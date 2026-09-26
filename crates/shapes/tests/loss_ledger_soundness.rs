@@ -112,15 +112,17 @@ fn sound_green_for_real_compile_output() {
     assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
 }
 
-/// The SHACL 1.2 constraints the value-schema projection drops — the list
-/// components, `sh:rootClass` and a property-level `sh:someValue` — each record
-/// their own code, and every one of those codes is inside the declared profile;
-/// a `sh:TripleTerm` node kind is projected (the JSON-LD-star embedded node) and
-/// records nothing.
+/// The SHACL 1.2 constraints the value-schema projection drops — `sh:rootClass`
+/// and a property-level `sh:someValue` — each record their own code, as do the
+/// list components for the one part they do not project (a list the instance
+/// projection keeps as linked `@graph` nodes), and every one of those codes is
+/// inside the declared profile; a `sh:TripleTerm` node kind is projected (the
+/// JSON-LD-star embedded node) and records nothing.
 ///
 /// The neighbours record nothing: `sh:singleLine true` is projected as a
-/// negated line-break pattern, `sh:singleLine false` and `sh:uniqueMembers false`
-/// check nothing, and a node-level `sh:someValue` is projected as `sh:node` is.
+/// negated line-break pattern, `sh:singleLine false` checks nothing, and a
+/// node-level `sh:someValue` is projected as `sh:node` is. `sh:uniqueMembers
+/// false` requires a list, projected but for the linked-node part.
 #[test]
 fn shacl12_constraints_record_declared_codes() {
     let compiled = compile_ttl(
@@ -156,8 +158,7 @@ fn shacl12_constraints_record_declared_codes() {
             sh:targetClass ex:Quiet ;
             sh:someValue [ sh:property [ sh:path ex:name ; sh:minCount 1 ] ] ;
             sh:property [ sh:path ex:label ; sh:singleLine true ] ;
-            sh:property [ sh:path ex:note ; sh:singleLine false ] ;
-            sh:property [ sh:path ex:items ; sh:uniqueMembers false ] .
+            sh:property [ sh:path ex:note ; sh:singleLine false ] .
         ",
     );
     assert!(
@@ -165,6 +166,15 @@ fn shacl12_constraints_record_declared_codes() {
         "{:?}",
         recorded_codes(&neighbours)
     );
+    let listness = compile_ttl(
+        r"
+        ex:ListnessShape a sh:NodeShape ;
+            sh:targetClass ex:Listness ;
+            sh:property [ sh:path ex:items ; sh:uniqueMembers false ] .
+        ",
+    );
+    assert_eq!(recorded_codes(&listness), vec!["sh:uniqueMembers"]);
+    assert_ledger_sound(&listness.losses, "shacl", "json-schema");
     let schema: serde_json::Value =
         serde_json::from_str(&neighbours.schema_json).expect("schema JSON");
     let properties = &schema["$defs"]["Quiet"]["properties"];

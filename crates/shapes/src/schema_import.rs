@@ -34,6 +34,7 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
 const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
@@ -712,6 +713,9 @@ impl ImportContext<'_> {
             let mut members = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
                 let branch_path = format!("{path}/allOf/{index}");
+                if self.import_node_list(branch, &branch_path, constraints)? {
+                    continue;
+                }
                 if let Some(negand) = branch
                     .as_object()
                     .and_then(|map| (map.len() == 1).then(|| map.get("not")).flatten())
@@ -1155,6 +1159,9 @@ impl ImportContext<'_> {
         if is_lang_string_schema(schema) {
             return Ok(Some(NamedNode::new_unchecked(RDF_LANG_STRING)));
         }
+        if is_dir_lang_string_schema(schema) {
+            return Ok(Some(NamedNode::new_unchecked(RDF_DIR_LANG_STRING)));
+        }
         if let Some([scalar, typed]) = schema
             .get("anyOf")
             .and_then(Value::as_array)
@@ -1225,6 +1232,8 @@ impl ImportContext<'_> {
         let mut implied_blank = false;
         let mut implied_triple = false;
         let mut implied_bound = false;
+        let mut implied_constant = false;
+        let mut typed_bounds: Vec<(String, &Value)> = Vec::new();
         let mut unread: Vec<String> = Vec::new();
         for (index, alternative) in alternatives.iter().enumerate() {
             let location = if alternatives.len() == 1 && alternative_path == path {
@@ -1276,11 +1285,28 @@ impl ImportContext<'_> {
                 Some(Rejection::BlankNode) => implied_blank = true,
                 Some(Rejection::TripleTerm) => implied_triple = true,
                 Some(Rejection::NonNumeric) => implied_bound = true,
+                Some(Rejection::Implied) => implied_constant = true,
+                Some(Rejection::TypedBound) => typed_bounds.push((location, alternative)),
                 None => unread.push(location),
             }
         }
         let has_lexical = lexical(constraints) || lexical(&derived);
         constraints.extend(derived);
+        if implied_constant && !has_lexical && !bounded(constraints) {
+            unread.push(path.to_owned());
+        }
+        // A typed bound rejection reads back only as exactly the one the bounds
+        // already read project to; any other is a negation SHACL cannot state
+        // here.
+        let expected = crate::json_schema::expected_typed_bound_rejections(
+            constraints,
+            &self.config.namespaces,
+        );
+        for (location, alternative) in typed_bounds {
+            if !expected.contains(alternative) {
+                unread.push(location);
+            }
+        }
         if implied_blank && !has_lexical {
             unread.push(path.to_owned());
         }
@@ -1395,7 +1421,23 @@ impl ImportContext<'_> {
             }
         }
 
+        // The list components: a list object judging the members, beside the
+        // node reference a list kept as linked nodes projects as.
+        if let [left, right] = branches {
+            let pair = match (list_members(left), list_members(right)) {
+                (Some(members), None) if is_plain_node_ref(right) => Some((members, 0)),
+                (None, Some(members)) if is_plain_node_ref(left) => Some((members, 1)),
+                _ => None,
+            };
+            if let Some((members, index)) = pair {
+                let members_path = format!("{path}/{index}/properties/@list");
+                self.import_list_members(members, &members_path, 0, constraints)?;
+                return Ok(());
+            }
+        }
+
         let mut node_branches = 0_usize;
+        let mut nil_branches = 0_usize;
         let mut typed_branches = 0_usize;
         let mut language_branches = 0_usize;
         let mut reference_branches = 0_usize;
@@ -1412,6 +1454,12 @@ impl ImportContext<'_> {
                 continue;
             }
             if branch == &Value::Bool(false) {
+                continue;
+            }
+            // `rdf:nil`'s empty list, which a class admits as it admits node
+            // references (see the emitter's `sh:class` projection).
+            if list_form(branch) == Some(ListForm::Nil) {
+                nil_branches += 1;
                 continue;
             }
             if is_node_ref_schema(branch) {
@@ -1469,6 +1517,9 @@ impl ImportContext<'_> {
         if saw_true {
             return Ok(());
         }
+        if nil_branches > 0 && node_branches + reference_branches == 0 {
+            unsupported = true;
+        }
         let effective_branches = node_branches
             + typed_branches
             + language_branches
@@ -1513,6 +1564,208 @@ impl ImportContext<'_> {
         }
         self.record("schema-applicator-dropped", path);
         Ok(())
+    }
+
+    /// Read a list's members schema back as the SHACL 1.2 list components:
+    /// `minItems`/`maxItems` (offset by `skipped` members judged elsewhere) as
+    /// `sh:minListLength`/`sh:maxListLength`, `uniqueItems` as
+    /// `sh:uniqueMembers true`, `items` as a `sh:memberShape` whose own
+    /// constraints are the items schema's. A list with none of them requires
+    /// only that the value be a list, which `sh:uniqueMembers false` states.
+    fn import_list_members(
+        &mut self,
+        members: &Map<String, Value>,
+        path: &str,
+        skipped: u64,
+        constraints: &mut Vec<Constraint>,
+    ) -> Result<(), SchemaImportError> {
+        let start = constraints.len();
+        for (keyword, value) in members {
+            let location = format!("{path}/{}", pointer_escape(keyword));
+            match keyword.as_str() {
+                "type" => {}
+                "minItems" => {
+                    let n = nonnegative_integer(value, &location)?;
+                    constraints.push(Constraint::MinListLength(n + skipped));
+                }
+                "maxItems" => {
+                    let n = nonnegative_integer(value, &location)?;
+                    constraints.push(Constraint::MaxListLength(n + skipped));
+                }
+                "uniqueItems" if value == &Value::Bool(true) => {
+                    constraints.push(Constraint::UniqueMembers(true));
+                }
+                "items" => {
+                    let shape = self.import_member_shape(value, &location)?;
+                    constraints.push(Constraint::MemberShape(Box::new(shape)));
+                }
+                "$comment" => self.record("annotation-dropped", &location),
+                _ => {
+                    validate_json_keyword_value(keyword, value, &location)?;
+                    self.record("unknown-keyword-dropped", &location);
+                }
+            }
+        }
+        if constraints.len() == start {
+            constraints.push(Constraint::UniqueMembers(false));
+        }
+        Ok(())
+    }
+
+    /// The member shape whose value schema `schema` is.
+    fn import_member_shape(
+        &mut self,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Shape, SchemaImportError> {
+        let mut constraints = Vec::new();
+        self.import_scalar_schema(schema, path, &mut constraints)?;
+        Ok(Shape {
+            id: self.nested_shape_id(path),
+            targets: Vec::new(),
+            constraints,
+            property_shapes: Vec::new(),
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
+
+    /// Read a node shape's list conjunct back (see the emitter's
+    /// `ListComponents::node_schema`): `rdf:nil`, and a cell whose `rdf:first`
+    /// is one member and whose `rdf:rest` holds the others.
+    fn import_node_list(
+        &mut self,
+        branch: &Value,
+        path: &str,
+        constraints: &mut Vec<Constraint>,
+    ) -> Result<bool, SchemaImportError> {
+        let Some(alternatives) = branch
+            .as_object()
+            .filter(|object| object.len() == 1)
+            .and_then(|object| object.get("anyOf"))
+            .and_then(Value::as_array)
+        else {
+            return Ok(false);
+        };
+        let first = self
+            .config
+            .namespaces
+            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
+        let rest = self
+            .config
+            .namespaces
+            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
+        let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+        let nil_form = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "@id": { "const": nil },
+                first.clone(): false,
+                rest.clone(): false
+            },
+            "required": ["@id"]
+        });
+        let mut has_nil = false;
+        let mut cons: Option<(usize, &Map<String, Value>)> = None;
+        for (index, alternative) in alternatives.iter().enumerate() {
+            if alternative == &nil_form {
+                has_nil = true;
+                continue;
+            }
+            let Some(object) = alternative.as_object() else {
+                return Ok(false);
+            };
+            let shaped = object.len() == 4
+                && object.get("type").and_then(Value::as_str) == Some("object")
+                && is_exact_required(object.get("required"), &[first.as_str(), rest.as_str()])
+                && object.get("not")
+                    == Some(&serde_json::json!({
+                        "properties": { "@id": { "const": nil } },
+                        "required": ["@id"]
+                    }));
+            if !shaped || cons.is_some() {
+                return Ok(false);
+            }
+            cons = Some((index, object));
+        }
+        let mut read = Vec::new();
+        match cons {
+            None if has_nil => read.push(Constraint::MaxListLength(0)),
+            None => return Ok(false),
+            Some((index, object)) => {
+                let base = format!("{path}/anyOf/{index}/properties");
+                let properties = object
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .filter(|properties| properties.len() == 2);
+                let Some(properties) = properties else {
+                    return Ok(false);
+                };
+                let single =
+                    serde_json::json!({ "type": ["boolean", "number", "object", "string"] });
+                let head = match properties.get(&first) {
+                    Some(schema) if schema == &single => None,
+                    Some(schema) => match schema
+                        .get("allOf")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                    {
+                        Some([only, member]) if only == &single => Some(member),
+                        _ => return Ok(false),
+                    },
+                    None => return Ok(false),
+                };
+                let tail = properties
+                    .get(&rest)
+                    .and_then(|schema| schema.get("anyOf"))
+                    .and_then(Value::as_array);
+                let Some([tail_list, tail_node]) = tail.map(Vec::as_slice) else {
+                    return Ok(false);
+                };
+                let Some(members) = list_members(tail_list) else {
+                    return Ok(false);
+                };
+                if !is_plain_node_ref(tail_node) {
+                    return Ok(false);
+                }
+                let tail_path =
+                    format!("{base}/{}/anyOf/0/properties/@list", pointer_escape(&rest));
+                let mut listed = Vec::new();
+                self.import_list_members(members, &tail_path, 1, &mut listed)?;
+                // The tail's own member shape repeats the head's; a lone
+                // `sh:uniqueMembers false` stands for the list requirement.
+                listed.retain(|constraint| {
+                    !matches!(
+                        constraint,
+                        Constraint::MemberShape(_) | Constraint::UniqueMembers(false)
+                    )
+                });
+                if !has_nil
+                    && !listed
+                        .iter()
+                        .any(|c| matches!(c, Constraint::MinListLength(_)))
+                {
+                    listed.push(Constraint::MinListLength(1));
+                }
+                if let Some(member) = head {
+                    let shape = self.import_member_shape(
+                        member,
+                        &format!("{base}/{}/allOf/1", pointer_escape(&first)),
+                    )?;
+                    listed.push(Constraint::MemberShape(Box::new(shape)));
+                }
+                if listed.is_empty() {
+                    listed.push(Constraint::UniqueMembers(false));
+                }
+                read.extend(listed);
+            }
+        }
+        constraints.extend(read);
+        Ok(true)
     }
 
     fn import_scalar_type(
@@ -2180,6 +2433,13 @@ enum Rejection {
     TripleTerm,
     /// A value no numeric bound can compare.
     NonNumeric,
+    /// A constant whose lexical form a lexical-form constraint judged at
+    /// compile time — `rdf:nil`'s list, `true`, `false`, an `sh:in` member —
+    /// or a range of bare integers a length bound or numeric bound excludes.
+    Implied,
+    /// A typed literal of an integer-family or decimal datatype a numeric
+    /// bound rejects.
+    TypedBound,
 }
 
 /// The ECMA-262 source a string containing a line break matches.
@@ -2187,7 +2447,26 @@ const LINE_BREAK_PATTERN: &str = "[\\n\\r\\u000B\\u000C]";
 
 fn classify_rejection(value: &Value) -> Option<Rejection> {
     let object = value.as_object()?;
+    if object.len() == 1 && object.contains_key("const") {
+        return Some(Rejection::Implied);
+    }
+    if list_form(value) == Some(ListForm::Nil) {
+        return Some(Rejection::Implied);
+    }
+    if list_form(value) == Some(ListForm::NonEmpty) {
+        return Some(Rejection::BlankNode);
+    }
+    if list_form(value) == Some(ListForm::Any) {
+        return Some(Rejection::NonNumeric);
+    }
     let kind = object.get("type").and_then(Value::as_str)?;
+    if kind == "integer"
+        && object
+            .keys()
+            .all(|key| matches!(key.as_str(), "type" | "minimum" | "maximum" | "not"))
+    {
+        return Some(Rejection::Implied);
+    }
     if kind == "string" {
         if object.len() == 2
             && object.get("pattern").and_then(Value::as_str) == Some(LINE_BREAK_PATTERN)
@@ -2219,8 +2498,50 @@ fn classify_rejection(value: &Value) -> Option<Rejection> {
     if is_language_carrier(object) {
         return Some(Rejection::NonNumeric);
     }
-    // A literal object whose `@value` string breaks a lexical-form constraint.
     let properties = object.get("properties").and_then(Value::as_object)?;
+    if object.len() == 3 && is_exact_required(object.get("required"), &["@value", "@type"]) {
+        let at_type = properties.get("@type")?;
+        if properties.len() == 2
+            && properties.get("@value") == Some(&Value::Object(Map::new()))
+            && at_type.get("not").and_then(|not| not.get("enum")).is_some()
+        {
+            return Some(Rejection::NonNumeric);
+        }
+        if properties.len() == 2
+            && at_type.get("const").is_some_and(Value::is_string)
+            && properties
+                .get("@value")
+                .and_then(|at_value| at_value.get("not"))
+                .is_some()
+        {
+            return Some(Rejection::TypedBound);
+        }
+        return None;
+    }
+    // An IRI whose `@id` (the IRI itself) breaks a lexical-form constraint.
+    if object.len() == 3 && is_exact_required(object.get("required"), &["@id"]) {
+        let at_id = properties.get("@id").and_then(Value::as_object)?;
+        if properties.len() != 1
+            || at_id.len() != 3
+            || at_id.get("type").and_then(Value::as_str) != Some("string")
+            || at_id.get("pattern").and_then(Value::as_str) != Some("^(?:[^_]|_(?:[^:]|$))")
+        {
+            return None;
+        }
+        if let Some(pattern) = at_id.get("not").and_then(negated_pattern) {
+            return Some(Rejection::Pattern(pattern));
+        }
+        if let Some(n) = at_id.get("maxLength").and_then(Value::as_u64) {
+            return Some(Rejection::MinLength(n + 1));
+        }
+        if let Some(n) = at_id.get("minLength").and_then(Value::as_u64)
+            && n > 0
+        {
+            return Some(Rejection::MaxLength(n - 1));
+        }
+        return None;
+    }
+    // A literal object whose `@value` string breaks a lexical-form constraint.
     if object.len() != 3
         || properties.len() != 1
         || !is_exact_required(object.get("required"), &["@value"])
@@ -2278,7 +2599,7 @@ fn typed_datatype_constant(value: &Value) -> Option<&str> {
     if at_value.get("type").and_then(Value::as_str) != Some("string")
         || !at_value
             .keys()
-            .all(|key| matches!(key.as_str(), "type" | "format" | "pattern"))
+            .all(|key| matches!(key.as_str(), "type" | "format" | "pattern" | "allOf"))
     {
         return None;
     }
@@ -2288,9 +2609,57 @@ fn typed_datatype_constant(value: &Value) -> Option<&str> {
         .flatten()
 }
 
-/// Whether `value` is the language-tagged object with any tag — the projection
-/// of `rdf:langString`.
+/// Whether `value` is the language-tagged object with any tag and no base
+/// direction — the projection of `rdf:langString`.
 fn is_lang_string_schema(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        let Some(properties) = object.get("properties").and_then(Value::as_object) else {
+            return false;
+        };
+        let mut rest = object.clone();
+        let mut rest_properties = properties.clone();
+        rest_properties.remove("@direction").as_ref() == Some(&Value::Bool(false)) && {
+            rest.insert("properties".to_owned(), Value::Object(rest_properties));
+            is_any_language_object(&Value::Object(rest))
+        }
+    })
+}
+
+/// Whether `value` is the language-tagged object with a base direction — the
+/// projection of `rdf:dirLangString`.
+fn is_dir_lang_string_schema(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == 3
+            && object.get("type").and_then(Value::as_str) == Some("object")
+            && object
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| {
+                    properties.len() == 3
+                        && properties
+                            .get("@value")
+                            .is_some_and(|schema| is_exact_type_schema(schema, "string"))
+                        && properties
+                            .get("@language")
+                            .is_some_and(|schema| is_exact_type_schema(schema, "string"))
+                        && properties
+                            .get("@direction")
+                            .and_then(|schema| schema.get("enum"))
+                            == Some(&Value::Array(vec![
+                                Value::String("ltr".to_owned()),
+                                Value::String("rtl".to_owned()),
+                            ]))
+                })
+            && is_exact_required(
+                object.get("required"),
+                &["@value", "@language", "@direction"],
+            )
+    })
+}
+
+/// Whether `value` is the language-tagged object with any tag, direction or
+/// none — the value a numeric bound cannot compare.
+fn is_any_language_object(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.len() == 3
             && object.get("type").and_then(Value::as_str) == Some("object")
@@ -2313,7 +2682,7 @@ fn is_lang_string_schema(value: &Value) -> bool {
 /// Whether `object` is a language-tagged literal object (any tag, or a
 /// `sh:languageIn` pattern).
 fn is_language_carrier(object: &Map<String, Value>) -> bool {
-    is_language_literal_schema(object) || is_lang_string_schema(&Value::Object(object.clone()))
+    is_language_literal_schema(object) || is_any_language_object(&Value::Object(object.clone()))
 }
 
 /// Whether `value` is the projection of a blank node: a node reference whose
@@ -2385,6 +2754,7 @@ fn node_kind_union(branches: &[Value]) -> Option<Vec<NodeKindValue>> {
     };
     let (mut string, mut number, mut boolean, mut typed) = (false, false, false, false);
     let (mut iri, mut blank, mut node, mut triple) = (false, false, false, false);
+    let (mut nil_list, mut nonempty_list, mut any_list) = (false, false, false);
     for branch in &branches {
         if is_exact_type_schema(branch, "string") {
             string = true;
@@ -2403,8 +2773,18 @@ fn node_kind_union(branches: &[Value]) -> Option<Vec<NodeKindValue>> {
         } else if is_node_ref_schema(branch) && branch.get("$comment").is_none() {
             node = true;
         } else {
-            return None;
+            // `rdf:nil` (an IRI) and a non-empty list (whose head is a blank
+            // node) project as lists; the emitter pairs each node kind with
+            // exactly the lists it admits.
+            match list_form(branch)? {
+                ListForm::Nil => nil_list = true,
+                ListForm::NonEmpty => nonempty_list = true,
+                ListForm::Any => any_list = true,
+            }
         }
+    }
+    if nil_list != iri || nonempty_list != blank || any_list != node {
+        return None;
     }
     let literal = string && number && boolean && typed;
     if (string || number || boolean || typed) && !literal {
@@ -2493,6 +2873,53 @@ fn with_has_values(items: &Value, has_values: &[Value]) -> Value {
         }
     }
     single
+}
+
+/// The members schema `M` of the projection of a list,
+/// `{"type": "object", "properties": {"@list": M}, "required": ["@list"]}`,
+/// when `M` is an array schema.
+fn list_members(value: &Value) -> Option<&Map<String, Value>> {
+    let object = value.as_object()?;
+    if object.len() != 3
+        || object.get("type").and_then(Value::as_str) != Some("object")
+        || !is_exact_required(object.get("required"), &["@list"])
+    {
+        return None;
+    }
+    let properties = object.get("properties")?.as_object()?;
+    let members = (properties.len() == 1)
+        .then(|| properties.get("@list"))
+        .flatten()?
+        .as_object()?;
+    (members.get("type").and_then(Value::as_str) == Some("array")).then_some(members)
+}
+
+/// Which list the projection of a list names by its length alone: any list,
+/// `rdf:nil`'s empty list, or a non-empty one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListForm {
+    Any,
+    Nil,
+    NonEmpty,
+}
+
+fn list_form(value: &Value) -> Option<ListForm> {
+    let members = list_members(value)?;
+    match (
+        members.len(),
+        members.get("maxItems").and_then(Value::as_u64),
+        members.get("minItems").and_then(Value::as_u64),
+    ) {
+        (1, None, None) => Some(ListForm::Any),
+        (2, Some(0), None) => Some(ListForm::Nil),
+        (2, None, Some(1)) => Some(ListForm::NonEmpty),
+        _ => None,
+    }
+}
+
+/// A node reference with no annotation.
+fn is_plain_node_ref(value: &Value) -> bool {
+    is_node_ref_schema(value) && value.get("$comment").is_none()
 }
 
 fn is_node_ref_schema(value: &Value) -> bool {
@@ -3143,37 +3570,17 @@ mod tests {
                 ] .
             "#,
         );
-        // The one forward loss is the numeric property's: a numeric literal
-        // projects as a bare JSON number without its datatype, and a numeric
-        // literal the projection cannot carry as one is not compared with a bound.
-        let mut codes: Vec<&str> = compiled
-            .losses
-            .entries()
-            .iter()
-            .map(|entry| entry.code.as_ref())
-            .collect();
-        codes.sort_unstable();
-        assert_eq!(codes, ["sh:datatype", "sh:maxExclusive", "sh:minInclusive"]);
+        // The projection carries every numeric literal's datatype and lexical
+        // form, so the numeric property projects without a forward loss, and
+        // the whole schema reads back with none.
+        assert!(
+            compiled.losses.is_empty(),
+            "{}",
+            compiled.losses.render_json()
+        );
         let imported = import_compiled_schema(&compiled, &config()).expect("import schema");
-        // The `$comment` naming those forward losses is documentation, not a
-        // constraint, and reads back as nothing.
-        let reverse: Vec<(&str, Option<&str>)> = imported
-            .losses
-            .entries()
-            .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_ref(),
-                    entry.location.as_ref().and_then(|l| l.subject.as_deref()),
-                )
-            })
-            .collect();
-        assert_eq!(
-            reverse,
-            [(
-                "annotation-dropped",
-                Some("#/$defs/Person/properties/ex:age/$comment")
-            )],
+        assert!(
+            imported.losses.is_empty(),
             "unexpected reverse losses: {}",
             imported.losses.render_json()
         );

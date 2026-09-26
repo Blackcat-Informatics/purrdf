@@ -13,12 +13,15 @@
 //! the affected definition. A construct is projected or its loss is recorded;
 //! none vanishes.
 //!
-//! A SHACL list value node is an RDF list, which the instance projection keeps
-//! as a node reference whose members live on separate `@graph` nodes, so the
-//! list components are recorded losses rather than `minItems`/`maxItems`/
-//! `uniqueItems`/`items` (which would judge a multi-valued property's values
-//! instead); the Pydantic emitter additionally keeps each `$comment` naming a
-//! dropped constraint in its models' `model_json_schema()`.
+//! A SHACL list value node is an RDF list, which the instance projection
+//! carries as the JSON-LD list object `{"@list": [...]}` whenever JSON-LD 1.1
+//! converts it, so the list components project as `minItems`/`maxItems`/
+//! `uniqueItems`/`items` on that array; a list kept as linked `@graph` nodes
+//! is the one part no JSON Schema keyword reaches, and is recorded. The
+//! Pydantic emitter additionally keeps each `$comment` in its models'
+//! `model_json_schema()`. The `observed` module checks, with a trusted JSON
+//! Schema validator, that each projection accepts and rejects what SHACL
+//! validation does.
 
 use std::collections::BTreeMap;
 
@@ -32,6 +35,7 @@ use purrdf_shapes::{
 use serde_json::Value;
 
 const PREFIXES: &str = r"
+    @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
     @prefix sh:  <http://www.w3.org/ns/shacl#> .
     @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
     @prefix ex:  <https://example.org/> .
@@ -43,30 +47,37 @@ const HOLDER: &str = "<https://example.org/HolderShape>";
 /// The JSON pointer prefix of the definition each fixture's constructs land in.
 const HOLDER_DEF: &str = "#/$defs/Holder";
 
-/// `sh:minListLength` on a property shape and on a node shape.
+/// `sh:minListLength` on a property shape.
 const MIN_LIST_LENGTH: &str = r"
-    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:minListLength 1 ;
+    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
         sh:property [ sh:path ex:subject ; sh:maxCount 1 ; sh:minListLength 2 ] .
 ";
 
-/// `sh:maxListLength` on a property shape and on a node shape.
+/// `sh:maxListLength` on a property shape.
 const MAX_LIST_LENGTH: &str = r"
-    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:maxListLength 4 ;
+    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
         sh:property [ sh:path ex:subject ; sh:maxCount 1 ; sh:maxListLength 3 ] .
 ";
 
-/// `sh:uniqueMembers true` on a property shape and on a node shape, beside a
-/// `sh:uniqueMembers false` neighbour (`ex:other`) that checks nothing.
+/// `sh:uniqueMembers true` on a property shape, beside a `sh:uniqueMembers
+/// false` neighbour (`ex:other`), which requires only that the value be a list.
 const UNIQUE_MEMBERS: &str = r"
-    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:uniqueMembers true ;
+    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
         sh:property [ sh:path ex:subject ; sh:maxCount 1 ; sh:uniqueMembers true ] ;
         sh:property [ sh:path ex:other ; sh:maxCount 1 ; sh:uniqueMembers false ] .
 ";
 
-/// `sh:memberShape` on a property shape and on a node shape.
+/// `sh:memberShape` on a property shape.
 const MEMBER_SHAPE: &str = r"
-    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:memberShape [ sh:nodeKind sh:IRI ] ;
+    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
         sh:property [ sh:path ex:subject ; sh:maxCount 1 ; sh:memberShape [ sh:nodeKind sh:IRI ] ] .
+";
+
+/// The four list components on a node shape, whose focus node is the list.
+const NODE_LIST: &str = r"
+    ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+        sh:minListLength 1 ; sh:maxListLength 3 ; sh:uniqueMembers true ;
+        sh:memberShape [ sh:nodeKind sh:IRI ] .
 ";
 
 /// A list value of `sh:class` on a property shape (one member with a node
@@ -378,32 +389,21 @@ fn json_schema_projects_min_list_length() {
     let emitted = emit(MIN_LIST_LENGTH);
     assert_eq!(
         source_losses(&emitted),
-        owned3(&[
-            (
-                "sh:minListLength",
-                HOLDER,
-                "a SHACL list constraint has no projection in this emitter"
-            ),
-            (
-                "sh:minListLength",
-                HOLDER,
-                "a SHACL list constraint on the focus node has no projection in this emitter"
-            ),
-        ])
+        owned3(&[(
+            "sh:minListLength",
+            HOLDER,
+            "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+        ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r#"{"$comment":"a sh:minListLength constraint on property ex:subject was dropped (no projection in this emitter)"}"#
+            r#"{"$comment":"a sh:minListLength constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"minItems":2,"type":"array"}},"required":["@list"],"type":"object"}]}"#
         )
     );
-    assert_eq!(
-        holder["$comment"],
-        json(
-            r#""a node-level sh:minListLength constraint was dropped (no projection in this emitter)""#
-        )
-    );
+    assert!(holder["allOf"].is_null());
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -412,13 +412,13 @@ fn typescript_projects_min_list_length() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: JsonValue;\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly [JsonValue, JsonValue, ...Array<JsonValue>];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
     assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:minListLength", HOLDER), ("sh:minListLength", HOLDER),])
+        owned2(&[("sh:minListLength", HOLDER),])
     );
 }
 
@@ -427,13 +427,15 @@ fn pydantic_projects_min_list_length() {
     let emitted = emit(MIN_LIST_LENGTH);
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: Any = Field(default=None, alias=\"ex:subject\")")
+        Some(
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object = Field(default=None, alias=\"ex:subject\")"
+        )
     );
     assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
     assert_pydantic_keeps_comments(&emitted);
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:minListLength", HOLDER), ("sh:minListLength", HOLDER),])
+        owned2(&[("sh:minListLength", HOLDER),])
     );
 }
 
@@ -473,11 +475,15 @@ fn graphql_projects_min_list_length() {
                 "union-validation-delegated",
                 "#/$defs/Holder/properties/@type/anyOf"
             ),
+            (
+                "union-validation-delegated",
+                "#/$defs/Holder/properties/ex:subject/anyOf"
+            ),
         ])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:minListLength", HOLDER), ("sh:minListLength", HOLDER),])
+        owned2(&[("sh:minListLength", HOLDER),])
     );
 }
 
@@ -486,20 +492,21 @@ fn linkml_projects_min_list_length() {
     let emitted = emit(MIN_LIST_LENGTH);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(r#"{"alias":"ex:subject","range":"string","required":false,"slot_uri":"ex:subject"}"#)
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+        )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
     assert_eq!(
         holder_losses(&emitted.linkml_losses),
         owned2(&[(
             "keyword-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject"
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
         ),])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:minListLength", HOLDER), ("sh:minListLength", HOLDER),])
+        owned2(&[("sh:minListLength", HOLDER),])
     );
 }
 
@@ -508,32 +515,21 @@ fn json_schema_projects_max_list_length() {
     let emitted = emit(MAX_LIST_LENGTH);
     assert_eq!(
         source_losses(&emitted),
-        owned3(&[
-            (
-                "sh:maxListLength",
-                HOLDER,
-                "a SHACL list constraint has no projection in this emitter"
-            ),
-            (
-                "sh:maxListLength",
-                HOLDER,
-                "a SHACL list constraint on the focus node has no projection in this emitter"
-            ),
-        ])
+        owned3(&[(
+            "sh:maxListLength",
+            HOLDER,
+            "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+        ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r#"{"$comment":"a sh:maxListLength constraint on property ex:subject was dropped (no projection in this emitter)"}"#
+            r#"{"$comment":"a sh:maxListLength constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":3,"type":"array"}},"required":["@list"],"type":"object"}]}"#
         )
     );
-    assert_eq!(
-        holder["$comment"],
-        json(
-            r#""a node-level sh:maxListLength constraint was dropped (no projection in this emitter)""#
-        )
-    );
+    assert!(holder["allOf"].is_null());
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -542,13 +538,13 @@ fn typescript_projects_max_list_length() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: JsonValue;\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": (readonly [] | readonly [JsonValue] | readonly [JsonValue, JsonValue] | readonly [JsonValue, JsonValue, JsonValue]);\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
     assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:maxListLength", HOLDER), ("sh:maxListLength", HOLDER),])
+        owned2(&[("sh:maxListLength", HOLDER),])
     );
 }
 
@@ -557,13 +553,15 @@ fn pydantic_projects_max_list_length() {
     let emitted = emit(MAX_LIST_LENGTH);
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: Any = Field(default=None, alias=\"ex:subject\")")
+        Some(
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object = Field(default=None, alias=\"ex:subject\")"
+        )
     );
     assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
     assert_pydantic_keeps_comments(&emitted);
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:maxListLength", HOLDER), ("sh:maxListLength", HOLDER),])
+        owned2(&[("sh:maxListLength", HOLDER),])
     );
 }
 
@@ -603,11 +601,15 @@ fn graphql_projects_max_list_length() {
                 "union-validation-delegated",
                 "#/$defs/Holder/properties/@type/anyOf"
             ),
+            (
+                "union-validation-delegated",
+                "#/$defs/Holder/properties/ex:subject/anyOf"
+            ),
         ])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:maxListLength", HOLDER), ("sh:maxListLength", HOLDER),])
+        owned2(&[("sh:maxListLength", HOLDER),])
     );
 }
 
@@ -616,20 +618,21 @@ fn linkml_projects_max_list_length() {
     let emitted = emit(MAX_LIST_LENGTH);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(r#"{"alias":"ex:subject","range":"string","required":false,"slot_uri":"ex:subject"}"#)
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+        )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
     assert_eq!(
         holder_losses(&emitted.linkml_losses),
         owned2(&[(
             "keyword-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject"
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
         ),])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:maxListLength", HOLDER), ("sh:maxListLength", HOLDER),])
+        owned2(&[("sh:maxListLength", HOLDER),])
     );
 }
 
@@ -642,29 +645,30 @@ fn json_schema_projects_unique_members() {
             (
                 "sh:uniqueMembers",
                 HOLDER,
-                "a SHACL list constraint has no projection in this emitter"
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
             ),
             (
                 "sh:uniqueMembers",
                 HOLDER,
-                "a SHACL list constraint on the focus node has no projection in this emitter"
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
             ),
         ])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
-        holder["properties"]["ex:subject"],
+        holder["properties"]["ex:other"],
         json(
-            r#"{"$comment":"a sh:uniqueMembers constraint on property ex:subject was dropped (no projection in this emitter)"}"#
+            r#"{"$comment":"a sh:uniqueMembers constraint on ex:other is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"type":"array"}},"required":["@list"],"type":"object"}]}"#
         )
     );
     assert_eq!(
-        holder["$comment"],
+        holder["properties"]["ex:subject"],
         json(
-            r#""a node-level sh:uniqueMembers constraint was dropped (no projection in this emitter)""#
+            r#"{"$comment":"a sh:uniqueMembers constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"type":"array","uniqueItems":true}},"required":["@list"],"type":"object"}]}"#
         )
     );
-    assert_eq!(holder["properties"]["ex:other"], json(r"{}"));
+    assert!(holder["allOf"].is_null());
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -673,10 +677,16 @@ fn typescript_projects_unique_members() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:other\"?: JsonValue;\n  readonly \"ex:subject\"?: JsonValue;\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:other\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (JsonValue)[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (JsonValue)[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
-    assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
+    assert_eq!(
+        holder_losses(&emitted.typescript_losses),
+        owned2(&[(
+            "unique-items-validation-dropped",
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/uniqueItems"
+        ),])
+    );
     assert_eq!(
         source_codes(&emitted),
         owned2(&[("sh:uniqueMembers", HOLDER), ("sh:uniqueMembers", HOLDER),])
@@ -688,7 +698,9 @@ fn pydantic_projects_unique_members() {
     let emitted = emit(UNIQUE_MEMBERS);
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: Any = Field(default=None, alias=\"ex:subject\")")
+        Some(
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object = Field(default=None, alias=\"ex:subject\")"
+        )
     );
     assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
     assert_pydantic_keeps_comments(&emitted);
@@ -738,6 +750,14 @@ fn graphql_projects_unique_members() {
                 "union-validation-delegated",
                 "#/$defs/Holder/properties/@type/anyOf"
             ),
+            (
+                "union-validation-delegated",
+                "#/$defs/Holder/properties/ex:other/anyOf"
+            ),
+            (
+                "union-validation-delegated",
+                "#/$defs/Holder/properties/ex:subject/anyOf"
+            ),
         ])
     );
     assert_eq!(
@@ -751,20 +771,21 @@ fn linkml_projects_unique_members() {
     let emitted = emit(UNIQUE_MEMBERS);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(r#"{"alias":"ex:subject","range":"string","required":false,"slot_uri":"ex:subject"}"#)
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:other":{"alias":"ex:other","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf1Object"}],"required":false,"slot_uri":"ex:other"},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+        )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
     assert_eq!(
         holder_losses(&emitted.linkml_losses),
         owned2(&[
             (
                 "keyword-validation-dropped",
-                "#/$defs/Holder/properties/ex:other"
+                "#/$defs/Holder/properties/ex:other/anyOf/1/properties/@list/items"
             ),
             (
                 "keyword-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject"
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
             ),
         ])
     );
@@ -779,32 +800,21 @@ fn json_schema_projects_member_shape() {
     let emitted = emit(MEMBER_SHAPE);
     assert_eq!(
         source_losses(&emitted),
-        owned3(&[
-            (
-                "sh:memberShape",
-                HOLDER,
-                "a SHACL list constraint has no projection in this emitter"
-            ),
-            (
-                "sh:memberShape",
-                HOLDER,
-                "a SHACL list constraint on the focus node has no projection in this emitter"
-            ),
-        ])
+        owned3(&[(
+            "sh:memberShape",
+            HOLDER,
+            "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+        ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r#"{"$comment":"a sh:memberShape constraint on property ex:subject was dropped (no projection in this emitter)"}"#
+            r#"{"$comment":"a sh:memberShape constraint on ex:subject is not checked on a list kept as linked @graph nodes","anyOf":[{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"type":"array"}},"required":["@list"],"type":"object"}]}"#
         )
     );
-    assert_eq!(
-        holder["$comment"],
-        json(
-            r#""a node-level sh:memberShape constraint was dropped (no projection in this emitter)""#
-        )
-    );
+    assert!(holder["allOf"].is_null());
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -813,13 +823,19 @@ fn typescript_projects_member_shape() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: JsonValue;\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly (({\n                  readonly \"@id\": string;\n                  readonly [key: string]: JsonValue;\n                } | {\n                  readonly \"@list\": readonly [];\n                  readonly [key: string]: JsonValue;\n                }))[];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
-    assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
+    assert_eq!(
+        holder_losses(&emitted.typescript_losses),
+        owned2(&[(
+            "string-validation-dropped",
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0/properties/@id/pattern"
+        ),])
+    );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:memberShape", HOLDER), ("sh:memberShape", HOLDER),])
+        owned2(&[("sh:memberShape", HOLDER),])
     );
 }
 
@@ -828,13 +844,15 @@ fn pydantic_projects_member_shape() {
     let emitted = emit(MEMBER_SHAPE);
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: Any = Field(default=None, alias=\"ex:subject\")")
+        Some(
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object = Field(default=None, alias=\"ex:subject\")"
+        )
     );
     assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
     assert_pydantic_keeps_comments(&emitted);
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:memberShape", HOLDER), ("sh:memberShape", HOLDER),])
+        owned2(&[("sh:memberShape", HOLDER),])
     );
 }
 
@@ -874,11 +892,15 @@ fn graphql_projects_member_shape() {
                 "union-validation-delegated",
                 "#/$defs/Holder/properties/@type/anyOf"
             ),
+            (
+                "union-validation-delegated",
+                "#/$defs/Holder/properties/ex:subject/anyOf"
+            ),
         ])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:memberShape", HOLDER), ("sh:memberShape", HOLDER),])
+        owned2(&[("sh:memberShape", HOLDER),])
     );
 }
 
@@ -887,20 +909,182 @@ fn linkml_projects_member_shape() {
     let emitted = emit(MEMBER_SHAPE);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(r#"{"alias":"ex:subject","range":"string","required":false,"slot_uri":"ex:subject"}"#)
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+        )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
+    assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
     assert_eq!(
-        holder_losses(&emitted.linkml_losses),
-        owned2(&[(
-            "keyword-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject"
-        ),])
+        source_codes(&emitted),
+        owned2(&[("sh:memberShape", HOLDER),])
+    );
+}
+
+#[test]
+fn json_schema_projects_node_list() {
+    let emitted = emit(NODE_LIST);
+    assert_eq!(
+        source_losses(&emitted),
+        owned3(&[
+            (
+                "sh:maxListLength",
+                HOLDER,
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+            ),
+            (
+                "sh:memberShape",
+                HOLDER,
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+            ),
+            (
+                "sh:minListLength",
+                HOLDER,
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+            ),
+            (
+                "sh:uniqueMembers",
+                HOLDER,
+                "the focus node's own member (its rdf:first) is not compared with the members of its rdf:rest: no JSON Schema keyword relates two instance locations"
+            ),
+            (
+                "sh:uniqueMembers",
+                HOLDER,
+                "a list the projection keeps as linked @graph nodes (a cell with another property, referenced twice, or an IRI) is not checked: its members hang off other @graph nodes, and a JSON Schema keyword judges only the instance location it applies to and those beneath it"
+            ),
+        ])
+    );
+    let holder = &emitted.schema["$defs"]["Holder"];
+    assert_eq!(
+        holder["allOf"],
+        json(
+            r#"[{"anyOf":[{"not":{"properties":{"@id":{"const":"http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"}},"required":["@id"]},"properties":{"rdf:first":{"allOf":[{"type":["boolean","number","object","string"]},{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}]},"rdf:rest":{"anyOf":[{"properties":{"@list":{"items":{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]},"maxItems":2,"type":"array","uniqueItems":true}},"required":["@list"],"type":"object"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"}]}},"required":["rdf:first","rdf:rest"],"type":"object"}]}]"#
+        )
+    );
+    assert_eq!(
+        holder["$comment"],
+        json(
+            r#""a node-level sh:uniqueMembers constraint does not compare the focus node's rdf:first with its rdf:rest; a sh:maxListLength constraint on the focus node is not checked on a list kept as linked @graph nodes; a sh:memberShape constraint on the focus node is not checked on a list kept as linked @graph nodes; a sh:minListLength constraint on the focus node is not checked on a list kept as linked @graph nodes; a sh:uniqueMembers constraint on the focus node is not checked on a list kept as linked @graph nodes""#
+        )
+    );
+}
+
+#[test]
+fn typescript_projects_node_list() {
+    let emitted = emit(NODE_LIST);
+    assert_eq!(
+        ts_type(&emitted.typescript, "Holder").as_deref(),
+        Some(
+            "export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly [key: string]: JsonValue;\n} & {\n      readonly \"rdf:first\": ((boolean | number | string | {\n            readonly [key: string]: JsonValue;\n          }) & ({\n              readonly \"@id\": string;\n              readonly [key: string]: JsonValue;\n            } | {\n              readonly \"@list\": readonly [];\n              readonly [key: string]: JsonValue;\n            }));\n      readonly \"rdf:rest\": ({\n            readonly \"@list\": (readonly [] | readonly [({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    })] | readonly [({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    }), ({\n                      readonly \"@id\": string;\n                      readonly [key: string]: JsonValue;\n                    } | {\n                      readonly \"@list\": readonly [];\n                      readonly [key: string]: JsonValue;\n                    })]);\n            readonly [key: string]: JsonValue;\n          } | {\n            readonly \"@id\": string;\n            readonly [key: string]: JsonValue;\n          });\n      readonly [key: string]: JsonValue;\n    });\n"
+        )
+    );
+    assert_eq!(
+        holder_losses(&emitted.typescript_losses),
+        owned2(&[
+            (
+                "negation-validation-dropped",
+                "#/$defs/Holder/allOf/0/anyOf/0/not"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf/1/anyOf/0/properties/@id/pattern"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:rest/anyOf/0/properties/@list/items/anyOf/0/properties/@id/pattern"
+            ),
+            (
+                "unique-items-validation-dropped",
+                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:rest/anyOf/0/properties/@list/uniqueItems"
+            ),
+        ])
     );
     assert_eq!(
         source_codes(&emitted),
-        owned2(&[("sh:memberShape", HOLDER), ("sh:memberShape", HOLDER),])
+        owned2(&[
+            ("sh:maxListLength", HOLDER),
+            ("sh:memberShape", HOLDER),
+            ("sh:minListLength", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+        ])
+    );
+}
+
+#[test]
+fn pydantic_projects_node_list() {
+    let emitted = emit(NODE_LIST);
+    assert_eq!(py_field(&emitted.pydantic, "ex:subject").as_deref(), None);
+    assert_eq!(
+        holder_losses(&emitted.pydantic_losses),
+        owned2(&[
+            ("intersection-validation-widened", "#/$defs/Holder/allOf"),
+            (
+                "intersection-validation-widened",
+                "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf"
+            ),
+            (
+                "negation-validation-dropped",
+                "#/$defs/Holder/allOf/0/anyOf/0/not"
+            ),
+        ])
+    );
+    assert_pydantic_keeps_comments(&emitted);
+    assert_eq!(
+        source_codes(&emitted),
+        owned2(&[
+            ("sh:maxListLength", HOLDER),
+            ("sh:memberShape", HOLDER),
+            ("sh:minListLength", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+        ])
+    );
+}
+
+#[test]
+fn graphql_projects_node_list() {
+    let emitted = emit(NODE_LIST);
+    assert_eq!(gql_type(&emitted.graphql, "Holder").as_deref(), None);
+    assert_eq!(
+        holder_losses(&emitted.graphql_losses),
+        owned2(&[
+            ("custom-scalar-validation-delegated", "#/$defs/Holder"),
+            ("intersection-validation-delegated", "#/$defs/Holder/allOf"),
+        ])
+    );
+    assert_eq!(
+        source_codes(&emitted),
+        owned2(&[
+            ("sh:maxListLength", HOLDER),
+            ("sh:memberShape", HOLDER),
+            ("sh:minListLength", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+        ])
+    );
+}
+
+#[test]
+fn linkml_projects_node_list() {
+    let emitted = emit(NODE_LIST);
+    let holder = &emitted.linkml["classes"]["Holder"];
+    assert_eq!(
+        holder,
+        &json(
+            r#"{"all_of":[{"any_of":[{"is_a":"InlineDefsHolderAllOf0AnyOf0Object"}]}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+        )
+    );
+    assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
+    assert_eq!(
+        source_codes(&emitted),
+        owned2(&[
+            ("sh:maxListLength", HOLDER),
+            ("sh:memberShape", HOLDER),
+            ("sh:minListLength", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+            ("sh:uniqueMembers", HOLDER),
+        ])
     );
 }
 
@@ -912,28 +1096,23 @@ fn json_schema_projects_list_valued_class() {
         owned3(&[(
             "sh:class",
             HOLDER,
-            "a constraint on the focus node itself has no projection in an object schema describing the node's properties"
+            "a class membership runs through rdfs:subClassOf* triples on other @graph nodes, which no JSON Schema keyword applied to this node reaches"
         ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r##"{"anyOf":[{"$comment":"ex:Dog has no NodeShape; node reference only","properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"$ref":"#/$defs/Cat"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"}]}"##
+            r##"{"anyOf":[{"$comment":"ex:Dog has no NodeShape; node reference only","properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"$ref":"#/$defs/Cat"},{"properties":{"@id":{"type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}"##
         )
     );
+    assert!(holder["allOf"].is_null());
     assert_eq!(
         holder["$comment"],
         json(
             r#""a node-level sh:class constraint was dropped (no projection in an object schema)""#
         )
     );
-    let defs: Vec<&String> = emitted.schema["$defs"]
-        .as_object()
-        .expect("$defs")
-        .keys()
-        .collect();
-    assert_eq!(defs, ["Annotation", "Cat", "Holder", "Node"]);
 }
 
 #[test]
@@ -942,7 +1121,7 @@ fn typescript_projects_list_valued_class() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | Cat);\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | Cat | {\n        readonly \"@list\": readonly [];\n        readonly [key: string]: JsonValue;\n      });\n  readonly [key: string]: JsonValue;\n};\n"
         )
     );
     assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
@@ -955,7 +1134,7 @@ fn pydantic_projects_list_valued_class() {
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
         Some(
-            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | Cat | _InlineDefsHolderPropertiesExSubjectAnyOf2Object = Field(default=None, alias=\"ex:subject\")"
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | Cat | _InlineDefsHolderPropertiesExSubjectAnyOf2Object | _InlineDefsHolderPropertiesExSubjectAnyOf3Object = Field(default=None, alias=\"ex:subject\")"
         )
     );
     assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
@@ -1013,12 +1192,11 @@ fn linkml_projects_list_valued_class() {
     let emitted = emit(LIST_VALUED_CLASS);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(
-            r#"{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"Cat"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"}],"required":false,"slot_uri":"ex:subject"}"#
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"Cat"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
     assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
     assert_eq!(source_codes(&emitted), owned2(&[("sh:class", HOLDER),]));
 }
@@ -1026,34 +1204,16 @@ fn linkml_projects_list_valued_class() {
 #[test]
 fn json_schema_projects_list_valued_datatype() {
     let emitted = emit(LIST_VALUED_DATATYPE);
-    assert_eq!(
-        source_losses(&emitted),
-        owned3(&[
-            (
-                "sh:datatype",
-                HOLDER,
-                "numeric literals project as bare JSON numbers without their datatype or lexical form, so a numeric literal of another numeric datatype, or an ill-typed one, is not told apart"
-            ),
-            (
-                "sh:datatype",
-                HOLDER,
-                "a constraint on the focus node itself has no projection in an object schema describing the node's properties"
-            ),
-        ])
-    );
+    assert_eq!(source_losses(&emitted), owned3(&[]));
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r#"{"$comment":"a sh:datatype constraint on property ex:subject is widened (numeric datatypes are not told apart)","anyOf":[{"anyOf":[{"type":"integer"},{"properties":{"@type":{"const":"xsd:integer"},"@value":{"type":"string"}},"required":["@value","@type"],"type":"object"}]},{"type":"string"}]}"#
+            r#"{"anyOf":[{"anyOf":[{"type":"integer"},{"properties":{"@type":{"const":"xsd:integer"},"@value":{"pattern":"^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$","type":"string"}},"required":["@value","@type"],"type":"object"}]},{"type":"string"}]}"#
         )
     );
-    assert_eq!(
-        holder["$comment"],
-        json(
-            r#""a node-level sh:datatype constraint was dropped (no projection in an object schema)""#
-        )
-    );
+    assert_eq!(holder["allOf"], json(r"[false]"));
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -1061,21 +1221,22 @@ fn typescript_projects_list_valued_datatype() {
     let emitted = emit(LIST_VALUED_DATATYPE);
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
-        Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ((number | {\n          readonly \"@type\": \"xsd:integer\";\n          readonly \"@value\": string;\n          readonly [key: string]: JsonValue;\n        }) | string);\n  readonly [key: string]: JsonValue;\n};\n"
-        )
+        Some("export type Holder = never;\n")
     );
     assert_eq!(
         holder_losses(&emitted.typescript_losses),
-        owned2(&[(
-            "integer-validation-widened",
-            "#/$defs/Holder/properties/ex:subject/anyOf/0/anyOf/0/type"
-        ),])
+        owned2(&[
+            (
+                "integer-validation-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0/anyOf/0/type"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0/anyOf/1/properties/@value/pattern"
+            ),
+        ])
     );
-    assert_eq!(
-        source_codes(&emitted),
-        owned2(&[("sh:datatype", HOLDER), ("sh:datatype", HOLDER),])
-    );
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -1087,60 +1248,29 @@ fn pydantic_projects_list_valued_datatype() {
             "    subject: StrictInt | _InlineDefsHolderPropertiesExSubjectAnyOf0AnyOf1Object | StrictStr = Field(default=None, alias=\"ex:subject\")"
         )
     );
-    assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
-    assert_pydantic_keeps_comments(&emitted);
     assert_eq!(
-        source_codes(&emitted),
-        owned2(&[("sh:datatype", HOLDER), ("sh:datatype", HOLDER),])
+        holder_losses(&emitted.pydantic_losses),
+        owned2(&[
+            ("intersection-validation-widened", "#/$defs/Holder/allOf"),
+            ("keyword-validation-dropped", "#/$defs/Holder/allOf/0"),
+        ])
     );
+    assert_pydantic_keeps_comments(&emitted);
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
 fn graphql_projects_list_valued_datatype() {
     let emitted = emit(LIST_VALUED_DATATYPE);
-    assert_eq!(
-        gql_type(&emitted.graphql, "Holder").as_deref(),
-        Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
-        )
-    );
+    assert_eq!(gql_type(&emitted.graphql, "Holder").as_deref(), None);
     assert_eq!(
         holder_losses(&emitted.graphql_losses),
         owned2(&[
-            (
-                "additional-properties-validation-narrowed",
-                "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
-            ),
-            (
-                "nullable-presence-validation-widened",
-                "#/$defs/Holder/properties/@annotation"
-            ),
-            (
-                "nullable-presence-validation-widened",
-                "#/$defs/Holder/properties/@id"
-            ),
-            (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
-            ),
-            (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
-            ),
+            ("custom-scalar-validation-delegated", "#/$defs/Holder"),
+            ("intersection-validation-delegated", "#/$defs/Holder/allOf"),
         ])
     );
-    assert_eq!(
-        source_codes(&emitted),
-        owned2(&[("sh:datatype", HOLDER), ("sh:datatype", HOLDER),])
-    );
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -1148,43 +1278,36 @@ fn linkml_projects_list_valued_datatype() {
     let emitted = emit(LIST_VALUED_DATATYPE);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(
-            r#"{"alias":"ex:subject","any_of":[{"any_of":[{"range":"integer"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0AnyOf1Object"}]},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
+        holder,
+        &json(
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"any_of":[{"range":"integer"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0AnyOf1Object"}]},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
-    assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
     assert_eq!(
-        source_codes(&emitted),
-        owned2(&[("sh:datatype", HOLDER), ("sh:datatype", HOLDER),])
+        holder_losses(&emitted.linkml_losses),
+        owned2(&[("keyword-validation-dropped", "#/$defs/Holder/allOf/0"),])
     );
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
 fn json_schema_projects_list_valued_node_kind() {
     let emitted = emit(LIST_VALUED_NODE_KIND);
-    assert_eq!(
-        source_losses(&emitted),
-        owned3(&[(
-            "sh:nodeKind",
-            HOLDER,
-            "a constraint on the focus node itself has no projection in an object schema describing the node's properties"
-        ),])
-    );
+    assert_eq!(source_losses(&emitted), owned3(&[]));
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
         holder["properties"]["ex:subject"],
         json(
-            r#"{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@id":{"type":"object"}},"required":["@id"],"type":"object"},{"properties":{"@type":{"type":"string"},"@value":{}},"required":["@value"],"type":"object"},{"type":"boolean"},{"type":"number"},{"type":"string"}]}"#
+            r#"{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@id":{"type":"object"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"},{"properties":{"@type":{"type":"string"},"@value":{}},"required":["@value"],"type":"object"},{"type":"boolean"},{"type":"number"},{"type":"string"}]}"#
         )
     );
     assert_eq!(
-        holder["$comment"],
+        holder["allOf"],
         json(
-            r#""a node-level sh:nodeKind constraint was dropped (no projection in an object schema)""#
+            r#"[{"properties":{"@id":{"anyOf":[{"pattern":"^(?:[^_]|_(?:[^:]|$))"},{"pattern":"^_:"}]}},"required":["@id"]}]"#
         )
     );
+    assert!(holder["$comment"].is_null());
 }
 
 #[test]
@@ -1193,17 +1316,27 @@ fn typescript_projects_list_valued_node_kind() {
     assert_eq!(
         ts_type(&emitted.typescript, "Holder").as_deref(),
         Some(
-            "export type Holder = {\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@id\": {\n            readonly [key: string]: JsonValue;\n          };\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@type\"?: string;\n        readonly \"@value\": JsonValue;\n        readonly [key: string]: JsonValue;\n      } | boolean | number | string);\n  readonly [key: string]: JsonValue;\n};\n"
+            "export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: ({\n        readonly \"@id\": string;\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@id\": {\n            readonly [key: string]: JsonValue;\n          };\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@list\": readonly [];\n        readonly [key: string]: JsonValue;\n      } | {\n        readonly \"@type\"?: string;\n        readonly \"@value\": JsonValue;\n        readonly [key: string]: JsonValue;\n      } | boolean | number | string);\n  readonly [key: string]: JsonValue;\n} & (null | boolean | number | string | readonly JsonValue[] | {\n    readonly \"@id\": JsonValue;\n    readonly [key: string]: JsonValue;\n  }));\n"
         )
     );
     assert_eq!(
         holder_losses(&emitted.typescript_losses),
-        owned2(&[(
-            "string-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject/anyOf/0/properties/@id/pattern"
-        ),])
+        owned2(&[
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/0/pattern"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/1/pattern"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0/properties/@id/pattern"
+            ),
+        ])
     );
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:nodeKind", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -1212,57 +1345,39 @@ fn pydantic_projects_list_valued_node_kind() {
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
         Some(
-            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object | _InlineDefsHolderPropertiesExSubjectAnyOf2Object | StrictBool | Annotated[StrictFloat, Field(allow_inf_nan=False)] | StrictInt | StrictStr = Field(default=None, alias=\"ex:subject\")"
+            "    subject: _InlineDefsHolderPropertiesExSubjectAnyOf0Object | _InlineDefsHolderPropertiesExSubjectAnyOf1Object | _InlineDefsHolderPropertiesExSubjectAnyOf2Object | _InlineDefsHolderPropertiesExSubjectAnyOf3Object | StrictBool | Annotated[StrictFloat, Field(allow_inf_nan=False)] | StrictInt | StrictStr = Field(default=None, alias=\"ex:subject\")"
         )
     );
-    assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
+    assert_eq!(
+        holder_losses(&emitted.pydantic_losses),
+        owned2(&[
+            ("intersection-validation-widened", "#/$defs/Holder/allOf"),
+            (
+                "keyword-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/0"
+            ),
+            (
+                "keyword-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/1"
+            ),
+        ])
+    );
     assert_pydantic_keeps_comments(&emitted);
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:nodeKind", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
 fn graphql_projects_list_valued_node_kind() {
     let emitted = emit(LIST_VALUED_NODE_KIND);
-    assert_eq!(
-        gql_type(&emitted.graphql, "Holder").as_deref(),
-        Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
-        )
-    );
+    assert_eq!(gql_type(&emitted.graphql, "Holder").as_deref(), None);
     assert_eq!(
         holder_losses(&emitted.graphql_losses),
         owned2(&[
-            (
-                "additional-properties-validation-narrowed",
-                "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
-            ),
-            (
-                "nullable-presence-validation-widened",
-                "#/$defs/Holder/properties/@annotation"
-            ),
-            (
-                "nullable-presence-validation-widened",
-                "#/$defs/Holder/properties/@id"
-            ),
-            (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
-            ),
-            (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
-            ),
+            ("custom-scalar-validation-delegated", "#/$defs/Holder"),
+            ("intersection-validation-delegated", "#/$defs/Holder/allOf"),
         ])
     );
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:nodeKind", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -1270,20 +1385,29 @@ fn linkml_projects_list_valued_node_kind() {
     let emitted = emit(LIST_VALUED_NODE_KIND);
     let holder = &emitted.linkml["classes"]["Holder"];
     assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(
-            r#"{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"range":"boolean"},{"range":"double"},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
+        holder,
+        &json(
+            r#"{"all_of":[{"is_a":"InlineDefsHolderAllOf0Object"}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"},{"range":"boolean"},{"range":"double"},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
     assert_eq!(
         holder_losses(&emitted.linkml_losses),
-        owned2(&[(
-            "keyword-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject/anyOf/2/properties/@value"
-        ),])
+        owned2(&[
+            (
+                "keyword-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/0"
+            ),
+            (
+                "keyword-validation-dropped",
+                "#/$defs/Holder/allOf/0/properties/@id/anyOf/1"
+            ),
+            (
+                "keyword-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/3/properties/@value"
+            ),
+        ])
     );
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:nodeKind", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -2938,7 +3062,7 @@ mod observed {
             .as_array()
             .expect("@graph")
             .iter()
-            .find(|node| node["@id"] == "ex:h")
+            .find(|node| node["@id"] == "https://example.org/h")
             .expect("ex:h is projected")
             .clone();
         let schema: Value = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
@@ -3024,11 +3148,10 @@ mod observed {
     }
 
     /// Where the other constraints admit an IRI, `sh:pattern` judges `str()` of
-    /// it — the full IRI — which the projection's compacted `@id` does not carry:
-    /// the part is recorded, and an IRI the pattern rejects is accepted by the
-    /// schema. The literal and blank-node verdicts still agree.
+    /// it — the full IRI, which is the projection's `@id` — so an IRI the
+    /// pattern rejects is rejected by the schema too, and nothing is recorded.
     #[test]
-    fn json_schema_pattern_on_iris_is_a_recorded_loss() {
+    fn json_schema_pattern_on_iris_agrees_with_validation() {
         let shapes = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
             sh:property [ sh:path ex:subject ; sh:nodeKind sh:IRIOrLiteral ;
                           sh:pattern "^https://example.org/" ] ."#;
@@ -3036,95 +3159,349 @@ mod observed {
             shapes,
             &[
                 ("ex:inside", true),
+                ("<urn:outside>", false),
                 (r#""https://example.org/x""#, true),
                 (r#""elsewhere""#, false),
+                // `rdf:nil` is an IRI, projected as the empty list: its IRI is
+                // judged at compile time.
+                ("()", false),
             ],
         );
-        let data = "ex:h a ex:Holder ; ex:subject <urn:outside> .";
-        assert_eq!(judge(shapes, data), (true, false));
+        // The literals admitted include canonical integers, whose numerals a
+        // pattern cannot judge (see the integer test below).
         assert_eq!(
-            source_losses(&emit(shapes)),
-            owned3(&[(
-                "sh:pattern",
-                HOLDER,
-                "the lexical form is not checked on IRI values (projected as a compacted @id, \
-                 not the IRI string) or numeric and boolean literals (projected as JSON scalars \
-                 without their lexical form)"
-            )])
+            source_codes(&emit(shapes)),
+            owned2(&[("sh:pattern", HOLDER)])
         );
-        // With the values held to IRIs and strings, only the IRI part remains.
-        let listed = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
-            sh:property [ sh:path ex:subject ; sh:pattern "^https://example.org/" ;
-                          sh:in ( ex:inside <urn:outside> "https://example.org/x" ) ] ."#;
-        agree(
-            listed,
-            &[("ex:inside", true), (r#""https://example.org/x""#, true)],
-        );
-        assert_eq!(
-            judge(listed, "ex:h a ex:Holder ; ex:subject <urn:outside> ."),
-            (true, false)
-        );
-        assert_eq!(
-            source_losses(&emit(listed)),
-            owned3(&[(
-                "sh:pattern",
-                HOLDER,
-                "the lexical form is not checked on IRI values (projected as a compacted @id, \
-                 not the IRI string)"
-            )])
-        );
+        let nil = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:pattern "syntax-ns#nil$" ] ."#;
+        agree(nil, &[("()", true), ("ex:inside", false), ("( 1 )", false)]);
     }
 
-    /// A pattern whose `sh:flags` has no ECMA-262 translation (`i`, whose XPath
-    /// case variants are not simple case folding) is not emitted: the loss is
-    /// recorded rather than a pattern with another language.
+    /// `sh:flags "i"` is written into the pattern as XPath case variants, so
+    /// it is emitted and judges exactly what validation does.
     #[test]
-    fn json_schema_untranslatable_flags_record_the_loss() {
+    fn json_schema_case_insensitive_flag_agrees_with_validation() {
         let shapes = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
             sh:property [ sh:path ex:subject ; sh:datatype xsd:string ;
                           sh:pattern "^abc$" ; sh:flags "i" ] ."#;
-        let emitted = emit(shapes);
-        assert_eq!(
-            emitted.schema["$defs"]["Holder"]["properties"]["ex:subject"]["anyOf"][0]["pattern"],
-            Value::Null
+        assert!(emit(shapes).compiled.losses.is_empty());
+        agree(
+            shapes,
+            &[
+                (r#""abc""#, true),
+                (r#""ABC""#, true),
+                (r#""aBc""#, true),
+                (r#""abd""#, false),
+            ],
         );
-        let codes: Vec<(String, String)> = source_codes(&emitted);
-        assert_eq!(codes, owned2(&[("sh:pattern", HOLDER)]));
-        // The neighbour without the flag translates, and records nothing.
-        let plain = shapes.replace(r#"; sh:flags "i" "#, "");
-        assert!(emit(&plain).compiled.losses.is_empty());
-        agree(&plain, &[(r#""abc""#, true), (r#""ABC""#, false)]);
     }
 
     /// `sh:minLength` and `sh:maxLength` count the lexical form's characters on a
-    /// bare string, a typed literal and a language-tagged literal alike, and
-    /// reject a blank node.
+    /// bare string, a typed literal and a language-tagged literal alike, on an
+    /// IRI's full string, on the canonical numeral of a bare integer and on
+    /// `true`/`false`, and reject a blank node.
     #[test]
     fn json_schema_lengths_agree_with_validation() {
         let shapes = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
-            sh:property [ sh:path ex:subject ; sh:nodeKind sh:BlankNodeOrLiteral ;
-                          sh:minLength 2 ; sh:maxLength 3 ] .";
+            sh:property [ sh:path ex:subject ; sh:minLength 2 ; sh:maxLength 4 ] .";
         agree(
             shapes,
             &[
                 (r#""ab""#, true),
-                (r#""abcd""#, false),
+                (r#""abcde""#, false),
                 (r#""a""#, false),
                 (r#""abc"^^ex:code"#, true),
-                (r#""abcd"^^ex:code"#, false),
+                (r#""abcde"^^ex:code"#, false),
                 (r#""a"^^ex:code"#, false),
                 (r#""ab"@en"#, true),
-                (r#""abcd"@en"#, false),
+                (r#""abcde"@en"#, false),
                 ("[]", false),
+                ("( 1 )", false),
+                ("12", true),
+                ("-5", true),
+                ("5", false),
+                ("12345", false),
+                ("-1234", false),
+                ("true", true),
+                ("false", false),
+                ("<a:bc>", true),
+                ("ex:long", false),
             ],
         );
+        assert!(emit(shapes).compiled.losses.is_empty());
+    }
+
+    /// A pattern over a bare integer's numeral has no JSON Schema statement
+    /// (`pattern` judges strings; the integers whose numerals start with `1`
+    /// are no finite union of intervals and residue classes): recorded, and
+    /// observed. With `sh:in` making the admissible integers finite, each is
+    /// judged as a constant and nothing is recorded.
+    #[test]
+    fn json_schema_pattern_on_integers_is_proven_inexpressible() {
+        let shapes = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:datatype xsd:integer ; sh:pattern "^1" ] ."#;
+        agree(shapes, &[("12", true), (r#""+21"^^xsd:integer"#, false)]);
         assert_eq!(
-            judge(shapes, "ex:h a ex:Holder ; ex:subject 12345 ."),
+            judge(shapes, "ex:h a ex:Holder ; ex:subject 21 ."),
             (true, false)
         );
         assert_eq!(
             source_codes(&emit(shapes)),
-            owned2(&[("sh:maxLength", HOLDER), ("sh:minLength", HOLDER)])
+            owned2(&[("sh:pattern", HOLDER)])
+        );
+        let listed = r#"ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:pattern "^1" ; sh:in ( 12 21 ) ] ."#;
+        agree(listed, &[("12", true), ("21", false)]);
+        assert!(emit(listed).compiled.losses.is_empty());
+    }
+
+    /// `rdf:langString` and `rdf:dirLangString` are told apart by the
+    /// projection's `@direction`.
+    #[test]
+    fn json_schema_base_direction_agrees_with_validation() {
+        let plain = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:datatype rdf:langString ] .";
+        let directional = plain.replace("rdf:langString", "rdf:dirLangString");
+        agree(
+            plain,
+            &[
+                (r#""hi"@en"#, true),
+                (r#""hi"@en--rtl"#, false),
+                (r#""hi""#, false),
+            ],
+        );
+        agree(
+            &directional,
+            &[
+                (r#""hi"@en--rtl"#, true),
+                (r#""hi"@en--ltr"#, true),
+                (r#""hi"@en"#, false),
+            ],
+        );
+        assert!(emit(plain).compiled.losses.is_empty());
+        assert!(emit(&directional).compiled.losses.is_empty());
+    }
+
+    /// Every numeric datatype is told apart: only a canonical `xsd:integer` is
+    /// a bare number, and every other numeric literal keeps its datatype and
+    /// lexical form, held to the datatype's lexical and value space.
+    #[test]
+    fn json_schema_numeric_datatypes_agree_with_validation() {
+        for (datatype, cases) in [
+            (
+                "xsd:int",
+                &[
+                    (r#""5"^^xsd:int"#, true),
+                    ("5", false),
+                    (r#""3000000000"^^xsd:int"#, false),
+                    (r#""5"^^xsd:long"#, false),
+                ][..],
+            ),
+            (
+                "xsd:byte",
+                &[
+                    (r#""127"^^xsd:byte"#, true),
+                    (r#""-128"^^xsd:byte"#, true),
+                    (r#""128"^^xsd:byte"#, false),
+                ][..],
+            ),
+            (
+                "xsd:decimal",
+                &[("1.5", true), ("1.5e0", false), ("1", false)][..],
+            ),
+            (
+                "xsd:double",
+                &[
+                    ("1.5e0", true),
+                    (r#""INF"^^xsd:double"#, true),
+                    ("1.5", false),
+                ][..],
+            ),
+            (
+                "xsd:integer",
+                &[("7", true), (r#""+07"^^xsd:integer"#, true), ("7.0", false)][..],
+            ),
+        ] {
+            let shapes = format!(
+                "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+                   sh:property [ sh:path ex:subject ; sh:datatype {datatype} ] ."
+            );
+            agree(&shapes, cases);
+            assert!(emit(&shapes).compiled.losses.is_empty(), "{datatype}");
+        }
+    }
+
+    /// A numeric bound compares a typed literal of an integer-family or decimal
+    /// datatype by an order pattern on its lexical form, exactly as a bare
+    /// integer by `minimum`/`maximum`; a double's lexical forms on one side of
+    /// a bound are no regular language, so a double is not judged — recorded,
+    /// and observed.
+    #[test]
+    fn json_schema_typed_numeric_bounds_agree_with_validation() {
+        let shapes = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:minInclusive 1 ; sh:maxExclusive 10 ] .";
+        agree(
+            shapes,
+            &[
+                (r#""5"^^xsd:int"#, true),
+                (r#""10"^^xsd:int"#, false),
+                (r#""+05"^^xsd:integer"#, true),
+                ("1.5", true),
+                ("0.5", false),
+                ("9.99", true),
+                ("10.0", false),
+                (r#""5"^^xsd:unsignedByte"#, true),
+                (r#""2026-01-01"^^xsd:date"#, false),
+                ("5e0", true),
+            ],
+        );
+        assert_eq!(
+            judge(shapes, "ex:h a ex:Holder ; ex:subject 50e0 ."),
+            (true, false)
+        );
+        assert_eq!(
+            source_codes(&emit(shapes)),
+            owned2(&[("sh:maxExclusive", HOLDER), ("sh:minInclusive", HOLDER)])
+        );
+        // Held to decimals, the bounds judge every admissible value.
+        let decimals = shapes.replace(
+            "sh:minInclusive 1",
+            "sh:datatype xsd:decimal ; sh:minInclusive 1",
+        );
+        agree(
+            &decimals,
+            &[("1.5", true), ("0.5", false), ("12.25", false)],
+        );
+        assert!(emit(&decimals).compiled.losses.is_empty());
+    }
+
+    /// `sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers` and
+    /// `sh:memberShape` judge the `@list` a list value projects as; a value
+    /// that is not a list violates each. A list kept as linked `@graph` nodes
+    /// (here: its head cell carries another property) is not judged — no JSON
+    /// Schema keyword reaches another node's `rdf:first` — recorded, and
+    /// observed.
+    #[test]
+    fn json_schema_list_components_agree_with_validation() {
+        let lengths = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:minListLength 2 ; sh:maxListLength 3 ] .";
+        agree(
+            lengths,
+            &[
+                ("( 1 2 )", true),
+                ("( 1 2 3 )", true),
+                ("( 1 )", false),
+                ("()", false),
+                ("( 1 2 3 4 )", false),
+                (r#""( 1 2 )""#, false),
+                ("<<( ex:a ex:b ex:c )>>", false),
+            ],
+        );
+        let node_form = "ex:h a ex:Holder ; ex:subject _:head .
+            _:head rdf:first 1 ; rdf:rest rdf:nil ; ex:note \"annotated\" .";
+        assert_eq!(judge(lengths, node_form), (true, false));
+        assert_eq!(
+            source_codes(&emit(lengths)),
+            owned2(&[("sh:maxListLength", HOLDER), ("sh:minListLength", HOLDER)])
+        );
+
+        let unique = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:uniqueMembers true ] .";
+        agree(
+            unique,
+            &[
+                ("( 1 2 )", true),
+                ("( 1 1 )", false),
+                ("( ex:a ex:a )", false),
+                (r#"( "a" "a"@en )"#, true),
+                (r#"( 1 "1"^^xsd:int )"#, true),
+                // Two member lists are two nodes, whatever their members.
+                ("( ( 1 ) ( 1 ) )", true),
+                ("( () () )", false),
+                ("()", true),
+            ],
+        );
+        // A node that is no list is a node reference, which the schema cannot
+        // tell from a list kept as linked nodes.
+        assert_eq!(
+            judge(unique, "ex:h a ex:Holder ; ex:subject ex:notAList ."),
+            (true, false)
+        );
+
+        let members = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ;
+                          sh:memberShape [ sh:datatype xsd:integer ; sh:minInclusive 0 ] ] .";
+        agree(
+            members,
+            &[
+                ("( 1 2 )", true),
+                ("( 1 -1 )", false),
+                (r#"( 1 "x" )"#, false),
+                ("()", true),
+            ],
+        );
+        let iris = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:memberShape [ sh:nodeKind sh:IRI ] ] .";
+        agree(
+            iris,
+            &[
+                ("( ex:a () )", true),
+                ("( [] )", false),
+                ("( ( 1 ) )", false),
+            ],
+        );
+
+        // `sh:uniqueMembers false` requires only a list; a node that is none is
+        // a node reference the schema cannot tell from a list kept as nodes.
+        let listness = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:uniqueMembers false ] .";
+        agree(
+            listness,
+            &[("( 1 1 )", true), (r#""x""#, false), ("7", false)],
+        );
+        assert_eq!(
+            judge(listness, "ex:h a ex:Holder ; ex:subject ex:notAList ."),
+            (true, false)
+        );
+    }
+
+    /// The list components on a node shape judge its focus node as the list: a
+    /// cell whose `rdf:first` is one member and whose `rdf:rest` holds the
+    /// others. The focus node's own member is not compared with the rest's (no
+    /// JSON Schema keyword relates two instance locations) — recorded, and
+    /// observed.
+    #[test]
+    fn json_schema_node_list_components_agree_with_validation() {
+        for (data, conforms) in [
+            (
+                "ex:h a ex:Holder ; rdf:first ex:a ; rdf:rest ( ex:b ) .",
+                true,
+            ),
+            ("ex:h a ex:Holder ; rdf:first ex:a ; rdf:rest () .", true),
+            (
+                "ex:h a ex:Holder ; rdf:first ex:a ; rdf:rest ( ex:b ex:c ex:d ) .",
+                false,
+            ),
+            ("ex:h a ex:Holder ; rdf:first 1 ; rdf:rest () .", false),
+            (
+                "ex:h a ex:Holder ; rdf:first ex:a ; rdf:rest ( ex:b ex:b ) .",
+                false,
+            ),
+            (
+                "ex:h a ex:Holder ; rdf:first ex:a , ex:b ; rdf:rest () .",
+                false,
+            ),
+            ("ex:h a ex:Holder .", false),
+        ] {
+            assert_eq!(judge(NODE_LIST, data), (conforms, conforms), "{data}");
+        }
+        assert_eq!(
+            judge(
+                NODE_LIST,
+                "ex:h a ex:Holder ; rdf:first ex:a ; rdf:rest ( ex:a ) ."
+            ),
+            (true, false)
         );
     }
 
@@ -3325,6 +3702,38 @@ mod observed {
         }
     }
 
+    /// A node shape's value, node-kind and lexical constraints judge the focus
+    /// node through its `@id`; a datatype, language or range constraint, which
+    /// only a literal meets, fails for every focus node, in both.
+    #[test]
+    fn json_schema_focus_node_constraints_agree_with_validation() {
+        let data = "ex:h a ex:Holder .";
+        for (constraint, conforms) in [
+            ("sh:in ( ex:h ex:k )", true),
+            ("sh:in ( ex:k 1 )", false),
+            ("sh:hasValue ex:h", true),
+            ("sh:hasValue ex:k", false),
+            (r#"sh:pattern "/h$""#, true),
+            (r#"sh:pattern "/k$""#, false),
+            (r#"sh:pattern "^HTTPS:" ; sh:flags "i""#, true),
+            ("sh:maxLength 100", true),
+            ("sh:minLength 100", false),
+            ("sh:nodeKind sh:IRI", true),
+            ("sh:nodeKind sh:BlankNodeOrIRI", true),
+            ("sh:nodeKind sh:BlankNode", false),
+            ("sh:nodeKind sh:Literal", false),
+            ("sh:datatype xsd:string", false),
+            ("sh:minInclusive 1", false),
+            (r#"sh:languageIn ( "en" )"#, false),
+        ] {
+            let shapes = format!(
+                "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; {constraint} ."
+            );
+            assert_eq!(judge(&shapes, data), (conforms, conforms), "{constraint}");
+            assert!(emit(&shapes).compiled.losses.is_empty(), "{constraint}");
+        }
+    }
+
     /// `sh:closed true` projects as a closed object and `sh:closed sh:ByTypes`
     /// leaves it open: an undeclared property is rejected by the first in both
     /// the schema and validation, and accepted by the schema under the second —
@@ -3407,22 +3816,25 @@ fn json_schema_records_shape_based_property_constraints() {
     );
 }
 
-/// On a node shape, a constraint judging the focus node itself — here its
-/// value, lexical form and range — records its own code; a node-level
-/// `sh:singleLine` holds of every subject and records nothing.
+/// On a node shape, a constraint judging the focus node itself projects on the
+/// node's `@id` (its full IRI or blank-node label) or, where only a literal
+/// could meet it, rejects every node; only a class membership, which runs
+/// through `rdfs:subClassOf*` triples on other `@graph` nodes, records a loss.
 #[test]
-fn json_schema_records_focus_node_constraints() {
+fn json_schema_projects_focus_node_constraints() {
     let emitted = emit(
         r#"
         ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
             sh:in ( ex:a ex:b ) ; sh:pattern "^https:" ; sh:minInclusive 1 ; sh:singleLine true .
         "#,
     );
-    let mut codes: Vec<String> = source_codes(&emitted)
-        .into_iter()
-        .map(|(code, _)| code)
-        .collect();
-    codes.sort();
-    assert_eq!(codes, ["sh:in", "sh:minInclusive", "sh:pattern"]);
-    purrdf::loss::assert_ledger_sound(&emitted.compiled.losses, "shacl", "json-schema");
+    assert!(
+        emitted.compiled.losses.is_empty(),
+        "{}",
+        emitted.compiled.losses.render_json()
+    );
+    let classed =
+        emit("ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ; sh:class ex:Root .");
+    assert_eq!(source_codes(&classed), owned2(&[("sh:class", HOLDER)]));
+    purrdf::loss::assert_ledger_sound(&classed.compiled.losses, "shacl", "json-schema");
 }
