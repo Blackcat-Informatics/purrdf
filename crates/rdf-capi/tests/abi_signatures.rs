@@ -308,16 +308,24 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
     let expected: [(&str, String); 4] = [
         (
             "purrdf_shacl_validate_to_sarif",
+            // `0.8.0` (unshipped) also inserted the conformance-disallow set and the
+            // shapes graph's `owl:imports` table before the out-parameters;
+            // `shapes_base_iri` stays where `0.7.0` put it.
             "int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, \
-             const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, \
-             PurrdfError **out_error)"
+             const char *shapes_base_iri, const char *data_nt, \
+             const char *const *conformance_disallows, size_t conformance_disallows_count, \
+             const char *const *import_iris, const char *const *import_documents, \
+             size_t import_count, PurrdfBuffer **out_buffer, PurrdfError **out_error)"
                 .to_owned(),
         ),
         (
             "purrdf_shacl_entail_to_ntriples",
+            // `0.8.0` (unshipped) inserted the shapes graph's `owl:imports` table
+            // before the out-parameters.
             "int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, \
-             const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, \
-             PurrdfError **out_error)"
+             const char *shapes_base_iri, const char *data_nt, \
+             const char *const *import_iris, const char *const *import_documents, \
+             size_t import_count, PurrdfBuffer **out_buffer, PurrdfError **out_error)"
                 .to_owned(),
         ),
         (

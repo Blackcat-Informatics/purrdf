@@ -680,7 +680,7 @@ def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness()
     of the asserted one.
     """
     pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
-    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [])
+    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [], [])
 
     assert answer.startswith("mechanism strict-table\nvar c\n")
     # `A` is asserted; `B` is derived by cax-sco and is a certain answer all the same.
@@ -730,16 +730,16 @@ def test_a_variable_is_projected_from_every_position_including_the_predicate() -
             "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
         ),
     ]:
-        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [])
+        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [], [])
         assert answer == expected, pattern
 
     # …and the predicate column ranges over what the CHASE entailed. No triple of
     # `SCHEMA` states `x rdf:type B`; `cax-sco` is the only reason the row exists.
     bridge = "<https://example.org/x> ?p <https://example.org/B> .\n"
-    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [])
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [], [])
     assert answer.startswith("mechanism strict-table\nvar p\n")
     assert f"\nrow <{RDF_TYPE}>\n" in answer
-    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [])
+    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [], [])
     assert asserted == "mechanism strict-table\nvar p\n"
 
 
@@ -759,6 +759,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         query_string,
         "<https://example.org/s> <https://example.org/p?zzz=1> ?o .\n",
         [],
+        [],
     )
     assert answer == "mechanism strict-table\nvar o\nrow <https://example.org/o>\n"
 
@@ -767,6 +768,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         entail.Regime.SIMPLE,
         quoted,
         '<https://example.org/s> ?p "is ?zzz a variable" .\n',
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
@@ -777,6 +779,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         one,
         "# is ?zzz a variable? it is prose.\n"
         "<https://example.org/s> ?p <https://example.org/o> .\n",
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
@@ -807,10 +810,10 @@ def test_an_open_predicate_is_a_named_limit_rather_than_a_short_answer() -> None
         f"<https://example.org/p> <{RDF_TYPE}> "
         "<http://www.w3.org/2002/07/owl#TransitiveProperty> .\n"
     )
-    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [])
+    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [], [])
     assert verdict == "mechanism freeze\nentailment entailed\n"
 
-    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [])
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [], [])
     assert "owl#TransitiveProperty" not in answer
     limits = [line for line in answer.splitlines() if line.startswith("limit ")]
     assert len(limits) == 1, answer
@@ -831,7 +834,7 @@ def test_the_variable_stand_in_never_reaches_a_python_caller() -> None:
         "?s ?p ?o .\n?o ?p2 ?s .\n",
     ]:
         for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
-            answer, certificate = entail.certain_answers(regime, one, pattern, [])
+            answer, certificate = entail.certain_answers(regime, one, pattern, [], [])
             assert "urn:purrdf" not in answer + certificate
             assert "purrdfQvar" not in answer + certificate
 
@@ -859,12 +862,14 @@ def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> No
         premise,
         '?s <https://example.org/p> "5"^^<https://example.org/dt> .\n',
         [],
+        [],
     )
     assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/caller>\n"
     answer, _ = entail.certain_answers(
         entail.Regime.SIMPLE,
         premise,
         f'?s <https://example.org/p> "5"^^<{probe}> .\n',
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/probe>\n"
@@ -877,7 +882,7 @@ def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> No
     ]:
         for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
             with pytest.raises(ValueError) as refused:
-                entail.certain_answers(regime, premise, pattern, [])
+                entail.certain_answers(regime, premise, pattern, [], [])
             message = str(refused.value)
             assert "a variable is not a datatype IRI" in message
             assert "`?d`" in message
@@ -894,18 +899,18 @@ def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
     caller's data.
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
-    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [])
+    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [], [])
     assert answer == "mechanism strict-table\nentailment entailed\n"
     assert "\nfired cax-sco " in certificate
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [])
+    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [], [])
     assert answer.startswith("mechanism strict-table\nentailment not-entailed\n")
     assert "\nmiss " in answer
 
     # `D` realizes datatype entailment as the five dt-* rules and states no theorem
     # that they are all of it, so it can PROVE an entailment and never refute one.
-    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [])
+    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [], [])
     assert answer.startswith("mechanism strict-table\nentailment undecided\n")
     assert "\nundecided " in answer
 
@@ -919,14 +924,14 @@ def test_verify_entailment_re_decides_its_own_warrant() -> None:
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
     answer, certificate = entail.verify_entailment(
-        entail.Regime.OWL_RL, SCHEMA, entailed, []
+        entail.Regime.OWL_RL, SCHEMA, entailed, [], []
     )
     assert answer.startswith("mechanism strict-table\nentailment entailed\n")
     assert answer.endswith("warrant present\nverified true\n")
     assert certificate.startswith("purrdf-reasoning-report 4\n")
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [])
+    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [], [])
     assert answer.endswith("warrant absent\nverified not-applicable\n")
 
 
@@ -944,10 +949,10 @@ def test_the_regimes_defined_by_a_missing_input_are_refused_by_name() -> None:
         (entail.Regime.RIF, "rif"),
     ]:
         with pytest.raises(ValueError) as raised:
-            entail.graph_entails(regime, SCHEMA, entailed, [])
+            entail.graph_entails(regime, SCHEMA, entailed, [], [])
         assert spelling in str(raised.value)
         with pytest.raises(ValueError) as raised:
-            entail.certain_answers(regime, SCHEMA, pattern, [])
+            entail.certain_answers(regime, SCHEMA, pattern, [], [])
         assert spelling in str(raised.value)
 
 
@@ -1001,18 +1006,18 @@ def test_webont_imports_011_answers_from_its_own_premise_imports_intact() -> Non
     imports = [(SUPPORT_011_A, support)]
 
     answer, certificate = entail.graph_entails(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer.startswith("mechanism strict-table\nentailment entailed\n")
     assert certificate.startswith("purrdf-reasoning-report 4\n")
 
     # The other two services answer the same question the same way.
     answer, _ = entail.certain_answers(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer == "mechanism strict-table\nrow\n"
     answer, _ = entail.verify_entailment(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer.endswith("warrant present\nverified true\n")
 
@@ -1027,7 +1032,7 @@ def test_an_unsupplied_import_refuses_by_name_rather_than_reasoning_without_it()
     premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
     conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
     with pytest.raises(ValueError) as raised:
-        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [])
+        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [], [])
     assert SUPPORT_011_A in str(raised.value)
 
 
@@ -1043,6 +1048,7 @@ def test_a_malformed_import_table_is_refused_by_entry() -> None:
             premise,
             conclusion,
             [(SUPPORT_011_A, "this is not n-quads\n")],
+            [],
         )
     assert "the import document for" in str(raised.value)
 
@@ -1052,12 +1058,13 @@ def test_a_malformed_import_table_is_refused_by_entry() -> None:
             premise,
             conclusion,
             [(SUPPORT_011_A, support), (SUPPORT_011_A, "")],
+            [],
         )
     assert "twice" in str(raised.value)
 
     with pytest.raises(ValueError) as raised:
         entail.graph_entails(
-            entail.Regime.OWL_RL, premise, conclusion, [("", support)]
+            entail.Regime.OWL_RL, premise, conclusion, [("", support)], []
         )
     assert "empty ontology IRI" in str(raised.value)
 
@@ -1077,6 +1084,35 @@ def test_the_import_table_is_required_rather_than_defaulted() -> None:
         entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]
+
+
+def test_py_entail_premise_iris() -> None:
+    """`premise_iris` names the document the premise was read from.
+
+    A premise that imports its OWN IRI, with an empty import table, is refused when
+    the caller declares no premise IRI and answered when it names that IRI: the two
+    calls differ in `premise_iris` alone, so an argument that was silently dropped
+    would make both refuse.
+    """
+    premise_iri = "http://example.org/premise"
+    premise = (
+        f"<{premise_iri}> <http://www.w3.org/2002/07/owl#imports> <{premise_iri}> .\n"
+        "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
+    )
+    conclusion = "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
+    pattern = "<https://example.org/x> <https://example.org/p> ?o .\n"
+    for call, question in (
+        (entail.graph_entails, conclusion),
+        (entail.verify_entailment, conclusion),
+        (entail.certain_answers, pattern),
+    ):
+        with pytest.raises(ValueError) as raised:
+            call(entail.Regime.SIMPLE, premise, question, [], [])
+        assert premise_iri in str(raised.value)
+        answer, _ = call(entail.Regime.SIMPLE, premise, question, [], [premise_iri])
+        assert answer.startswith("mechanism strict-table\n"), answer
+    with pytest.raises(TypeError):
+        entail.graph_entails(entail.Regime.SIMPLE, premise, conclusion, [])  # type: ignore[call-arg]
 
 
 def test_every_regime_member_selects_a_distinct_native_regime() -> None:

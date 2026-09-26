@@ -52,7 +52,9 @@ const MAX_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DECLARATION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_SCHEMA_DEPTH: usize = 128;
-const MAX_TUPLE_EXPANSION: usize = 32;
+/// The greatest length a JavaScript array can have (ECMA-262 §10.4.2): a
+/// length bound at or beyond it constrains no JSON value TypeScript types.
+const MAX_ARRAY_LENGTH: u64 = 4_294_967_295;
 const RESERVED_TYPE_NAMES: &[&str] = &[
     "Any",
     "Array",
@@ -60,6 +62,7 @@ const RESERVED_TYPE_NAMES: &[&str] = &[
     "Boolean",
     "Date",
     "Function",
+    "JsonDistinct",
     "JsonObject",
     "JsonPrimitive",
     "JsonValue",
@@ -269,7 +272,7 @@ pub fn emit_typescript(
     let type_names = definition_names(definitions)?;
     validate_unguarded_reference_cycles(definitions)?;
     let (declaration, losses) = {
-        let mut renderer = Renderer::new(&type_names);
+        let mut renderer = Renderer::new(&type_names, definitions);
         for (key, definition) in definitions {
             renderer.audit_schema(definition, &definition_path(key), 0)?;
         }
@@ -515,16 +518,21 @@ enum JsonKind {
 
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
+    definitions: &'a Map<String, Value>,
     ledger: LossLedger,
     recorded_losses: BTreeSet<(String, String)>,
+    /// Whether a declaration uses the `JsonDistinct` helper.
+    uses_distinct: bool,
 }
 
 impl<'a> Renderer<'a> {
-    fn new(names: &'a BTreeMap<String, String>) -> Self {
+    fn new(names: &'a BTreeMap<String, String>, definitions: &'a Map<String, Value>) -> Self {
         Self {
             names,
+            definitions,
             ledger: LossLedger::new(),
             recorded_losses: BTreeSet::new(),
+            uses_distinct: false,
         }
     }
 
@@ -545,18 +553,23 @@ impl<'a> Renderer<'a> {
             "export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];\n\n",
         );
 
+        let mut body = String::new();
         for (key, definition) in definitions {
             let name = self
                 .names
                 .get(key)
                 .expect("definition_names covers every validated definition");
             if let Some(description) = schema_doc(definition)? {
-                write_doc_comment(&mut output, 0, description, None);
+                write_doc_comment(&mut body, 0, description, None);
             }
             let expression = self.render_schema(definition, &definition_path(key), 0)?;
-            writeln!(output, "export type {name} = {expression};\n")
+            writeln!(body, "export type {name} = {expression};\n")
                 .expect("writing TypeScript to a String cannot fail");
         }
+        if self.uses_distinct {
+            output.push_str(DISTINCT_HELPER);
+        }
+        output.push_str(&body);
         Ok(finish_text(output))
     }
 
@@ -591,9 +604,18 @@ impl<'a> Renderer<'a> {
                     })?;
                     conjuncts.push(name.clone());
                 }
+                // A finite value set meets the numeric keywords exactly by
+                // leaving out the numbers that fail them.
+                let decided = numeric_keywords_decided(object);
+                let admitted = |value: &Value| {
+                    !decided || literal_meets_numeric_keywords(object, value) == Some(true)
+                };
                 if let Some(values) = object.get("enum").and_then(Value::as_array) {
                     let mut variants = Vec::with_capacity(values.len());
                     for (index, value) in values.iter().enumerate() {
+                        if !admitted(value) {
+                            continue;
+                        }
                         variants.push(Self::render_literal(
                             value,
                             &format!("{path}/enum/{index}"),
@@ -603,11 +625,11 @@ impl<'a> Renderer<'a> {
                     conjuncts.push(join_union(variants));
                 }
                 if let Some(value) = object.get("const") {
-                    conjuncts.push(Self::render_literal(
-                        value,
-                        &format!("{path}/const"),
-                        depth + 1,
-                    )?);
+                    conjuncts.push(if admitted(value) {
+                        Self::render_literal(value, &format!("{path}/const"), depth + 1)?
+                    } else {
+                        "never".to_owned()
+                    });
                 }
                 if let Some(branches) = object.get("allOf").and_then(Value::as_array) {
                     let mut expressions = Vec::with_capacity(branches.len());
@@ -812,7 +834,7 @@ impl<'a> Renderer<'a> {
                 )?);
             }
         }
-        let mut rest = match object.get("items") {
+        let rest = match object.get("items") {
             None | Some(Value::Bool(true)) => "JsonValue".to_owned(),
             Some(Value::Bool(false)) => "never".to_owned(),
             Some(schema @ Value::Object(_)) => {
@@ -820,58 +842,80 @@ impl<'a> Renderer<'a> {
             }
             Some(_) => unreachable!("schema catalog validates items schemas"),
         };
-        let mut min_items = array_bound(object, "minItems", path)?.unwrap_or(0);
-        let mut max_items = array_bound(object, "maxItems", path)?;
-        let has_explicit_max = max_items.is_some();
-
-        if rest == "never" {
-            max_items = Some(max_items.map_or(prefix.len(), |value| value.min(prefix.len())));
-        }
-        if prefix.len().saturating_add(1) > MAX_TUPLE_EXPANSION {
-            self.record(
-                "tuple-array-validation-widened",
-                &format!("{path}/prefixItems"),
-                "The prefixItems tuple exceeds the fixed TypeScript declaration expansion budget",
-            );
-            let mut common = prefix;
-            if rest != "never" {
-                common.push(rest);
-            }
-            rest = join_union(common);
-            prefix = Vec::new();
-            if !has_explicit_max {
-                max_items = None;
-            }
-        }
-        if min_items > MAX_TUPLE_EXPANSION {
-            self.record(
-                "array-cardinality-validation-widened",
-                &format!("{path}/minItems"),
-                "minItems exceeds the fixed TypeScript tuple expansion budget",
-            );
-            min_items = 0;
-        }
-        if max_items.is_some_and(|maximum| maximum > MAX_TUPLE_EXPANSION) {
-            self.record(
-                "array-cardinality-validation-widened",
-                &format!("{path}/maxItems"),
-                "maxItems exceeds the fixed TypeScript tuple expansion budget",
-            );
-            max_items = None;
-        }
-        if let Some(maximum) = max_items
-            && maximum >= min_items
-            && maximum - min_items + 1 > MAX_TUPLE_EXPANSION
+        let min_items = array_bound(object, "minItems", path)?.unwrap_or(0);
+        let max_items = array_bound(object, "maxItems", path)?;
+        let relation = render_array_relation(&prefix, &rest, min_items, max_items);
+        if relation != "never"
+            && let Some(bounds) = self.distinct_bounds(object, path)?
         {
-            self.record(
-                "array-cardinality-validation-widened",
-                &format!("{path}/maxItems"),
-                "the minItems/maxItems interval exceeds the fixed TypeScript tuple union budget",
-            );
-            max_items = None;
+            // The enumeration holds each position to its type and every
+            // length the domains allow; the length bounds it does not imply
+            // are element properties, as `render_array_relation` states them.
+            self.uses_distinct = true;
+            let distinct = format!("JsonDistinct<{}, {rest}>", render_tuple(&prefix));
+            let mut properties = Vec::new();
+            if let Some(last) = bounds.least_last {
+                let item = usize::try_from(last)
+                    .ok()
+                    .and_then(|index| prefix.get(index))
+                    .map_or(rest.as_str(), String::as_str);
+                properties.push(format!("readonly \"{last}\": {item}"));
+            }
+            if let Some(maximum) = bounds.greatest {
+                properties.push(format!("readonly \"{maximum}\"?: never"));
+            }
+            return Ok(if properties.is_empty() {
+                distinct
+            } else {
+                format!("({distinct} & {{ {} }})", properties.join("; "))
+            });
         }
+        Ok(relation)
+    }
 
-        render_array_relation(&prefix, &rest, min_items, max_items)
+    /// When `uniqueItems` over this array is written exactly, the length bounds
+    /// the `JsonDistinct` enumeration must still state; `None` when it is not
+    /// written (see [`distinct_shape`]). Every item schema must admit finitely
+    /// many JSON scalars.
+    fn distinct_bounds(
+        &self,
+        object: &Map<String, Value>,
+        path: &str,
+    ) -> Result<Option<DistinctBounds>, TypeScriptError> {
+        if object.get("uniqueItems") != Some(&Value::Bool(true)) {
+            return Ok(None);
+        }
+        let mut domains = Vec::new();
+        if let Some(items) = object.get("prefixItems").and_then(Value::as_array) {
+            for item in items {
+                let Some(domain) = finite_scalar_domain(item, self.definitions) else {
+                    return Ok(None);
+                };
+                domains.push(domain);
+            }
+        }
+        let rest = match object.get("items") {
+            None | Some(Value::Bool(true)) => return Ok(None),
+            Some(Value::Bool(false)) => BTreeSet::new(),
+            Some(schema) => match finite_scalar_domain(schema, self.definitions) {
+                Some(domain) => domain,
+                None => return Ok(None),
+            },
+        };
+        let Some(shape) = distinct_shape(&domains, &rest) else {
+            return Ok(None);
+        };
+        let min_items = array_bound(object, "minItems", path)?.unwrap_or(0);
+        let longest = u64::try_from(shape.longest).unwrap_or(u64::MAX);
+        let greatest = array_bound(object, "maxItems", path)?.filter(|maximum| *maximum < longest);
+        let bounds = DistinctBounds {
+            least_last: min_items.checked_sub(1),
+            greatest,
+        };
+        // Intersecting the enumeration with the bounds distributes over its
+        // members: TypeScript refuses 100,000 of them (TS2590).
+        let intersected = bounds.least_last.is_some() || bounds.greatest.is_some();
+        Ok((!intersected || shape.total < DISTINCT_SPREAD_LIMIT).then_some(bounds))
     }
 
     fn render_literal(value: &Value, path: &str, depth: usize) -> Result<String, TypeScriptError> {
@@ -1012,22 +1056,21 @@ impl<'a> Renderer<'a> {
                     }
                 }
             }
-            if object.get("uniqueItems") == Some(&Value::Bool(true)) {
+            if object.get("uniqueItems") == Some(&Value::Bool(true))
+                && self.distinct_bounds(object, path)?.is_none()
+            {
                 self.record(
                     "unique-items-validation-dropped",
                     &format!("{path}/uniqueItems"),
-                    "TypeScript cannot require pairwise-distinct runtime array values",
+                    "a TypeScript tuple type constrains each position independently, so it \
+                     states pairwise-distinct elements only by enumerating the distinct \
+                     sequences of a finite scalar item domain, which these items are not or \
+                     which exceed the enumeration limit",
                 );
             }
         }
-        if has_kind(JsonKind::Number) {
-            for keyword in [
-                "minimum",
-                "maximum",
-                "exclusiveMinimum",
-                "exclusiveMaximum",
-                "multipleOf",
-            ] {
+        if has_kind(JsonKind::Number) && !numeric_keywords_decided(object) {
+            for keyword in NUMERIC_KEYWORDS {
                 if object.contains_key(keyword) {
                     self.record(
                         "numeric-validation-dropped",
@@ -1309,7 +1352,7 @@ fn validate_keyword_values(object: &Map<String, Value>, path: &str) -> Result<()
         "maxProperties",
     ] {
         if object.contains_key(keyword) {
-            let _ = nonnegative_usize(object, keyword, path)?;
+            let _ = nonnegative_bound(object, keyword, path)?;
         }
     }
     for keyword in ["uniqueItems", "deprecated", "readOnly", "writeOnly"] {
@@ -1463,41 +1506,134 @@ fn array_bound(
     object: &Map<String, Value>,
     keyword: &str,
     path: &str,
-) -> Result<Option<usize>, TypeScriptError> {
+) -> Result<Option<u64>, TypeScriptError> {
     object
         .contains_key(keyword)
-        .then(|| nonnegative_usize(object, keyword, path))
+        .then(|| nonnegative_bound(object, keyword, path))
         .transpose()
 }
 
-fn nonnegative_usize(
+fn nonnegative_bound(
     object: &Map<String, Value>,
     keyword: &str,
     path: &str,
-) -> Result<usize, TypeScriptError> {
+) -> Result<u64, TypeScriptError> {
     let value = object
         .get(keyword)
-        .expect("nonnegative_usize is called only for a present keyword");
-    // Only values through the fixed tuple budget affect emitted structure.
-    // Saturating larger integers keeps native and wasm32 behavior identical.
-    let over_budget = MAX_TUPLE_EXPANSION + 1;
+        .expect("nonnegative_bound is called only for a present keyword");
+    // A JavaScript array has at most MAX_ARRAY_LENGTH elements, so every
+    // larger bound states the same about a typed value as the length one past
+    // it; saturating there keeps native and wasm32 behavior identical.
+    let saturated = MAX_ARRAY_LENGTH + 1;
     if let Some(value) = value.as_u64() {
-        return Ok(usize::try_from(value.min(over_budget as u64))
-            .expect("the fixed expansion-budget sentinel fits every supported usize"));
+        return Ok(value.min(saturated));
     }
     if let Some(value) = value.as_f64()
         && value >= 0.0
         && value.fract() == 0.0
     {
-        return Ok(if value > over_budget as f64 {
-            over_budget
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            reason = "a non-negative integral f64 at most 2^32 converts exactly"
+        )]
+        return Ok(if value > saturated as f64 {
+            saturated
         } else {
-            value as usize
+            value as u64
         });
     }
     Err(TypeScriptError::new(format!(
         "{path}/{keyword} must be a non-negative integer"
     )))
+}
+
+/// The numeric assertions, which judge numbers only.
+const NUMERIC_KEYWORDS: [&str; 5] = [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+];
+
+/// Whether a schema's value set is a finite `const`/`enum` whose every member
+/// the numeric keywords judge decidably, so the declaration states them by
+/// leaving out the numbers that fail (an infinite number set has no subtype of
+/// `number` denoting an interval or residue class).
+fn numeric_keywords_decided(object: &Map<String, Value>) -> bool {
+    let values: Vec<&Value> = if let Some(value) = object.get("const") {
+        vec![value]
+    } else if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        values.iter().collect()
+    } else {
+        return false;
+    };
+    values
+        .into_iter()
+        .all(|value| literal_meets_numeric_keywords(object, value).is_some())
+}
+
+/// Whether a literal meets every numeric keyword of `object`; a non-number
+/// meets them all. `None` when a comparison is not exact in binary64.
+fn literal_meets_numeric_keywords(object: &Map<String, Value>, value: &Value) -> Option<bool> {
+    let Value::Number(number) = value else {
+        return Some(true);
+    };
+    let mut holds = true;
+    for keyword in NUMERIC_KEYWORDS {
+        let Some(Value::Number(bound)) = object.get(keyword) else {
+            continue;
+        };
+        holds &= match keyword {
+            "multipleOf" => {
+                let (Some(number), Some(divisor)) = (exact_integer(number), exact_integer(bound))
+                else {
+                    return None;
+                };
+                divisor != 0 && number % divisor == 0
+            }
+            _ => {
+                let ordering = compare_numbers(number, bound)?;
+                match keyword {
+                    "minimum" => ordering.is_ge(),
+                    "maximum" => ordering.is_le(),
+                    "exclusiveMinimum" => ordering.is_gt(),
+                    _ => ordering.is_lt(),
+                }
+            }
+        };
+    }
+    Some(holds)
+}
+
+fn exact_integer(number: &serde_json::Number) -> Option<i128> {
+    number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+}
+
+/// The exact order of two JSON numbers: integers compare exactly, and a
+/// binary64 value against an integer only where that integer is exact in
+/// binary64.
+fn compare_numbers(
+    left: &serde_json::Number,
+    right: &serde_json::Number,
+) -> Option<std::cmp::Ordering> {
+    const EXACT: i128 = 1 << 53;
+    match (exact_integer(left), exact_integer(right)) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        (left_integer, right_integer) => {
+            if left_integer.is_some_and(|value| value.abs() > EXACT)
+                || right_integer.is_some_and(|value| value.abs() > EXACT)
+            {
+                return None;
+            }
+            left.as_f64()?.partial_cmp(&right.as_f64()?)
+        }
+    }
 }
 
 fn integer_exceeds_typescript_exact_range(number: &serde_json::Number) -> bool {
@@ -1511,69 +1647,273 @@ fn integer_exceeds_typescript_exact_range(number: &serde_json::Number) -> bool {
     }
 }
 
+/// The exact array type for position-specific `prefix` items, `rest` items
+/// beyond them (`never` for none) and a length in `min_items..=max_items`.
+///
+/// Prefix positions below the minimum are required tuple elements, and those
+/// above it a nested chain `readonly [] | readonly [P, ...next]`, which states
+/// each shorter length without an optional element (whose `undefined` no JSON
+/// value carries). Lengths beyond the prefix are stated on element properties
+/// rather than by writing elements out: an array literal whose contextual type
+/// has a tuple-like member is typed as a tuple (TypeScript's tuple-like
+/// contextual typing), and a tuple of length `n` has exactly the element
+/// properties `"0"` to `"n-1"`. So a required property `"m-1"` holds exactly
+/// when the length is at least `m`, and an optional `never`-typed property
+/// `"n"` exactly when it is at most `n`, for every bound.
 fn render_array_relation(
     prefix: &[String],
     rest: &str,
-    min_items: usize,
-    max_items: Option<usize>,
-) -> Result<String, TypeScriptError> {
-    if max_items.is_some_and(|maximum| maximum < min_items) {
-        return Ok("never".to_owned());
+    min_items: u64,
+    max_items: Option<u64>,
+) -> String {
+    let has_rest = rest != "never";
+    let prefix_length = u64::try_from(prefix.len()).unwrap_or(u64::MAX);
+    let mut max_items = max_items.filter(|maximum| *maximum < MAX_ARRAY_LENGTH);
+    if !has_rest {
+        max_items = Some(max_items.map_or(prefix_length, |maximum| maximum.min(prefix_length)));
     }
-    if let Some(maximum) = max_items {
-        let mut variants = Vec::with_capacity(maximum - min_items + 1);
-        for length in min_items..=maximum {
-            if length > prefix.len() && rest == "never" {
-                continue;
-            }
-            variants.push(render_tuple_for_length(prefix, rest, length));
-        }
-        return Ok(join_union(variants));
+    if min_items > MAX_ARRAY_LENGTH || max_items.is_some_and(|maximum| maximum < min_items) {
+        return "never".to_owned();
     }
-    if prefix.is_empty() && min_items == 0 {
-        return Ok(format!("readonly ({rest})[]"));
-    }
-    if rest == "never" {
-        let mut variants = Vec::new();
-        for length in min_items..=prefix.len() {
-            variants.push(render_tuple_for_length(prefix, rest, length));
-        }
-        return Ok(join_union(variants));
-    }
-
-    let threshold = prefix.len().max(min_items);
-    let mut variants = Vec::new();
-    for length in min_items..threshold {
-        variants.push(render_tuple_for_length(prefix, rest, length));
-    }
-    if threshold == 0 {
-        variants.push(format!("readonly ({rest})[]"));
+    let explicit = max_items.map_or(prefix_length, |maximum| maximum.min(prefix_length));
+    let required = min_items.min(explicit);
+    let open = has_rest && max_items.is_none_or(|maximum| maximum > explicit);
+    let positions = prefix
+        .iter()
+        .take(usize::try_from(explicit).unwrap_or(usize::MAX))
+        .collect::<Vec<_>>();
+    let split = usize::try_from(required).unwrap_or(usize::MAX);
+    let (head, optional) = positions.split_at(split.min(positions.len()));
+    // The tail after the required head, innermost first.
+    let mut tail = if open {
+        format!("readonly ({rest})[]")
     } else {
-        let mut head = Vec::with_capacity(threshold);
-        for index in 0..threshold {
-            head.push(
-                prefix
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| rest.to_owned()),
-            );
-        }
-        variants.push(render_tuple_with_rest(&head, rest));
+        "readonly []".to_owned()
+    };
+    let mut tail_is_rest = open;
+    for item in optional.iter().rev() {
+        let inner = if tail_is_rest {
+            format!("...Array<{rest}>")
+        } else if tail == "readonly []" {
+            String::new()
+        } else {
+            format!("...{tail}")
+        };
+        let element = if inner.is_empty() {
+            format!("readonly [{item}]")
+        } else {
+            format!("readonly [{item}, {inner}]")
+        };
+        tail = format!("(readonly [] | {element})");
+        tail_is_rest = false;
     }
-    Ok(join_union(variants))
-}
-
-fn render_tuple_for_length(prefix: &[String], rest: &str, length: usize) -> String {
-    let mut items = Vec::with_capacity(length);
-    for index in 0..length {
-        items.push(
-            prefix
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| rest.to_owned()),
+    let base = if head.is_empty() {
+        tail
+    } else {
+        let mut elements = head.iter().map(|item| (*item).clone()).collect::<Vec<_>>();
+        if tail_is_rest {
+            elements.push(format!("...Array<{rest}>"));
+        } else if tail != "readonly []" {
+            elements.push(format!("...{tail}"));
+        }
+        format!("readonly [{}]", elements.join(", "))
+    };
+    if !open {
+        return base;
+    }
+    let mut properties = BTreeMap::<u64, String>::new();
+    if explicit == 0 && (min_items > 0 || max_items.is_some()) {
+        // Tuple-like contextual typing, so an array literal has a length.
+        properties.insert(
+            0,
+            if min_items > 0 {
+                format!("readonly \"0\": {rest}")
+            } else {
+                format!("readonly \"0\"?: {rest}")
+            },
         );
     }
-    render_tuple(&items)
+    if min_items > explicit {
+        let last = min_items - 1;
+        properties.insert(last, format!("readonly \"{last}\": {rest}"));
+    }
+    if let Some(maximum) = max_items {
+        properties.insert(maximum, format!("readonly \"{maximum}\"?: never"));
+    }
+    if properties.is_empty() {
+        return base;
+    }
+    let members = properties.into_values().collect::<Vec<_>>().join("; ");
+    format!("({base} & {{ {members} }})")
+}
+
+/// TypeScript's limit on a union it distributes a tuple spread or an
+/// intersection over: 100,000 members are refused ("Expression produces a
+/// union type that is too complex to represent", TS2590). Each `JsonDistinct`
+/// level spreads the sequences that continue after its element.
+const DISTINCT_SPREAD_LIMIT: u64 = 100_000;
+
+/// TypeScript refuses an instantiation this deep ("Type instantiation is
+/// excessively deep and possibly infinite", TS2589).
+const INSTANTIATION_DEPTH_LIMIT: u32 = 100;
+
+/// The length bounds a `JsonDistinct` enumeration still states: the last
+/// position a value must reach, and the length it must not exceed.
+struct DistinctBounds {
+    least_last: Option<u64>,
+    greatest: Option<u64>,
+}
+
+/// The enumeration `JsonDistinct<P, R>` over finite domains: its longest
+/// sequence and its member count (saturating at [`DISTINCT_SPREAD_LIMIT`]).
+struct DistinctShape {
+    longest: usize,
+    total: u64,
+}
+
+/// The instantiation depth one `JsonDistinct` level adds: three, and four when
+/// its candidates (the position's values not yet used) are a union of two or
+/// more. A path's depth is the sum over its levels, the last (with no
+/// candidate) included; the oracle's compiler facts pin these costs.
+const fn distinct_level_depth(candidates: usize) -> u32 {
+    if candidates >= 2 { 4 } else { 3 }
+}
+
+/// The subtree of distinct sequences below one node: (member count saturating
+/// at [`DISTINCT_SPREAD_LIMIT`], deepest instantiation depth, longest further
+/// length); `None` when a path reaches [`INSTANTIATION_DEPTH_LIMIT`].
+fn distinct_subtree<'d>(
+    domain: &dyn Fn(usize) -> &'d BTreeSet<String>,
+    position: usize,
+    used: Vec<&'d String>,
+    depth: u32,
+) -> Option<(u64, u32, usize)> {
+    let mut count = 0_u64;
+    let mut deepest = depth;
+    let mut longest = 0_usize;
+    let mut stack = vec![(position, used, depth)];
+    while let Some((position, used, depth)) = stack.pop() {
+        count += 1;
+        if count >= DISTINCT_SPREAD_LIMIT {
+            return Some((DISTINCT_SPREAD_LIMIT, deepest, longest));
+        }
+        let candidates: Vec<&'d String> = domain(position)
+            .iter()
+            .filter(|value| !used.contains(value))
+            .collect();
+        let reached = depth + distinct_level_depth(candidates.len());
+        if reached >= INSTANTIATION_DEPTH_LIMIT {
+            return None;
+        }
+        deepest = deepest.max(reached);
+        longest = longest.max(used.len());
+        for value in candidates {
+            let mut extended = used.clone();
+            extended.push(value);
+            stack.push((position + 1, extended, reached));
+        }
+    }
+    Some((count, deepest, longest))
+}
+
+/// Whether TypeScript represents `JsonDistinct<P, R>` over these domains, and
+/// its shape: every path's instantiation depth stays below 100 (TS2589), and
+/// after each first element fewer than 100,000 sequences continue (the union
+/// the first level spreads, TS2590).
+fn distinct_shape(prefix: &[BTreeSet<String>], rest: &BTreeSet<String>) -> Option<DistinctShape> {
+    let domain = |position: usize| prefix.get(position).unwrap_or(rest);
+    let root = domain(0);
+    let root_depth = distinct_level_depth(root.len());
+    if root.is_empty() {
+        return Some(DistinctShape {
+            longest: 0,
+            total: 1,
+        });
+    }
+    let later: BTreeSet<&String> = prefix.iter().skip(1).flatten().chain(rest).collect();
+    let mut shared = None;
+    let mut total = 1_u64;
+    let mut longest = 0_usize;
+    for first in root {
+        // A first value no later position admits leaves the same subtree.
+        let subtree = if later.contains(first) {
+            distinct_subtree(&domain, 1, vec![first], root_depth)?
+        } else if let Some(shared) = shared {
+            shared
+        } else {
+            let subtree = distinct_subtree(&domain, 1, vec![first], root_depth)?;
+            shared = Some(subtree);
+            subtree
+        };
+        let (count, _, further) = subtree;
+        if count >= DISTINCT_SPREAD_LIMIT {
+            return None;
+        }
+        total = total.saturating_add(count).min(DISTINCT_SPREAD_LIMIT);
+        longest = longest.max(further);
+    }
+    Some(DistinctShape { longest, total })
+}
+
+/// The type-level enumeration of pairwise-distinct sequences. A tuple type
+/// constrains each position independently, so distinctness is stated by
+/// enumerating the distinct sequences of a finite item domain: each position
+/// takes a value its type admits that no earlier position took (`U`).
+const DISTINCT_HELPER: &str = "/** The sequences whose elements are pairwise distinct: position `i` meets `P[i]`, every later position `R`. */\n\
+export type JsonDistinct<P extends readonly unknown[], R, U = never> =\n\
+  | readonly []\n\
+  | (P extends readonly [infer H, ...infer T]\n\
+      ? Exclude<H, U> extends infer X\n\
+        ? X extends unknown\n\
+          ? readonly [X, ...JsonDistinct<T, R, U | X>]\n\
+          : never\n\
+        : never\n\
+      : Exclude<R, U> extends infer X\n\
+        ? X extends unknown\n\
+          ? readonly [X, ...JsonDistinct<readonly [], R, U | X>]\n\
+          : never\n\
+        : never);\n\n";
+
+/// The JSON scalars a schema admits when they are finitely many: a `const` or
+/// `enum` of scalars, or `boolean`/`null` types; `None` otherwise. Values are
+/// keyed by their canonical JSON, the equality `uniqueItems` compares by.
+fn finite_scalar_domain(
+    schema: &Value,
+    definitions: &Map<String, Value>,
+) -> Option<BTreeSet<String>> {
+    let mut current = schema;
+    let mut seen = BTreeSet::new();
+    loop {
+        let object = match current {
+            Value::Bool(false) => return Some(BTreeSet::new()),
+            Value::Object(object) => object,
+            _ => return None,
+        };
+        let scalar = |value: &Value| {
+            (!value.is_array() && !value.is_object())
+                .then(|| serde_json::to_string(value).ok())
+                .flatten()
+        };
+        if let Some(value) = object.get("const") {
+            return scalar(value).map(|value| BTreeSet::from([value]));
+        }
+        if let Some(values) = object.get("enum").and_then(Value::as_array) {
+            return values.iter().map(scalar).collect();
+        }
+        if let Some(Value::String(kind)) = object.get("type") {
+            return match kind.as_str() {
+                "boolean" => Some(BTreeSet::from(["false".to_owned(), "true".to_owned()])),
+                "null" => Some(BTreeSet::from(["null".to_owned()])),
+                _ => None,
+            };
+        }
+        let reference = object.get("$ref").and_then(Value::as_str)?;
+        let key = reference_key(reference)?;
+        if !seen.insert(key.clone()) {
+            return None;
+        }
+        current = definitions.get(&key)?;
+    }
 }
 
 fn render_tuple(items: &[String]) -> String {
@@ -1582,12 +1922,6 @@ fn render_tuple(items: &[String]) -> String {
     } else {
         format!("readonly [{}]", items.join(", "))
     }
-}
-
-fn render_tuple_with_rest(head: &[String], rest: &str) -> String {
-    let mut parts = head.to_vec();
-    parts.push(format!("...Array<{rest}>"));
-    format!("readonly [{}]", parts.join(", "))
 }
 
 fn join_union(expressions: Vec<String>) -> String {
@@ -2085,13 +2419,13 @@ mod tests {
         assert!(source.contains("export type Choice = (\"ex:open\" | true);"));
         assert!(source.contains("readonly \"@id\": string;"));
         assert!(source.contains("readonly \"ex:choice\"?: Choice;"));
-        assert!(
-            source.contains(
-                "readonly \"ex:tags\"?: (readonly [string] | readonly [string, string]);"
-            )
-        );
         assert!(source.contains(
-            "readonly \"ex:tuple\"?: (readonly [] | readonly [string] | readonly [string, number]);"
+            "readonly \"ex:tags\"?: (readonly (string)[] & { readonly \"0\": string; readonly \
+             \"2\"?: never });"
+        ));
+        assert!(source.contains(
+            "readonly \"ex:tuple\"?: (readonly [] | readonly [string, ...(readonly [] | readonly \
+             [number])]);"
         ));
         assert!(source.contains("readonly [key: string]: never;"));
         assert!(source.contains("export type PathWithToken = (null | 7 | \"mapped\");"));
@@ -2202,7 +2536,7 @@ mod tests {
 
     #[test]
     fn lossy_projection_exercises_the_entire_closed_profile() {
-        let prefix_items = (0..=MAX_TUPLE_EXPANSION)
+        let prefix_items = (0..=32)
             .map(|index| {
                 if index % 2 == 0 {
                     json!({ "type": "string" })
@@ -2266,7 +2600,6 @@ mod tests {
         let package = emit_typescript(&compiled(&schema), &config()).expect("lossy schema emits");
         let expected = [
             "additional-properties-validation-widened",
-            "array-cardinality-validation-widened",
             "array-contains-validation-dropped",
             "conditional-validation-dropped",
             "dependency-validation-dropped",
@@ -2280,7 +2613,6 @@ mod tests {
             "property-count-validation-dropped",
             "property-name-validation-dropped",
             "string-validation-dropped",
-            "tuple-array-validation-widened",
             "unevaluated-validation-dropped",
             "unique-items-validation-dropped",
         ];
@@ -2510,6 +2842,188 @@ mod tests {
         );
     }
 
+    fn literals(prefix: &str, count: usize) -> BTreeSet<String> {
+        (0..count)
+            .map(|index| format!("\"{prefix}{index}\""))
+            .collect()
+    }
+
+    /// The limits the oracle's compiler facts pin, as the analysis states them.
+    #[test]
+    fn distinct_shape_follows_the_compiler_limits() {
+        let single = |index: usize| BTreeSet::from([format!("\"s{index}\"")]);
+        let pair = |index: usize| BTreeSet::from([format!("\"p{index}\""), "\"x\"".to_owned()]);
+        let none = BTreeSet::new();
+        let chain = |singles: usize, pairs: usize| {
+            (0..singles)
+                .map(single)
+                .chain((0..pairs).map(pair))
+                .collect::<Vec<_>>()
+        };
+        assert!(distinct_shape(&chain(32, 0), &none).is_some());
+        assert!(distinct_shape(&chain(33, 0), &none).is_none());
+        assert!(distinct_shape(&chain(0, 24), &none).is_some());
+        assert!(distinct_shape(&chain(0, 25), &none).is_none());
+        assert!(distinct_shape(&chain(31, 1), &none).is_none());
+        let rest = literals("r", 2);
+        assert!(distinct_shape(&chain(29, 0), &rest).is_some());
+        assert!(distinct_shape(&chain(30, 0), &rest).is_none());
+        let eight = distinct_shape(&[], &literals("v", 8)).expect("eight items enumerate");
+        assert_eq!((eight.longest, eight.total), (8, DISTINCT_SPREAD_LIMIT));
+        assert!(distinct_shape(&[], &literals("v", 9)).is_none());
+        let seven = distinct_shape(&[], &literals("v", 7)).expect("seven items enumerate");
+        assert_eq!((seven.longest, seven.total), (7, 13_700));
+        let empty = distinct_shape(&[], &none).expect("no items");
+        assert_eq!((empty.longest, empty.total), (0, 1));
+    }
+
+    #[test]
+    fn distinctness_over_finite_items_is_enumerated_and_elsewhere_recorded() {
+        let schema = json!({
+            "$defs": {
+                "Bounded": {
+                    "type": "array",
+                    "items": { "enum": ["a", "b", "c"] },
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "uniqueItems": true
+                },
+                "Choice": {
+                    "type": "array",
+                    "items": { "enum": ["a", "b", "c"] },
+                    "uniqueItems": true
+                },
+                "Flags": {
+                    "type": "array",
+                    "items": { "type": "boolean" },
+                    "uniqueItems": true
+                },
+                "Open": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "uniqueItems": true
+                },
+                "Wide": {
+                    "type": "array",
+                    "items": { "enum": ["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"] },
+                    "uniqueItems": true
+                }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
+        let source = declaration(&package);
+        assert!(
+            source
+                .contains("export type JsonDistinct<P extends readonly unknown[], R, U = never> =")
+        );
+        assert!(
+            source.contains(
+                "export type Choice = JsonDistinct<readonly [], (\"a\" | \"b\" | \"c\")>;"
+            )
+        );
+        assert!(source.contains("export type Flags = JsonDistinct<readonly [], boolean>;"));
+        assert!(source.contains(
+            "export type Bounded = (JsonDistinct<readonly [], (\"a\" | \"b\" | \"c\")> & { \
+             readonly \"1\": (\"a\" | \"b\" | \"c\"); readonly \"2\"?: never });"
+        ));
+        let located = |location: &str| {
+            package.losses.entries().iter().any(|entry| {
+                entry.code == "unique-items-validation-dropped"
+                    && entry
+                        .location
+                        .as_ref()
+                        .and_then(|value| value.subject.as_deref())
+                        == Some(location)
+            })
+        };
+        assert!(located("#/$defs/Open/uniqueItems"));
+        assert!(located("#/$defs/Wide/uniqueItems"));
+        for exact in ["Bounded", "Choice", "Flags"] {
+            assert!(!located(&format!("#/$defs/{exact}/uniqueItems")), "{exact}");
+        }
+        // Without an enumerated array the helper is not declared.
+        let plain = emit_typescript(
+            &compiled(&json!({ "$defs": { "Open": schema["$defs"]["Open"].clone() } })),
+            &config(),
+        )
+        .expect("emits");
+        assert!(!declaration(&plain).contains("JsonDistinct"));
+    }
+
+    #[test]
+    fn numeric_keywords_over_a_finite_set_leave_out_the_failing_numbers() {
+        let schema = json!({
+            "$defs": {
+                "Kept": { "enum": [1, 2, 3, "x"], "minimum": 2, "exclusiveMaximum": 3 },
+                "Gone": { "const": 1, "minimum": 2 },
+                "Multiple": { "enum": [2, 3, 4], "multipleOf": 2 },
+                "Open": { "type": "number", "minimum": 0 },
+                "Fractional": { "enum": [1.5], "multipleOf": 0.5 }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
+        let source = declaration(&package);
+        assert!(
+            source.contains("export type Kept = (2 | \"x\");"),
+            "{source}"
+        );
+        assert!(source.contains("export type Gone = never;"), "{source}");
+        assert!(
+            source.contains("export type Multiple = (2 | 4);"),
+            "{source}"
+        );
+        let codes = package
+            .losses
+            .entries()
+            .iter()
+            .filter(|entry| entry.code == "numeric-validation-dropped")
+            .filter_map(|entry| entry.location.as_ref()?.subject.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            codes,
+            BTreeSet::from([
+                "#/$defs/Fractional/multipleOf".to_owned(),
+                "#/$defs/Open/minimum".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn length_bounds_are_exact_at_any_size() {
+        let schema = json!({
+            "$defs": {
+                "Huge": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1_000_000,
+                    "maxItems": 2_000_000
+                },
+                "Prefixed": {
+                    "type": "array",
+                    "prefixItems": [{ "type": "string" }, { "type": "number" }],
+                    "items": { "type": "boolean" },
+                    "minItems": 1,
+                    "maxItems": 40
+                }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
+        assert!(
+            package.losses.is_empty(),
+            "{}",
+            package.losses.render_json()
+        );
+        let source = declaration(&package);
+        assert!(source.contains(
+            "export type Huge = (readonly (string)[] & { readonly \"0\": string; readonly \
+             \"999999\": string; readonly \"2000000\"?: never });"
+        ));
+        assert!(source.contains(
+            "export type Prefixed = (readonly [string, ...(readonly [] | readonly [number, \
+             ...Array<boolean>])] & { readonly \"40\"?: never });"
+        ));
+    }
+
     #[test]
     fn literal_trees_and_portable_array_bounds_are_audited_exactly() {
         let schema = json!({
@@ -2534,14 +3048,19 @@ mod tests {
         let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
         let source = declaration(&package);
         assert!(source.contains(
-            "export type IntegralFloatBounds = (readonly [JsonValue] | readonly [JsonValue, \
-             JsonValue]);"
+            "export type IntegralFloatBounds = (readonly (JsonValue)[] & { readonly \"0\": \
+             JsonValue; readonly \"2\"?: never });"
         ));
+        // No JavaScript array has 2^32 elements.
+        assert!(source.contains("export type LargeBound = never;"));
+        assert!(package.losses.entries().iter().all(|entry| {
+            entry
+                .location
+                .as_ref()
+                .and_then(|value| value.subject.as_deref())
+                .is_none_or(|subject| !subject.starts_with("#/$defs/LargeBound"))
+        }));
         for (code, location) in [
-            (
-                "array-cardinality-validation-widened",
-                "#/$defs/LargeBound/minItems",
-            ),
             (
                 "object-literal-validation-widened",
                 "#/$defs/NestedLiterals/enum/0/0",

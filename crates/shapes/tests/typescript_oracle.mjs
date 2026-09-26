@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -19,7 +18,6 @@ const TYPESCRIPT_PROJECT = path.join(REPO, "crates", "rdf-wasm", "js");
 const TYPESCRIPT_VERSION = "7.0.2";
 const CLOSED_PROFILE = new Set([
   "additional-properties-validation-widened",
-  "array-cardinality-validation-widened",
   "array-contains-validation-dropped",
   "conditional-validation-dropped",
   "dependency-validation-dropped",
@@ -33,7 +31,6 @@ const CLOSED_PROFILE = new Set([
   "property-count-validation-dropped",
   "property-name-validation-dropped",
   "string-validation-dropped",
-  "tuple-array-validation-widened",
   "unevaluated-validation-dropped",
   "unique-items-validation-dropped",
 ]);
@@ -145,6 +142,12 @@ function compileFixture(name, fixture, directory) {
     probes.push({ file, probe, compilerOnly: true });
     writeFileSync(path.join(root, file), probeSource(probe, true), "utf8");
   });
+  fixture.proofs.forEach((probe, index) => {
+    const file = `proof-${String(index).padStart(3, "0")}.ts`;
+    files.push(file);
+    probes.push({ file, probe, compilerOnly: true, proof: true });
+    writeFileSync(path.join(root, file), probe.source, "utf8");
+  });
 
   const configPath = path.join(root, "tsconfig.json");
   writeFileSync(
@@ -199,7 +202,7 @@ function compileFixture(name, fixture, directory) {
       );
     }
 
-    return probes.map(({ file, probe, compilerOnly }) => {
+    return probes.map(({ file, probe, compilerOnly, proof = false }) => {
       const filePath = path.join(root, file);
       const diagnostics = [
         ...program.getSyntacticDiagnostics(filePath),
@@ -209,6 +212,7 @@ function compileFixture(name, fixture, directory) {
       return {
         probe,
         compilerOnly,
+        proof,
         valid: diagnostics.length === 0,
         diagnostics,
       };
@@ -314,6 +318,13 @@ function assertFixture(name, fixture, results) {
             diagnosticsText(result.diagnostics),
         );
       }
+      const code = result.probe.expectedCode;
+      if (code !== undefined && !result.diagnostics.some((entry) => entry.code === code)) {
+        throw new Error(
+          `${name}/${result.probe.label} was rejected without TS${code}:\n` +
+            diagnosticsText(result.diagnostics),
+        );
+      }
     } else {
       try {
         compareProbe(name, result.probe, result.valid, locatedLosses);
@@ -358,23 +369,51 @@ if (manifest.exact.losses.losses.length !== 0) {
 const lossyCodes = new Set(manifest.lossy.losses.losses.map((entry) => entry.code));
 assert.deepEqual(lossyCodes, CLOSED_PROFILE, "lossy fixture no longer covers the closed profile");
 
-const directory = mkdtempSync(path.join(tmpdir(), "purrdf-typescript-oracle-"));
+// The scratch lives beside the build output (see scripts/build-scratch.sh).
+const scratchRoot = path.join(process.env.CARGO_TARGET_DIR ?? path.join(REPO, "target"), "gate-scratch");
+mkdirSync(scratchRoot, { recursive: true });
+const directory = mkdtempSync(path.join(scratchRoot, "typescript-oracle."));
 try {
   const exactResults = compileFixture("exact", manifest.exact, directory);
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);
+  const listResults = compileFixture("lists", manifest.lists, directory);
+  const temporalResults = compileFixture("temporal", manifest.temporal, directory);
   assertFixture("exact", manifest.exact, exactResults);
   assertFixture("lossy", manifest.lossy, lossyResults);
+  // The SHACL list components over projected instances: every probe agrees
+  // with the SHACL verdict but for the two located losses TypeScript's type
+  // system has no statement for (distinct elements of an unconstrained item
+  // type, an integer minimum), which the lossy fixture's complement proofs
+  // show.
+  assertFixture("lists", manifest.lists, listResults);
+  const listDivergences = listResults.filter(({ probe, valid }) => valid !== probe.sourceValid);
+  assert.equal(listDivergences.length, 2, "lists fixture divergences drifted");
+  // The temporal range bounds over projected instances: a bound is a negation
+  // TypeScript has no type for, so every non-conforming probe diverges at its
+  // located loss.
+  assertFixture("temporal", manifest.temporal, temporalResults);
+  assert.equal(
+    temporalResults.filter(
+      ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
+    ).length,
+    manifest.temporal.probes.filter((probe) => !probe.sourceValid).length,
+    "temporal fixture divergences drifted",
+  );
   const divergenceCount = lossyResults.filter(
     ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
   ).length;
-  if (divergenceCount < 16) {
+  if (divergenceCount < CLOSED_PROFILE.size - 2) {
     throw new Error(`lossy fixture exposed only ${divergenceCount} located divergences`);
   }
   console.log(
     `TypeScript oracle: compiler ${compilerVersion}; ` +
       `${manifest.exact.probes.length} exact boon probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
-      `${divergenceCount} divergences map to the complete 18-code loss profile; ` +
+      `${divergenceCount} divergences map to the complete ${CLOSED_PROFILE.size}-code loss profile; ` +
+      `${manifest.exact.proofs.length + manifest.lossy.proofs.length + manifest.temporal.proofs.length} compiler facts behind the ` +
+      "distinct-sequence limit and the numeric, uniqueness and temporal losses hold; " +
+      `${manifest.lists.probes.length} SHACL list-component probes agree but for 2 located losses; ` +
+      `${manifest.temporal.probes.length} temporal range-bound probes agree or diverge at their located negation; ` +
       "verified reverse SHACL import passes",
   );
 } finally {

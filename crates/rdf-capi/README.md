@@ -129,21 +129,97 @@ executes that example against the generated shared library and committed header.
   before `out_error`. Recompile against the new header; there is no `_v2` alias,
   because two entry points for one job is the duplication this library exists to
   avoid.
-  `0.7.0` → `0.8.0` carries no break at all: it adds eight prepared-shapes-product
-  entry points plus `purrdf_shacl_validate_changes_to_sarif` (the SHACL change
-  path) and appends one status discriminant, touching no existing prototype
-  and renumbering nothing. It bumps because `0.7.0` is the ABI of the released
-  `2.0.x` libraries, which export nine fewer symbols — leaving the triple still
+  `0.7.0` → `0.8.0` adds eight prepared-shapes-product entry points,
+  `purrdf_shacl_validate_changes_to_sarif` (the SHACL change path) and the three
+  shapes-graph tools (`purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`,
+  `purrdf_shacl_lint_shapes`), appends one
+  status discriminant, and carries four breaks: `purrdf_shacl_validate_to_sarif`
+  gained `conformance_disallows` / `conformance_disallows_count` (the SHACL 1.2
+  conformance-disallow set; count `0` is the default set) between `data_nt` and
+  `out_buffer`, and `purrdf_entail_certain_answers`, `purrdf_entail_graph_entails`
+  and `purrdf_entail_verify_entailment` gained `premise_iris` /
+  `premise_iri_count` (the IRIs the premise document was read from; count `0` is
+  bare text) between `import_count` and `out_answer`, so a `0.7.0` host recompiles.
+  The same bump gives every shapes-graph entry point — `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`, the three
+  shapes-graph tools and `purrdf_shapes_product_encode` — the shapes graph's
+  `owl:imports` table, `import_iris` / `import_documents` / `import_count`, before its
+  out-parameters; appends `PURRDF_STATUS_SHAPES_IMPORT_ERROR`; and adds its three
+  accessors (see [The shapes graph's `owl:imports`](#the-shapes-graphs-owlimports)).
+  It bumps in any case because `0.7.0` is the ABI of the released
+  `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.
+
+## Shapes-graph tools
+
+Beside validation, three entry points reach the same engine every other PurRDF host
+does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
+
+- `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
+  max_term_generating_rounds, import_iris, import_documents, import_count,
+  out_inferred, out_proof, out_error)` runs exactly one
+  rule source — the SHACL 1.2 rules of `shapes_ttl`, or the SPARQL 1.2 RL rule set
+  `srl` — and writes the **inference graph** (the inferred triples only, never the
+  data graph) as canonical N-Triples. A non-NULL `out_proof` also receives the proof
+  of every inferred triple. `max_term_generating_rounds` is a nullable `uint64_t *`:
+  NULL keeps the default, a divergence criterion derived from the input: at most
+  `max(256, 4 × N)` rounds that infer a new term, `N` the distinct terms of the
+  data graph (and of an SRL rule set's data blocks), past which the rule set is
+  refused as divergent, naming its rules. A rule set bounded by a constant past
+  that horizon terminates; pass its bound.
+- `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
+  expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
+  import_iris, import_documents, import_count, out_terms, out_error)` evaluates
+  one node expression of the shapes graph. Exactly one selector is non-NULL:
+  `expr` is an IRI or `_:label`; `expr_at` with `expr_via` walks from a named
+  node, each predicate reaching exactly one value, to an anonymous `[ … ]`
+  expression; `expr_turtle` is the expression inline as Turtle, whose one root
+  blank node is the expression. `focus` is an IRI or an N-Triples term, and each
+  `scope` entry a `NAME=TERM` binding. The output nodes come back one N-Triples
+  term per line, in sequence order.
+- `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, import_iris,
+  import_documents, import_count, out_report, out_clean, out_findings, out_error)`
+  certifies a shapes graph — its whole `owl:imports` closure: the loader's verdict, the
+  W3C `shacl-shacl.ttl` results, which implementation every function call binds to, and
+  every validator declared for a built-in component (superseded by the native
+  implementation, never run).
+  It writes the same deterministic report text as `purrdf shapes lint`. A malformed
+  shapes graph is a report with findings and `*out_clean == 0`, not an error; a
+  closure that is not in hand is `PURRDF_STATUS_SHAPES_IMPORT_ERROR` and no report.
+
+## The shapes graph's `owl:imports`
+
+Every entry point that takes a Turtle shapes graph also takes the shapes graph's
+`owl:imports` table, as `import_iris` / `import_documents` / `import_count` — the
+parallel-array convention the `purrdf_entail_*` services use. Entry `i` declares that
+the ontology IRI `import_iris[i]` names the Turtle document `import_documents[i]`,
+parsed with that IRI as its base; `import_count == 0` (the arrays may then be NULL) is
+the empty table. PurRDF fetches nothing.
+
+An `owl:imports <X>` is resolved by a table entry for `<X>`, by `shapes_base_iri` (or the
+document's own `@base`) being `<X>`, or by the closure declaring the ontology
+(`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), or by the
+closure describing `<X>` with `sh:declare` — SHACL's prefix-declaration idiom, where an
+`owl:imports` along `sh:prefixes/owl:imports*` names a node the shapes graph declares
+prefixes on. Anything else —
+and a table entry no import names — fails the call with
+`PURRDF_STATUS_SHAPES_IMPORT_ERROR`: the same refusal the Rust API, the `purrdf` command
+line, Python and WebAssembly raise for the same shapes graph, rather than a verdict about
+a smaller shapes graph than the one named. `purrdf_shapes_import_error_kind(err)` reads
+its kind (`unresolved-import`, `unreached-import` or `invalid-import`), and
+`purrdf_shapes_import_error_iri_count` / `purrdf_shapes_import_error_iri` the IRIs it
+names. An imported document's shapes, rules and functions take part exactly as the
+importing document's do, and a prepared product carries the merged closure.
 
 ## Base IRIs across the surface
 
 Every entry point that reads or writes an RDF **syntax admitting a relative IRI**
 takes a nullable base, in the slot beside the document it qualifies:
 `purrdf_parse`, `purrdf_serialize`, `purrdf_serialize_jsonld_configured`, the
-SHACL pair's `shapes_base_iri`, and the SPARQL request base on `purrdf_query`,
+SHACL entry points' `shapes_base_iri` (and `purrdf_shacl_apply_rules`' `srl_base_iri`),
+and the SPARQL request base on `purrdf_query`,
 `purrdf_query_json`, `purrdf_query_governed`,
 `purrdf_query_entailment_governed`, and `purrdf_update_governed`.
 
@@ -176,6 +252,8 @@ for **every** format, including those that would not have applied it.
 | `PURRDF_STATUS_FREEZE_ERROR` | 8 | freezing a mutable graph failed |
 | `PURRDF_STATUS_CURSOR_EXHAUSTED` | 9 | no more rows (a non-error terminal signal, `> 0`) |
 | `PURRDF_STATUS_GTS_ERROR` | 10 | GTS container read/write failed |
+| `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` | 11 | the prepared-shapes-product boundary refused; read `purrdf_shapes_product_error_dimension` |
+| `PURRDF_STATUS_SHAPES_IMPORT_ERROR` | 12 | a shapes graph's `owl:imports` closure is not in hand, or its import table cannot be used; read `purrdf_shapes_import_error_kind` |
 | `PURRDF_STATUS_PANIC` | 100 | a panic was caught at the boundary |
 
 ## Governed execution

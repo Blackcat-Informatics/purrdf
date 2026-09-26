@@ -992,20 +992,53 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// The SHACL → JSON Schema/OpenAPI shapes projection's closed loss profile:
 /// each `(code, note)` pair `shapes::json_schema::Ctx::record`/the
 /// value-vocabulary `loss_entry` builders use (`crates/shapes/src/json_schema.rs`),
-/// all recorded via the shared runtime [`LossLedger`]. `sh:sparql` /
-/// `sh:expression` (SHACL-AF constraints), property-level `sh:not`, and a
-/// `rdfs:range` clash with a value-vocabulary projection are recorded via
-/// `Ctx::record`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// all recorded via the shared runtime [`LossLedger`].
+///
+/// The emitter matches every constraint kind explicitly, so each one is either
+/// projected or recorded here under the SHACL parameter that declares it:
+/// `sh:sparql` / `sh:expression` / `sh:nodeByExpression` and a custom
+/// constraint component (`sh:ConstraintComponent`); property-level `sh:not`,
+/// `sh:and`, `sh:or`, `sh:xone`, `sh:node`, `sh:qualifiedValueShape`,
+/// `sh:closed`, `sh:uniqueLang true` and `sh:someValue` (a value is projected as
+/// a node reference or a literal, never the value node's own properties); the
+/// part of the SHACL 1.2 list components (`sh:minListLength`,
+/// `sh:maxListLength`, `sh:uniqueMembers`, `sh:memberShape`) a list kept as
+/// linked `@graph` nodes would need (a converted list's `@list` is judged
+/// exactly); `sh:rootClass`; the part of `sh:pattern` a canonical
+/// `xsd:integer` (a bare JSON number) would need, and a pattern past the
+/// translation size bound; a range bound's comparison with an `xsd:double` or
+/// `xsd:float` literal; a node shape's `sh:class`
+/// (membership runs through `rdfs:subClassOf*` triples on other nodes) and the
+/// constraints not well-formed on a node shape (`sh:minCount`, `sh:maxCount`,
+/// `sh:uniqueLang`, `sh:qualifiedValueShape`); every property pair
+/// (`sh:equals`, `sh:disjoint`, `sh:subsetOf`, `sh:lessThan`,
+/// `sh:lessThanOrEquals`), whatever its path; `sh:uniqueValuesFor`;
+/// `sh:closed sh:ByTypes`; a property shape whose path is not one predicate
+/// (`sh:path`), whose value nodes `sh:values` or `sh:defaultValue` compute
+/// (dropped whole, one entry per term), or that nests property shapes
+/// (`sh:property`, on a property or member shape), a `sh:reifierShape` or
+/// `sh:reificationRequired`; and a constraint whose results carry a severity
+/// outside the default conformance-disallow set (`sh:severity`). Everything
+/// else is projected and records nothing: `sh:datatype`, `sh:nodeKind`,
+/// `sh:in`, `sh:hasValue`, `sh:languageIn`, `sh:minLength`, `sh:maxLength` and
+/// `sh:singleLine` on a property or node shape (a node shape's judge the focus
+/// node's `@id`, or reject every node where only a literal could conform), and
+/// `sh:nodeKind sh:TripleTerm` (a triple term projects as the JSON-LD-star
+/// embedded node).
+///
+/// `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
 /// loss on the shape's own subject rather than vanishing silently;
-/// `sh:targetNode` / `sh:targetSubjectsOf` / `sh:targetObjectsOf`-targeted
-/// shapes (`Target::Node` / `Target::SubjectsOf` / `Target::ObjectsOf`) are
-/// the same story — none of the three is a class extension, so none can key a
-/// `$def`, and each records its own loss instead of vanishing (a shape's
-/// `Target::ImplicitClass` — the shape node is itself `rdfs:Class` — IS a
-/// class extension and genuinely gets a `$def`, so it records no loss);
+/// `sh:targetNode` / `sh:targetSubjectsOf` / `sh:targetObjectsOf` /
+/// `sh:targetWhere`-targeted shapes (`Target::Node` and
+/// `Target::NodeExpression` / `Target::SubjectsOf` / `Target::ObjectsOf` /
+/// `Target::Where`) are the same story — none is a class extension, so none can
+/// key a `$def`, and each records its own loss instead of vanishing (a shape's
+/// `Target::ImplicitClass` — an implicit class target, the shape node being
+/// itself a class — IS a class extension and genuinely gets a `$def`, so it
+/// records no loss);
 /// `value-vocabulary` covers an enum-with-no-members projection and
 /// `value-vocabulary member` a dropped blank-node enum member. Mirrored here
 /// (rather than depended-on from this crate) because `purrdf-core` never
@@ -1026,9 +1059,85 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          excluded from the compiled $defs.",
     ),
     (
+        "sh:disjoint",
+        "A SHACL sh:disjoint constraint keeps the values apart from the nodes a property path (an \
+         IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:equals",
+        "A SHACL sh:equals constraint requires the values to be exactly the nodes a property path \
+         (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
         "sh:expression",
         "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is \
          dropped.",
+    ),
+    (
+        "sh:lessThan",
+        "A SHACL sh:lessThan constraint orders the values below every node a property path (an \
+         IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:lessThanOrEquals",
+        "A SHACL sh:lessThanOrEquals constraint orders the values at or below every node a \
+         property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON \
+         Schema constrains each property on its own and cannot relate one property's values to \
+         another path's, so the constraint is dropped.",
+    ),
+    (
+        "sh:maxListLength",
+        "A SHACL 1.2 sh:maxListLength constraint bounds the member count of a list value node \
+         (as maxItems) or focus node (as maxItems of its rdf:rest, less its own member); the \
+         instance projection carries a list JSON-LD 1.1 converts (Processing Algorithms and \
+         API 8.4.2) as its @list array, which the schema judges exactly; a list it keeps as \
+         linked @graph nodes (a cell with another property, referenced twice, or an IRI) is a \
+         node reference whose members hang off other @graph nodes, and a JSON Schema keyword \
+         judges only the instance location it applies to and those beneath it ($ref resolves \
+         schemas, never instance values), so for such a value the constraint is not checked.",
+    ),
+    (
+        "sh:memberShape",
+        "A SHACL 1.2 sh:memberShape constraint judges every member of a list value node or \
+         focus node against a shape (as items); the instance projection carries a list \
+         JSON-LD 1.1 converts (Processing Algorithms and API 8.4.2) as its @list array, which \
+         the schema judges exactly; a list it keeps as linked @graph nodes (a cell with \
+         another property, referenced twice, or an IRI) is a node reference whose members \
+         hang off other @graph nodes, and a JSON Schema keyword judges only the instance \
+         location it applies to and those beneath it ($ref resolves schemas, never instance \
+         values), so for such a value the constraint is not checked.",
+    ),
+    (
+        "sh:minListLength",
+        "A SHACL 1.2 sh:minListLength constraint bounds the member count of a list value node \
+         (as minItems) or focus node (as minItems of its rdf:rest, less its own member); the \
+         instance projection carries a list JSON-LD 1.1 converts (Processing Algorithms and \
+         API 8.4.2) as its @list array, which the schema judges exactly; a list it keeps as \
+         linked @graph nodes (a cell with another property, referenced twice, or an IRI) is a \
+         node reference whose members hang off other @graph nodes, and a JSON Schema keyword \
+         judges only the instance location it applies to and those beneath it ($ref resolves \
+         schemas, never instance values), so for such a value the constraint is not checked.",
+    ),
+    (
+        "sh:class",
+        "A sh:class constraint on a node shape (one class or a SHACL list of them) judges the \
+         focus node's own class membership through the data graph's rdfs:subClassOf* triples, \
+         which live on other @graph nodes; a JSON Schema keyword judges only the instance \
+         location it applies to and those beneath it, so none reaches them, and the \
+         constraint is dropped.",
+    ),
+    (
+        "sh:closed sh:ByTypes",
+        "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's \
+         own rdf:type values collect through the shapes graph; an object schema states one fixed \
+         key set for every instance, so the object is left open and the constraint is dropped \
+         (on a property shape, whose value nodes are node references, likewise).",
     ),
     (
         "sh:not",
@@ -1040,9 +1149,19 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "sh:nodeByExpression",
         "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node \
          expression evaluated against the data graph; a closed-world JSON Schema has no way to \
-         express a shape that is not known until validation time, so the constraint is dropped. \
-         (This code was recorded by the emitter without being declared here, which made \
-         check_ledger_sound reject any ledger containing it; declared now.)",
+         express a shape that is not known until validation time, so the constraint is dropped.",
+    ),
+    (
+        "sh:rootClass",
+        "A SHACL 1.2 sh:rootClass constraint bounds class-valued value nodes (or the focus \
+         node) by the data graph's rdfs:subClassOf hierarchy; a closed-world JSON Schema cannot \
+         consult that hierarchy, so the constraint is dropped.",
+    ),
+    (
+        "sh:someValue",
+        "A SHACL 1.2 sh:someValue constraint on a property shape requires at least one of the \
+         property's values to conform to a shape; the emitted value schema constrains each value \
+         alone, so the constraint is dropped (on a node shape it is projected as sh:node is).",
     ),
     (
         "sh:sparql",
@@ -1050,10 +1169,16 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          dropped.",
     ),
     (
+        "sh:subsetOf",
+        "A SHACL 1.2 sh:subsetOf constraint requires every value to be among the nodes a property \
+         path reaches from the focus node; JSON Schema constrains each property on its own and \
+         cannot relate one property's values to another path's, so the constraint is dropped.",
+    ),
+    (
         "sh:targetNode",
-        "A shape targeted only via sh:targetNode selects specific focus nodes, not a class \
-         extension; it has no closed-world JSON Schema $def and its constraints are not \
-         enforced by the emitted schema.",
+        "A shape targeted only via sh:targetNode selects specific focus nodes (a constant, or \
+         the output nodes of a node expression), not a class extension; it has no closed-world \
+         JSON Schema $def and its constraints are not enforced by the emitted schema.",
     ),
     (
         "sh:targetObjectsOf",
@@ -1066,6 +1191,204 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's \
          subject position, not a class extension; no closed-world JSON Schema $def can be keyed \
          and its constraints are not enforced.",
+    ),
+    (
+        "sh:targetWhere",
+        "A shape targeted via sh:targetWhere selects the nodes that conform to another shape, \
+         not a class extension; it has no closed-world JSON Schema $def and its constraints are \
+         not enforced by the emitted schema.",
+    ),
+    (
+        "sh:uniqueMembers",
+        "A SHACL 1.2 sh:uniqueMembers constraint (true: no repeated member; false: only a \
+         list) judges a list value node or focus node (as uniqueItems); the instance \
+         projection carries a list JSON-LD 1.1 converts (Processing Algorithms and API 8.4.2) \
+         as its @list array, which the schema judges exactly; a list it keeps as linked \
+         @graph nodes (a cell with another property, referenced twice, or an IRI) is a node \
+         reference whose members hang off other @graph nodes, and a JSON Schema keyword \
+         judges only the instance location it applies to and those beneath it ($ref resolves \
+         schemas, never instance values), so for such a value the constraint is not checked. \
+         On a node shape the focus node's own member (its rdf:first) is not compared with the \
+         members of its rdf:rest, two instance locations no JSON Schema keyword relates.",
+    ),
+    (
+        "sh:uniqueValuesFor",
+        "A SHACL 1.2 sh:uniqueValuesFor constraint forbids two target nodes of a shape from \
+         having exactly the same values for the listed properties; a JSON Schema judges one \
+         instance alone (uniqueItems is uniqueness within one array, not across instances), so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:values",
+        "A SHACL 1.2 property shape with sh:values takes the output nodes of a node expression \
+         evaluated at validation as value nodes, which a JSON document does not carry; \
+         projecting its constraints onto the document's own values would require what a \
+         computed value supplies, so the property shape is dropped.",
+    ),
+    (
+        "sh:defaultValue",
+        "A SHACL 1.2 property shape with sh:defaultValue takes the output nodes of a node \
+         expression as its value nodes when the property has no other value; a JSON document \
+         does not carry them, and projecting the shape's constraints onto the document's own \
+         values would require what the default supplies, so the property shape is dropped.",
+    ),
+    (
+        "sh:and",
+        "A sh:and constraint on a property shape judges each value node against shapes; a value \
+         is projected as a node reference (its own properties live on its separate @graph node) \
+         or a literal, so the value schema has nothing to judge and the constraint is dropped.",
+    ),
+    (
+        "sh:or",
+        "A sh:or constraint on a property shape judges each value node against shapes; a value is \
+         projected as a node reference (its own properties live on its separate @graph node) or a \
+         literal, so the value schema has nothing to judge and the constraint is dropped.",
+    ),
+    (
+        "sh:xone",
+        "A sh:xone constraint on a property shape judges each value node against shapes; a value \
+         is projected as a node reference (its own properties live on its separate @graph node) \
+         or a literal, so the value schema has nothing to judge and the constraint is dropped.",
+    ),
+    (
+        "sh:node",
+        "A sh:node constraint on a property shape judges each value node against a shape; a value \
+         is projected as a node reference (its own properties live on its separate @graph node) \
+         or a literal, so the value schema has nothing to judge and the constraint is dropped.",
+    ),
+    (
+        "sh:qualifiedValueShape",
+        "A sh:qualifiedValueShape constraint counts the value nodes that conform to a shape, \
+         which the value schema cannot judge from a node reference; on a node shape, where it is \
+         not well-formed, it judges the focus node itself, which an object schema describing the \
+         node's properties does not state, so the constraint is dropped.",
+    ),
+    (
+        "sh:closed",
+        "A sh:closed true constraint on a property shape limits the properties of each value \
+         node, which its node reference does not carry, so the constraint is dropped (on a node \
+         shape it is projected as additionalProperties false).",
+    ),
+    (
+        "sh:uniqueLang",
+        "A sh:uniqueLang true constraint forbids two values sharing a language tag, which a \
+         schema constraining each value alone cannot state; on a node shape, where it is not \
+         well-formed, it judges the focus node itself, which an object schema describing the \
+         node's properties does not state, so the constraint is dropped.",
+    ),
+    (
+        "sh:ConstraintComponent",
+        "A custom SPARQL-based constraint component (named in the note) validates through a \
+         SPARQL query, which has no closed-world JSON Schema equivalent, so the constraint is \
+         dropped.",
+    ),
+    (
+        "sh:minCount",
+        "A sh:minCount constraint on a node shape or a member shape, where it is not \
+         well-formed, judges the focus node itself rather than a property's values, so the \
+         constraint is dropped.",
+    ),
+    (
+        "sh:maxCount",
+        "A sh:maxCount constraint on a node shape or a member shape, where it is not \
+         well-formed, judges the focus node itself rather than a property's values, so the \
+         constraint is dropped.",
+    ),
+    (
+        "sh:pattern",
+        "A sh:pattern constraint. The schema judges the lexical form of every projected value \
+         that carries one: a bare string, a literal object's @value, an IRI's @id (the full \
+         IRI), rdf:nil and true/false (constants judged at compile time); every flag, i \
+         included, has an exact ECMA-262 rewrite. It does not judge a canonical xsd:integer \
+         projected as a bare JSON number: pattern judges strings only, and the integers whose \
+         numerals a pattern matches (those starting with 1: 1, 10-19, 100-199, ...) are no \
+         finite union of the intervals and residue classes minimum, maximum and multipleOf \
+         state, so where the other constraints admit such an integer and no sh:in list makes \
+         the admissible integers finite, that part is not checked; and a pattern whose \
+         ECMA-262 translation exceeds the size bound is not emitted.",
+    ),
+    (
+        "sh:minInclusive",
+        "A sh:minInclusive constraint. A numeric bound compares a bare integer by \
+         minimum/maximum and a typed literal of an integer-family or decimal datatype by an \
+         order pattern on its lexical form (the forms on one side of a rational threshold are \
+         a regular language), exactly; it does not judge an xsd:double or xsd:float literal, \
+         whose lexical forms on one side of a bound are no regular language (among \
+         0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
+         comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
+    ),
+    (
+        "sh:maxInclusive",
+        "A sh:maxInclusive constraint. A numeric bound compares a bare integer by \
+         minimum/maximum and a typed literal of an integer-family or decimal datatype by an \
+         order pattern on its lexical form (the forms on one side of a rational threshold are \
+         a regular language), exactly; it does not judge an xsd:double or xsd:float literal, \
+         whose lexical forms on one side of a bound are no regular language (among \
+         0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
+         comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
+    ),
+    (
+        "sh:minExclusive",
+        "A sh:minExclusive constraint. A numeric bound compares a bare integer by \
+         minimum/maximum and a typed literal of an integer-family or decimal datatype by an \
+         order pattern on its lexical form (the forms on one side of a rational threshold are \
+         a regular language), exactly; it does not judge an xsd:double or xsd:float literal, \
+         whose lexical forms on one side of a bound are no regular language (among \
+         0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
+         comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
+    ),
+    (
+        "sh:maxExclusive",
+        "A sh:maxExclusive constraint. A numeric bound compares a bare integer by \
+         minimum/maximum and a typed literal of an integer-family or decimal datatype by an \
+         order pattern on its lexical form (the forms on one side of a rational threshold are \
+         a regular language), exactly; it does not judge an xsd:double or xsd:float literal, \
+         whose lexical forms on one side of a bound are no regular language (among \
+         0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
+         comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
+    ),
+    (
+        "sh:path",
+        "A property shape whose path is not one predicate (an inverse, sequence, alternative or \
+         closure path) constrains no outgoing JSON property of the projected node, so the \
+         property shape is dropped.",
+    ),
+    (
+        "sh:property",
+        "A property shape nested under a property shape or a member shape judges each value \
+         node's (or member's) own properties, which live on that node's own @graph node; a \
+         JSON Schema keyword judges only the instance location it applies to and those \
+         beneath it, so none reaches them, and the nested shape is dropped.",
+    ),
+    (
+        "sh:reifierShape",
+        "A SHACL 1.2 sh:reifierShape constraint judges the reifiers of each value's triple, which \
+         the projected value does not carry, so the constraint is dropped.",
+    ),
+    (
+        "sh:reificationRequired",
+        "A SHACL 1.2 sh:reificationRequired true constraint requires each value's triple to be \
+         reified, which the projected value does not state, so the constraint is dropped.",
+    ),
+    (
+        "sh:severity",
+        "A constraint whose validation results carry a severity outside the default \
+         conformance-disallow set (sh:Violation, sh:Warning, sh:Info) — sh:Debug, sh:Trace or a \
+         custom severity, from the shape or a reifier annotation — never makes a node fail to \
+         conform under that set, so the schema, which states conformance under it, does not \
+         enforce the constraint.",
     ),
     (
         "value-vocabulary",
@@ -1126,9 +1449,13 @@ const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "negation-validation-dropped",
-        "JSON Schema not has no direct Pydantic v2 type-annotation equivalent; the generated \
-         runtime annotation validates the positive carrier type while model_json_schema() \
-         retains the negation.",
+        "JSON Schema not has no Pydantic v2 type-annotation equivalent, so the generated \
+         package evaluates the negated schema over the raw JSON input in a before-validator \
+         with a closed keyword table. A negated schema using a keyword outside that table (a \
+         regex-selected key, key names, dependencies, evaluation state, a format, content, a \
+         non-integer multipleOf, or a pattern outside the common regex grammar) is not \
+         evaluated: the positive carrier is validated while model_json_schema() retains the \
+         negation.",
     ),
     (
         "one-of-validation-widened",
@@ -1249,12 +1576,6 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
          value schema is widened.",
     ),
     (
-        "array-cardinality-validation-widened",
-        "A JSON Schema minItems/maxItems assertion exceeds the declaration emitter's fixed \
-         tuple-expansion budget. Item and tuple-prefix carriers remain, while exact length \
-         validation is widened to keep declaration size bounded deterministically.",
-    ),
-    (
         "array-contains-validation-dropped",
         "JSON Schema contains/minContains/maxContains assertions quantify matching array \
          elements and have no TypeScript assignability equivalent. Item and cardinality \
@@ -1292,11 +1613,13 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "numeric-validation-dropped",
-        "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric \
-         predicates with no exact TypeScript number-type expression; integer const/enum values \
-         outside the IEEE-754 safe range also have no exact TypeScript number literal. The \
-         numeric carrier or closest literal remains while the predicate or excess precision is \
-         omitted.",
+        "JSON Schema minimum/maximum/exclusive bounds and multipleOf over infinitely many \
+         numbers have no TypeScript expression: the only proper subtypes of number are unions of \
+         numeric literals, and TypeScript has no complement of a literal within number. (Over a \
+         finite const/enum the numbers that fail are left out, exactly.) Integer const/enum \
+         values outside the IEEE-754 safe range also have no exact TypeScript number literal. \
+         The numeric carrier or closest literal remains while the predicate or excess precision \
+         is omitted.",
     ),
     (
         "object-literal-validation-widened",
@@ -1334,12 +1657,6 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
          remains while the predicate is omitted.",
     ),
     (
-        "tuple-array-validation-widened",
-        "A JSON Schema prefixItems tuple exceeds the declaration emitter's fixed tuple-expansion \
-         budget. The common item carrier remains while position-specific validation beyond the \
-         budget is widened deterministically.",
-    ),
-    (
         "unevaluated-validation-dropped",
         "JSON Schema unevaluatedProperties/unevaluatedItems depends on applicator evaluation state \
          that TypeScript's structural type system does not expose. Representable local \
@@ -1347,8 +1664,12 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "unique-items-validation-dropped",
-        "JSON Schema uniqueItems compares runtime array values for equality; TypeScript array and \
-         tuple declarations cannot require pairwise-distinct elements. Item and length \
+        "JSON Schema uniqueItems compares runtime array values for equality. A TypeScript tuple \
+         type constrains each position independently, so its pairs form a product of two item \
+         sets, and the pairwise-distinct pairs over infinitely many items are no finite union of \
+         products (among 3^n + 1 distinct items two share their membership in n products, and \
+         their pair lies in none). Over finitely many scalar items the distinct sequences are \
+         enumerated exactly, up to the compiler's union limit; otherwise item and length \
          declarations remain while uniqueness is omitted.",
     ),
 ];
@@ -1489,8 +1810,11 @@ const JSON_SCHEMA_GRAPHQL_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "union-validation-delegated",
-        "General JSON Schema anyOf and type unions define input-value unions. GraphQL has no \
-         input union type, so a non-finite union is carried through the caller-named fallback \
+        "A JSON Schema anyOf is carried as a @oneOf input object and an output union when every \
+         value selects one alternative, by its JSON kind or, among object alternatives, by a \
+         required key no other alternative declares. A type-array union, or an anyOf whose \
+         alternatives overlap so a value would satisfy several, has no exactly-one-field input \
+         GraphQL could coerce it through; it is carried through the caller-named fallback \
          scalar and branch validation is delegated.",
     ),
     (
@@ -2522,7 +2846,7 @@ mod tests {
         assert_eq!(rdf_gts_loss_matrix_json(), rdf_gts_loss_matrix_json());
     }
 
-    /// The issue-named enumerator: the set of `(from, to)` pairs
+    /// The enumerator's completeness: the set of `(from, to)` pairs
     /// [`loss_matrix_json`] renders must equal `registered_pairs()` exactly —
     /// this is the executable proof that `loss_matrix_json()` enumerates
     /// precisely the registered pairs, no more and no fewer.

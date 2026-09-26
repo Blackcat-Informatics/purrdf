@@ -34,13 +34,18 @@ pub mod constraints;
 pub mod data;
 pub mod data_view;
 pub mod engine;
+mod error;
 pub mod expression;
 pub mod extension_usage;
 pub(crate) mod footprint;
+pub mod free_expression;
+pub mod function_resolution;
 pub mod graphql;
+pub mod imports;
 pub mod instance;
 pub mod json_schema;
 pub mod linkml;
+pub mod lint;
 pub mod model;
 pub(crate) mod parallel;
 pub mod path;
@@ -50,6 +55,7 @@ pub mod product;
 pub mod provenance;
 pub mod pydantic;
 pub mod report;
+pub(crate) mod result_annotations;
 pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
@@ -57,15 +63,22 @@ mod schema_surface;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
+pub mod spec;
+pub mod srl;
+pub(crate) mod target_eval;
 pub mod term;
 pub mod text_ingest;
 pub mod typescript;
+pub(crate) mod unique_values;
+pub mod validator_alternatives;
 
+pub use error::{ShaclJsRefusal, ShapesError};
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
-    emit_graphql, import_graphql_package,
+    GraphqlUnionMemberMap, emit_graphql, import_graphql_package,
 };
+pub use imports::{ResolvedShapesGraph, ShapesImportError, ShapesImports, resolve_shapes_imports};
 pub use json_schema::{
     Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
     SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
@@ -82,11 +95,12 @@ pub use pydantic::{
     PydanticPackage, PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
     import_pydantic_package,
 };
-pub use rules::{apply_rules, entail_dataset};
+pub use rules::{RuleOptions, RuleProcessor, apply_rules, entail_dataset, infer};
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
     import_compiled_schema, import_json_schema,
 };
+pub use srl::{Explanation, Inference};
 pub use typescript::{
     TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
     TypeScriptPackage, emit_typescript, import_typescript_package,

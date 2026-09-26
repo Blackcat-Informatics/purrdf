@@ -124,7 +124,9 @@
 //! [`change_path_report_bytes_match_pinned_golden`] failing has found a SEMANTIC
 //! CHANGE in SHACL validation and must stop and diagnose it. Regenerating the
 //! golden to make the test pass is forbidden, and a regenerated golden is
-//! indistinguishable from the bug it exists to catch.
+//! indistinguishable from the bug it exists to catch. A NEW constraint kind adds
+//! its own [`CASES`] entry and, with it, its own section of the golden; the
+//! sections of the existing cases are never rewritten.
 //!
 //! # The instrument, and the trap it is threaded around
 //!
@@ -290,6 +292,15 @@ const NS: &str = "http://example.org/purrdf/change-path#";
 /// `rdf:type`, spelled out because the fixtures are built id-natively.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+/// `rdf:first`, the member cell of a SHACL list.
+const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+
+/// `rdf:rest`, the tail cell of a SHACL list.
+const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+
+/// `rdf:nil`, the empty SHACL list.
+const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
 /// `rdfs:subClassOf`, which the seam fixture needs to reach the class-membership
 /// index at all; see [`seam_dataset`].
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -357,12 +368,17 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// load, at any core count, because nothing in binding consults a clock, a source
 /// of randomness or the scheduler. A host-sensitive figure would have no business
 /// being asserted; this one has no business being merely logged.
+///
+/// A SHACL 1.2 `sh:class` value may be a list of classes (a disjunction), but only
+/// a list of two or more lowers to an identity set at bind; a single class stays
+/// a plain slot. The seam shapes graph carries one `sh:class`, so binding it
+/// builds no set table and the list form costs this figure nothing.
 const BIND_ALLOC_CONST: u64 = 59;
 
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 296 allocations
+/// seam, and here the figure really is constant: admission makes 291 allocations
 /// with either seam dataset bound.
 ///
 /// # Why it moved from 284
@@ -422,7 +438,24 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// The property this test is actually about is untouched: the figure is still
 /// the same for both seam datasets, which is the assertion above this one, and
 /// which is what says admission does not read the data.
-const ADMIT_ALLOC_CONST: u64 = 296;
+///
+/// # What the function linker costs
+///
+/// Admission re-runs the function linker over the carried shapes graph, and that
+/// linker scans THREE declaring classes (`sh:NodeExpressionFunction` beside the
+/// two parameter-function classes, so a built-in declared under the wrong class is
+/// caught). Each class scan first asks the dataset's term table whether the class
+/// IRI occurs at all, and skips the pattern probe — and the two IRI terms it would
+/// build for it — when it does not. The seam shapes graph declares no function, so
+/// all three scans end at that lookup and allocate nothing.
+///
+/// # What list-valued `sh:class` and `sh:datatype` cost
+///
+/// The carried model's `sh:class` and `sh:datatype` values are LISTS — a SHACL 1.2
+/// value of either may be a SHACL list, read as a disjunction — so the decoder
+/// reads each as a sequence into its own vector. The seam shapes graph carries one
+/// of each: two allocations, once per restore, whatever the data.
+const ADMIT_ALLOC_CONST: u64 = 291;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
@@ -540,6 +573,27 @@ impl Emit<'_> {
         let reifier = self.scoped("stmt");
         self.builder.push_reifier(reifier, triple);
         reifier
+    }
+
+    /// Attach a SHACL list of `members` to the focus node under `predicate`, its
+    /// cells named per focus node so no two focus nodes share one.
+    fn list(&mut self, predicate: &str, members: &[TermId]) {
+        let first = self.builder.intern_iri(RDF_FIRST);
+        let rest = self.builder.intern_iri(RDF_REST);
+        let mut next = self.builder.intern_iri(RDF_NIL);
+        for (index, member) in members.iter().enumerate().rev() {
+            let cell = self.scoped(&format!("cell{index}"));
+            self.builder.push_quad(cell, first, *member, None);
+            self.builder.push_quad(cell, rest, next, None);
+            next = cell;
+        }
+        self.prop(predicate, next);
+    }
+
+    /// Declare `subject rdfs:subClassOf class`.
+    fn subclass(&mut self, subject: TermId, class: TermId) {
+        let predicate = self.builder.intern_iri(RDFS_SUBCLASS_OF);
+        self.builder.push_quad(subject, predicate, class, None);
     }
 
     /// Attach a per-focus-node target node typed `ex:Target`, returning it.
@@ -792,18 +846,13 @@ const CASES: &[ConstraintCase] = &[
     },
     ConstraintCase {
         name: "not",
-        // The negated shape is spelled as a NODE shape wrapping a property
-        // shape. Measured on this build, the anonymous PROPERTY-shape spelling
-        // — `sh:not [ sh:path ex:flag ; sh:minCount 1 ]`, with or without an
-        // explicit `a sh:PropertyShape` — reports a violation for EVERY focus
-        // node, including nodes carrying no `ex:flag` at all, which is the
-        // opposite of what SHACL states for `sh:not`. That behaviour is a
-        // question about the engine, not about allocation, so the fixture uses
-        // the spelling whose conforming and violating branches really are what
-        // their names say; a case that reported every node as violating would
-        // make the conforming half of this file untestable.
+        // The negated shape is an anonymous PROPERTY shape, the natural
+        // spelling: a focus node with no `ex:flag` fails its `sh:minCount 1`, so
+        // `sh:not` holds for it, and only a flagged focus node is reported.
+        // `tests/logical_shape_arguments.rs` pins that answer on this same
+        // prepared change path.
         shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
-            sh:not [ a sh:NodeShape ; sh:property [ sh:path ex:flag ; sh:minCount 1 ] ] .",
+            sh:not [ sh:path ex:flag ; sh:minCount 1 ] .",
         emit: |emit, violating| {
             if violating {
                 emit.text("flag", "present");
@@ -923,6 +972,25 @@ const CASES: &[ConstraintCase] = &[
             sh:closed true ;
             sh:ignoredProperties ( rdf:type ) ;
             sh:property [ sh:path ex:name ] .",
+        emit: |emit, violating| {
+            emit.text("name", "present");
+            if violating {
+                emit.text("stray", "not permitted by the closed shape");
+            }
+        },
+    },
+    ConstraintCase {
+        name: "closed_by_types",
+        // SHACL 1.2 Core §7.9.1: `ex:name` is permitted because the focus node's
+        // type `ex:Focus` is a subclass, IN THE SHAPES GRAPH, of the class another
+        // shape declares it on — so every outgoing predicate but `rdf:type` is
+        // looked up through the focus node's types, on the conforming path too.
+        shapes: "ex:Named a <http://www.w3.org/2000/01/rdf-schema#Class> .
+            ex:Focus a <http://www.w3.org/2000/01/rdf-schema#Class> ;
+                <http://www.w3.org/2000/01/rdf-schema#subClassOf> ex:Named .
+            ex:NamedShape a sh:NodeShape ; sh:targetClass ex:Named ;
+                sh:property [ sh:path ex:name ] .
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ; sh:closed sh:ByTypes .",
         emit: |emit, violating| {
             emit.text("name", "present");
             if violating {
@@ -1089,6 +1157,214 @@ const CASES: &[ConstraintCase] = &[
                 emit.text("next", "a literal is not an IRI");
             } else {
                 emit.target("next");
+            }
+        },
+    },
+    ConstraintCase {
+        name: "min_list_length",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:minListLength 2 ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            if violating {
+                emit.list("items", &[a]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "max_list_length",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:maxListLength 2 ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            let c = emit.scoped("c");
+            if violating {
+                emit.list("items", &[a, b, c]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "unique_members",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:uniqueMembers true ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            if violating {
+                emit.list("items", &[a, b, a]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "member_shape",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:memberShape [ sh:nodeKind sh:IRI ] ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = if violating {
+                emit.lit(RdfLiteral::simple("a literal is not an IRI"))
+            } else {
+                emit.scoped("b")
+            };
+            emit.list("items", &[a, b]);
+        },
+    },
+    ConstraintCase {
+        name: "single_line",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:label ; sh:singleLine true ] .",
+        emit: |emit, violating| {
+            if violating {
+                emit.text("label", "two\nlines");
+            } else {
+                emit.text("label", "one line");
+            }
+        },
+    },
+    ConstraintCase {
+        name: "root_class",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:kind ; sh:rootClass ex:Root ] .",
+        emit: |emit, violating| {
+            // A two-step chain per focus node, so the conforming branch walks
+            // `rdfs:subClassOf` transitively rather than matching the root.
+            let kind = emit.scoped("kind");
+            let middle = emit.scoped("middle");
+            emit.subclass(kind, middle);
+            let top = if violating {
+                emit.scoped("elsewhere")
+            } else {
+                emit.iri("Root")
+            };
+            emit.subclass(middle, top);
+            emit.prop("kind", kind);
+        },
+    },
+    ConstraintCase {
+        name: "some_value",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:ref ; sh:someValue [ sh:class ex:Target ] ] .",
+        emit: |emit, violating| {
+            let stray = emit.scoped("stray");
+            emit.classify(stray, "Other");
+            emit.prop("ref", stray);
+            if !violating {
+                emit.target("ref");
+            }
+        },
+    },
+    ConstraintCase {
+        name: "subset_of",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ; sh:subsetOf ex:alias ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            if violating {
+                emit.text("alias", &format!("other-{index}"));
+            } else {
+                emit.text("alias", &format!("item-{index}"));
+                emit.text("alias", &format!("more-{index}"));
+            }
+        },
+    },
+    // The property pairs over a path other than one IRI: `$otherNodes` is walked
+    // from the focus node by the path evaluator, not read off one predicate.
+    ConstraintCase {
+        name: "equals_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:owner ; sh:equals [ sh:inversePath ex:owns ] ] .",
+        emit: |emit, violating| {
+            let owner = emit.scoped("owner");
+            emit.prop("owner", owner);
+            let focus = emit.focus;
+            if violating {
+                let other = emit.scoped("other");
+                emit.quad(other, "owns", focus);
+            } else {
+                emit.quad(owner, "owns", focus);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "disjoint_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ; sh:disjoint ( ex:ref ex:key ) ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            let target = emit.target("ref");
+            let key = if violating {
+                format!("item-{index}")
+            } else {
+                format!("other-{index}")
+            };
+            let key = emit.lit(RdfLiteral::simple(&key));
+            emit.quad(target, "key", key);
+        },
+    },
+    ConstraintCase {
+        name: "subset_of_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ;
+                          sh:subsetOf [ sh:alternativePath ( ex:alias ex:nick ) ] ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            emit.text("alias", &format!("other-{index}"));
+            if !violating {
+                emit.text("nick", &format!("item-{index}"));
+            }
+        },
+    },
+    ConstraintCase {
+        name: "less_than_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:count ; sh:lessThan ( ex:ref ex:limit ) ] .",
+        emit: |emit, violating| {
+            let index = i64::try_from(emit.index).expect("fixture indices fit in i64");
+            emit.integer("count", index);
+            let target = emit.target("ref");
+            let limit = if violating { index } else { index + 1 };
+            let limit = emit.lit(RdfLiteral::typed(limit.to_string(), XSD_INTEGER));
+            emit.quad(target, "limit", limit);
+        },
+    },
+    ConstraintCase {
+        name: "less_than_or_equals_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:count ; sh:lessThanOrEquals ( ex:ref ex:limit ) ] .",
+        emit: |emit, violating| {
+            let index = i64::try_from(emit.index).expect("fixture indices fit in i64");
+            emit.integer("count", index);
+            let target = emit.target("ref");
+            let limit = if violating { index - 1 } else { index };
+            let limit = emit.lit(RdfLiteral::typed(limit.to_string(), XSD_INTEGER));
+            emit.quad(target, "limit", limit);
+        },
+    },
+    ConstraintCase {
+        name: "unique_values_for",
+        // CROSS-FOCUS: every violating focus node shares one code, so each one
+        // collides with another target node whether or not the request names
+        // that other node — the grouping is the shape's full target set, built
+        // once per binding (in the warm-up, outside every window).
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:uniqueValuesFor ex:code .",
+        emit: |emit, violating| {
+            if violating {
+                emit.text("code", "shared");
+            } else {
+                let index = emit.index;
+                emit.text("code", &format!("code-{index}"));
             }
         },
     },
@@ -1809,7 +2085,15 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
     sh:property [ sh:path ex:key ; sh:minCount 1 ] .";
 
 /// The expansion's fixed cost, independent of how many rows changed.
-const EXPANSION_CONST: u64 = 2;
+///
+/// One of the three is the `sh:shape` trigger every shapes graph carries: the
+/// data graph's `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape
+/// targets") can make any node a focus node of any shape, so the footprint reads
+/// them for every shapes graph. The expansion resolves each trigger's predicate
+/// once per call, and on a delta-backed view that lookup builds the owned term it
+/// asks for — one allocation, charged once, whatever the change's size. It adds
+/// nothing to the per-row or per-doubling terms.
+const EXPANSION_CONST: u64 = 3;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
 ///
@@ -1932,7 +2216,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
     ids.len()
 }
 
-/// **Expanding a change costs `2 + 2N + 3·log2(N)` allocations for `N` changed
+/// **Expanding a change costs `3 + 2N + 3·log2(N)` allocations for `N` changed
 /// rows — and the `2N` is the delta view's type-erased probe, not the walk.**
 ///
 /// `affected_focus_node_ids` is the surface the incremental soundness claim rests
@@ -1942,7 +2226,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// building a `HashSet` frontier table per changed row — while the validation
 /// beside it ran the lowered one. Measured on this revision before that was fixed,
 /// the same fixture cost `4 + 4N + 3·log2(N)`: 278 allocations for 64 changed rows
-/// and 537 for 128, against 148 and 279 now.
+/// and 537 for 128, against 149 and 280 now.
 ///
 /// A closed form rather than a flat `alloc(2N) == alloc(N)`, for the reason
 /// `tests/sparql_path_alloc.rs` states for its three surfaces: the residual terms
@@ -1987,9 +2271,10 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// matching trigger is anchored AT the changed row's subject, so the expansion takes
 /// the branch that performs no pattern lookup at all.
 ///
-/// Measured on this revision the per-row term is then exactly zero — 16 allocations
-/// for 32 changed rows and 25 for 256, which is `1 + 3·log2(N)`, the three doubling
-/// series and nothing else. So the `2N` above really is one probe per row, and a
+/// Measured on this revision the per-row term is then exactly zero — 17 allocations
+/// for 32 changed rows and 26 for 256, which is `2 + 3·log2(N)`: the three doubling
+/// series, and a constant of 2 that includes the `sh:shape` trigger's predicate
+/// lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
 #[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
@@ -2007,9 +2292,9 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
         let doublings = u64::from(changes.ilog2());
         assert_eq!(
             sample.allocations,
-            1 + EXPANSION_PER_DOUBLING * doublings,
+            2 + EXPANSION_PER_DOUBLING * doublings,
             "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
-             1 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             2 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
              is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
              in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
              probe it is attributed to\n  {sample:?}",
@@ -2426,8 +2711,8 @@ fn all_constraint_kind_names() -> Vec<String> {
 /// `PlannedConstraint` variant name above) matches no single [`CASES`] entry,
 /// even though the kind genuinely IS exercised there — split, across entries
 /// named for the sub-constraints it composes, because those names are more
-/// informative than the kind's own. Renaming the existing entries to match is
-/// out of scope here (an existing `CASES` entry must not change), so the
+/// informative than the kind's own. Renaming the existing entries to match
+/// would change existing `CASES` entries, which must stay fixed, so the
 /// mapping is recorded instead.
 ///
 /// `sh:qualifiedValueShape` is the one case: `PlannedConstraint::QualifiedValueShape`

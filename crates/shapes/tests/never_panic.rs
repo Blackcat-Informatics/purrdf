@@ -44,7 +44,8 @@ fn cyclic_node_expression_graph_is_hard_error() {
         ),
         None,
     )
-    .expect_err("a named-node expression cycle must be rejected");
+    .expect_err("a named-node expression cycle must be rejected")
+    .to_string();
     assert!(
         named.contains("cyclic"),
         "error must name the cycle, got: {named}"
@@ -58,7 +59,8 @@ fn cyclic_node_expression_graph_is_hard_error() {
         ),
         None,
     )
-    .expect_err("a blank-node expression cycle must be rejected");
+    .expect_err("a blank-node expression cycle must be rejected")
+    .to_string();
     assert!(
         blank.contains("cyclic"),
         "error must name the cycle, got: {blank}"

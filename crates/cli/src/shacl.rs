@@ -110,20 +110,23 @@ use crate::{sink, source};
 ///
 /// # This lane and `validate --shapes` share ONE seam
 ///
-/// The read and the import fold are [`crate::shapes_source::read_shapes_document`] and
-/// [`crate::shapes_source::fold_shapes_imports`] — the identical functions
-/// `validate --shapes --import` calls — rather than a second copy of the same walk. That is
-/// what makes a product written by `purrdf shacl pack --import IRI=FILE` and a run of
-/// `purrdf validate --shapes --import IRI=FILE` agree by construction: there is
-/// exactly one implementation of "what does folding this closure mean", so the two commands
-/// cannot silently diverge on it the way they used to, when this lane parsed raw text with no
-/// import table at all and dropped an unresolved `owl:imports` with nothing printed.
+/// The read and the import table are [`crate::shapes_source::read_shapes_document`] and
+/// [`crate::shapes_source::shapes_imports`] — the identical functions
+/// `validate --shapes --import` calls — and the closure is resolved by the engine's one
+/// helper (`purrdf_shapes::imports::resolve_shapes_imports`), the one every PurRDF host
+/// resolves through. That is what makes a product written by
+/// `purrdf shacl pack --import IRI=FILE` and a run of
+/// `purrdf validate --shapes --import IRI=FILE` agree by construction: there is exactly
+/// one implementation of "what does this closure mean", so the two commands — and the
+/// Python, WebAssembly and C hosts — cannot diverge on it.
 ///
-/// A shapes graph naming no `--import` at all is not refused for it: every unresolved
-/// `owl:imports` is reported on stderr as a `shacl warning` line and the product is packed
-/// from the shapes graph alone — see [`crate::shapes_source`]'s module documentation for why
-/// that asymmetry is deliberate. Naming any `--import` pair makes the closure mandatory: an
-/// `owl:imports` no pair resolves, or a pair the closure never reaches, is then a usage error.
+/// An `owl:imports` that names neither the shapes document itself (its `--base`, `file://`
+/// retrieval IRI or `@base`) nor an ontology already in the shapes graph (`<X> a
+/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) nor a node the shapes
+/// graph describes with `sh:declare` (SHACL's prefix idiom), and that no `--import`
+/// pair resolves, is refused by name, with the pair that resolves it — the product is never
+/// packed from a shapes graph smaller than the one named. See [`crate::shapes_source`]'s
+/// module documentation for the rule. A pair the closure never reaches is a usage error.
 ///
 /// # Errors
 ///
@@ -132,7 +135,7 @@ use crate::{sink, source};
 /// relative `--shapes-graph` has no base to resolve against, or when an `--import` pair is
 /// malformed, resolves nothing the shapes graph imports, or is never reached by the import
 /// closure; [`CliError::Runtime`] when a document cannot be read, is not UTF-8, does not
-/// parse, an `owl:imports` no pair resolves, or the shapes graph declares a capability the
+/// parse, an `owl:imports` is unresolved, or the shapes graph declares a capability the
 /// product format cannot carry.
 pub(crate) fn pack(
     shapes: &str,
@@ -168,16 +171,27 @@ pub(crate) fn pack(
         effective_base.as_deref(),
         "--shapes",
     )?;
-    let folded = crate::shapes_source::fold_shapes_imports(root, imports)?;
+    let table = crate::shapes_source::shapes_imports(&root, imports)?;
 
     let product = purrdf_validate::pack_shapes_product_from_dataset(
-        &folded.dataset,
-        &folded.prefixes,
+        &root.dataset,
+        &root.prefixes,
         effective_base.as_deref(),
         shapes_graph,
         box_role_vocab,
+        &table,
     )
-    .map_err(|refusal| refusal_error(&format!("--shapes {shapes}"), &refusal))?;
+    .map_err(|refusal| match refusal {
+        purrdf_validate::ShapesProductRefusal::Shapes(error) => crate::shapes_source::shapes_error(
+            error,
+            &format!("--shapes {shapes}"),
+            &root,
+            "--base",
+        ),
+        refusal @ purrdf_validate::ShapesProductRefusal::Admission(_) => {
+            refusal_error(&format!("--shapes {shapes}"), &refusal)
+        }
+    })?;
 
     let written = product.len();
     sink::write_out(out, &product)?;

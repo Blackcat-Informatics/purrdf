@@ -29,7 +29,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// capability no operator will find, which is indistinguishable from not shipping it. This
 /// pinned list is what keeps a new verb from being added to the tree and left off the surface
 /// an installed consumer actually meets.
-const SUBCOMMANDS: [&str; 12] = [
+const SUBCOMMANDS: [&str; 16] = [
     "convert",
     "query",
     "update",
@@ -42,6 +42,10 @@ const SUBCOMMANDS: [&str; 12] = [
     "project",
     "lift",
     "pack",
+    "shacl",
+    "rules",
+    "node-expr",
+    "shapes",
 ];
 
 #[test]

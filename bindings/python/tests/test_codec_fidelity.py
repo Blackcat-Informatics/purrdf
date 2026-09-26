@@ -22,10 +22,10 @@ owes a document:
   already canonical.
 
 On egress, two cross-checks that no single-format test can make: every one of
-the eight ``RdfFormat`` constants routes to its own codec — asserted by syntax
+the nine ``RdfFormat`` constants routes to its own codec — asserted by syntax
 only that codec emits, which is what catches a constant wired to the wrong
 format — and a base-free triple serialization is byte-identical to the
-default-graph selection of a dataset dump, in all eight.
+default-graph selection of a dataset dump, in all nine.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ PRIVATE_TAG_DOCUMENTS = (
 #: canonical spelling of a zero UTC offset is `Z`.
 NON_CANONICAL_DATETIME = "2026-06-19T00:00:00+00:00"
 
-#: Each of the eight `RdfFormat` constants, with syntax the codec it names DOES
+#: Each of the nine `RdfFormat` constants, with syntax the codec it names DOES
 #: emit and syntax it does NOT, over the two-graph document below. The negative
-#: half is what makes the set a partition rather than eight coincidences: Turtle
+#: half is what makes the set a partition rather than nine coincidences: Turtle
 #: and TriG share `@prefix`, JSON-LD and YAML-LD share an `@context` member, and
 #: N-Triples and N-Quads share every line of the default graph, so a positive
 #: marker alone would leave three pairs interchangeable. A serialize/reparse
@@ -79,9 +79,11 @@ FORMAT_MARKERS = (
     # JSON-LD quotes its keys; YAML-LD does not.
     (RdfFormat.JSON_LD, '"@context": {}', ("# yaml-language-server:",)),
     (RdfFormat.YAML_LD, "# yaml-language-server:", ('"@context"',)),
+    # RDF/XML is XML with no graph syntax, so the named graph is dropped.
+    (RdfFormat.RDF_XML, "<rdf:RDF", ("@prefix", f"{EX}g")),
 )
 
-#: All eight formats the `RdfFormat` constants name.
+#: All nine formats the `RdfFormat` constants name.
 ALL_FORMATS = tuple(data_format for data_format, _, _ in FORMAT_MARKERS)
 
 
@@ -95,7 +97,7 @@ def _literal_store() -> purrdf.Store:
 def _two_graph_store() -> purrdf.Store:
     """One default-graph triple and one named-graph quad.
 
-    The named graph is what makes the eight formats tell each other apart: a
+    The named graph is what makes the nine formats tell each other apart: a
     document with no graph name renders identically in Turtle and TriG, and in
     N-Triples and N-Quads, so a single-graph fixture cannot distinguish either
     pair.
@@ -217,7 +219,7 @@ def test_a_constructed_literal_is_emitted_quoted() -> None:
 def test_each_format_constant_emits_its_own_syntax(
     data_format: RdfFormat, present: str, absent: tuple[str, ...]
 ) -> None:
-    """Eight constants, eight codecs, each pinned to the one it names.
+    """Nine constants, nine codecs, each pinned to the one it names.
 
     A serialize-then-reparse round trip under ONE constant is self-consistent
     whatever the constant maps to, so it cannot catch a constant wired to the

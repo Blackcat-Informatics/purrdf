@@ -16,9 +16,11 @@ use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
 use crate::data::{DatasetIdentity, GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
+use crate::error::ShapesError;
+use crate::imports::ShapesImports;
 use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
-use crate::report::ValidationReport;
+use crate::report::{ConformanceDisallows, ValidationReport};
 use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{
     NamedNode, Term, canonical_cmp, canonical_cmp_id_term, canonical_cmp_ids, term_id_to_native,
@@ -293,8 +295,10 @@ impl BoundShapes {
         shapes: &[Shape],
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
+        disallows: &ConformanceDisallows,
     ) -> Result<Self, String> {
-        let binding = lowered.bind(data.core_view(), &classes);
+        let mut binding = lowered.bind(data.core_view(), &classes);
+        binding.set_conformance_disallows(disallows);
         let targets = shapes
             .iter()
             .map(|shape| {
@@ -321,8 +325,10 @@ impl BoundShapes {
         data: &ShaclData,
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
+        disallows: &ConformanceDisallows,
     ) -> Self {
-        let binding = lowered.bind(data.core_view(), &classes);
+        let mut binding = lowered.bind(data.core_view(), &classes);
+        binding.set_conformance_disallows(disallows);
         Self {
             lowered,
             classes,
@@ -379,8 +385,12 @@ impl PreparedTargets {
     ///
     /// # Errors
     ///
-    /// Returns an error when a SHACL-SPARQL target fails to evaluate — an
-    /// unanswerable target is not an empty one.
+    /// `sh:targetWhere`, a structured `sh:targetNode` and the data graph's
+    /// `sh:shape` declarations are evaluated here too, once, for the same reason
+    /// (see [`crate::target_eval`]).
+    ///
+    /// Returns an error when a SHACL-SPARQL, where or node-expression target fails
+    /// to evaluate — an unanswerable target is not an empty one.
     fn for_shape(
         data: &ShaclData,
         shape: &Shape,
@@ -420,8 +430,31 @@ impl PreparedTargets {
                     }
                 }
                 Target::ImplicitClass(_) => {}
+                Target::Where(shape) => {
+                    for node in crate::target_eval::where_targets(
+                        data,
+                        shape,
+                        binding.conformance_disallows(),
+                    )? {
+                        prepared.explicit_ids.insert(node);
+                    }
+                }
+                Target::NodeExpression(expr) => {
+                    for candidate in crate::target_eval::node_expression_targets(
+                        data,
+                        &shape.id,
+                        expr,
+                        binding.conformance_disallows(),
+                    )? {
+                        prepared.insert_explicit(data.core_view(), candidate);
+                    }
+                }
             }
         }
+        // Explicit shape targets: the data graph's `n sh:shape <shape>` triples.
+        prepared
+            .explicit_ids
+            .extend(crate::target_eval::declared_shape_targets(data, &shape.id));
         Ok(prepared)
     }
 
@@ -928,13 +961,16 @@ impl FocusSet {
     }
 }
 
-/// Resolve the focus node set for a single shape from its target declarations.
+/// Resolve the focus node set for a single shape from its target declarations —
+/// `targets`, the declarations of the shape whose node is `shape`, plus the data
+/// graph's `sh:shape` declarations naming it.
 ///
 /// Interned targets are deduplicated in id space and resolved to an owned term
 /// exactly once. Results retain that id for constraint and path evaluation and
 /// are sorted canonically before return.
 pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
+    shape: &Term,
     targets: &[Target],
     binding: &DatasetBinding,
     classes: &ClassCatalog,
@@ -955,7 +991,12 @@ pub(crate) fn resolve_focus_nodes(
                 Some(instances_of_class(data, class, binding, classes)?)
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Node(_) | Target::Sparql { .. } => None,
+            Target::Where(where_shape) => Some(crate::target_eval::where_targets(
+                data,
+                where_shape,
+                binding.conformance_disallows(),
+            )?),
+            Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
         };
         if let Some(ids) = ids {
             // Upper bound on the pushes this target adds: one Vec growth step
@@ -978,10 +1019,17 @@ pub(crate) fn resolve_focus_nodes(
                 substitutions,
             } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::NodeExpression(expr) => crate::target_eval::node_expression_targets(
+                data,
+                shape,
+                expr,
+                binding.conformance_disallows(),
+            )?,
             Target::Class(_)
             | Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
-            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
+            | Target::ImplicitClass(_)
+            | Target::Where(_) => unreachable!("id-native target handled above"),
         };
         for term in candidates {
             if let Some(id) = resolve_id(ds, &term) {
@@ -991,6 +1039,13 @@ pub(crate) fn resolve_focus_nodes(
             } else if seen_foreign.insert(term.clone()) {
                 nodes.push(FocusNode::Foreign(term));
             }
+        }
+    }
+
+    // Explicit shape targets: the data graph's `n sh:shape <shape>` triples.
+    for id in crate::target_eval::declared_shape_targets(data, shape) {
+        if seen_ids.insert(id) {
+            nodes.push(FocusNode::Interned(id));
         }
     }
 
@@ -1019,6 +1074,19 @@ fn evaluate_shape_focus_nodes(
     //    the message names the declaration rather than arriving mid-validation on
     //    whichever row happened to reach it first.
     let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
+
+    // Every `sh:uniqueValuesFor` grouping, built HERE, on this thread and before
+    // any worker exists: a grouping reads the declaring shape's whole target set,
+    // so building it lazily from inside the chunked fan-out would have several
+    // workers enumerate the same target set at once. Under the same function and
+    // aggregate scopes a worker installs, because a SHACL-SPARQL target resolved
+    // here may call a registered function exactly as it would there.
+    // A shapes graph without the component skips even the scopes.
+    if plan.has_unique_values() {
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
+        let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
+        plan.warm_unique_values(data)?;
+    }
 
     // One validation owns one ordered governor ledger. Letting focus workers charge that
     // shared state directly would make the first trip and its consumed vector depend on
@@ -1092,10 +1160,13 @@ fn evaluate_shape_focus_nodes(
     )
 }
 
-fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> ValidationReport {
+fn finish_report(
+    mut results: Vec<crate::report::ValidationResult>,
+    disallows: &ConformanceDisallows,
+) -> ValidationReport {
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
-    // message, severity). The message and severity tiebreakers make the ordering
-    // TOTAL: two results that agree on the first five components (e.g. several
+    // message, severity, result annotations). The message, severity and annotation
+    // tiebreakers make the ordering TOTAL: two results that agree on the first five components (e.g. several
     // `sh:uniqueLang` violations on one focus, which differ only in their message
     // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
     // iteration order and thus not guaranteed stable across ahash versions or
@@ -1111,15 +1182,13 @@ fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> Validatio
                 .as_ref()
                 .map_or_default(ToString::to_string),
             result.value.as_ref().map_or_default(ToString::to_string),
-            result.message.clone().unwrap_or_default(),
+            crate::report::messages_sort_key(&result.messages),
             result.severity.clone(),
+            crate::report::annotations_sort_key(&result.annotations),
         )
     };
     results.sort_by_cached_key(sort_key);
-    ValidationReport {
-        conforms: results.is_empty(),
-        results,
-    }
+    ValidationReport::from_results(results, disallows.clone())
 }
 
 fn validate_with_plan_and_focus_filter<F>(
@@ -1143,8 +1212,13 @@ where
         if shape.deactivated {
             continue;
         }
-        let mut focus_nodes =
-            resolve_focus_nodes(data, &shape.targets, bound.binding(), bound.classes())?;
+        let mut focus_nodes = resolve_focus_nodes(
+            data,
+            &shape.id,
+            &shape.targets,
+            bound.binding(),
+            bound.classes(),
+        )?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
         // the retained set to workers. The filter is a caller-supplied predicate
@@ -1159,10 +1233,44 @@ where
             |_| true,
         )?);
     }
-    Ok(finish_report(all_results))
+    Ok(finish_report(
+        all_results,
+        &shapes.validation_options.conformance_disallows,
+    ))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/// The options of a validation REQUEST: what the caller asks of one validation,
+/// as opposed to what the shapes graph says.
+///
+/// Carried on [`Shapes::validation_options`], so every entry point that takes a
+/// shapes graph — the free functions, [`PreparedShapes`] and every
+/// [`PreparedValidator`] bound from it — answers under the same options, and a
+/// preparation restored from a prepared product takes them through
+/// [`PreparedShapes::with_validation_options`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ValidationOptions {
+    /// The set of disallowed severity levels (SHACL 1.2 Core, "Conformance
+    /// Checking"): a result whose severity is in the set makes the report — and
+    /// every nested conformance check the run performs — non-conforming, and a
+    /// result whose severity is not in it does not. Defaults to exactly
+    /// `sh:Violation`, `sh:Warning`, `sh:Info` ("If the validation report contains
+    /// no such triples, sh:Violation, sh:Warning, and sh:Info are set as
+    /// defaults"). The report echoes a non-default set as
+    /// `sh:conformanceDisallows` triples; see [`ConformanceDisallows`].
+    pub conformance_disallows: ConformanceDisallows,
+}
+
+impl ValidationOptions {
+    /// These options with the conformance-disallow set replaced.
+    #[must_use]
+    pub fn with_conformance_disallows(mut self, disallows: ConformanceDisallows) -> Self {
+        self.conformance_disallows = disallows;
+        self
+    }
+}
 
 /// Immutable shape preparation reusable across independent dataset snapshots.
 ///
@@ -1332,6 +1440,21 @@ impl PreparedShapes {
     #[must_use]
     pub fn shapes(&self) -> &Arc<Shapes> {
         &self.shapes
+    }
+
+    /// This preparation answering every later bind under `options`.
+    ///
+    /// The route for a preparation whose [`Shapes`] the caller does not hold — one
+    /// restored from a prepared product — to take a validation request's options
+    /// ([`Shapes::validation_options`]). The options are request configuration,
+    /// not shapes-graph content, so the analysis and the lowering are kept: only
+    /// the shapes value is copied (copy-on-write; a preparation holding the only
+    /// reference changes it in place), and a validator already bound keeps the
+    /// options it was bound with.
+    #[must_use]
+    pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
+        Arc::make_mut(&mut self.shapes).validation_options = options;
+        self
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent
@@ -1545,6 +1668,11 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
         let shapes = Arc::clone(&prepared.shapes);
+        // The rules entailment regime applies to every validation this binding answers.
+        let data = match entailed_for_validation(&data, &shapes)? {
+            Some(entailed) => entailed,
+            None => data,
+        };
         let _function_scope = crate::sparql::enter_function_scope(
             crate::sparql::bind_in_current_env(&shapes.functions)?,
         );
@@ -1555,6 +1683,7 @@ impl PreparedValidator {
             &shapes.node_shapes,
             prepared.lowered(),
             Arc::clone(&prepared.classes),
+            &shapes.validation_options.conformance_disallows,
         )?;
         Ok(Self {
             data,
@@ -1659,7 +1788,10 @@ impl PreparedValidator {
                 |_| true,
             )?);
         }
-        Ok(finish_report(all_results))
+        Ok(finish_report(
+            all_results,
+            &self.shapes.validation_options.conformance_disallows,
+        ))
     }
 
     /// Validate only the supplied candidate focus nodes that match each shape's
@@ -1741,6 +1873,22 @@ impl PreparedValidator {
     /// the data graph into an owned snapshot first, so it is linear in the graph by
     /// construction.
     ///
+    /// # `sh:uniqueValuesFor` reads the whole target set, not the request
+    ///
+    /// SHACL 1.2 Core §7.9.5 compares a value node with "another node in
+    /// $targetNodes", and "Let $targetNodes be the target nodes of S" names every
+    /// target node of the declaring shape in the bound data graph — not the focus
+    /// nodes a request happens to list. A requested node that shares its values
+    /// with a target the request did not name therefore still violates, exactly as
+    /// it does under [`Self::validate`]. The shape's full target set is grouped by
+    /// value tuple once per binding, the first time a validation reaches the
+    /// constraint, and every later request against the same binding reuses that
+    /// grouping; the request that builds it pays a cost linear in the target set,
+    /// and the requests after it pay only their lookups, so the bounded-allocation
+    /// guarantee above holds for every request that finds the grouping built.
+    /// [`Self::affected_focus_node_ids`] expands a change to a listed property, or
+    /// to the target set, to every focus node of the shape, for the same reason.
+    ///
     /// # Errors
     ///
     /// Returns an error when a constraint evaluation hard-fails.
@@ -1795,6 +1943,10 @@ impl PreparedValidator {
     /// This is the crate's headline realtime surface, so the claim is stated where
     /// it is called rather than only in a design note: a caller sizing a latency
     /// budget around "re-validate only what changed" is relying on it.
+    ///
+    /// `sh:uniqueValuesFor` compares each requested node with the declaring
+    /// shape's FULL target set in the bound data graph, not with the other ids
+    /// supplied — see [`Self::validate_focus_nodes`] for the rule and its cost.
     ///
     /// # Errors
     ///
@@ -1891,7 +2043,8 @@ impl PreparedValidator {
     /// lowering itself, so it covers every route a read can take back to a focus
     /// node: a forward predicate step at any depth of a sequence, an
     /// `sh:inversePath`, a `sh:zeroOrMorePath` / `sh:oneOrMorePath` closure,
-    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the `rdf:type` and
+    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the data graph's `sh:shape`
+    /// statements (explicit shape targets), the `rdf:type` and
     /// `rdfs:subClassOf*` edges behind `sh:targetClass` and `sh:class`, a
     /// property-pair comparand predicate, and the whole nesting of `sh:node`,
     /// `sh:not`, `sh:and` / `sh:or` / `sh:xone` and `sh:qualifiedValueShape`.
@@ -1904,7 +2057,9 @@ impl PreparedValidator {
     /// A shapes graph that reads through query text this walk does not interpret —
     /// `sh:sparql`, a SPARQL target, a constraint component's `sh:ask` /
     /// `sh:select` validator, a `sh:SPARQLFunction` call, a SPARQL node expression
-    /// — has no footprint anyone can bound from the shapes graph alone. That
+    /// — has no footprint anyone can bound from the shapes graph alone, and neither
+    /// has a target EVALUATED over the whole data graph (`sh:targetWhere`, a
+    /// node-expression `sh:targetNode`). That
     /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
     /// must run [`Self::validate`]. It is reported rather than silently
     /// under-approximated because a short answer here is indistinguishable from a
@@ -2039,6 +2194,41 @@ impl PreparedValidator {
                 }
             }
         }
+        // The cross-focus reads (`sh:uniqueValuesFor`): a changed row whose
+        // predicate one of them names moves verdicts across the whole target set,
+        // so every focus node of the top-level shape it sits under is expanded —
+        // resolved against THIS binding, i.e. after the change. A focus node that
+        // left the set is expanded by that shape's own target reads above. Each
+        // shape is enumerated at most once however many of its broadcasts fire.
+        let mut broadcast_shapes: Vec<usize> = Vec::new();
+        for broadcast in self.bound.footprint().broadcasts() {
+            if broadcast_shapes.contains(&broadcast.shape) {
+                continue;
+            }
+            // A predicate this dataset never interned names no changed row.
+            let Some(predicate) = core.term_id_by_iri(broadcast.predicate.as_str()) else {
+                continue;
+            };
+            if !changed.iter().any(|quad| quad.p == predicate) {
+                continue;
+            }
+            broadcast_shapes.push(broadcast.shape);
+            let targets = self.bound.targets.get(broadcast.shape).ok_or_else(|| {
+                format!(
+                    "internal change-path defect: a cross-focus read names top-level shape {} of \
+                     a binding indexing {}",
+                    broadcast.shape,
+                    self.bound.targets.len()
+                )
+            })?;
+            for focus in targets.resolve_all(&self.data) {
+                if let Some(id) = focus.id()
+                    && seen.insert(id)
+                {
+                    affected.push(FocusId::new(dataset, id));
+                }
+            }
+        }
         // Canonical order, because a change expansion is a value a caller may log,
         // compare or pin, and first-seen order is a fact about the walk rather than
         // about the change.
@@ -2109,7 +2299,10 @@ impl PreparedValidator {
     fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
-            return Ok(finish_report(Vec::new()));
+            return Ok(finish_report(
+                Vec::new(),
+                &self.shapes.validation_options.conformance_disallows,
+            ));
         }
         // The dual question, asked once for the whole focus set: not "shape, do
         // you contain this node?" once per (shape, focus node) pair, but "node,
@@ -2139,7 +2332,10 @@ impl PreparedValidator {
                 |focus| claimed.contains(focus),
             )?);
         }
-        Ok(finish_report(all_results))
+        Ok(finish_report(
+            all_results,
+            &self.shapes.validation_options.conformance_disallows,
+        ))
     }
 }
 
@@ -2494,6 +2690,47 @@ fn change_pass(
 pub fn validate_with_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
+    include_focus: F,
+) -> Result<ValidationReport, String>
+where
+    F: FnMut(&Shape, &Term) -> bool,
+{
+    match entailed_for_validation(data, shapes)? {
+        Some(entailed) => validate_data_with_focus_filter(&entailed, shapes, include_focus),
+        None => validate_data_with_focus_filter(data, shapes, include_focus),
+    }
+}
+
+/// The data graph validation reads under the SHACL rules entailment regime: `data`
+/// with the shapes graph's rules executed over it, or `None` when the shapes graph
+/// does not declare the regime.
+///
+/// SHACL 1.2 Inference Rules, "The sh:RulesEntailment Regime": "the shapes graph
+/// indicates to a SHACL validation engine that the SHACL rules inside of the shapes
+/// graph need to be executed prior to starting the validation. […] Validation engines
+/// that do support the SHACL rules entailment regime execute the rules following the
+/// rules execution instructions prior to performing the actual validation." The
+/// entailed data keeps `data`'s shapes-graph exposure, so a SHACL-SPARQL constraint
+/// sees exactly what it would have seen without the regime.
+///
+/// # Errors
+///
+/// A rules-engine failure: validation of a graph whose rules could not be executed
+/// has no answer.
+fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
+    if !shapes.rules.entailment {
+        return Ok(None);
+    }
+    let entailed = crate::rules::apply_rules(data, shapes)
+        .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
+    build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
+}
+
+/// [`validate_with_focus_filter`] over data the entailment regime has already been
+/// applied to.
+fn validate_data_with_focus_filter<F>(
+    data: &ShaclData,
+    shapes: &Shapes,
     mut include_focus: F,
 ) -> Result<ValidationReport, String>
 where
@@ -2501,7 +2738,12 @@ where
 {
     let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
     let classes = Arc::clone(lowered.classes());
-    let bound = BoundShapes::bind_untargeted(data, lowered, classes);
+    let bound = BoundShapes::bind_untargeted(
+        data,
+        lowered,
+        classes,
+        &shapes.validation_options.conformance_disallows,
+    );
     validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
@@ -2564,7 +2806,7 @@ where
 /// Without a shapes graph both consumers retain the same view, sharing its lazy
 /// class-membership analysis. When a shapes-graph IRI is known, SPARQL receives a
 /// composite with every shapes row placed into that named graph.
-fn build_projected_data(
+pub(crate) fn build_projected_data(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,
@@ -2616,6 +2858,11 @@ fn build_sparql_view(
 /// shapes graph as a named graph to SHACL-SPARQL paths.
 ///
 /// `shapes_graph_iri` overrides [`Shapes::shapes_graph`] when both are present.
+///
+/// The shapes graph's `owl:imports` closure was decided when `shapes` was built: every
+/// [`Shapes`] constructor resolves it through [`crate::imports::resolve_shapes_imports`]
+/// against the caller's import table and refuses an incomplete one, so a `Shapes` value
+/// is the whole closure and the graph exposed here is the merged one.
 pub fn validate_dataset_with_shapes_graph(
     data: &RdfDataset,
     shapes: &Shapes,
@@ -2704,39 +2951,56 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// `@base` can still establish one, and with neither, a relative reference is a hard
 /// `iri-relative-no-base` — but it is now an answer somebody gave.
 ///
+/// # `owl:imports`
+///
+/// The shapes graph must hold its own `owl:imports` closure: this overload supplies no
+/// imported document, so a shapes graph that imports one it does not contain is refused
+/// with [`ShapesError::Imports`] — see [`crate::imports`].
+/// [`parse_shapes_with_config`] takes the import table.
+///
 /// # Errors
 ///
-/// Returns an error string if the shapes Turtle fails to parse (including a relative
+/// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand;
+/// [`ShapesError::Invalid`] if the shapes Turtle fails to parse (including a relative
 /// IRI reference with no base in scope) or contains unsupported SHACL constructs.
-pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, String> {
-    parse_shapes_with_config(shapes_ttl, base, None)
+pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, ShapesError> {
+    parse_shapes_with_config(shapes_ttl, base, None, &ShapesImports::new())
 }
 
 /// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
-/// (`crate::model::BoxRoleVocab`) threaded through.
+/// (`crate::model::BoxRoleVocab`) and the shapes graph's `owl:imports` table threaded
+/// through.
 ///
 /// PurRDF mints no vocabulary IRIs, so the box-role annotation feature has no
 /// default vocabulary: with `box_role_vocab = None` it is INACTIVE (shapes
 /// parse fine, but no role annotations are collected or stamped).
 ///
+/// `imports` supplies the documents the shapes graph's `owl:imports` name (see
+/// [`crate::imports`]). `base`, and a base the document's own `@base` establishes, are the
+/// IRIs the document was read under, so an import of either names this document.
+///
 /// # Errors
 ///
-/// Returns an error string if the shapes Turtle fails to parse or contains
-/// unsupported SHACL constructs.
+/// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand or `imports`
+/// cannot be used; [`ShapesError::Invalid`] if the shapes Turtle fails to parse or
+/// contains unsupported SHACL constructs.
 pub fn parse_shapes_with_config(
     shapes_ttl: &str,
     base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
-) -> Result<Shapes, String> {
-    // Parse the shapes graph via the native purrdf codecs — no
-    // the oxigraph `io` parser. The native codec drops document prefixes once it folds to
-    // the IR, so we recover the `@prefix`/SPARQL `PREFIX` map by scanning the
-    // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
-    // names. Syntax failures are accumulated per independently recoverable
+    imports: &ShapesImports,
+) -> Result<Shapes, ShapesError> {
+    // Parse the shapes graph via the native purrdf codecs. The document's prefix map
+    // comes back from the SAME parse — the codec's own record of its `@prefix` /
+    // `PREFIX` directives, never a scan of the text — because SHACL-SPARQL queries
+    // fall back to it. Syntax failures are accumulated per independently recoverable
     // statement so a SHACL author sees the complete actionable set in one pass.
-    let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, base)
+    let crate::text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        base: document_base,
+    } = crate::text_ingest::parse_turtle_document(shapes_ttl, base)
         .map_err(|errors| errors.join("\n"))?;
-    let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
     // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
     // this is the only seam that ever sees them, and both decided what the source
@@ -2744,12 +3008,26 @@ pub fn parse_shapes_with_config(
     // baked into every SHACL-AF query body below). A `Shapes` that could not report
     // them would force any consumer needing its identity to accept that identity as
     // an argument, which makes it a caller's claim instead of a fact about the parse.
+    //
+    // A base the document's own `@base` established is a second IRI it was read under,
+    // so an `owl:imports` of it names this document too.
+    let declared_base;
+    let imports = match document_base {
+        Some(document_base) if Some(document_base.as_str()) != base => {
+            let mut widened = imports.clone();
+            widened.declare_loaded(document_base);
+            declared_base = widened;
+            &declared_base
+        }
+        _ => imports,
+    };
     crate::shapes::from_dataset_with_base(
         &shapes_dataset,
         base,
         &doc_prefixes,
         box_role_vocab,
         None,
+        imports,
     )
 }
 
@@ -2766,53 +3044,92 @@ pub fn parse_shapes_with_config(
 /// on those lexical forms; lenient parsing keeps RDF ingestion separate from the
 /// SHACL conformance decision.
 ///
+/// The shapes graph must hold its own `owl:imports` closure; [`validate_graphs_with_config`]
+/// and [`validate_graphs_with_options`] take the import table.
+///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand;
+/// [`ShapesError::Invalid`] if either graph fails to parse.
 pub fn validate_graphs(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<ValidationReport, String> {
-    validate_graphs_with_config(data_nt, shapes_ttl, shapes_base, None)
+) -> Result<ValidationReport, ShapesError> {
+    validate_graphs_with_config(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        None,
+        &ShapesImports::new(),
+    )
+}
+
+/// [`validate_graphs`] under a validation request's `options` — its
+/// conformance-disallow set — with the shapes graph's `owl:imports` table (see
+/// [`crate::imports`]).
+///
+/// # Errors
+///
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse or
+/// validation hard-fails.
+pub fn validate_graphs_with_options(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    options: &ValidationOptions,
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
+        .map_err(|errors| errors.join("\n"))?;
+    let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    shapes.set_validation_options(options.clone());
+    Ok(validate_dataset(data.as_ref(), &shapes)?)
 }
 
 /// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
 /// (`crate::model::BoxRoleVocab`) threaded through to shape parsing and
-/// validation. `None` leaves the box-role feature inactive.
+/// validation, and the shapes graph's `owl:imports` table (see [`crate::imports`]).
+/// `None` leaves the box-role feature inactive.
 ///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse.
 pub fn validate_graphs_with_config(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
-) -> Result<ValidationReport, String> {
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
     // Parse the data graph via the native codecs. Every independently malformed
     // N-Triples line is reported in one pass, matching `parse_shapes`' complete
     // syntax-diagnostic contract.
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
-    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab)?;
-    validate_dataset(data.as_ref(), &shapes)
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, imports)?;
+    Ok(validate_dataset(data.as_ref(), &shapes)?)
 }
 
-/// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph.
+/// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph, with
+/// the shapes graph's `owl:imports` table (see [`crate::imports`]).
 ///
 /// # Errors
 ///
-/// Returns an error string if the shapes graph fails to parse or if the SHACL
-/// projection cannot be frozen.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if the shapes graph fails to parse
+/// or if the SHACL projection cannot be frozen.
 pub fn validate_dataset_graphs(
     data: &RdfDataset,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<ValidationReport, String> {
-    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
-    validate_dataset(data, &shapes)
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    Ok(validate_dataset(data, &shapes)?)
 }
 
 /// Entail data (N-Triples) under shapes (Turtle), returning the materialized
@@ -2825,20 +3142,25 @@ pub fn validate_dataset_graphs(
 /// The returned [`Arc<RdfDataset>`] is a NEW frozen dataset of base ⊎ inferred
 /// triples the caller serializes however its surface emits RDF.
 ///
+/// `imports` is the shapes graph's `owl:imports` table (see [`crate::imports`]): an
+/// imported document's rules are rules of the shapes graph.
+///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse or if rule application
-/// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
-/// does not reach a fixpoint — see [`crate::apply_rules`]).
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse or
+/// if rule application fails (an illegal head term, an unresolvable `sh:condition`, or a
+/// rule set that does not reach a fixpoint — see [`crate::apply_rules`]).
 pub fn entail_graphs(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<Arc<RdfDataset>, String> {
+    imports: &ShapesImports,
+) -> Result<Arc<RdfDataset>, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
-    crate::rules::entail_dataset(data.as_ref(), &shapes)
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -2947,9 +3269,10 @@ mod tests {
             .collect()
     }
 
-    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all` and
-    /// `TargetDispatch` select the identical focus-node set — for every `Target`
-    /// variant there is.**
+    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all`,
+    /// `TargetDispatch` and `resolve_focus_nodes` select the identical focus-node
+    /// set — for every `Target` variant there is, and for the data graph's
+    /// `sh:shape` declarations, which no variant carries.**
     ///
     /// Three implementations of one predicate. `contains` DEFINES it, one
     /// (shape, node) pair at a time; `resolve_all` enumerates it forwards over the
@@ -2982,6 +3305,14 @@ mod tests {
                 sh:target [ a sh:SPARQLTarget ; sh:select
                     "SELECT ?this WHERE { ?this <http://example.org/ns#active> true }" ] ;
                 sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:WhereShape a sh:NodeShape ;
+                sh:targetWhere [ sh:datatype xsd:boolean ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ExpressionShape a sh:NodeShape ;
+                sh:targetNode [ sh:path ex:pointsAt ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:DeclaredShape a sh:NodeShape ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
             "#,
             r"
             ex:Child rdfs:subClassOf ex:Person .
@@ -2991,13 +3322,16 @@ mod tests {
             ex:tail ex:link ex:head .
             ex:explicit ex:required ex:anything .
             ex:activeNode ex:active true .
+            ex:flagged ex:flag true .
+            ex:ExpressionShape ex:pointsAt ex:pointed .
+            ex:declared sh:shape ex:DeclaredShape .
             ",
         );
 
         // The fixture's claim to be exhaustive is itself checked: a fixture that
         // quietly stopped covering a variant would leave this test green while
         // testing less, which is the failure mode an agreement test is for.
-        let mut covered = [false; 6];
+        let mut covered = [false; 8];
         for target in shapes.node_shapes.iter().flat_map(|shape| &shape.targets) {
             covered[match target {
                 Target::Class(_) => 0,
@@ -3006,6 +3340,8 @@ mod tests {
                 Target::Node(_) => 3,
                 Target::ImplicitClass(_) => 4,
                 Target::Sparql { .. } => 5,
+                Target::Where(_) => 6,
+                Target::NodeExpression(_) => 7,
             }] = true;
         }
         assert!(
@@ -3030,6 +3366,24 @@ mod tests {
             assert_eq!(
                 by_contains, by_resolve_all,
                 "{shape}: `resolve_all` disagrees with `contains`",
+            );
+            // The fourth route: the one the unprepared entry points, the rules
+            // engine and `sh:uniqueValuesFor` resolve through.
+            let declared = &shapes.node_shapes[position];
+            let by_resolve_focus_nodes: std::collections::BTreeSet<String> = resolve_focus_nodes(
+                &validator.data,
+                &declared.id,
+                &declared.targets,
+                validator.bound.binding(),
+                validator.bound.classes(),
+            )
+            .expect("fixture targets resolve")
+            .iter()
+            .map(|focus| focus.to_term(validator.data.core_view()).to_string())
+            .collect();
+            assert_eq!(
+                by_contains, by_resolve_focus_nodes,
+                "{shape}: `resolve_focus_nodes` disagrees with `contains`",
             );
         }
     }
@@ -3144,7 +3498,9 @@ mod tests {
             "ex:b ex:q ex:c .\n",           // valid, between the two errors
             "ex:d ex:r ex:s ex:t ex:u .\n", // too many terms → recoverable error
         );
-        let err = parse_shapes(bad, None).expect_err("malformed Turtle must error");
+        let err = parse_shapes(bad, None)
+            .expect_err("malformed Turtle must error")
+            .to_string();
         let n = err.matches("Turtle parse error").count();
         assert!(
             n >= 2,
@@ -3161,7 +3517,9 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> .\n",
             "neither is this\n",
         );
-        let err = validate_graphs(bad_data, "", None).expect_err("malformed N-Triples must error");
+        let err = validate_graphs(bad_data, "", None)
+            .expect_err("malformed N-Triples must error")
+            .to_string();
         let n = err.matches("N-Triples parse error").count();
         assert!(
             n >= 2,
@@ -3210,7 +3568,8 @@ mod tests {
         // parse into shapes that quietly match nothing: a validator built from those
         // would report `conforms true` over a constraint it never evaluated.
         let err = parse_shapes(RELATIVE_SHAPES, None)
-            .expect_err("a relative IRI with no base must be refused");
+            .expect_err("a relative IRI with no base must be refused")
+            .to_string();
         assert!(
             err.contains("iri-relative-no-base"),
             "the refusal must name the actionable condition: {err}"
@@ -3298,8 +3657,9 @@ mod tests {
                     sh:minCount 1 ;
                 ] ."
         );
-        let report = validate_dataset_graphs(dataset.as_ref(), &shapes_ttl, None)
-            .expect("GTS-backed store should validate");
+        let report =
+            validate_dataset_graphs(dataset.as_ref(), &shapes_ttl, None, &ShapesImports::new())
+                .expect("GTS-backed store should validate");
         assert!(!report.conforms, "missing property must violate the shape");
         assert_eq!(report.results.len(), 1);
     }
@@ -3651,10 +4011,11 @@ mod tests {
         let shapes = load_shapes_ttl(&shapes_ttl);
         let report = validate(&data, &shapes);
 
-        // SHACL: conforms is false if ANY result exists, regardless of severity
+        // SHACL 1.2 Core: sh:Warning is in the default conformance-disallow set,
+        // so a Warning result makes conforms false.
         assert!(
             !report.conforms,
-            "Warning results must still make conforms=false"
+            "Warning results must still make conforms=false under the default set"
         );
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].severity, Severity::Warning);
@@ -5366,7 +5727,7 @@ mod tests {
             })
             .collect();
         cases.sort();
-        assert_eq!(cases.len(), 71, "first-party corpus cardinality drifted");
+        assert_eq!(cases.len(), 73, "first-party corpus cardinality drifted");
 
         let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
             .into_iter()
@@ -5396,6 +5757,7 @@ mod tests {
                     Some(crate::model::BoxRoleVocab::for_namespace(
                         "https://example.org/meta/",
                     )),
+                    &ShapesImports::new(),
                 )
                 .unwrap_or_else(|error| panic!("{case_name}: validation failed: {error}"))
                 .to_ntriples()

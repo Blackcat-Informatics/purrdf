@@ -21,11 +21,13 @@ stratified semi-naive fixpoint, carrying no ambient I/O, no wall clock and no
 RNG.
 
 A rule set is *data* — a table of clauses over a relation store — rather than a
-hand-written loop. Its consumer today is
-[`purrdf-entail`](https://crates.io/crates/purrdf-entail): the RDF, RDFS, OWL 2
+hand-written loop. Its consumers are
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail) — the RDF, RDFS, OWL 2
 RL and D calculi are declared as DL-clause programs and evaluated here, which is
 what lets a reasoning report carry a *contract hash* of the exact program that
-ran instead of a claim about which rules were meant to.
+ran instead of a claim about which rules were meant to — and
+[`purrdf-shapes`](https://crates.io/crates/purrdf-shapes), whose SHACL rules
+and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
 
 ## Design commitments
 
@@ -44,6 +46,14 @@ ran instead of a claim about which rules were meant to.
   [`purrdf-entail`](https://crates.io/crates/purrdf-entail)'s OWL-Direct
   hypertableau, which classifies its own `SHOIQ(D)` DL-clauses through this
   crate's `HeadForm` and branches on exactly that form.
+* **Guards and an ordered schedule, still one evaluator.** A guard literal is a
+  body literal whose meaning a caller supplies at evaluation time — a SPARQL
+  `FILTER` or assignment, a SHACL node expression, a CONSTRUCT query — so a rule
+  language with an expression sublanguage lowers onto the same join, commit and
+  budgets as a pure Datalog program. The ordered schedule runs such a program in
+  the layers, run-once rules and concurrently evaluated groups SHACL 1.2 Inference
+  Rules and SPARQL 1.2 RL define; the SPARQL 1.2 RL rule-level stratifier builds
+  that schedule, or names the cycle that makes one impossible.
 * **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
   digest over the planner version, the caller's contract hash and a canonical
   digest of the clause program. The cache is owned by the caller, never a
@@ -56,7 +66,15 @@ ran instead of a claim about which rules were meant to.
   two callers with the same input always get the same answer. Nothing numeric is
   caller-settable here: a settable ceiling drags a charge schedule behind it, and
   a reasoner's step count is an artifact of the plan, so pinning one would pin the
-  planner and make a caller's *model* move when the join order does.
+  planner and make a caller's *model* move when the join order does. The one
+  exception is the limit on TERM-GENERATING rounds of a guarded program: whether
+  such a program terminates is undecidable, so any fixed limit refuses some
+  program that terminates, and the limit is the caller's (`EvalOptions`). Its
+  default is a divergence criterion derived from the input, `max(256, 4 × N)`
+  rounds for `N` distinct seeded terms, refused as `TermGenerationDiverged`
+  naming the rules that generated a term in the last round. It counts rounds
+  rather than pricing work, only ever refuses, cannot bind a guard-free program,
+  and is folded into the program's contract hash.
 * **A stop signal is admitted, because it is answer-blind.** `StopSignal` is a
   two-line trait polled at round boundaries the fixpoint was going to reach
   anyway. It carries no number and cannot be asked *where* to stop, only whether
@@ -79,7 +97,8 @@ This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
 C (the GTS container itself reaches Python and C, not the wasm package). It is the evaluator beneath
-[`purrdf-entail`](https://crates.io/crates/purrdf-entail) and is published
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail) and
+[`purrdf-shapes`](https://crates.io/crates/purrdf-shapes)'s rules engine, and is published
 separately so a caller can depend on the fixpoint alone. Note that it is not
 re-exported by the umbrella [`purrdf`](https://crates.io/crates/purrdf) crate.
 

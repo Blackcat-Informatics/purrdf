@@ -36,6 +36,11 @@ purrdf-sparql-algebra = { workspace = true }
 # frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
 # sh:SPARQLTarget evaluation.
 purrdf-sparql-eval = { workspace = true }
+# The one rules engine: SHACL rules and SPARQL 1.2 RL lower to this crate's rule-set
+# IR (`srl::ir`), which lowers onto purrdf-datalog's clause IR and is evaluated by its
+# stratifier and ordered schedule. purrdf-datalog depends only on purrdf-core, so the
+# edge adds no cycle, and it is on the workspace wasm gate.
+purrdf-datalog = { workspace = true }
 # sh:pattern regex constraint.
 regex = { workspace = true }
 # The one shared XSD/XPath `regExp` → `regex`-crate translation
@@ -157,6 +162,12 @@ name = "schema_surface"
 harness = false
 
 [[bench]]
+# The JSON-LD instance projection with and without RDF lists (the list index is
+# built only where some `rdf:rest` is `rdf:nil`). Report-only; `make bench` lane.
+name = "instance_projection"
+harness = false
+
+[[bench]]
 name = "pydantic_package"
 harness = false
 
@@ -189,4 +200,20 @@ harness = false
 # (mirrors `purremb_alloc` / `pack_input_alloc`). Report-only; `make bench` lane
 # only — excluded from `make check`.
 name = "shacl_product_alloc"
+harness = false
+
+[[bench]]
+# SPARQL 1.2 RL transitive closure through the public text API: the parse-and-check of
+# the closure program, and `srl::infer` over chains of increasing length. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "srl_closure"
+harness = false
+
+[[bench]]
+# Time to refusal of divergent rule sets under the default term-generating horizon —
+# a SHACL SPARQL rule minting a longer IRI, a string extended and a counter stepped
+# every pass, and a SPARQL 1.2 RL rule nesting a triple term every round — beside the
+# completion time of a counter bounded by its data, deeper than the horizon's floor.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "rules_divergence"
 harness = false

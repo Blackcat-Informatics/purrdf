@@ -8,7 +8,7 @@
 //! tightening `Arc::ptr_eq` until it rejects a legitimately shared handle would look
 //! like correct strictness and would reject every real shapes graph.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use purrdf::{RdfDataset, SparqlRequest, SparqlResult};
@@ -45,7 +45,8 @@ fn leaf_shape(id: &str) -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -57,7 +58,7 @@ fn node_by_expression(index: &ShapeIndex) -> Constraint {
     Constraint::NodeByExpression {
         expr: NodeExpr::This,
         shapes: Arc::clone(index),
-        message: None,
+        messages: vec![],
         severity: None,
     }
 }
@@ -72,7 +73,7 @@ fn conforms_to_computed(index: &ShapeIndex) -> Constraint {
                 shapes: Arc::clone(index),
             },
         },
-        message: None,
+        messages: vec![],
         severity: None,
     }
 }
@@ -159,8 +160,15 @@ fn link_refuses_unshared_index() {
     shape.constraints = vec![node_by_expression(&index), node_by_expression(&stray)];
 
     let mut registry = UserFunctionRegistry::new();
-    let error = link_shapes(&[shape], &index, &[], BTreeMap::new(), &mut registry)
-        .expect_err("a private handle must be refused");
+    let error = link_shapes(
+        &[shape],
+        &index,
+        &[],
+        &BTreeSet::new(),
+        BTreeMap::new(),
+        &mut registry,
+    )
+    .expect_err("a private handle must be refused");
 
     assert_eq!(error.dimension(), ProductDimension::Malformed);
     assert!(
@@ -190,6 +198,7 @@ fn link_accepts_correctly_shared_index() {
         std::slice::from_ref(&shape),
         &index,
         &[],
+        &BTreeSet::new(),
         BTreeMap::new(),
         &mut registry,
     )
@@ -209,6 +218,7 @@ fn link_accepts_a_graph_with_no_shape_index_site() {
         &[leaf_shape("A")],
         &index,
         &[],
+        &BTreeSet::new(),
         BTreeMap::new(),
         &mut registry,
     )
@@ -233,6 +243,7 @@ fn link_refuses_unfilled_custom_function_body() {
         &[leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
+        &BTreeSet::new(),
         BTreeMap::new(),
         &mut registry,
     )
@@ -265,6 +276,7 @@ fn link_accepts_a_supplied_custom_function_body() {
         &[leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
+        &BTreeSet::new(),
         bodies,
         &mut registry,
     )
@@ -296,6 +308,7 @@ fn link_accepts_a_body_installed_before_linking() {
         &[leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
+        &BTreeSet::new(),
         BTreeMap::new(),
         &mut registry,
     )
@@ -315,8 +328,15 @@ fn link_refuses_a_body_with_no_declaration() {
     bodies.insert(ex("ghost").as_str().to_owned(), NodeExpr::This);
     let mut registry = UserFunctionRegistry::new();
 
-    let error = link_shapes(&[leaf_shape("A")], &index, &[], bodies, &mut registry)
-        .expect_err("an orphan body must be refused");
+    let error = link_shapes(
+        &[leaf_shape("A")],
+        &index,
+        &[],
+        &BTreeSet::new(),
+        bodies,
+        &mut registry,
+    )
+    .expect_err("an orphan body must be refused");
     assert_eq!(error.dimension(), ProductDimension::Malformed);
     assert!(error.message().contains("ghost"), "got {error}");
 }
@@ -389,4 +409,71 @@ fn linked_custom_function_recursion_resolves() {
         bound[0].contains("lexical_form: \"0\""),
         "the recursive branch must have been taken — an unrecursed body answers 3: {bound:?}",
     );
+}
+
+// ── SHACL 1.2 SPARQL Extensions §7.3: redefinition ──────────────────────────────
+
+/// A custom list-parameter declaration `ex:<local>` with the body `sh:this`.
+fn list_function(local: &str) -> Arc<CustomFunction> {
+    let func = Arc::new(CustomFunction {
+        iri: ex(local),
+        kind: CustomFnKind::ListParameter,
+        params: vec![ArgKey::Index(0)],
+        required: 1,
+        body: OnceLock::new(),
+    });
+    func.body
+        .set(NodeExpr::This)
+        .expect("a fresh declaration has no body");
+    func
+}
+
+/// "If a function with the same IRI is already registered, SHACL engines MUST
+/// ignore the attempt to redefine it": a host's NATIVE registration survives a
+/// declaration of the same IRI — neither replaced nor a cross-kind panic.
+#[test]
+fn a_native_registration_is_not_redefined() {
+    use purrdf_sparql_eval::{Arity, Volatility};
+    let mut registry = UserFunctionRegistry::new();
+    registry.register_native(
+        ex("f").as_str(),
+        Arity::Exact(1),
+        Volatility::Stable,
+        Arc::new(|_| Ok(None)),
+    );
+    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    assert!(registry.resolve_native(ex("f").as_str()).is_some());
+    assert!(registry.resolve_expr(ex("f").as_str()).is_none());
+}
+
+/// "… unless the function was previously added as a custom SPARQL function": a
+/// SPARQL-bodied registration IS redefined by the declaration.
+#[test]
+fn a_custom_sparql_function_is_redefined() {
+    use purrdf_sparql_eval::{TypeConstraint, UserFnBody, UserFunction};
+    let mut registry = UserFunctionRegistry::new();
+    registry.insert(
+        ex("f").as_str(),
+        UserFunction {
+            params: Vec::new(),
+            required: 0,
+            body: Arc::from("SELECT (1 AS ?r) WHERE {}"),
+            kind: UserFnBody::Select,
+            return_constraint: TypeConstraint {
+                datatype: None,
+                node_kind: None,
+            },
+        },
+    );
+    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    assert!(registry.resolve(ex("f").as_str()).is_none());
+    assert!(registry.resolve_expr(ex("f").as_str()).is_some());
+}
+
+/// The neighbour: with nothing registered, the declaration registers.
+#[test]
+fn an_unregistered_declaration_registers() {
+    let mut registry = UserFunctionRegistry::new();
+    super::register_expression_bodied_functions(&[list_function("f")], &mut registry);
+    assert!(registry.resolve_expr(ex("f").as_str()).is_some());
 }

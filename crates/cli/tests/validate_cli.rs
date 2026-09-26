@@ -505,10 +505,10 @@ fn a_tripped_governor_writes_no_report_and_exits_three() {
     let receipt = stderr(&out);
     // The banner is a LINE of the receipt rather than its first byte. `validate` writes its
     // own `shacl ` receipt lines to the same stream before the engine is reached — the
-    // `shapes-provenance` line naming where these shapes came from, and a `shacl warning`
-    // for each unresolved `owl:imports` — and a trip must not suppress the answer to "which
-    // shapes were we validating against when the budget ran out?", which is the first thing
-    // an operator needs in order to re-run with a bigger budget.
+    // `shapes-provenance` line naming where these shapes came from — and a trip must not
+    // suppress the answer to "which shapes were we validating against when the budget ran
+    // out?", which is the first thing an operator needs in order to re-run with a bigger
+    // budget.
     assert!(
         receipt
             .lines()
@@ -1378,9 +1378,17 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
 // and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
-// --import` and `shex --import` give. What was a BUG is that an unresolved import used to be
-// SILENT: a shapes graph whose shapes all lived in an imported document reported `conforms
-// true / results 0` against no shapes at all, with exit 0 and not a word on stderr.
+// --import` and `shex --import` give. An import whose ontology is already IN the shapes graph,
+// or whose target the shapes graph describes with `sh:declare`, needs no pair; any other unresolved import is REFUSED, because a shapes graph whose shapes
+// all live in an imported document would otherwise report `conforms true / results 0`
+// against no shapes at all.
+
+/// The W3C SHACL 1.2 core vocabulary, vendored beside the shapes engine.
+const SHACL_TTL: &str = include_str!("../../shapes/spec/shacl.ttl");
+/// The W3C SHACL 1.2 node-expression vocabulary; it `owl:imports <sh:>`.
+const SHNEX_TTL: &str = include_str!("../../shapes/spec/shnex.ttl");
+/// The W3C SHACL 1.2 SPARQL node-expression vocabulary; it `owl:imports <shnex:>`.
+const SHNEX_SPARQL_TTL: &str = include_str!("../../shapes/spec/shnex-sparql.ttl");
 
 /// A root shapes document that is nothing but an ontology header importing `shapes-a`.
 const IMPORT_ROOT: &str = concat!(
@@ -1452,32 +1460,383 @@ fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
     );
 }
 
-/// WITHOUT `--import`, an unresolved `owl:imports` is REPORTED and the run proceeds.
-///
-/// This is the actual defect: the pre-fix behaviour was silence. It is deliberately a
-/// diagnostic rather than a refusal — see the neighbouring-valid-case test below.
+/// WITHOUT `--import`, an `owl:imports` whose ontology is not in the shapes graph is REFUSED
+/// by name, with the pair that resolves it, and no verdict is written — validating the root
+/// alone would decide `conforms true` against a shapes graph with no shapes in it.
 #[test]
-fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {
+fn an_unresolved_shapes_import_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
     let out = run(&["validate", "--shapes", &root, &data]);
     let err = stderr(&out);
-    assert_eq!(code(&out), 0, "still a decided verdict: {err}");
-    assert!(
-        err.contains("http://example.org/shapes-a"),
-        "the warning names the import it could not resolve: {err}"
+    assert_eq!(
+        code(&out),
+        1,
+        "an unresolved import is a runtime refusal: {err}"
     );
     assert!(
-        err.contains("--import"),
-        "and the flag that resolves it: {err}"
+        err.contains("<http://example.org/shapes-a>"),
+        "the refusal names the import it could not resolve: {err}"
     );
-    // The verdict is unchanged from the pre-fix behaviour — the shapes graph really does
-    // carry no shapes. What changed is that the operator is now TOLD why it is empty.
     assert!(
-        err.contains("shacl conforms true\n") && err.contains("shacl results 0\n"),
-        "validating against the root alone still decides: {err}"
+        err.contains("--import http://example.org/shapes-a=FILE"),
+        "and the pair that resolves it: {err}"
+    );
+    assert!(
+        !err.contains("shacl conforms"),
+        "no verdict is decided over a shapes graph smaller than the one named: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "and no report is written");
+}
+
+/// The W3C SHACL 1.2 vocabularies merged into ONE shapes document, beside a user shape:
+/// `shnex.ttl` imports `sh:` and `shnex-sparql.ttl` imports `shnex:`, and both ontologies are
+/// declared in the same document — so the closure is complete as written. It validates with
+/// no `--import` and nothing on stderr but the receipt, and the user shape decides.
+#[test]
+fn merged_vocabulary_needs_no_import_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "merged.ttl",
+        &format!("{SHACL_TTL}\n{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{IMPORT_B}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a complete closure is a decided run: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the user shape beside the vocabulary fires: {err}"
+    );
+    assert!(
+        !err.contains("warning") && !err.contains("owl:imports"),
+        "an import the graph already holds is neither warned about nor required: {err}"
+    );
+}
+
+/// The neighbour of [`merged_vocabulary_needs_no_import_flag`]: the same document WITHOUT
+/// `shacl.ttl`, so `shnex.ttl`'s import of `sh:` names an ontology nothing declares. Exactly
+/// that import is refused — `shnex:`, which `shnex-sparql.ttl` imports and `shnex.ttl`
+/// declares, is still resolved in place and is not named.
+#[test]
+fn unresolved_import_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "partial.ttl",
+        &format!("{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{IMPORT_B}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&out);
+    assert_eq!(
+        code(&out),
+        1,
+        "an unresolved import is a runtime refusal: {err}"
+    );
+    assert!(
+        err.contains("<http://www.w3.org/ns/shacl#>")
+            && err.contains("--import http://www.w3.org/ns/shacl#=FILE"),
+        "the refusal names the missing ontology and the pair that resolves it: {err}"
+    );
+    assert!(
+        !err.contains("<http://www.w3.org/ns/shacl-node-expr#>"),
+        "the import the graph already holds is not named: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "no report is written");
+}
+
+/// The vendored W3C `sparql/node/prefixes-001` test: `ex:TestPrefixes owl:imports` the IRI
+/// upstream publishes the test under, a node the document describes with `sh:declare` — SHACL's
+/// `sh:prefixes/owl:imports*/sh:declare` path, reaching the `ex:` prefix declared there.
+/// Nothing needs fetching: the import names a node the shapes graph holds.
+const PREFIXES_001: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../vectors/shacl/sparql/node/prefixes-001.ttl"
+);
+/// The IRI the W3C suite publishes `prefixes-001` under — the document's own IRI.
+const PREFIXES_001_IRI: &str = "http://datashapes.org/sh/tests/sparql/node/prefixes-001.test";
+
+/// The W3C expected report for `prefixes-001`: one violation, on `ex:InvalidResource1`, whose
+/// value is `test:Value` — reachable only if the `test:` and `ex:` prefixes the
+/// `sh:prefixes/owl:imports*/sh:declare` path leads to were honoured by the `sh:select`.
+fn assert_prefixes_001_verdict(out: &Output) {
+    let err = stderr(out);
+    assert_eq!(code(out), 0, "a decided verdict: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the W3C verdict is non-conforming with exactly one result: {err}"
+    );
+    let report = stdout(out);
+    assert!(
+        report.contains(&format!(
+            "<http://www.w3.org/ns/shacl#focusNode> <{PREFIXES_001_IRI}#InvalidResource1>"
+        )),
+        "the result is on ex:InvalidResource1: {report}"
+    );
+    assert!(
+        report.contains("<http://www.w3.org/ns/shacl#value> <http://test.com/ns#Value>"),
+        "with test:Value as its value, so the declared prefix resolved: {report}"
+    );
+    assert!(
+        !report.contains(&format!(
+            "<http://www.w3.org/ns/shacl#focusNode> <{PREFIXES_001_IRI}#ValidResource1>"
+        )),
+        "ex:ValidResource1 is not the focus node of any result: {report}"
+    );
+}
+
+/// The W3C `prefixes-001` vector validates as written, with no `--import` and no
+/// `--shapes-base`: its `owl:imports` target is the node the document itself describes with
+/// `sh:declare` — SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom — so the import is in
+/// hand, and the run reaches the W3C verdict with the same file as data. `--shapes-base`
+/// changes nothing about that, and `shacl pack` packs it as written too.
+///
+/// The neighbour: the same document with the target's `sh:declare` replaced by an
+/// `rdfs:label` describes the target, but not as SHACL reads an import target, so the import
+/// is refused by name — and the refusal names both remedies, `--shapes-base` and `--import`.
+#[test]
+fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused() {
+    assert_prefixes_001_verdict(&run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]));
+    assert_prefixes_001_verdict(&run(&[
+        "validate",
+        "--shapes",
+        PREFIXES_001,
+        "--shapes-base",
+        PREFIXES_001_IRI,
+        PREFIXES_001,
+    ]));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vector = std::fs::read_to_string(PREFIXES_001).expect("the vendored vector");
+    let target = format!("<{PREFIXES_001_IRI}>\n  sh:declare [");
+    assert_eq!(
+        vector.matches(&target).count(),
+        1,
+        "the idiom's target, once"
+    );
+    let labelled = write_file(
+        dir.path(),
+        "prefixes-001-labelled.ttl",
+        &vector.replace(
+            &target,
+            &format!("<{PREFIXES_001_IRI}>\n  rdfs:label \"prefixes-001\" .\n[]\n  sh:declare ["),
+        ),
+    );
+    let refused = run(&["validate", "--shapes", &labelled, PREFIXES_001]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains(&format!("<{PREFIXES_001_IRI}>")),
+        "the refusal names the import: {err}"
+    );
+    assert!(
+        err.contains(&format!("--shapes-base {PREFIXES_001_IRI}")),
+        "and suggests reading the document under that IRI: {err}"
+    );
+    assert!(
+        err.contains(&format!("--import {PREFIXES_001_IRI}=FILE")),
+        "and the pair that resolves it: {err}"
+    );
+    assert!(stdout(&refused).is_empty(), "no report is written");
+
+    // `shacl pack` packs the vector as written, and the product it writes reaches the same
+    // verdict.
+    let product = dir.path().join("prefixes-001.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        PREFIXES_001,
+        "--out",
+        product_path,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    assert_prefixes_001_verdict(&run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        PREFIXES_001,
+    ]));
+}
+
+/// `--shapes-base` is the shapes document's PARSE base: a relative shape IRI resolves against
+/// it, observed in the report's `sh:sourceShape`, while without it the same reference
+/// resolves against the file's `file://` retrieval IRI. `--base` sets only the DATA graph's
+/// base and leaves the shapes document alone. The flag is refused against `--shapes-product`,
+/// which recorded its base when it was packed.
+#[test]
+fn shapes_base_is_the_shapes_documents_parse_base() {
+    const RELATIVE_SHAPES: &str = concat!(
+        "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n",
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+        "@prefix ex:  <http://example.org/> .\n",
+        "<#AgeShape> a sh:PropertyShape ; sh:targetClass ex:Person ;\n",
+        "    sh:path ex:age ; sh:datatype xsd:integer .\n",
+    );
+    const SOURCE_SHAPE: &str = "<http://www.w3.org/ns/shacl#sourceShape>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "relative.ttl", RELATIVE_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let based = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    assert_eq!(code(&based), 0, "{}", stderr(&based));
+    assert!(
+        stdout(&based).contains(&format!(
+            "{SOURCE_SHAPE} <http://example.org/shapes/doc#AgeShape>"
+        )),
+        "the relative shape IRI resolves against --shapes-base: {}",
+        stdout(&based)
+    );
+
+    // An `@base` inside the document still wins inside it, as Turtle specifies.
+    let declared = write_file(
+        dir.path(),
+        "declared.ttl",
+        &format!("@base <http://example.org/declared/doc> .\n{RELATIVE_SHAPES}"),
+    );
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &declared,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&format!(
+            "{SOURCE_SHAPE} <http://example.org/declared/doc#AgeShape>"
+        )),
+        "the document's own @base wins: {}",
+        stdout(&out)
+    );
+
+    for args in [
+        vec!["validate", "--shapes", &shapes, &data],
+        vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--base",
+            "http://example.org/shapes/doc",
+            &data,
+        ],
+    ] {
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        let report = stdout(&out);
+        assert!(
+            report.contains(&format!("{SOURCE_SHAPE} <file://"))
+                && report.contains("relative.ttl#AgeShape>"),
+            "{args:?}: without --shapes-base the shape resolves against the file: {report}"
+        );
+    }
+
+    let product = dir.path().join("relative.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let refused = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 2, "a usage error: {err}");
+    assert!(
+        err.contains("--shapes-base"),
+        "the refusal names the flag: {err}"
+    );
+}
+
+/// The imported vocabulary of [`EXTERNAL_IMPORT_SHAPES`]: the subclass axioms that make
+/// `ex:ConstraintComponent` a constraint-component class and `ex:SPARQLAskValidator` an
+/// ASK-validator class.
+const EXTERNAL_IMPORT_VOCABULARY: &str = concat!(
+    "@prefix ex: <http://example.org/ns#> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "<http://example.org/validator-vocabulary> a owl:Ontology .\n",
+    "ex:ConstraintComponent rdfs:subClassOf sh:ConstraintComponent .\n",
+    "ex:SPARQLAskValidator rdfs:subClassOf sh:SPARQLAskValidator .\n",
+);
+
+/// A custom component with two parameters whose ASK validator flags every value that is
+/// not their concatenation — the W3C `validator-001` mechanism, on `example.org` terms —
+/// in a shapes graph that imports [`EXTERNAL_IMPORT_VOCABULARY`] by IRI. Its targets are
+/// literals, so the file is its own data graph.
+const EXTERNAL_IMPORT_SHAPES: &str = concat!(
+    "@prefix ex: <http://example.org/ns#> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "<http://example.org/validator-shapes> owl:imports <http://example.org/validator-vocabulary> .\n",
+    "ex:TestConstraintComponent a ex:ConstraintComponent ;\n",
+    "    sh:parameter ex:TestParameter1, ex:TestParameter2 ;\n",
+    "    sh:validator [ a ex:SPARQLAskValidator ;\n",
+    "        sh:ask \"ASK { FILTER (?value = CONCAT($test1, $test2)) }\" ] .\n",
+    "ex:TestParameter1 a sh:Parameter ; sh:path ex:test1 ; sh:datatype xsd:string .\n",
+    "ex:TestParameter2 a sh:Parameter ; sh:path ex:test2 ; sh:datatype xsd:string .\n",
+    "ex:TestShape a sh:NodeShape ; ex:test1 \"Hello \" ; ex:test2 \"World\" ;\n",
+    "    sh:targetNode \"Hallo Welt\", \"Hello World\" .\n",
+);
+
+/// A shapes graph that imports an ontology no document here holds is refused without
+/// `--import`, naming the import and the flag that supplies it — and validates once a
+/// document is named for it: one violation, on the focus node `"Hallo Welt"`.
+#[test]
+fn an_external_import_is_refused_until_a_document_is_named_for_it() {
+    const VOCABULARY: &str = "http://example.org/validator-vocabulary";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", EXTERNAL_IMPORT_SHAPES);
+
+    let refused = run(&["validate", "--shapes", &shapes, &shapes]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains(&format!("<{VOCABULARY}>"))
+            && err.contains(&format!("--import {VOCABULARY}=FILE")),
+        "the refusal names the external import and its pair: {err}"
+    );
+    assert!(stdout(&refused).is_empty(), "no report is written");
+
+    let vocabulary = write_file(dir.path(), "vocabulary.ttl", EXTERNAL_IMPORT_VOCABULARY);
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--import",
+        &format!("{VOCABULARY}={vocabulary}"),
+        &shapes,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a named document resolves the import: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "one violation: {err}"
+    );
+    assert!(
+        stdout(&out).contains("<http://www.w3.org/ns/shacl#focusNode> \"Hallo Welt\""),
+        "on the focus node \"Hallo Welt\": {}",
+        stdout(&out)
     );
 }
 
@@ -1547,34 +1906,66 @@ fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
 
 /// THE NEIGHBOURING VALID CASES. Every one of these must still SUCCEED.
 ///
-/// Over-refusal is the mirror image of the silent drop this change fixes, and it is exactly
-/// what a stricter reading of `owl:imports` would produce. Two documents in this repo's own
-/// vendored W3C SHACL corpus carry an inert `owl:imports`
-/// (`vectors/shacl/sparql/component/validator-001.ttl`,
-/// `vectors/shacl/sparql/node/prefixes-001.ttl`); hard-failing on an unresolved import would
-/// reject them, and `make conformance` would go red for input that is valid.
+/// Over-refusal is the mirror image of the silent drop the import refusal closes: an
+/// `owl:imports` is only missing when the closure does not already hold the ontology it
+/// names, and a graph that does hold it — by its `owl:Ontology` header or by an
+/// `owl:versionIRI` — must validate with no `--import` at all.
 #[test]
 fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
-    // 1. A shapes graph with an INERT owl:imports and its own shapes: the shapes decide, and
-    //    the unresolved import does not stop the run. This is the corpus case.
-    let inert = write_file(
+    // 1. A shapes graph that imports an ontology it ALSO declares — by header, and by
+    //    version IRI — and carries its own shape: the imports are resolved in place, the
+    //    shape decides, and nothing is asked of the operator. The same document importing an
+    //    ontology it does NOT declare is refused (`an_unresolved_shapes_import_is_refused_by_name`).
+    let in_place = write_file(
         dir.path(),
-        "inert.ttl",
+        "in-place.ttl",
         &format!(
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-             <http://example.org/inert> owl:imports <http://example.org/never-supplied> .\n{IMPORT_B}"
+             <http://example.org/in-place> owl:imports <http://example.org/present> ,\n\
+                 <http://example.org/present/1.0> .\n\
+             <http://example.org/present> a owl:Ontology ;\n\
+                 owl:versionIRI <http://example.org/present/1.0> .\n{IMPORT_B}"
         ),
     );
-    let out = run(&["validate", "--shapes", &inert, &data]);
+    let out = run(&["validate", "--shapes", &in_place, &data]);
     let err = stderr(&out);
-    assert_eq!(code(&out), 0, "an inert import is not a refusal: {err}");
+    assert_eq!(
+        code(&out),
+        0,
+        "an import resolved in place is not a refusal: {err}"
+    );
     assert!(
         err.contains("shacl results 1\n"),
         "the shapes graph's OWN shape still fires: {err}"
     );
+
+    // 1b. A document importing its OWN IRI — by its in-document `@base`, and by its
+    //     `file://` retrieval IRI through `<>` with no `@base` — names a document already
+    //     loaded, from a node that is no `owl:Ontology`.
+    for (name, header) in [
+        (
+            "self-base.ttl",
+            "@base <http://example.org/shapes/self> .\n\
+             <#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+        ),
+        (
+            "self-retrieval.ttl",
+            "<#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+        ),
+    ] {
+        let own = write_file(dir.path(), name, &format!("{header}{IMPORT_B}"));
+        let out = run(&["validate", "--shapes", &own, &data]);
+        let err = stderr(&out);
+        assert_eq!(
+            code(&out),
+            0,
+            "{name}: a self-import is not a refusal: {err}"
+        );
+        assert!(err.contains("shacl results 1\n"), "{name}: {err}");
+    }
 
     // 2. A shapes graph with no imports and no --import: byte-for-byte the pre-flag path.
     let plain = write_file(dir.path(), "plain.ttl", IMPORT_B);
@@ -2055,4 +2446,176 @@ fn a_change_document_may_have_stdin_but_only_if_nothing_else_does() {
         "one stdin reader is fine: {}",
         stderr(&accepted)
     );
+}
+
+/// The W3C SHACL 1.2 vocabulary's declaration of the built-in `sh:SPARQLExprExpression`,
+/// verbatim: a `sh:NamedParameterExpressionFunction` with the two `sh:Parameter`s
+/// `-prefixes` and `-sparqlExpr` and no `sh:bodyExpression`.
+const SPARQL_EXPR_DECLARATION: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+"#;
+
+/// A Warning-graded property shape whose value nodes are computed by `sh:values [
+/// sh:sparqlExpr "ex:active" ; sh:prefixes ex:Prefixes ]`: the one value node is
+/// `ex:active`, which `sh:in ( ex:retired )` refuses at every `ex:Person`.
+const SPARQL_EXPR_SHAPES: &str = r#"
+@prefix ex: <http://example.org/> .
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/"^^xsd:anyURI ] .
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [
+    sh:path ex:status ;
+    sh:values [ sh:sparqlExpr "ex:active" ; sh:prefixes ex:Prefixes ] ;
+    sh:in ( ex:retired ) ;
+    sh:severity sh:Warning
+  ] .
+"#;
+
+/// On the command line, a shapes graph carrying the SHACL 1.2 vocabulary's
+/// own `sh:SPARQLExprExpression` declaration loads, and its `sh:sparqlExpr` +
+/// `sh:prefixes` expression is evaluated natively — each result's `sh:value` is the
+/// computed `<http://example.org/active>`, which only the prefix-expanded expression
+/// yields. The Warning results do not conform under the default conformance-disallow set
+/// and conform under `sh:Violation` alone.
+#[test]
+fn cli_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration() {
+    const VALUE: &str = "<http://www.w3.org/ns/shacl#value> <http://example.org/active>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "sparql-expr.ttl",
+        &format!("{SPARQL_EXPR_DECLARATION}{SPARQL_EXPR_SHAPES}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let default = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&default), 0, "{}", stderr(&default));
+    assert!(
+        stderr(&default).contains("shacl conforms false\n"),
+        "{}",
+        stderr(&default)
+    );
+    assert!(
+        stderr(&default).contains("shacl results 2\n"),
+        "{}",
+        stderr(&default)
+    );
+    let report = stdout(&default);
+    assert_eq!(report.matches(VALUE).count(), 2, "{report}");
+
+    let relaxed = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        "http://www.w3.org/ns/shacl#Violation",
+        &data,
+    ]);
+    assert_eq!(code(&relaxed), 0, "{}", stderr(&relaxed));
+    assert!(
+        stderr(&relaxed).contains("shacl conforms true\n"),
+        "{}",
+        stderr(&relaxed)
+    );
+    assert_eq!(stdout(&relaxed).matches(VALUE).count(), 2);
+}
+
+/// `--conformance-disallows` is the conformance-disallow set the run is judged against, on
+/// the parse route and the product route alike: a Warning-only graph does not conform under
+/// SHACL's default set and conforms under `sh:Violation` alone, the report echoes the named
+/// set, and a value that is not an IRI is a usage error rather than a silently default run.
+#[test]
+fn cli_validate_conformance_disallows() {
+    const WARNING_SHAPES: &str = concat!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+        "ex:PersonShape a sh:NodeShape ;\n",
+        "  sh:targetClass ex:Person ;\n",
+        "  sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; sh:severity sh:Warning ] .\n",
+    );
+    const ECHO: &str =
+        "<http://www.w3.org/ns/shacl#conformanceDisallows> <http://www.w3.org/ns/shacl#Violation>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "warning.ttl", WARNING_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let default = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&default), 0, "{}", stderr(&default));
+    assert!(stderr(&default).contains("shacl conforms false\n"));
+    assert!(stdout(&default).contains(&conforms_triple(false)));
+    assert!(
+        !stdout(&default).contains("conformanceDisallows"),
+        "the default set is echoed by stating none:\n{}",
+        stdout(&default)
+    );
+
+    let violation = "http://www.w3.org/ns/shacl#Violation";
+    let relaxed = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        violation,
+        &data,
+    ]);
+    assert_eq!(code(&relaxed), 0, "{}", stderr(&relaxed));
+    assert!(stderr(&relaxed).contains("shacl conforms true\n"));
+    assert!(stderr(&relaxed).contains("shacl results 1\n"));
+    let report = stdout(&relaxed);
+    assert!(report.contains(&conforms_triple(true)), "{report}");
+    assert!(report.contains(ECHO), "the named set is echoed:\n{report}");
+
+    let product = dir.path().join("warning.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--conformance-disallows",
+        violation,
+        &data,
+    ]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(stderr(&restored).contains("shacl conforms true\n"));
+    assert!(stdout(&restored).contains(ECHO));
+
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        "Violation",
+        &data,
+    ]);
+    assert_eq!(code(&refused), 2, "a usage error: {}", stderr(&refused));
+    assert!(stderr(&refused).contains("--conformance-disallows"));
 }

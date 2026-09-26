@@ -10,37 +10,16 @@ use crate::model::{rdf, rdfs, sh};
 use crate::shapes::Parser;
 use crate::term::{Term, term_id_to_native};
 
-/// Explicit Core max-one parameters, parameters of native components that have
-/// multiple parameters, and single-valued shape metadata. SHACL 1.2 Core
-/// §3.1.1 makes every parameter of a multi-parameter component single-valued,
-/// including optional parameters. Single-parameter components such as
-/// `sh:ClassConstraintComponent` remain repeatable unless Core explicitly limits
-/// their parameter, as it does for `sh:datatype`.
-const SINGLETON_PREDICATES: &[&str] = &[
-    sh::DATATYPE,
-    sh::NODE_KIND,
-    sh::MIN_COUNT,
-    sh::MAX_COUNT,
-    sh::MIN_EXCLUSIVE,
-    sh::MIN_INCLUSIVE,
-    sh::MAX_EXCLUSIVE,
-    sh::MAX_INCLUSIVE,
-    sh::MIN_LENGTH,
-    sh::MAX_LENGTH,
-    sh::LANGUAGE_IN,
-    sh::UNIQUE_LANG,
-    sh::IN,
-    sh::PATTERN,
-    sh::FLAGS,
-    sh::CLOSED,
-    sh::IGNORED_PROPERTIES,
-    sh::QUALIFIED_VALUE_SHAPE,
-    sh::QUALIFIED_MIN_COUNT,
-    sh::QUALIFIED_MAX_COUNT,
-    sh::QUALIFIED_VALUE_SHAPES_DISJOINT,
-    sh::REIFIER_SHAPE,
-    sh::REIFICATION_REQUIRED,
-];
+/// The single-valued constraint parameters: every parameter the spec symbol
+/// table marks `single` — SHACL 1.2 Core's explicit "a shape has at most one
+/// value for …" rules, and §3.1.1's rule that every parameter of a
+/// multi-parameter component is single-valued, including optional parameters.
+/// Single-parameter components such as `sh:ClassConstraintComponent` remain
+/// repeatable unless Core explicitly limits their parameter, as it does for
+/// `sh:datatype`. Derived from the table, so there is no second list to drift.
+fn singleton_predicates() -> &'static [&'static str] {
+    crate::spec::single_valued_params()
+}
 
 /// These properties describe a SHACL node; arbitrary RDF annotations with the
 /// same predicates do not make their subject a shape or declaration.
@@ -73,7 +52,7 @@ impl<'a> MetadataSubjects<'a> {
                 .filter_map(|iri| data.term_id_by_iri(iri))
                 .collect()
         };
-        let mut markers = ids(SINGLETON_PREDICATES);
+        let mut markers = ids(singleton_predicates());
         let repeatables: IdSet = ids(&[
             sh::CLASS,
             sh::HAS_VALUE,
@@ -83,8 +62,13 @@ impl<'a> MetadataSubjects<'a> {
             sh::OR,
             sh::XONE,
             sh::PROPERTY,
+            sh::MEMBER_SHAPE,
+            sh::SOME_VALUE,
+            sh::ROOT_CLASS,
+            sh::UNIQUE_VALUES_FOR,
             sh::EQUALS,
             sh::DISJOINT,
+            sh::SUBSET_OF,
             sh::LESS_THAN,
             sh::LESS_THAN_OR_EQUALS,
             sh::SPARQL,
@@ -111,6 +95,8 @@ impl<'a> MetadataSubjects<'a> {
                 sh::NOT,
                 sh::QUALIFIED_VALUE_SHAPE,
                 sh::REIFIER_SHAPE,
+                sh::MEMBER_SHAPE,
+                sh::SOME_VALUE,
                 sh::PARAMETER_PROPERTY,
                 sh::NODE_VALIDATOR,
                 sh::PROPERTY_VALIDATOR,
@@ -124,6 +110,7 @@ impl<'a> MetadataSubjects<'a> {
                 sh::BODY_EXPRESSION,
                 sh::FILTER_SHAPE,
                 sh::NODES,
+                sh::MINUS,
                 sh::IF,
                 sh::THEN,
                 sh::ELSE,
@@ -246,7 +233,7 @@ impl Parser<'_> {
     /// the first object as an interned ID makes cardinality count distinct RDF
     /// values in the union graph, not repetitions of a statement in named graphs.
     pub(crate) fn check_builtin_cardinalities(&self) -> Result<(), String> {
-        let singleton_ids: IdSet = SINGLETON_PREDICATES
+        let singleton_ids: IdSet = singleton_predicates()
             .iter()
             .chain(METADATA_SINGLETONS)
             .filter_map(|iri| self.data.term_id_by_iri(iri))

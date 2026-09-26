@@ -121,7 +121,7 @@ use super::error::{ProductDimension, ShapesProductError};
 ///   justification because it is the least apt: it is not a statement about a
 ///   candidate product's bytes at all, it says the encoder never got a complete
 ///   reading of its SOURCE, so no product was produced. No dimension names "the
-///   source was unreadable", and inventing one is out of scope for this module.
+///   source was unreadable", and this module adds none for an arm that cannot fire.
 ///   [`Malformed`] is documented as the dimension for a structural failure no
 ///   other dimension names, so it is where this lands. It is also unreachable
 ///   through [`encode_dataset`]: a frozen [`RdfDataset`] is a view whose status is
@@ -407,7 +407,9 @@ mod tests {
     fn shapes_from(dataset: &Arc<RdfDataset>, ttl: &str) -> Shapes {
         crate::shapes::from_dataset_with_config_and_graph(
             dataset,
-            &crate::text_ingest::extract_prefixes(ttl),
+            &crate::text_ingest::parse_turtle_document(ttl, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             Some(SHAPES_GRAPH_IRI.to_owned()),
         )
@@ -719,7 +721,9 @@ mod tests {
     #[test]
     fn restored_shapes_graph_is_queryable() {
         let source = dataset_of(SHAPES_GRAPH_QUERY_SHAPES);
-        let prefixes = crate::text_ingest::extract_prefixes(SHAPES_GRAPH_QUERY_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(SHAPES_GRAPH_QUERY_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
 
         let before = crate::shapes::from_dataset_with_config_and_graph(
             &source,

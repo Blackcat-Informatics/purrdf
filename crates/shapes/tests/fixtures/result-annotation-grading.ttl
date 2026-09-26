@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# A first-party sht:Validate case, in the W3C suite's own form, whose expected
+# report carries a SHACL-SPARQL result annotation (ex:label). It exists to prove
+# the shared grader grades result annotations: the case passes as written, and
+# fails once its expected annotation set is altered.
+
+@prefix ex: <http://example.org/ns#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix sht: <http://www.w3.org/ns/shacl-test#> .
+
+ex:a ex:p ex:b .
+ex:b ex:tag "urgent" .
+
+ex:S
+  rdf:type sh:NodeShape ;
+  sh:targetNode ex:a ;
+  sh:sparql [
+      sh:resultAnnotation [
+          sh:annotationProperty ex:label ;
+          sh:annotationVarName "tag" ;
+        ] ;
+      sh:select """
+        SELECT $this ?value ?tag
+        WHERE { $this <http://example.org/ns#p> ?value . ?value <http://example.org/ns#tag> ?tag }
+        """ ;
+    ] ;
+.
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries ( <result-annotation-grading> ) ;
+.
+<result-annotation-grading>
+  rdf:type sht:Validate ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^<http://www.w3.org/2001/XMLSchema#boolean> ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:a ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:SPARQLConstraintComponent ;
+          sh:sourceShape ex:S ;
+          sh:value ex:b ;
+          ex:label "urgent" ;
+        ] ;
+    ] ;
+.

@@ -3162,6 +3162,322 @@ def jsonld_lens_claims() -> list[Claim]:
     ]
 
 
+_SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
+_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "shacl12.rs"
+_SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
+_BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
+
+
+def load_shacl12_type_counts() -> dict[str, int]:
+    """The W3C SHACL 1.2 suite's size per test family, from the harness's own pins.
+
+    ``W3C12_CASES_BY_TYPE`` and ``W3C12_TOTAL_CASES`` in the SHACL 1.2 discovery
+    module are what the harness asserts discovery found, type by type. The seven
+    ``srlt:`` types are summed into one SPARQL 1.2 RL figure, which is how the prose
+    states it. The per-type pins must sum to the total, or this loader refuses
+    rather than re-basing a claim on a table that disagrees with itself.
+    """
+    text = _read(_SHACL12_CORPUS)
+    rel = _SHACL12_CORPUS.relative_to(_REPO)
+    total_match = re.search(r"pub\(crate\) const W3C12_TOTAL_CASES: usize = (\d+);", text)
+    table_match = re.search(
+        r"pub\(crate\) const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
+        text,
+        re.DOTALL,
+    )
+    if total_match is None or table_match is None:
+        raise SystemExit(
+            f"check-doc-claims: W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE not found in {rel}"
+        )
+    pairs = re.findall(r'\(\s*"([^"]+)",\s*(\d+)\s*\)', table_match.group(1))
+    by_type = {name: int(count) for name, count in pairs}
+    total = int(total_match.group(1))
+    if len(pairs) != len(by_type) or sum(by_type.values()) != total:
+        raise SystemExit(
+            f"check-doc-claims: {rel}'s W3C12_CASES_BY_TYPE ({sum(by_type.values())} "
+            f"over {len(pairs)} rows) does not sum to W3C12_TOTAL_CASES ({total})"
+        )
+    families = ("sht:Validate", "sht:EvalNodeExpr", "sht:Infer")
+    missing = [name for name in families if name not in by_type]
+    srl = {name: n for name, n in by_type.items() if name.startswith("srlt:")}
+    if missing or len(srl) + len(families) != len(by_type):
+        raise SystemExit(
+            f"check-doc-claims: {rel}'s W3C12_CASES_BY_TYPE lacks {missing} or carries "
+            f"a type outside sht:Validate, sht:EvalNodeExpr, sht:Infer and srlt:*"
+        )
+    return {
+        "total": total,
+        "validate": by_type["sht:Validate"],
+        "evalnodeexpr": by_type["sht:EvalNodeExpr"],
+        "infer": by_type["sht:Infer"],
+        "srl": sum(srl.values()),
+    }
+
+
+_SHACL12_HARNESS = _REPO / "crates" / "shapes" / "tests" / "w3c12_conformance.rs"
+# The node-expression grader both SHACL 1.2 harnesses (library and CLI) share; it owns
+# the upstream-errata table and its count pin.
+_SHACL12_NODE_EXPR_GRADER = (
+    _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "node_expr_grading.rs"
+)
+_SHACL12_UNLISTED_ROW = "SHACL 1.2 unlisted vendored files"
+
+
+def load_shacl12_category_pins() -> dict[str, int]:
+    """The SHACL 1.2 harness's own pins for the categories the matrix folds into
+    one XFail/Skip column: upstream errata (``NON_CANONICAL_EXPECTATIONS_COUNT``, in
+    the shared node-expression grader),
+    expected import refusals (``W3C12_REFUSED_IMPORTS``), entries of unlisted
+    vendored files (``W3C12_UNLISTED_ENTRIES``) and those graded with a delta
+    (``UNLISTED_FILE_DELTAS_COUNT``). The harness asserts each against what it
+    grades, so prose that restates the split is checked against the numbers the
+    run itself enforces.
+    """
+    pins: dict[str, int] = {}
+    for key, name, path in (
+        ("errata", "NON_CANONICAL_EXPECTATIONS_COUNT", _SHACL12_NODE_EXPR_GRADER),
+        ("refused", "W3C12_REFUSED_IMPORTS", _SHACL12_HARNESS),
+        ("unlisted", "W3C12_UNLISTED_ENTRIES", _SHACL12_HARNESS),
+        ("delta", "UNLISTED_FILE_DELTAS_COUNT", _SHACL12_HARNESS),
+    ):
+        text = _read(path)
+        rel = path.relative_to(_REPO)
+        m = re.search(rf"const {name}: usize = (\d+);", text)
+        if m is None:
+            raise SystemExit(f"check-doc-claims: {name} not found in {rel}")
+        pins[key] = int(m.group(1))
+    return pins
+
+
+def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
+    """Every prose restatement of the W3C SHACL 1.2 suite's size and result.
+
+    The pass figure and the approved-suite total (pass + XFail/Skip) come from the
+    generated matrix row; the unlisted files' figure from their own row; the
+    per-family sizes from the harness's discovery pins; and the split of the
+    XFail/Skip column into upstream errata and expected import refusals from the
+    harness's category pins. The sources are cross-checked — approved plus
+    unlisted must be the discovered total, and errata plus refusals must be the
+    whole XFail/Skip column (the XFAIL ledger is empty) — so they cannot drift
+    apart behind prose that quotes one of them.
+    """
+    passed, xskip = matrix[_SHACL12_ROW]
+    listed = passed + xskip
+    unlisted_passed, _ = matrix[_SHACL12_UNLISTED_ROW]
+    counts = load_shacl12_type_counts()
+    cats = load_shacl12_category_pins()
+    mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
+    pins = (
+        "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
+        "crates/shapes/tests/shacl_corpora/shacl12.rs"
+    )
+    catsrc = f"the category pins in {_SHACL12_HARNESS.relative_to(_REPO)}"
+    if counts["total"] != listed + cats["unlisted"]:
+        raise SystemExit(
+            f"check-doc-claims: the matrix row {_SHACL12_ROW!r} totals {listed} and the "
+            f"harness pins {cats['unlisted']} unlisted entries, but {pins} pin "
+            f"{counts['total']} discovered tests"
+        )
+    if cats["errata"] + cats["refused"] != xskip:
+        raise SystemExit(
+            f"check-doc-claims: the matrix row {_SHACL12_ROW!r} has {xskip} in XFail/Skip "
+            f"but {catsrc} pin {cats['errata']} errata + {cats['refused']} refusals"
+        )
+    if unlisted_passed != cats["unlisted"]:
+        raise SystemExit(
+            f"check-doc-claims: the matrix row {_SHACL12_UNLISTED_ROW!r} passes "
+            f"{unlisted_passed} but {catsrc} pin {cats['unlisted']} unlisted entries"
+        )
+    families = {k: counts[k] for k in ("validate", "evalnodeexpr", "infer", "srl")}
+    split = {"errata": cats["errata"], "refused": cats["refused"]}
+    return [
+        Claim(
+            "the W3C SHACL 1.2 count in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(r"that same refused case \((?P<passed>\d+)/(?P<total>\d+)\)"),
+            {"passed": passed, "total": listed},
+            mat,
+        ),
+        Claim(
+            "the SHACL 1.2 suite size by family in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(
+                r"(?P<total>\d+) tests, covering (?P<validate>\d+) `sht:Validate`, "
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr` and (?P<infer>\d+) "
+                r"`sht:Infer` tests, and (?P<srl>\d+) SPARQL 1.2 RL"
+            ),
+            {"total": counts["total"], **families},
+            pins,
+        ),
+        Claim(
+            "the SHACL 1.2 category split in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(
+                r"upstream manifest lists (?P<listed>\d+) of them\. Of those, "
+                r"(?P<passed>\d+) pass as approved, (?P<errata>\d+) are upstream errata "
+                r"and (?P<refused>\d+) is refused for an unresolvable import, all "
+                r"described below, and the expected-failure ledger is empty\. The "
+                r"other (?P<unlisted>\d+) are entries of vendored files"
+            ),
+            {"listed": listed, "passed": passed, **split, "unlisted": cats["unlisted"]},
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 scoreboard line quoted in the book's SHACL chapter",
+            _BOOK_SHACL,
+            r"W3C12 TOTAL: passed (?P<passed>\d+), upstream-errata (?P<errata>\d+), "
+            r"refused-unresolvable-import (?P<refused>\d+), xfailed (?P<xfailed>\d+), "
+            r"ledger (?P<ledger>\d+)",
+            {"passed": passed, **split, "xfailed": 0, "ledger": 0},
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 unlisted-files scoreboard line quoted in the book",
+            _BOOK_SHACL,
+            r"W3C12 UNLISTED: passed (?P<passed>\d+), exact (?P<exact>\d+), "
+            r"with-delta (?P<delta>\d+), total (?P<total>\d+)",
+            {
+                "passed": unlisted_passed,
+                "exact": cats["unlisted"] - cats["delta"],
+                "delta": cats["delta"],
+                "total": cats["unlisted"],
+            },
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 suite result in the purrdf-shapes README",
+            _SHAPES_README,
+            _flow(
+                r"\((?P<total>\d+) tests: (?P<validate>\d+) `sht:Validate`, "
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, (?P<infer>\d+) `sht:Infer` "
+                r"and (?P<srl>\d+) SPARQL 1.2 RL tests\) runs, and of the "
+                r"(?P<listed>\d+) an upstream manifest lists, (?P<passed>\d+) pass as "
+                r"approved, (?P<errata>\d+) are upstream errata and (?P<refused>\d+) is "
+                r"refused for an unresolvable import, with an empty expected-failure "
+                r"ledger"
+            ),
+            {
+                "total": counts["total"],
+                **families,
+                "listed": listed,
+                "passed": passed,
+                **split,
+            },
+            f"{mat}; {pins}; {catsrc}",
+        ),
+        Claim(
+            "the first-party SHACL corpus size in the purrdf-shapes README",
+            _SHAPES_README,
+            _flow(r"a (?P<total>\d+)-case first-party frozen corpus"),
+            {"total": matrix["SHACL (first-party corpus)"][0]},
+            mat,
+        ),
+        Claim(
+            "the root README's SHACL 1.2 headline",
+            _README,
+            _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
+                  r"W3C SHACL 1.2 test suite \((?P<errata>\d+) upstream errata, "
+                  r"(?P<refused>\d+) refused: unresolvable import\)"),
+            {"passed": passed, "total": listed, **split},
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the root README's SHACL 1.2 scoreboard row",
+            _README,
+            r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · (?P<errata>\d+) upstream "
+            r"errata · (?P<refused>\d+) refused: unresolvable import · "
+            r"(?P<ledgered>\d+) ledgered; (?P<unlisted>\d+) unlisted vendored files "
+            r"graded apart \|",
+            {
+                "passed": passed,
+                "total": listed,
+                **split,
+                "ledgered": 0,
+                "unlisted": cats["unlisted"],
+            },
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 per-engine scoreboard row",
+            _CONFORMANCE,
+            r"\| SHACL 1\.2 \| W3C `shacl12-test-suite`, `vectors/shacl12/tests/` \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass as approved · "
+            r"(?P<errata>\d+) upstream errata \(canonical XSD 1\.1 decimal\) · "
+            r"(?P<refused>\d+) refused: unresolvable import · (?P<ledgered>\d+) "
+            r"ledgered, of the (?P<listed>\d+) an upstream manifest lists; "
+            r"(?P<discovered>\d+) discovered: "
+            r"(?P<validate>\d+) `sht:Validate`, (?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, "
+            r"(?P<infer>\d+) `sht:Infer`, (?P<srl>\d+) SPARQL 1\.2 RL \|",
+            {
+                "passed": passed,
+                "total": listed,
+                **split,
+                "ledgered": 0,
+                "listed": listed,
+                "discovered": counts["total"],
+                **families,
+            },
+            f"{mat}; {pins}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 unlisted-files per-engine scoreboard row",
+            _CONFORMANCE,
+            r"\| SHACL 1\.2 unlisted vendored files \| the (?P<files>\d+) files of "
+            r"`vectors/shacl12/tests/` no upstream manifest includes \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* graded apart from the approved "
+            r"suite: (?P<exact>\d+) exactly as written · (?P<delta>\d+) with a proven "
+            r"delta \|",
+            {
+                "files": cats["unlisted"],
+                "passed": unlisted_passed,
+                "total": cats["unlisted"],
+                "exact": cats["unlisted"] - cats["delta"],
+                "delta": cats["delta"],
+            },
+            f"{mat}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 narrative count",
+            _CONFORMANCE,
+            _flow(
+                r"the harness discovers all \*\*(?P<total>\d+)\*\* entries of the "
+                r"vendored W3C `shacl12-test-suite`\. Of the \*\*(?P<listed>\d+)\*\* an "
+                r"upstream manifest lists, it passes \*\*(?P<passed>\d+) / "
+                r"(?P<listed2>\d+)\*\* as approved, with \*\*(?P<errata>\d+) upstream "
+                r"errata\*\* and \*\*(?P<refused>\d+) refused: unresolvable import\*\*, "
+                r"and an empty expected-failure ledger\. The (?P<total2>\d+) are "
+                r"(?P<validate>\d+) `sht:Validate`"
+            ),
+            {
+                "total": counts["total"],
+                "listed": listed,
+                "passed": passed,
+                "listed2": listed,
+                **split,
+                "total2": counts["total"],
+                "validate": counts["validate"],
+            },
+            f"{mat}; {pins}; {catsrc}",
+        ),
+        Claim(
+            "the SHACL 1.2 narrative family sizes",
+            _CONFORMANCE,
+            _flow(
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr` \(output compared term for "
+                r"term,[\s\S]*?(?P<infer>\d+) `sht:Infer` \(inferred graph compared by "
+                r"RDFC-1.0 isomorphism\) and (?P<srl>\d+) SPARQL 1.2 RL tests"
+            ),
+            {
+                "evalnodeexpr": counts["evalnodeexpr"],
+                "infer": counts["infer"],
+                "srl": counts["srl"],
+            },
+            pins,
+        ),
+    ]
+
+
 def rdf12_canon_profile_claim(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     """The root README's `purrdf-rdfc12` row restates the generated matrix row."""
     passed, ledgered = matrix["RDF 1.2 canonicalization profile"]
@@ -3324,6 +3640,11 @@ def _baseline_note_sites() -> tuple[tuple[str, str, str], ...]:
             "SPARQL 1.1/1.2 evaluation (full corpus)",
             "the upstream-errata fixture count",
             _flow(r"(?P<xskip>\d+) upstream-errata fixtures"),
+        ),
+        (
+            "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)",
+            "the vendored SHACL 1.2 suite size",
+            _flow(r"(?P<total>\d+) entries across every test type"),
         ),
         (
             "SPARQL CDT (SEP-0009, vendored corpus)",
@@ -5281,7 +5602,7 @@ def build_claims(
     owl2_pass, owl2_ledger = matrix["Entailment (OWL 2 DL consistency)"]
     owl2_total = owl2_pass + owl2_ledger
     sparql_pass, sparql_xfail = matrix["SPARQL 1.1/1.2 evaluation (full corpus)"]
-    shacl_pass, _ = matrix["SHACL Core + SHACL-SPARQL"]
+    shacl_pass, shacl_refused = matrix["SHACL Core + SHACL-SPARQL"]
     corpus_pass, _ = matrix["SHACL (first-party corpus)"]
     regex_pass, _ = matrix["XSD/XPath regExp (first-party corpus)"]
     rules_pass, _ = matrix["SHACL Rules"]
@@ -6021,8 +6342,14 @@ def build_claims(
             # narrative claim below.
             r"W3C data-shapes `core/` \+ `sparql/` \(\d+\), `af/` "
             r"\(\d+ vendored DASH \+ \d+ first-party\) \| "
-            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* · (?P<ledgered>\d+) ledgered",
-            {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass as approved · "
+            r"(?P<refused>\d+) refused: unresolvable import · (?P<ledgered>\d+) ledgered",
+            {
+                "passed": shacl_pass,
+                "total": shacl_pass + shacl_refused,
+                "refused": shacl_refused,
+                "ledgered": 0,
+            },
             mat,
         ),
         Claim(
@@ -6035,10 +6362,18 @@ def build_claims(
             "the W3C SHACL narrative count",
             _CONFORMANCE,
             _flow(
-                r"the harness discovers \*\*(?P<passed>\d+) / (?P<total>\d+)\*\* "
-                r"`sht:Validate` entries with \*\*(?P<ledgered>\d+) ledgered xfails\*\*"
+                r"the harness discovers \*\*(?P<total>\d+)\*\* `sht:Validate` entries "
+                r"and passes \*\*(?P<passed>\d+) / (?P<total2>\d+)\*\* as approved, with "
+                r"\*\*(?P<refused>\d+) refused: unresolvable import\*\* and "
+                r"\*\*(?P<ledgered>\d+) ledgered xfails\*\*"
             ),
-            {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
+            {
+                "total": shacl_pass + shacl_refused,
+                "passed": shacl_pass,
+                "total2": shacl_pass + shacl_refused,
+                "refused": shacl_refused,
+                "ledgered": 0,
+            },
             mat,
         ),
         Claim(
@@ -6086,16 +6421,27 @@ def build_claims(
             "the root README's W3C SHACL scoreboard row",
             _README,
             r"\| SHACL \| W3C data-shapes \(`vectors/shacl/`\) \| "
-            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\*, (?P<ledgered>\d+) ledgered \|",
-            {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · (?P<refused>\d+) refused: "
+            r"unresolvable import · (?P<ledgered>\d+) ledgered \|",
+            {
+                "passed": shacl_pass,
+                "total": shacl_pass + shacl_refused,
+                "refused": shacl_refused,
+                "ledgered": 0,
+            },
             mat,
         ),
         Claim(
             "the root README's SHACL headline",
             _README,
             _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
-                  r"W3C test suite, zero ledgered"),
-            {"passed": shacl_pass, "total": shacl_pass},
+                  r"W3C SHACL 1.0 test suite \((?P<refused>\d+) refused: unresolvable "
+                  r"import\), zero ledgered"),
+            {
+                "passed": shacl_pass,
+                "total": shacl_pass + shacl_refused,
+                "refused": shacl_refused,
+            },
             mat,
         ),
         Claim(
@@ -6149,11 +6495,13 @@ def build_claims(
         Claim(
             "the SHACL and codec snapshot in the book's conformance chapter",
             _BOOK_CONFORMANCE,
-            _flow(r"(?P<shacl>\d+)/(?P<shacl2>\d+) W3C SHACL, "
+            _flow(r"(?P<shacl>\d+)/(?P<shacl2>\d+) W3C SHACL \((?P<refused>\d+) "
+                  r"refused: unresolvable import\), "
                   r"(?P<codec>\d+)/(?P<codec2>\d+) codec"),
             {
                 "shacl": shacl_pass,
-                "shacl2": shacl_pass,
+                "shacl2": shacl_pass + shacl_refused,
+                "refused": shacl_refused,
                 "codec": codec_pass,
                 "codec2": codec_pass,
             },
@@ -6162,9 +6510,9 @@ def build_claims(
         Claim(
             "the W3C SHACL count in the book's SHACL chapter",
             _REPO / "docs" / "book" / "src" / "validation" / "shacl.md",
-            _flow(r"\((?P<passed>\d+)/(?P<total>\d+), zero ledgered gaps at the "
-                  r"time of writing"),
-            {"passed": shacl_pass, "total": shacl_pass},
+            _flow(r"passes as approved \((?P<passed>\d+)/(?P<total>\d+), zero ledgered "
+                  r"gaps at the time of writing"),
+            {"passed": shacl_pass, "total": shacl_pass + shacl_refused},
             mat,
         ),
         Claim(
@@ -6447,6 +6795,7 @@ def main(argv: list[str]) -> int:
         build_claims(inventory, matrix, census, lanes, mechanisms, extend_families)
         + jsonld_lens_claims()
         + rdf12_canon_profile_claim(matrix)
+        + shacl12_claims(matrix)
         + sparql_surface_table_claims(surfaces)
         + sparql_governed_table_claims(governed_surfaces)
         + product_alloc_prose_claims(load_product_alloc_report())

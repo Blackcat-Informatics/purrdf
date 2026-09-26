@@ -40,8 +40,9 @@ use purrdf_shapes::product::{
     AggregateRegistry, HostBindings, ProductDimension, PropertyFunctionRegistry, STAGE_ID,
     ShapesProduct, ShapesProductError, ShapesProfile, UserFunctionRegistry,
 };
+use purrdf_shapes::{ShapesError, ShapesImportError, ShapesImports};
 
-use crate::{SarifOptions, report_to_sarif_string};
+use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
 // ---------------------------------------------------------------------------
 // Refusal
@@ -52,16 +53,19 @@ use crate::{SarifOptions, report_to_sarif_string};
 /// Two arms, because there are exactly two kinds of failure on these paths and
 /// collapsing them would lie about one of them:
 ///
-/// * [`Shapes`](Self::Shapes) — the shapes DOCUMENT did not parse, so no product
+/// * [`Shapes`](Self::Shapes) — the shapes DOCUMENT did not become a shapes graph
+///   (it did not parse, or its `owl:imports` closure is not in hand — the typed
+///   [`ShapesError::Imports`] every shapes-graph entry point raises), so no product
 ///   was ever written or opened. There is no admission dimension because nothing
 ///   was admitted; [`dimension`](Self::dimension) is `None` and says so.
 /// * [`Admission`](Self::Admission) — the codec refused, on a named
 ///   [`ProductDimension`] the host can branch on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesProductRefusal {
-    /// The shapes document did not parse into a shapes graph. Carries the SHACL
-    /// engine's own diagnostic.
-    Shapes(String),
+    /// The shapes document did not become a shapes graph. Carries the SHACL
+    /// engine's own error: [`ShapesError::Imports`] when the shapes graph's
+    /// `owl:imports` closure is not in hand, [`ShapesError::Invalid`] otherwise.
+    Shapes(ShapesError),
     /// The prepared-product admission boundary refused, on a named dimension.
     Admission(ShapesProductError),
 }
@@ -90,16 +94,32 @@ impl ShapesProductRefusal {
         self.dimension().map(ProductDimension::label)
     }
 
+    /// The shapes graph's `owl:imports` refusal, when that is why no product exists.
+    ///
+    /// Every host maps this to the SAME typed import error its validation entry points
+    /// raise, so a refusal about an incomplete shapes graph reads identically whether
+    /// the caller asked to validate with it or to pack it.
+    #[must_use]
+    pub const fn import_error(&self) -> Option<&ShapesImportError> {
+        match self {
+            Self::Shapes(error) => error.as_imports(),
+            Self::Admission(_) => None,
+        }
+    }
+
     /// The explanation, WITHOUT the dimension label prefix.
     ///
     /// A host that carries the label in its own typed slot — a Python exception
     /// attribute, a JS class field, a C accessor — wants the prose alone, so that
     /// the label is not also duplicated into the message it renders beside.
     #[must_use]
-    pub fn message(&self) -> &str {
+    pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            Self::Shapes(message) => message,
-            Self::Admission(error) => error.message(),
+            Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
+            Self::Shapes(error @ (ShapesError::Imports(_) | ShapesError::ShaclJs(_))) => {
+                error.to_string().into()
+            }
+            Self::Admission(error) => error.message().into(),
         }
     }
 }
@@ -117,7 +137,7 @@ impl std::fmt::Display for ShapesProductRefusal {
     /// still sees the label.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Shapes(message) => f.write_str(message),
+            Self::Shapes(error) => write!(f, "{error}"),
             Self::Admission(error) => write!(f, "{error}"),
         }
     }
@@ -140,55 +160,45 @@ impl std::error::Error for ShapesProductRefusal {}
 /// Turtle ingestion into a dataset, plus the `@prefix`/`PREFIX` map recovered from
 /// the source text — so a product packed from a document and a validation run
 /// directly against that document see the same `Shapes`. They are performed here
-/// rather than by calling `parse_shapes` because this entry point additionally has
-/// to inspect the resulting DATASET before it becomes `Shapes` — see the next
-/// paragraph — and `parse_shapes` does not hand one back.
+/// rather than by calling `parse_shapes` so that this entry point and
+/// [`pack_shapes_product_from_dataset`] compile the shapes graph through one seam.
 ///
-/// # An unresolved `owl:imports` is refused here, not silently dropped
+/// # The shapes graph's `owl:imports` closure
 ///
-/// This is the text-in/bytes-out surface the Python, C-ABI and WebAssembly hosts
-/// call, and none of the three carries an import table or a place to print a
-/// warning: there is no `--import IRI=FILE` for them to pass and no stderr for
-/// them to read. The CLI's `shacl pack` is different — it has both, folds the
-/// closure or reports each unresolved IRI on stderr, and calls
-/// [`pack_shapes_product_from_dataset`] once that decision is made — but a host
-/// with neither capability has exactly one non-silent option when the shapes
-/// graph declares an import it has no way to honour: refuse. Packing the root
-/// graph alone and calling it done is exactly the silent omission this whole
-/// codec exists to rule out; see [`ProductDimension::UnsupportedCapability`],
-/// which is also where a declared function nothing in the shapes model reaches
-/// refuses.
+/// `imports` is the host's import table: `(ontology IRI, Turtle document)` pairs, each
+/// document parsed under its own IRI. The closure is resolved by the one helper every
+/// shapes-graph entry point shares ([`purrdf_shapes::imports::resolve_shapes_imports`]),
+/// and the product carries the MERGED shapes graph, so a restore validates against the
+/// imported shapes without the documents. `shapes_base`, and the IRI an in-document
+/// `@base` declares, are IRIs the document was read under, so an import of either names
+/// this document. An import nothing resolves — or a table entry nothing imports — is
+/// refused with [`ShapesError::Imports`]: packing the root graph alone would be exactly
+/// the silent omission this codec exists to rule out.
 ///
 /// # Errors
 ///
-/// [`ShapesProductRefusal::Shapes`] when the document does not parse;
-/// [`ShapesProductRefusal::Admission`] on [`ProductDimension::UnsupportedCapability`]
-/// when the shapes graph declares an `owl:imports` this entry point has no table to
-/// resolve it against, and on any other dimension the shapes graph declares
-/// something the product format cannot carry.
+/// [`ShapesProductRefusal::Shapes`] when the document does not parse or its
+/// `owl:imports` closure is not in hand; [`ShapesProductRefusal::Admission`] on any
+/// dimension the shapes graph declares something the product format cannot carry.
 pub fn pack_shapes_product(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
+    imports: &ShapesImportList<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
-    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(shapes_ttl, shapes_base)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
-    let unresolved = purrdf_entail::entails::imports::imported_iris(&dataset);
-    if let Some(iri) = unresolved.first() {
-        return Err(ShapesProductRefusal::Admission(ShapesProductError::new(
-            ProductDimension::UnsupportedCapability,
-            format!(
-                "this shapes graph owl:imports <{iri}>, and this entry point has no \
-                 `--import IRI=FILE` table and no diagnostic channel to report an unresolved \
-                 one on; packing the shapes graph alone would silently validate against a \
-                 different, smaller shapes graph than the one named. Fold the closure before \
-                 calling this function — `purrdf shacl pack --import <{iri}>=FILE` does so on \
-                 the command line, and {caller} does the same over a dataset it already holds",
-                caller = "`pack_shapes_product_from_dataset`"
-            ),
-        )));
+    let mut table = ShapesImports::from_turtle(imports)
+        .map_err(|error| ShapesProductRefusal::Shapes(error.into()))?;
+    let purrdf_shapes::text_ingest::TurtleDocument {
+        dataset,
+        base: document_base,
+        prefixes,
+    } = purrdf_shapes::text_ingest::parse_turtle_document(shapes_ttl, shapes_base)
+        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))?;
+    // The base an in-document `@base` established is a second IRI the document was read
+    // under; `shapes_base` is declared by the constructor itself.
+    if let Some(document_base) = document_base {
+        table.declare_loaded(document_base);
     }
-    let prefixes = purrdf_shapes::text_ingest::extract_prefixes(shapes_ttl);
-    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None, None)
+    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None, None, &table)
 }
 
 /// Write an already-READ shapes dataset out as a prepared product under
@@ -199,14 +209,12 @@ pub fn pack_shapes_product(
 /// dataset and its document prefix map, then calls straight through to this
 /// function, so the two can never compile the shapes graph two different ways.
 ///
-/// The intended caller is a host that has ALREADY turned a shapes document (or
-/// several, merged) into a dataset before this point — the CLI's `shacl pack`,
-/// which reads the shapes document, folds its `owl:imports` closure against an
-/// `--import IRI=FILE` table exactly the way `validate --shapes` does, and only
-/// then packs the merged graph. Import resolution is that caller's decision, not
-/// this function's: by the time a dataset reaches here, whatever it does or does
-/// not carry of an `owl:imports` closure is exactly what the caller decided
-/// should be packed, and this function has no opinion about it.
+/// The intended caller is a host that has ALREADY read a shapes document into a
+/// dataset — the CLI's `shacl pack`, which reads the shapes document and every
+/// `--import IRI=FILE` document itself and hands them over as `imports`. The
+/// closure is resolved here, by the same constructor every other shapes-graph entry
+/// point parses through ([`purrdf_shapes::shapes::from_dataset_with_base`]), and the
+/// product carries the merged graph.
 ///
 /// `base` and `shapes_graph` are recorded into the product's parse provenance —
 /// see [`purrdf_shapes::shapes::from_dataset_with_base`], the parser this calls —
@@ -224,14 +232,16 @@ pub fn pack_shapes_product(
 /// # Errors
 ///
 /// [`ShapesProductRefusal::Shapes`] when the dataset does not parse as a shapes
-/// graph; [`ShapesProductRefusal::Admission`] when it declares something the
-/// product format cannot carry.
+/// graph or its `owl:imports` closure is not in hand;
+/// [`ShapesProductRefusal::Admission`] when it declares something the product format
+/// cannot carry.
 pub fn pack_shapes_product_from_dataset(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
     base: Option<&str>,
     shapes_graph: Option<String>,
     box_role_vocab: Option<BoxRoleVocab>,
+    imports: &ShapesImports,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
     let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         dataset,
@@ -239,6 +249,7 @@ pub fn pack_shapes_product_from_dataset(
         doc_prefixes,
         box_role_vocab,
         shapes_graph,
+        imports,
     )
     .map_err(ShapesProductRefusal::Shapes)?;
     prepared_to_product(&PreparedShapes::new(Arc::new(shapes)))
@@ -869,9 +880,18 @@ fn validate_prepared(
     options: &SarifOptions,
 ) -> Result<String, ShapesProductRefusal> {
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
-    let report = engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
-        .map_err(ShapesProductRefusal::Shapes)?;
+        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))?;
+    // The request's options travel with the call, not with the product: a
+    // restored preparation answers under the default set until a request names
+    // another, and only then is the shapes value copied to carry it.
+    let report = if prepared.shapes().validation_options() == &options.validation {
+        engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
+    } else {
+        let mut shapes = (**prepared.shapes()).clone();
+        shapes.set_validation_options(options.validation.clone());
+        engine::validate_dataset_with_shapes_graph(data.as_ref(), &shapes, None)
+    }
+    .map_err(|error| ShapesProductRefusal::Shapes(error.into()))?;
     Ok(report_to_sarif_string(&report, options))
 }
 
@@ -931,8 +951,9 @@ mod tests {
         validate_with_shapes_product_expecting,
     };
     use crate::SarifOptions;
+    use purrdf_shapes::ShapesImportError;
     use purrdf_shapes::product::ProductDimension;
-    use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+    use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
@@ -941,8 +962,8 @@ mod tests {
           sh:targetClass ex:Person ;\n\
           sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n";
 
-    /// The same shapes graph as [`SHAPES`], plus an `owl:imports` this crate has no way
-    /// to resolve — used to exercise [`pack_shapes_product`]'s refusal.
+    /// The same shapes graph as [`SHAPES`], plus an `owl:imports` of `ex:lib` — refused
+    /// without an import table, packed with one.
     const SHAPES_WITH_UNRESOLVED_IMPORT: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
@@ -958,7 +979,7 @@ mod tests {
 
     #[test]
     fn a_product_round_trips_through_every_reader() {
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         admit_shapes_product(&product).expect("admit");
         rebuild_shapes_product(&product).expect("rebuild");
         certify_shapes_product(&product).expect("certify");
@@ -984,9 +1005,52 @@ mod tests {
         assert_eq!(sarif, rebuilt_sarif);
     }
 
+    /// A request's conformance-disallow set reaches a validation through a
+    /// restored product — admitted and rebuilt alike — and the default set is the
+    /// control that answers differently.
+    #[test]
+    fn a_product_validation_honours_the_request_disallow_set() {
+        let warning = SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        );
+        let product = pack_shapes_product(&warning, None, &[]).expect("shapes pack");
+        let conforms = |sarif: String| -> serde_json::Value {
+            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+            log["runs"][0]["properties"]["shaclConforms"].clone()
+        };
+        let relaxed = SarifOptions {
+            validation: purrdf_shapes::engine::ValidationOptions::default()
+                .with_conformance_disallows(
+                    purrdf_shapes::report::ConformanceDisallows::new([
+                        purrdf_shapes::report::Severity::Violation,
+                    ])
+                    .expect("non-empty"),
+                ),
+            ..SarifOptions::default()
+        };
+        assert_eq!(
+            conforms(
+                validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+                    .expect("validates")
+            ),
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            conforms(validate_with_shapes_product(&product, DATA, &relaxed).expect("validates")),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            conforms(
+                validate_with_rebuilt_shapes_product(&product, DATA, &relaxed).expect("validates")
+            ),
+            serde_json::json!(true)
+        );
+    }
+
     #[test]
     fn a_corrupt_product_is_refused_on_a_named_dimension() {
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
 
         // A whole, well-sized product whose MAGIC was overwritten: these bytes
         // were never a prepared shapes product, and the outermost check says so.
@@ -1002,13 +1066,13 @@ mod tests {
 
     #[test]
     fn a_shapes_parse_failure_names_no_dimension() {
-        let refusal = pack_shapes_product("@@@ not turtle", None).expect_err("refused");
+        let refusal = pack_shapes_product("@@@ not turtle", None, &[]).expect_err("refused");
         assert!(matches!(refusal, ShapesProductRefusal::Shapes(_)));
         assert_eq!(refusal.dimension(), None);
         assert_eq!(refusal.dimension_label(), None);
 
         // …while an admission refusal carries its label all the way out.
-        let mut wrong_magic = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let mut wrong_magic = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         wrong_magic[0] = b'X';
         let admission: ShapesProductRefusal = certify_shapes_product(&wrong_magic)
             .expect_err("refused")
@@ -1026,12 +1090,21 @@ mod tests {
     /// the two can never drift — this test pins that down from the outside as well.
     #[test]
     fn the_dataset_entry_point_matches_the_text_entry_point_byte_for_byte() {
-        let via_text = pack_shapes_product(SHAPES, None).expect("text entry point");
+        let via_text = pack_shapes_product(SHAPES, None, &[]).expect("text entry point");
 
         let dataset = parse_turtle_to_dataset(SHAPES, None).expect("dataset parse");
-        let prefixes = extract_prefixes(SHAPES);
-        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, None, None, None)
-            .expect("dataset entry point");
+        let prefixes = parse_turtle_document(SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
+        let via_dataset = pack_shapes_product_from_dataset(
+            &dataset,
+            &prefixes,
+            None,
+            None,
+            None,
+            &purrdf_shapes::ShapesImports::new(),
+        )
+        .expect("dataset entry point");
 
         assert_eq!(
             via_text, via_dataset,
@@ -1045,29 +1118,133 @@ mod tests {
     #[test]
     fn the_dataset_entry_point_matches_the_text_entry_point_with_a_base() {
         let base = Some("https://example.org/shapes");
-        let via_text = pack_shapes_product(SHAPES, base).expect("text entry point");
+        let via_text = pack_shapes_product(SHAPES, base, &[]).expect("text entry point");
 
         let dataset = parse_turtle_to_dataset(SHAPES, base).expect("dataset parse");
-        let prefixes = extract_prefixes(SHAPES);
-        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, base, None, None)
-            .expect("dataset entry point");
+        let prefixes = parse_turtle_document(SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
+        let via_dataset = pack_shapes_product_from_dataset(
+            &dataset,
+            &prefixes,
+            base,
+            None,
+            None,
+            &purrdf_shapes::ShapesImports::new(),
+        )
+        .expect("dataset entry point");
 
         assert_eq!(via_text, via_dataset);
     }
 
-    /// `pack_shapes_product` has no `--import` table and no stderr to warn on, so an
-    /// `owl:imports` it cannot resolve is a HARD refusal rather than a silently smaller
-    /// shapes graph — see the function's own doc comment for why packing the root graph
-    /// alone would be exactly the silent omission this codec exists to rule out.
+    /// An `owl:imports` nothing in the host's table resolves is a HARD refusal rather
+    /// than a silently smaller shapes graph — the typed import error every shapes-graph
+    /// entry point raises, before any product exists, so no dimension names it.
     #[test]
-    fn refuses_an_unresolved_import_on_unsupported_capability() {
-        let refusal = pack_shapes_product(SHAPES_WITH_UNRESOLVED_IMPORT, None)
+    fn refuses_an_unresolved_import_with_the_typed_import_error() {
+        let refusal = pack_shapes_product(SHAPES_WITH_UNRESOLVED_IMPORT, None, &[])
             .expect_err("an unresolved owl:imports is refused");
+        assert_eq!(refusal.dimension(), None);
         assert_eq!(
-            refusal.dimension(),
-            Some(ProductDimension::UnsupportedCapability)
+            refusal.import_error(),
+            Some(&ShapesImportError::Unresolved {
+                iris: vec!["http://example.org/lib".to_owned()]
+            })
         );
-        assert!(refusal.to_string().contains("http://example.org/lib"));
+    }
+
+    /// The neighbour: the same shapes graph WITH the imported document in the table packs,
+    /// and the product carries the imported shape — observed by a result the importing
+    /// document alone cannot produce.
+    #[test]
+    fn a_supplied_import_is_packed_into_the_product() {
+        const LIB: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:NameShape a sh:NodeShape ;\n\
+              sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+        let product = pack_shapes_product(
+            SHAPES_WITH_UNRESOLVED_IMPORT,
+            None,
+            &[("http://example.org/lib", LIB)],
+        )
+        .expect("every import resolves");
+        let sarif = validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+            .expect("validate with the product");
+        assert!(
+            sarif.contains("MinCountConstraintComponent"),
+            "the imported shape is enforced through the product: {sarif}"
+        );
+        assert!(
+            sarif.contains("DatatypeConstraintComponent"),
+            "and so is the importing document's own: {sarif}"
+        );
+    }
+
+    /// The W3C SHACL 1.2 core vocabulary, vendored beside the shapes engine.
+    const SHACL_TTL: &str = include_str!("../../shapes/spec/shacl.ttl");
+    /// The W3C SHACL 1.2 node-expression vocabulary; it `owl:imports <sh:>`.
+    const SHNEX_TTL: &str = include_str!("../../shapes/spec/shnex.ttl");
+    /// The W3C SHACL 1.2 SPARQL node-expression vocabulary; it `owl:imports <shnex:>`.
+    const SHNEX_SPARQL_TTL: &str = include_str!("../../shapes/spec/shnex-sparql.ttl");
+
+    /// The three SHACL 1.2 vocabularies merged into one shapes document beside a user shape:
+    /// every `owl:imports` names an ontology the same document declares, so the closure is
+    /// complete and the text-only entry point packs it — and the product enforces the user
+    /// shape, so the pack is observed to be the WHOLE shapes graph and not an empty one.
+    #[test]
+    fn merged_vocabulary_packs() {
+        let merged = format!("{SHACL_TTL}\n{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
+        let product =
+            pack_shapes_product(&merged, None, &[]).expect("a complete in-graph closure packs");
+        let sarif = validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+            .expect("validate with the product");
+        assert!(
+            sarif.contains("\"level\": \"error\""),
+            "the user shape is enforced through the product: {sarif}"
+        );
+    }
+
+    /// The neighbour of [`merged_vocabulary_packs`]: the same document WITHOUT `shacl.ttl`.
+    /// `shnex.ttl`'s import of `sh:` now names an ontology nothing declares, so the pack is
+    /// refused on the same dimension as any unresolved import, naming exactly that IRI —
+    /// `shnex:`, still declared in place, is not named.
+    #[test]
+    fn unresolved_import_refused() {
+        let partial = format!("{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
+        let refusal = pack_shapes_product(&partial, None, &[])
+            .expect_err("an import of an absent ontology is refused");
+        // Exactly `sh:` is named; `shnex:`, still declared in place, is not.
+        assert_eq!(
+            refusal.import_error(),
+            Some(&ShapesImportError::Unresolved {
+                iris: vec!["http://www.w3.org/ns/shacl#".to_owned()]
+            })
+        );
+    }
+
+    /// A shapes document importing its OWN IRI packs once the host names that IRI — as the
+    /// base it passes, or through the document's own `@base` — and is refused, naming the
+    /// IRI, when the host passes no base or a different one.
+    #[test]
+    fn a_self_import_packs_under_its_own_base() {
+        const DOC: &str = "http://example.org/shapes/doc";
+        let own = format!(
+            "<http://example.org/shapes/doc#Prefixes> \
+             <http://www.w3.org/2002/07/owl#imports> <{DOC}> .\n{SHAPES}"
+        );
+        pack_shapes_product(&own, Some(DOC), &[]).expect("the base names the imported document");
+        for base in [None, Some("http://example.org/shapes/other")] {
+            let refusal = pack_shapes_product(&own, base, &[]).expect_err("a different document");
+            assert_eq!(
+                refusal.import_error(),
+                Some(&ShapesImportError::Unresolved {
+                    iris: vec![DOC.to_owned()]
+                })
+            );
+        }
+        let declared = format!("@base <{DOC}> .\n{own}");
+        pack_shapes_product(&declared, None, &[]).expect("the document's own @base names it");
     }
 
     /// The neighbouring VALID case: a graph with NO `owl:imports` at all still packs
@@ -1076,7 +1253,7 @@ mod tests {
     /// general.
     #[test]
     fn accepts_a_graph_with_no_imports_neighbour() {
-        pack_shapes_product(SHAPES, None).expect("a graph with no owl:imports still packs");
+        pack_shapes_product(SHAPES, None, &[]).expect("a graph with no owl:imports still packs");
     }
 
     // ── Host-injected implementations ───────────────────────────────────────────
@@ -1130,9 +1307,12 @@ mod tests {
         let mut shapes = purrdf_shapes::shapes::from_dataset_with_base(
             &dataset,
             None,
-            &extract_prefixes(SHAPES),
+            &parse_turtle_document(SHAPES, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             None,
+            &purrdf_shapes::ShapesImports::new(),
         )
         .expect("the fixture shapes parse");
         shapes.functions = Arc::new(native_registry());
@@ -1166,8 +1346,8 @@ mod tests {
     /// caller required is refused, on a named dimension, before anything is decoded.
     #[test]
     fn refuses_a_product_that_is_not_the_expected_one() {
-        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
-        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let held = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None, &[]).expect("other shapes pack");
         let selector =
             parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
 
@@ -1186,7 +1366,7 @@ mod tests {
     /// to the unbound call it exists to replace.
     #[test]
     fn accepts_the_expected_product_neighbour() {
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         let selector = parse_identity_digest(&rendered_selector(&product))
             .expect("a rendered selector parses");
 
@@ -1214,8 +1394,8 @@ mod tests {
     /// dataset is ever re-derived.
     #[test]
     fn refuses_a_rebuild_validation_that_is_not_the_expected_one() {
-        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
-        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let held = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None, &[]).expect("other shapes pack");
         let selector =
             parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
 
@@ -1239,7 +1419,7 @@ mod tests {
     /// the unbound rebuild-and-validate call and the bound admission both reach.
     #[test]
     fn accepts_the_expected_product_neighbour_on_rebuild_validation() {
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         let selector = parse_identity_digest(&rendered_selector(&product))
             .expect("a rendered selector parses");
 
@@ -1263,7 +1443,7 @@ mod tests {
     /// agree today: what a product renders is what the boundary accepts back.
     #[test]
     fn the_rendered_selector_is_the_accepted_selector() {
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         let rendered = rendered_selector(&product);
         assert_eq!(rendered.len(), 64, "the rendering is 64 hexadecimal digits");
 
@@ -1286,8 +1466,8 @@ mod tests {
     /// build knows and `rebuild` would otherwise happily re-derive it.
     #[test]
     fn refuses_a_rebuilt_product_that_is_not_the_expected_one() {
-        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
-        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let held = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None, &[]).expect("other shapes pack");
         let selector =
             parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
 
@@ -1308,7 +1488,7 @@ mod tests {
     fn accepts_the_expected_product_neighbour_on_rebuild() {
         use purrdf_shapes::engine;
 
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         let selector = parse_identity_digest(&rendered_selector(&product))
             .expect("a rendered selector parses");
 
@@ -1400,8 +1580,9 @@ mod tests {
             None,
         )
         .expect("validated against the restored shapes");
-        let plain = admit_shapes_product(&pack_shapes_product(SHAPES, None).expect("shapes pack"))
-            .expect("the common path admits");
+        let plain =
+            admit_shapes_product(&pack_shapes_product(SHAPES, None, &[]).expect("shapes pack"))
+                .expect("the common path admits");
         let without_native = purrdf_shapes::engine::validate_dataset_with_shapes_graph(
             data.as_ref(),
             plain.shapes(),
@@ -1442,7 +1623,7 @@ mod tests {
         prepared_to_product_with_implementations(&prepared_with_native(), BUILD_A)
             .expect("an injected population with a named build is writable");
 
-        let plain = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let plain = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         admit_shapes_product(&plain).expect("the common path is unchanged");
     }
 
@@ -1460,7 +1641,7 @@ mod tests {
             );
         }
 
-        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let product = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
         let rendered = rendered_selector(&product);
         let direct = parse_identity_digest(&rendered).expect("the rendering parses");
         let padded =

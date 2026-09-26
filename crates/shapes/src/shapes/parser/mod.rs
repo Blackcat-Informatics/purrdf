@@ -3,9 +3,13 @@
 
 //! Focused sub-parsers for the SHACL shapes graph loader.
 
+pub(crate) mod annotations;
 pub(crate) mod cardinality;
+pub(crate) mod closed_by_types;
 pub(crate) mod custom_fn;
 pub(crate) mod functions;
 pub(crate) mod node_expr;
 pub(crate) mod rule_parse;
+pub(crate) mod shacl_instance;
 pub(crate) mod target_types;
+pub(crate) mod wellformed;

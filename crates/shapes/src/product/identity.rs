@@ -251,7 +251,7 @@ use super::error::{ProductDimension, ShapesProductError};
 /// The census mixes the SAME string into its stage id under its own `PROFILE_ID`.
 /// It is an integration test and cannot see a `pub(crate)` item, so the two
 /// declarations are necessarily separate; they name one profile and must be changed
-/// together. `stage_id_matches_golden` fails the moment the census's copy moves, so
+/// together. `stage_id_matches_shipped_constant` fails the moment the census's copy moves, so
 /// a divergence is loud rather than silent.
 pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 
@@ -1147,7 +1147,9 @@ mod tests {
     fn shapes_of(ttl: &str) -> Shapes {
         shapes_with(
             ttl,
-            &crate::text_ingest::extract_prefixes(ttl),
+            &crate::text_ingest::parse_turtle_document(ttl, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             Some(SHAPES_GRAPH_IRI),
         )
@@ -1432,7 +1434,9 @@ mod tests {
 
     #[test]
     fn identity_differs_on_shapes_graph() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let before = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &prefixes,
@@ -1514,7 +1518,9 @@ mod tests {
 
     #[test]
     fn identity_differs_on_box_role_vocab() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let before = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &prefixes,
@@ -1759,7 +1765,9 @@ mod tests {
         // The exact collision length-prefixing exists to prevent: without a prefix
         // on BOTH halves of every pair, each of these prefix maps flattens to `abc`
         // and two genuinely different configurations share one digest.
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let left = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &[("a".to_owned(), "bc".to_owned())],
@@ -1833,7 +1841,9 @@ mod tests {
 
     #[test]
     fn absent_vocabulary_differs_from_empty_vocabulary() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let empty = BoxRoleVocab {
             graph_box_role: String::new(),
             box_abox: String::new(),
@@ -2061,7 +2071,7 @@ mod tests {
 
         // The same map handed over in reverse order through the DATASET entry point,
         // which does no sorting of its own — so this exercises the encoder's sort
-        // rather than `extract_prefixes`'.
+        // rather than the codec's.
         let forward = vec![
             ("a".to_owned(), "https://example.org/a#".to_owned()),
             ("b".to_owned(), "https://example.org/b#".to_owned()),
@@ -2089,7 +2099,9 @@ mod tests {
     fn absent_vocabulary_matches_absent_vocabulary() {
         // The valid neighbour of `absent_vocabulary_differs_from_empty_vocabulary`:
         // an inactive box-role feature on BOTH sides is a match, not a refusal.
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let left = shapes_with(PLAIN_SHAPES, &prefixes, None, Some(SHAPES_GRAPH_IRI));
         let right = shapes_with(PLAIN_SHAPES, &prefixes, None, Some(SHAPES_GRAPH_IRI));
         assert!(left.box_role_vocab.is_none() && right.box_role_vocab.is_none());

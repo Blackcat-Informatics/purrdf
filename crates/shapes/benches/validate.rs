@@ -18,6 +18,47 @@
 //! now read the interned value node's borrowed surface (length, kind, language)
 //! and the closed-permitted set's borrowed keys instead of materializing terms.
 //!
+//! `shacl_focus_unique_values_for` is the one cross-focus Core component,
+//! `sh:uniqueValuesFor`, over a growing conforming target set: each focus node's
+//! verdict depends on every other target node, and the grouping of the target set
+//! by value tuple is built once per validation, so the per-focus-node cost is
+//! expected to stay flat across the sweep rather than grow with it.
+//!
+//! `shacl_focus_target_where` is `sh:targetWhere` over a graph holding as many
+//! unrelated nodes as targets, in its two resolutions: `narrowed`, where the where
+//! shape's `sh:class` bounds the candidates to the class's instances, and
+//! `full_scan`, the same condition behind a one-member `sh:or` the narrowing does
+//! not look inside, which checks every node of the graph against the shape.
+//!
+//! `shacl_focus_computed_values` is a property shape's value nodes in the three
+//! forms SHACL 1.2 Core gives them, over one conforming focus population:
+//! `asserted`, reached by the path alone; `values`, the output of a `sh:values`
+//! node expression evaluated at each focus node; and `default`, a
+//! `sh:defaultValue` constant added where the path and `sh:values` produce
+//! nothing. The `asserted` row is the control every shape without either term
+//! pays, and the two computed rows show what an expression evaluation per focus
+//! node costs beside it.
+//!
+//! `shacl_focus_sequence_operators` is the order-preserving node-expression list
+//! operators under an `sh:expression` evaluated at every focus node. Each focus
+//! node carries `tags` values, and the operand is `shnex:concat` of its path
+//! values with themselves — every node twice, in order: `distinct` keeps the first
+//! occurrences (SHACL 1.2 Node Expressions §4.2.1) and `filter` keeps every
+//! conforming node, duplicates and order included (§4.2.5), where `control`
+//! evaluates the path alone. The two `tags` sizes sit either side of the length
+//! at which `shnex:distinct` stops scanning its output and hashes instead.
+//!
+//! `shacl_focus_list_components` is the SHACL 1.2 list components over holders
+//! whose one value node is a SHACL list of `members` IRIs: `length`
+//! (`sh:minListLength`/`sh:maxListLength`), `unique` (`sh:uniqueMembers`) and
+//! `member_shape` (`sh:memberShape` over an IRI-kind shape), each beside a
+//! `control` row that constrains the same value node without walking its list.
+//!
+//! `shacl_focus_closed_by_types` is the same five-property closed shape in its
+//! two closures: `closed_true` (`sh:closed true` with `rdf:type` ignored) and
+//! `by_types` (`sh:closed sh:ByTypes` on the class, whose permitted set is
+//! selected per focus node by its `rdf:type` values).
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -60,6 +101,7 @@
 //! criterion measurements outside them pay one relaxed load per allocation.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Once};
@@ -93,6 +135,13 @@ const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
 const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_000];
 const CLOSED_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
+const UNIQUE_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const COMPUTED_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const TARGET_WHERE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const SEQUENCE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const SEQUENCE_TAGS: &[usize] = &[8, 24];
+const LIST_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const LIST_MEMBERS: &[usize] = &[4, 32];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -296,9 +345,16 @@ ex:WholeBundleShape a sh:NodeShape ;
 /// A `sh:closed` node shape with five simple-predicate property shapes carrying
 /// `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn`/`sh:datatype`,
 /// over `focus_nodes` conforming subjects. Every subject also carries `rdf:type`,
-/// which the shape admits only through `sh:ignoredProperties`, so the closed
-/// permitted-set probe runs on every outgoing triple of every focus node.
-fn closed_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+/// so the closed permitted-set probe runs on every outgoing triple of every focus
+/// node.
+///
+/// `by_types` selects the closure. `false` is `sh:closed true` on a shape
+/// targeting the class, which admits `rdf:type` only through
+/// `sh:ignoredProperties`. `true` is `sh:closed sh:ByTypes` on the class itself
+/// (an implicit class target), whose permitted set is `rdf:type` plus the
+/// properties collected from each focus node's `rdf:type` values (SHACL 1.2 Core
+/// §7.9.1) — the same five, so both forms conform and do the same constraint work.
+fn closed_focus_fixture(focus_nodes: usize, by_types: bool) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let closed_class = builder.intern_iri(&format!("{BENCH_EX}ClosedClass"));
@@ -327,18 +383,22 @@ fn closed_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     }
 
     let dataset = builder.freeze().expect("closed focus fixture must freeze");
+    let closure = if by_types {
+        "ex:ClosedClass a rdfs:Class, sh:NodeShape ;\n    sh:closed sh:ByTypes ;"
+    } else {
+        "ex:ClosedBundleShape a sh:NodeShape ;\n    sh:targetClass ex:ClosedClass ;\n    \
+         sh:closed true ;\n    sh:ignoredProperties ( rdf:type ) ;"
+    };
     let shapes = parse_shapes(
         &format!(
             r#"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix ex: <{BENCH_EX}> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-ex:ClosedBundleShape a sh:NodeShape ;
-    sh:targetClass ex:ClosedClass ;
-    sh:closed true ;
-    sh:ignoredProperties ( rdf:type ) ;
+{closure}
     sh:property [
         sh:path ex:label ;
         sh:minCount 1 ;
@@ -371,6 +431,261 @@ ex:ClosedBundleShape a sh:NodeShape ;
         None,
     )
     .expect("closed focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// A `sh:uniqueValuesFor ( ex:notation ex:scheme )` node shape over
+/// `focus_nodes` conforming subjects, each with its own notation in one of 16
+/// schemes — the cross-focus component, whose verdict for a focus node depends on
+/// every other target node. The grouping of the target set is built once per
+/// validation, so the cost should grow linearly in the focus count, not
+/// quadratically.
+fn unique_values_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
+    let scheme_predicate = builder.intern_iri(&format!("{BENCH_EX}scheme"));
+    let schemes: Vec<TermId> = (0..16)
+        .map(|scheme| builder.intern_iri(&format!("{BENCH_EX}scheme{scheme}")))
+        .collect();
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}unique-item{index}"));
+        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
+        builder.push_quad(focus, rdf_type, concept, None);
+        builder.push_quad(focus, notation_predicate, notation, None);
+        builder.push_quad(
+            focus,
+            scheme_predicate,
+            schemes[index % schemes.len()],
+            None,
+        );
+    }
+    let dataset = builder
+        .freeze()
+        .expect("uniqueValuesFor focus fixture must freeze");
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:UniqueNotationShape a sh:NodeShape ;
+    sh:targetClass ex:Concept ;
+    sh:uniqueValuesFor ( ex:notation ex:scheme ) .
+"
+        ),
+        None,
+    )
+    .expect("uniqueValuesFor focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// A property shape over `focus_nodes` conforming rectangles whose `ex:area`
+/// value nodes come from `form`: `asserted` (each rectangle carries `ex:area`),
+/// `values` (each carries `ex:width`, and `sh:values [ sh:path ex:width ]`
+/// computes the area from it) or `default` (none carries either, and
+/// `sh:defaultValue 1` supplies it). `sh:minCount 1` and `sh:datatype
+/// xsd:integer` hold in every form, so the report is empty and every row does the
+/// same constraint work over one value node per focus node.
+fn computed_values_focus_fixture(focus_nodes: usize, form: &str) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let rectangle = builder.intern_iri(&format!("{BENCH_EX}Rectangle"));
+    let area = builder.intern_iri(&format!("{BENCH_EX}area"));
+    let width = builder.intern_iri(&format!("{BENCH_EX}width"));
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}rectangle{index}"));
+        builder.push_quad(focus, rdf_type, rectangle, None);
+        let value =
+            builder.intern_literal(RdfLiteral::typed((index % 97 + 1).to_string(), XSD_INTEGER));
+        match form {
+            "asserted" => builder.push_quad(focus, area, value, None),
+            "values" => builder.push_quad(focus, width, value, None),
+            _ => {}
+        }
+    }
+    let dataset = builder
+        .freeze()
+        .expect("computed-values focus fixture must freeze");
+    let computed = match form {
+        "asserted" => "",
+        "values" => "sh:values [ sh:path ex:width ] ;",
+        _ => "sh:defaultValue 1 ;",
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:RectangleShape a sh:NodeShape ;
+    sh:targetClass ex:Rectangle ;
+    sh:property [ sh:path ex:area ; {computed} sh:minCount 1 ; sh:datatype xsd:integer ] .
+"
+        ),
+        None,
+    )
+    .expect("computed-values focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// `focus_nodes` items, each with `tags` distinct IRI values of `ex:tag`, under one
+/// `sh:expression` whose operand is the item's tags concatenated with themselves:
+/// `control` evaluates the path alone, `distinct` the first occurrences of the
+/// doubled list, and `filter` the doubled list's members that conform to an
+/// IRI-kind shape — every one of them, in order. Each form wraps its operand in
+/// `shnex:exists`, which is `true` for every item, so the report is empty.
+fn sequence_focus_fixture(focus_nodes: usize, tags: usize, form: &str) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let item = builder.intern_iri(&format!("{BENCH_EX}Item"));
+    let tag = builder.intern_iri(&format!("{BENCH_EX}tag"));
+    let tag_values: Vec<TermId> = (0..tags)
+        .map(|index| builder.intern_iri(&format!("{BENCH_EX}tag{index}")))
+        .collect();
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}item{index}"));
+        builder.push_quad(focus, rdf_type, item, None);
+        for &value in &tag_values {
+            builder.push_quad(focus, tag, value, None);
+        }
+    }
+    let dataset = builder
+        .freeze()
+        .expect("sequence focus fixture must freeze");
+    let doubled = "[ shnex:concat ( [ shnex:pathValues ex:tag ] [ shnex:pathValues ex:tag ] ) ]";
+    let operand = match form {
+        "control" => "[ shnex:pathValues ex:tag ]".to_owned(),
+        "distinct" => format!("[ shnex:distinct {doubled} ]"),
+        _ => format!("[ shnex:filterShape ex:IriShape ; shnex:nodes {doubled} ]"),
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:IriShape a sh:NodeShape ; sh:nodeKind sh:IRI .
+ex:ItemShape a sh:NodeShape ;
+    sh:targetClass ex:Item ;
+    sh:expression [ shnex:exists {operand} ] .
+"
+        ),
+        None,
+    )
+    .expect("sequence focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// `focus_nodes` holders, each whose `ex:members` value is a SHACL list of
+/// `members` distinct IRIs, under a property shape on `ex:members` whose list
+/// constraints come from `form`: `control` checks `sh:minCount 1` alone, `length`
+/// adds `sh:minListLength 1` and `sh:maxListLength` at the member count, `unique`
+/// adds `sh:uniqueMembers true`, and `member_shape` adds `sh:memberShape` over an
+/// IRI-kind shape. Every list meets every form, so the report is empty and each
+/// treatment row differs from `control` only by the list walk its component does.
+fn list_focus_fixture(focus_nodes: usize, members: usize, form: &str) -> ValidationFixture {
+    let mut data = format!("@prefix ex: <{BENCH_EX}> .\n");
+    for index in 0..focus_nodes {
+        write!(data, "ex:holder{index} a ex:Holder ; ex:members (").expect("writes to a String");
+        for member in 0..members {
+            write!(data, " ex:member{member}").expect("writes to a String");
+        }
+        data.push_str(" ) .\n");
+    }
+    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&data, None)
+        .expect("list focus data must parse");
+    let constraint = match form {
+        "control" => String::new(),
+        "length" => format!("sh:minListLength 1 ; sh:maxListLength {members} ;"),
+        "unique" => "sh:uniqueMembers true ;".to_owned(),
+        _ => "sh:memberShape ex:IriShape ;".to_owned(),
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:IriShape a sh:NodeShape ; sh:nodeKind sh:IRI .
+ex:HolderShape a sh:NodeShape ;
+    sh:targetClass ex:Holder ;
+    sh:property [ sh:path ex:members ; sh:minCount 1 ; {constraint} ] .
+"
+        ),
+        None,
+    )
+    .expect("list focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// A `sh:targetWhere` fixture: `focus_nodes` concepts, each with a notation, and
+/// as many unrelated nodes beside them, so a where target that scans every node of
+/// the graph has twice the candidates one that narrows to the class does.
+///
+/// `narrowed` selects the where shape: `[ sh:class ex:Concept ]`, whose class
+/// bounds the candidates to its instances, or the same condition wrapped in a
+/// one-member `sh:or`, which means the same thing and which the narrowing does not
+/// look inside — the full scan over every node of the graph.
+fn target_where_focus_fixture(focus_nodes: usize, narrowed: bool) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
+    let other_predicate = builder.intern_iri(&format!("{BENCH_EX}other"));
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}where-item{index}"));
+        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
+        builder.push_quad(focus, rdf_type, concept, None);
+        builder.push_quad(focus, notation_predicate, notation, None);
+        let unrelated = builder.intern_iri(&format!("{BENCH_EX}where-other{index}"));
+        builder.push_quad(unrelated, other_predicate, focus, None);
+    }
+    let dataset = builder
+        .freeze()
+        .expect("targetWhere focus fixture must freeze");
+    let condition = if narrowed {
+        "[ sh:class ex:Concept ]"
+    } else {
+        "[ sh:or ( [ sh:class ex:Concept ] ) ]"
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:ConceptShape a sh:NodeShape ;
+    sh:targetWhere {condition} ;
+    sh:property [ sh:path ex:notation ; sh:minCount 1 ] .
+"
+        ),
+        None,
+    )
+    .expect("targetWhere focus shapes must parse");
     ValidationFixture {
         dataset,
         shapes,
@@ -557,7 +872,7 @@ fn bench_focus_closed(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(5));
     for &focus_nodes in CLOSED_FOCUS_SIZES {
-        let fixture = closed_focus_fixture(focus_nodes);
+        let fixture = closed_focus_fixture(focus_nodes, false);
         let probe = Once::new();
         group.throughput(Throughput::Elements(focus_nodes as u64));
         group.bench_with_input(
@@ -589,6 +904,159 @@ fn bench_focus_sparql(c: &mut Criterion) {
                 bencher.iter(|| validate_fixture(black_box(fixture)));
             },
         );
+    }
+    group.finish();
+}
+
+fn bench_focus_unique_values(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_unique_values_for");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in UNIQUE_VALUES_FOCUS_SIZES {
+        let fixture = unique_values_focus_fixture(focus_nodes);
+        let probe = Once::new();
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(focus_nodes),
+            &fixture,
+            move |bencher, fixture| {
+                probe.call_once(|| print_validation_probe("unique_values_for", fixture));
+                bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_focus_target_where(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_target_where");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in TARGET_WHERE_FOCUS_SIZES {
+        for (label, narrowed) in [("narrowed", true), ("full_scan", false)] {
+            let fixture = target_where_focus_fixture(focus_nodes, narrowed);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(label, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("target_where_{label}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_computed_values(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_computed_values");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in COMPUTED_VALUES_FOCUS_SIZES {
+        for form in ["asserted", "values", "default"] {
+            let fixture = computed_values_focus_fixture(focus_nodes, form);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(form, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("computed_values_{form}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_sequence_operators(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_sequence_operators");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in SEQUENCE_FOCUS_SIZES {
+        for &tags in SEQUENCE_TAGS {
+            for form in ["control", "distinct", "filter"] {
+                let fixture = sequence_focus_fixture(focus_nodes, tags, form);
+                let probe = Once::new();
+                group.throughput(Throughput::Elements(focus_nodes as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{form}_tags{tags}"), focus_nodes),
+                    &fixture,
+                    move |bencher, fixture| {
+                        probe.call_once(|| {
+                            print_validation_probe(&format!("sequence_{form}_tags{tags}"), fixture);
+                        });
+                        bencher.iter(|| validate_fixture(black_box(fixture)));
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_list_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_list_components");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in LIST_FOCUS_SIZES {
+        for &members in LIST_MEMBERS {
+            for form in ["control", "length", "unique", "member_shape"] {
+                let fixture = list_focus_fixture(focus_nodes, members, form);
+                let probe = Once::new();
+                group.throughput(Throughput::Elements(focus_nodes as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{form}_members{members}"), focus_nodes),
+                    &fixture,
+                    move |bencher, fixture| {
+                        probe.call_once(|| {
+                            print_validation_probe(
+                                &format!("list_{form}_members{members}"),
+                                fixture,
+                            );
+                        });
+                        bencher.iter(|| validate_fixture(black_box(fixture)));
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_closed_by_types(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_closed_by_types");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in CLOSED_FOCUS_SIZES {
+        for (label, by_types) in [("closed_true", false), ("by_types", true)] {
+            let fixture = closed_focus_fixture(focus_nodes, by_types);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(label, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("closed_{label}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1114,6 +1582,60 @@ fn bench_subclass_rule_rounds(c: &mut Criterion) {
     group.finish();
 }
 
+/// The chain lengths the SHACL-rules transitive-closure bench sweeps.
+const CLOSURE_CHAIN_LENGTHS: [usize; 3] = [8, 16, 32];
+
+/// A global SPARQL rule closing `ex:link` transitively into `ex:reaches`, over a chain
+/// of `n` nodes: `n − 1` links, `n(n − 1)/2` reaches.
+fn closure_fixture(n: usize) -> (Arc<RdfDataset>, Shapes) {
+    let mut data = format!("@prefix ex: <{BENCH_EX}> .\n");
+    for i in 0..n.saturating_sub(1) {
+        writeln!(data, "ex:n{i} ex:link ex:n{} .", i + 1).expect("writes to a String");
+    }
+    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&data, None)
+        .expect("closure data must parse");
+    let shapes = parse_shapes(
+        &format!(
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:base a sh:SPARQLRule ;
+    sh:construct "CONSTRUCT {{ ?a <{BENCH_EX}reaches> ?b }} WHERE {{ ?a <{BENCH_EX}link> ?b }}" .
+ex:step a sh:SPARQLRule ; sh:order 1 ;
+    sh:construct "CONSTRUCT {{ ?a <{BENCH_EX}reaches> ?c }} WHERE {{ ?a <{BENCH_EX}link> ?b . ?b <{BENCH_EX}reaches> ?c }}" .
+"#
+        ),
+        None,
+    )
+    .expect("closure rule shapes must parse");
+    (dataset, shapes)
+}
+
+/// The SHACL rules engine closing a chain transitively: every iteration re-executes the
+/// iterating rule over the evaluation graph until a pass infers nothing, so the cost
+/// grows with the chain length in iterations and in graph size at once. Report-only.
+fn bench_rules_transitive_closure(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_rules_transitive_closure");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for n in CLOSURE_CHAIN_LENGTHS {
+        let (dataset, shapes) = closure_fixture(n);
+        let expected = dataset.quad_count() + n * (n - 1) / 2;
+        group.throughput(Throughput::Elements((n * (n - 1) / 2) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                let output = entail_dataset(black_box(dataset.as_ref()), black_box(&shapes))
+                    .expect("the closure rules must entail");
+                assert_eq!(output.quad_count(), expected);
+                black_box(output);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn schema_import_config() -> SchemaImportConfig {
     let namespaces = Namespaces::new(
         "ex",
@@ -1438,11 +1960,18 @@ criterion_group!(
     bench_focus_core,
     bench_focus_closed,
     bench_focus_sparql,
+    bench_focus_unique_values,
+    bench_focus_target_where,
+    bench_focus_computed_values,
+    bench_focus_sequence_operators,
+    bench_focus_list_components,
+    bench_focus_closed_by_types,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,
     bench_subclass_patterns,
     bench_subclass_rule_rounds,
+    bench_rules_transitive_closure,
     bench_schema_import,
     bench_linkml_import,
     bench_linkml_slot_emission

@@ -9,16 +9,14 @@ native format read from a filesystem path it keeps the direct-load fast-path,
 using the parser class's :attr:`rdf_format` marker rather than a hardcoded map.
 
 The native parsers carry an :attr:`rdf_format` marker (Turtle/N-Triples/N-Quads/
-TriG/TriX/HexTuples); the codec parsers (JSON-LD-star, RDF/XML) route bytes
-through the purrdf-gts codecs. TriX and HexTuples are native codecs
-(``purrdf-rdf``): they load straight into the store like the other native
-quad formats.
+TriG/TriX/HexTuples/RDF/XML) and load straight into the store through the
+``purrdf-rdf`` codecs, which also report the document's prefixes; the JSON-LD-star
+parser routes its bytes through the dedicated JSON-LD converter.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING, Any
 
 import purrdf
@@ -35,6 +33,7 @@ _NQ = purrdf.RdfFormat.N_QUADS
 _TRIG = purrdf.RdfFormat.TRIG
 _TRIX = purrdf.RdfFormat.TRIX
 _HEXT = purrdf.RdfFormat.HEXTUPLES
+_RDFXML = purrdf.RdfFormat.RDF_XML
 
 
 def _as_bytes(source: Any) -> bytes:
@@ -55,37 +54,19 @@ def _as_text(source: Any) -> str:
     raise TypeError(f"unsupported parse source: {source!r}")
 
 
-#: An XML namespace declaration: ``xmlns:prefix="uri"`` (default ``xmlns`` is
-#: intentionally excluded; the reserved ``xml`` prefix is skipped by the caller).
-_XMLNS_PREFIX_RE = re.compile(
-    r"""\sxmlns:([A-Za-z_][\w.\-]*)\s*=\s*(["'])(.*?)\2""",
-    re.DOTALL,
-)
-
-
-def _scan_xml_prefixes(text: str) -> list[tuple[str, str]]:
-    """Extract ``(prefix, iri)`` declarations from XML ``xmlns:`` attributes.
-
-    A lightweight lexical scan (no full parse): RDF/XML records document prefixes
-    on the graph's ``NamespaceManager`` during parsing, but the native codec does
-    not surface them, so we recover them from the source text.
-    """
-    return [(match.group(1), match.group(3)) for match in _XMLNS_PREFIX_RE.finditer(text)]
-
-
 class _NativeParser(Parser):
     """Load a native-format payload into the sink store (deterministic)."""
 
     rdf_format: purrdf.RdfFormat = _TURTLE
-    #: Whether the format carries ``@prefix``/``PREFIX`` declarations to recover.
+    #: Whether the format declares prefixes (``@prefix``/``PREFIX``, ``xmlns``) to bind.
     prefix_bearing: bool = False
 
     def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
-        """Load ``source`` bytes into ``sink``'s store, recovering prefixes."""
+        """Load ``source`` bytes into ``sink``'s store, binding the parsed prefixes."""
         payload = _as_bytes(source)
+        prefixes = sink._store.load(payload, format=self.rdf_format, base=kwargs.get("base"))
         if self.prefix_bearing:
-            sink._bind_source_prefixes(payload)
-        sink._store.load(payload, format=self.rdf_format, base=kwargs.get("base"))
+            sink._bind_document_prefixes(prefixes)
 
 
 class TurtleParser(_NativeParser):
@@ -176,17 +157,16 @@ class JsonLDParser(Parser):
                     sink.bind(prefix, URIRef(namespace))
 
 
-class RDFXMLParser(Parser):
-    """RDF/XML parser via the purrdf-gts codec (``xml``/``application/rdf+xml``)."""
+class RDFXMLParser(_NativeParser):
+    """RDF/XML parser (``xml``/``application/rdf+xml``) via the native codec.
 
-    def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
-        """Load RDF/XML text (``from_rdf_xml`` → N-Quads → store)."""
-        text = _as_text(source)
-        sink._store.load(purrdf.from_rdf_xml(text), format=_NQ)
-        for prefix, namespace in _scan_xml_prefixes(text):
-            if prefix == "xml":
-                continue
-            sink.bind(prefix, URIRef(namespace))
+    Its prefixes are the document's ``xmlns`` declarations as the XML parser scoped
+    them, returned by the same ``load`` — never ``xmlns:`` text inside element
+    content or inside an ``rdf:parseType="Literal"`` value.
+    """
+
+    rdf_format = _RDFXML
+    prefix_bearing = True
 
 
 class TriXParser(_NativeParser):

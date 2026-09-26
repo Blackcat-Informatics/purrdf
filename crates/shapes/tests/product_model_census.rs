@@ -25,7 +25,7 @@
 //!            ([`census_closure_is_complete`]) — an enumeration silently omits the
 //!            types nobody happened to think of, and here that set is load-bearing:
 //!            `Shapes::target_types` carries the `sh:SPARQLTargetType` declarations
-//!            and `Rule` / `RuleSchedule` carry the SHACL-AF rules.
+//!            and `Rule` / `RuleGraph` / `RuleSetDeclaration` carry the SHACL rules.
 //!
 //!   RULE 2 — STAGE ID. [`stage_id`] is a content-derived capability digest over
 //!            the whole census plus the tables the model's MEANING depends on. It
@@ -90,11 +90,15 @@ const CENSUS_ROOT: &str = "Shapes";
 /// Checked for equality against the closure in [`census_closure_is_complete`], so
 /// this list cannot go stale in either direction — a reachable type missing from it
 /// fails, and a row here that the model no longer reaches fails too.
-const CENSUS_TYPES: [&str; 27] = [
+const CENSUS_TYPES: [&str; 33] = [
+    "AnnotatedConstraint",
     "ArgKey",
     "BoxRoleVocab",
+    "ClosedMode",
+    "ClosedTypeIndex",
     "ComponentValidator",
     "Constraint",
+    "ConstraintAnnotation",
     "CustomFnKind",
     "CustomFunction",
     "FnCall",
@@ -105,9 +109,11 @@ const CENSUS_TYPES: [&str; 27] = [
     "OrderKey",
     "Path",
     "PropertyShape",
+    "ResultAnnotation",
     "Rule",
     "RuleBody",
-    "RuleSchedule",
+    "RuleGraph",
+    "RuleSetDeclaration",
     "Severity",
     "Shape",
     "ShapeArg",
@@ -908,12 +914,19 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 ///
 /// * every `sh:…ConstraintComponent` IRI `crates/shapes/src/model.rs` declares —
 ///   the component identities a validation result is reported under; and
-/// * the native parameter-cardinality tables in
-///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs they
-///   name — which decide, with no vocabulary import, whether a second value of a
-///   parameter is a load error or a second constraint.
+/// * the native metadata-cardinality table in
+///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs it
+///   names — which decides, with no vocabulary import, whether a second value of
+///   a shape's metadata is a load error. The single-valued CONSTRAINT parameters
+///   are not a second table: they are the spec symbol table's `single` flags,
+///   which its canonical rendering (the third half) carries line by line.
 ///
-/// Either half moving changes what a shapes graph parses INTO, so a prepared
+/// * the spec symbol table (`purrdf_shapes::spec`), one line per fact in its own
+///   canonical rendering — which spec terms bind natively, with which signature,
+///   under which alias, and which parsed-model carrier evaluates each declared
+///   component.
+///
+/// Any of the three moving changes what a shapes graph parses INTO, so a prepared
 /// product minted before the move describes a model that no longer exists.
 ///
 /// # Panics
@@ -950,7 +963,7 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
     let cardinality_text = std::fs::read_to_string(&cardinality_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", cardinality_path.display()));
     let cardinality = syn::parse_file(&cardinality_text).expect("cardinality.rs parses as Rust");
-    for want in ["SINGLETON_PREDICATES", "METADATA_SINGLETONS"] {
+    for want in ["METADATA_SINGLETONS"] {
         let item = cardinality
             .items
             .iter()
@@ -991,6 +1004,15 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
             });
             table.push((format!("{want}[{index}] sh::{name}"), iri.clone()));
         }
+    }
+    let spec = purrdf_shapes::spec::implemented().canonical_text();
+    assert!(
+        spec.lines().count() > 100,
+        "the spec symbol table rendered only {} lines, which cannot be the whole table",
+        spec.lines().count()
+    );
+    for (index, line) in spec.lines().enumerate() {
+        table.push((format!("spec[{index}]"), line.to_owned()));
     }
     table
 }
@@ -1403,13 +1425,21 @@ fn census_rows_carry_every_variant_and_field() {
         "Shapes::parse_provenance is pub(crate) and must be censused as non-public"
     );
 
-    assert_eq!(by_name["RuleSchedule"].variants.len(), 2);
     assert_eq!(by_name["RuleBody"].variants.len(), 2);
+    for field in ["layer", "order", "run_once", "processors"] {
+        assert!(
+            by_name["Rule"].variants[0]
+                .fields
+                .iter()
+                .any(|f| f.name == field),
+            "Rule::{field} carries a rule's schedule or processor and must be censused"
+        );
+    }
     assert!(
-        by_name["Rule"].variants[0]
-            .fields
+        fields
             .iter()
-            .any(|field| field.name == "schedule")
+            .any(|field| field.name == "rules" && field.public),
+        "Shapes::rules carries the global rules and rule sets and must be censused"
     );
 
     for row in &rows {
@@ -1453,8 +1483,8 @@ fn stage_id_matches_shipped_constant() {
     assert_eq!(
         computed, shipped,
         "the SHACL prepared-product stage id moved. Something in the declarative model, the \
-         SPARQL built-in table, the constraint-component parameter table, the class-analysis \
-         derivation or the profile id changed, which means every product written under \
+         SPARQL built-in table, the constraint-component parameter table (spec symbol table \
+         included), the class-analysis derivation or the profile id changed, which means every product written under \
          `{shipped}` describes a preparation this build no longer performs. Update STAGE_ID in \
          the product module to `{computed}` ONLY after confirming the codec covers the change, \
          then re-prepare the product fixture the new stage id invalidates with the supported \
@@ -1484,7 +1514,17 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
         "parameter component MIN_COUNT_CONSTRAINT_COMPONENT = \
          http://www.w3.org/ns/shacl#MinCountConstraintComponent\n"
     ));
-    assert!(preimage.contains("SINGLETON_PREDICATES[0] sh::DATATYPE = "));
+    assert!(preimage.contains("METADATA_SINGLETONS[0] sh::PATH = "));
+    // The single-valued constraint parameters are the spec table's own flags.
+    assert!(preimage.contains(
+        "  param http://www.w3.org/ns/shacl#datatype optional=false value=iri-or-iri-list \
+         single=true property-only=false\n"
+    ));
+    assert!(preimage.contains(
+        "= function http://www.w3.org/ns/shacl#SPARQLExprExpression \
+         http://www.w3.org/ns/shacl#NamedParameterExpressionFunction keyed \
+         http://www.w3.org/ns/shacl#sparqlExpr -> select\n"
+    ));
     assert!(preimage.contains("analysis ClassCatalog::from_walk = fn from_walk"));
     assert!(preimage.contains("analysis lower_shape = fn lower_shape"));
     // A non-documentation attribute survives, because `#[derive(Default)]` on the
@@ -1635,6 +1675,79 @@ fn stage_id_changes_when_a_capability_table_changes() {
     assert_ne!(
         real,
         stage_id(&types, &builtins, &fewer_components, &analysis)
+    );
+}
+
+/// **Changing the spec symbol table moves the stage id**, with the model and the
+/// other tables held fixed: a product prepared under one table — one set of
+/// native bindings, signatures and aliases — is refused by a build whose table
+/// says something else, rather than restored against a meaning it was not
+/// prepared under.
+#[test]
+fn stage_id_changes_when_the_spec_table_changes() {
+    let types = census();
+    let builtins = builtin_function_table();
+    let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
+    let real = stage_id(&types, &builtins, &components, &analysis);
+    assert_eq!(real, shipped_stage_id());
+
+    assert!(
+        components.iter().any(|(key, _)| key.starts_with("spec[")),
+        "the spec table reaches the preimage"
+    );
+
+    // An alias re-pointed at another SPARQL form.
+    let mut realiased = components.clone();
+    let alias = realiased
+        .iter_mut()
+        .find(|(_, line)| line.starts_with("sparql-alias plus = add"))
+        .expect("the sparql:plus alias is a table fact");
+    alias.1 = alias.1.replace("Infix(\"+\")", "Infix(\"-\")");
+    assert_ne!(real, stage_id(&types, &builtins, &realiased, &analysis));
+
+    // A component re-pointed at another parsed-model carrier.
+    let mut recarried = components;
+    let row = recarried
+        .iter_mut()
+        .find(|(_, line)| {
+            line.contains("UniqueValuesForConstraintComponent constraint UniqueValuesFor")
+        })
+        .expect("the uniqueValuesFor row's carrier is a table fact");
+    row.1 = row
+        .1
+        .replace("constraint UniqueValuesFor", "constraint SubsetOf");
+    assert_ne!(real, stage_id(&types, &builtins, &recarried, &analysis));
+}
+
+/// Every `Constraint` variant — the model a prepared product carries — is claimed by
+/// a component row of the spec symbol table, and every variant a row claims exists.
+/// `Constraint::Component` is the one exception: it carries CUSTOM components, which
+/// by definition are not spec rows.
+#[test]
+fn constraint_variants_are_the_spec_table_component_rows() {
+    use purrdf_shapes::spec::Carrier;
+    let rows = census();
+    let constraint = rows
+        .iter()
+        .find(|row| row.name == "Constraint")
+        .expect("Constraint is censused");
+    let variants: BTreeSet<&str> = constraint
+        .variants
+        .iter()
+        .map(|variant| variant.name.as_str())
+        .filter(|name| *name != "Component")
+        .collect();
+    let mut claimed: BTreeSet<&str> = BTreeSet::new();
+    for row in purrdf_shapes::spec::implemented().components() {
+        match row.carrier() {
+            Carrier::Constraint(names) => claimed.extend(names),
+            Carrier::ShapeField(_) => {}
+        }
+    }
+    assert_eq!(
+        claimed, variants,
+        "Constraint variants == native component rows"
     );
 }
 

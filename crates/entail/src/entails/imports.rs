@@ -25,6 +25,18 @@
 //! than consulted afterwards: an imported axiom has to be able to participate in a rule
 //! body beside an importing one, which it can only do if the chase sees one graph.
 //!
+//! # An ontology already in the graph is not missing
+//!
+//! A premise that ALREADY holds the ontology it imports — its `owl:Ontology` header, or an
+//! ontology whose `owl:versionIRI` is the imported IRI — has that document's axioms in hand,
+//! and refusing it would refuse the closure the import asked for. So does a premise that
+//! imports the very document it was read from ([`ImportMap::declare_loaded`]).
+//!
+//! That rule is not this crate's: it is [`purrdf_core::imports`], re-exported here, and the
+//! SHACL engine takes its verdict about a shapes graph's `owl:imports` from the same code.
+//! Entailment and SHACL do not depend on each other, so the kernel both sit on is the one
+//! place a single rule can serve them both.
+//!
 //! # The closure is transitive, because the specification's is
 //!
 //! An imported document may import further documents, and OWL 2's imports closure is the
@@ -51,7 +63,7 @@
 //! [`resolve_rif_imports`](crate::resolve_rif_imports) takes a
 //! [`crate::RifImport`]'s location and a resolver CALLBACK, and the library
 //! fetches nothing. [`ImportMap`] is the same discipline in table form, and
-//! [`ImportMap::rif_resolver`] is the bridge: one map of caller-supplied documents serves
+//! [`rif_resolver`] is the bridge: one map of caller-supplied documents serves
 //! both, so a caller that already declared what its ontology IRIs denote does not declare it
 //! twice.
 //!
@@ -62,303 +74,85 @@
 //! one of them means, so what is shared is the configuration and the no-I/O rule, and the
 //! two consumers stay separate.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_core::RdfDataset;
 
 use crate::EntailError;
 use crate::rif_xml::RifImport;
-use crate::vocab::OWL_IMPORTS;
 
-/// The documents an `owl:imports` resolves to.
+pub use purrdf_core::imports::{ImportClosure, ImportMap, imported_iris, unresolved_imports};
+
+/// `map` as a resolver for [`resolve_rif_imports`](crate::resolve_rif_imports).
 ///
-/// PurRDF mints no vocabulary and fetches nothing: it has no notion of what an ontology IRI
-/// dereferences to, and inventing one would make an entailment depend on the network. So
-/// the import closure is **caller-supplied configuration**, exactly like every other
-/// vocabulary this library reads, and a premise that imports a document the caller did not
-/// supply is a hard error rather than a silently truncated premise.
+/// A [`RifImport`]'s `location` is looked up exactly as an `owl:imports` object is, and an
+/// unresolved one refuses by name through the SAME error. See the [module docs](self) for
+/// why the two resolutions share their configuration and not their semantics.
 ///
 /// ```
 /// use purrdf_core::RdfDatasetBuilder;
-/// use purrdf_entail::{EntailError, ImportMap, Regime, entails};
+/// use purrdf_entail::{EntailError, ImportMap, RifImport, rif_resolver};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let ontology = b.intern_iri("http://example.org/o");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let other = b.intern_iri("http://example.org/other");
-/// b.push_quad(ontology, imports, other, None);
-/// let premise = b.freeze().expect("freeze");
-/// let conclusion = RdfDatasetBuilder::new().freeze().expect("freeze");
+/// let s = b.intern_iri("http://example.org/s");
+/// let p = b.intern_iri("http://example.org/p");
+/// let o = b.intern_iri("http://example.org/o");
+/// b.push_quad(s, p, o, None);
+/// let document = b.freeze().expect("freeze");
 ///
-/// // An import nobody supplied is a refusal that NAMES the document.
-/// let error = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).unwrap_err();
-/// assert!(matches!(error, EntailError::UnresolvedImport(ref iri) if iri == "http://example.org/other"));
+/// let mut map = ImportMap::new();
+/// map.insert("http://example.org/lib", document);
+/// let mut resolve = rif_resolver(&map);
+///
+/// let known = RifImport { location: "http://example.org/lib".to_owned(), profile: None };
+/// assert!(resolve(&known).is_ok());
+/// let unknown = RifImport { location: "http://example.org/other".to_owned(), profile: None };
+/// assert!(matches!(
+///     resolve(&unknown),
+///     Err(EntailError::UnresolvedImport(ref iri)) if iri == "http://example.org/other"
+/// ));
 /// ```
-#[derive(Debug, Clone, Default)]
-pub struct ImportMap {
-    /// Ontology IRI → the document it names.
-    documents: BTreeMap<String, Arc<RdfDataset>>,
-}
-
-impl ImportMap {
-    /// An import map that resolves nothing.
-    ///
-    /// The right value for the overwhelmingly common premise that imports nothing, and the
-    /// wrong one for a premise that imports something — which is why the difference is an
-    /// error rather than a default.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Declare that `iri` names `document`, returning whatever it named before.
-    pub fn insert(
-        &mut self,
-        iri: impl Into<String>,
-        document: Arc<RdfDataset>,
-    ) -> Option<Arc<RdfDataset>> {
-        self.documents.insert(iri.into(), document)
-    }
-
-    /// The document `iri` names, if this map has one.
-    #[must_use]
-    pub fn get(&self, iri: &str) -> Option<&Arc<RdfDataset>> {
-        self.documents.get(iri)
-    }
-
-    /// How many documents this map resolves.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.documents.len()
-    }
-
-    /// This map as a resolver for [`resolve_rif_imports`](crate::resolve_rif_imports).
-    ///
-    /// A [`RifImport`]'s `location` is looked up exactly as an `owl:imports` object is, and an
-    /// unresolved one refuses by name through the SAME error. See the [module docs](self) for
-    /// why the two resolutions share their configuration and not their semantics.
-    ///
-    /// ```
-    /// use purrdf_core::RdfDatasetBuilder;
-    /// use purrdf_entail::{EntailError, ImportMap, RifImport};
-    ///
-    /// let mut b = RdfDatasetBuilder::new();
-    /// let s = b.intern_iri("http://example.org/s");
-    /// let p = b.intern_iri("http://example.org/p");
-    /// let o = b.intern_iri("http://example.org/o");
-    /// b.push_quad(s, p, o, None);
-    /// let document = b.freeze().expect("freeze");
-    ///
-    /// let mut map = ImportMap::new();
-    /// map.insert("http://example.org/lib", document);
-    /// let mut resolve = map.rif_resolver();
-    ///
-    /// let known = RifImport { location: "http://example.org/lib".to_owned(), profile: None };
-    /// assert!(resolve(&known).is_ok());
-    /// let unknown = RifImport { location: "http://example.org/other".to_owned(), profile: None };
-    /// assert!(matches!(
-    ///     resolve(&unknown),
-    ///     Err(EntailError::UnresolvedImport(ref iri)) if iri == "http://example.org/other"
-    /// ));
-    /// ```
-    pub fn rif_resolver(&self) -> impl FnMut(&RifImport) -> Result<Arc<RdfDataset>, EntailError> {
-        move |import: &RifImport| {
-            self.get(&import.location)
-                .map(Arc::clone)
-                .ok_or_else(|| EntailError::UnresolvedImport(import.location.clone()))
-        }
-    }
-
-    /// Whether this map resolves no document at all.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.documents.is_empty()
-    }
-}
-
-/// Every ontology IRI `ds` imports, in the dataset's own frozen quad order.
-///
-/// Only IRI objects: `owl:imports` is defined to relate an ontology to an ontology IRI, and
-/// a blank node or literal object is not one — such a triple names no document and cannot
-/// make one missing.
-///
-/// `owl:imports` is not an entailment construct — it is an RDF-level directive that any
-/// consumer of a document has to honour — so this is `pub`: the CLI's SHACL lane reads a
-/// shapes graph's imports through it rather than re-deriving "which objects count", which is
-/// exactly the judgement the paragraph above records. It walks the closure itself because it
-/// must also carry each document's `@prefix` map, which this module's own crate-private
-/// `resolve` has no reason to know about.
-#[must_use]
-pub fn imported_iris(ds: &RdfDataset) -> Vec<String> {
-    let Some(imports) = ds.term_id_by_iri(OWL_IMPORTS) else {
-        return Vec::new();
-    };
-    ds.quads()
-        .filter(|quad| quad.p == imports)
-        .filter_map(|quad| match ds.term_value(quad.o) {
-            TermValue::Iri(iri) => Some(iri),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The highest blank-node scope `ds` uses, so imported documents can be placed above it.
-///
-/// The survey is over [`term_positions`](crate::engine::term_positions) — every position
-/// the merge below WRITES — and not over `quads()` alone. A premise may carry a blank node
-/// that occurs only as a reifier, only inside an annotation, or only as a declared named
-/// graph; a scope survey blind to those three would report a maximum BELOW a scope the
-/// premise actually uses, and the very next imported document would be rescoped on top of
-/// it. Standardize-apart (see the [module docs](self)) is then false in the direction that
-/// matters: two documents' blank nodes would be the same term.
-fn max_scope(ds: &RdfDataset) -> u32 {
-    crate::engine::term_positions(ds)
-        .map(|id| scope_of(&ds.term_value(id)))
-        .max()
-        .unwrap_or(0)
-}
-
-/// The highest blank-node scope a term mentions, recursing into triple terms.
-fn scope_of(term: &TermValue) -> u32 {
-    match term {
-        TermValue::Blank { scope, .. } => scope.ordinal(),
-        TermValue::Triple { s, p, o } => scope_of(s).max(scope_of(p)).max(scope_of(o)),
-        TermValue::Iri(_) | TermValue::Literal { .. } => 0,
-    }
-}
-
-/// Intern `value` into `b`, rewriting every blank-node scope through `rescope`.
-fn intern_rescoped(
-    b: &mut RdfDatasetBuilder,
-    value: &TermValue,
-    rescope: &mut ScopeMap<'_>,
-) -> TermId {
-    match value {
-        TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_rescoped(b, s, rescope);
-            let p = intern_rescoped(b, p, rescope);
-            let o = intern_rescoped(b, o, rescope);
-            b.intern_triple(s, p, o)
-        }
-        other => crate::interner::intern_into(b, other),
-    }
-}
-
-/// An injective renumbering of ONE document's blank-node scopes into fresh ones.
-///
-/// Injective rather than "add a constant", because a document may already carry several
-/// scopes of its own and collapsing two of them would merge nodes the document keeps apart.
-struct ScopeMap<'a> {
-    /// The document's own scope → the scope it was given here.
-    assigned: BTreeMap<u32, BlankScope>,
-    /// The next unused scope, shared across every document of one merge.
-    next: &'a mut u32,
-}
-
-impl ScopeMap<'_> {
-    /// The fresh scope this document's `scope` was given, allocating one on first sight.
-    fn map(&mut self, scope: BlankScope) -> BlankScope {
-        if let Some(&assigned) = self.assigned.get(&scope.ordinal()) {
-            return assigned;
-        }
-        let assigned = BlankScope(*self.next);
-        *self.next = self
-            .next
-            .checked_add(1)
-            .expect("blank-node scope counter exceeded u32::MAX");
-        self.assigned.insert(scope.ordinal(), assigned);
-        assigned
+pub fn rif_resolver(
+    map: &ImportMap,
+) -> impl FnMut(&RifImport) -> Result<Arc<RdfDataset>, EntailError> + '_ {
+    move |import: &RifImport| {
+        map.get(&import.location)
+            .map(Arc::clone)
+            .ok_or_else(|| EntailError::UnresolvedImport(import.location.clone()))
     }
 }
 
 /// The premise together with its whole `owl:imports` closure, or the premise unchanged.
 ///
-/// `Ok(None)` means the premise imports nothing, so there is no merge to do and no copy to
-/// pay for — the caller reasons over the dataset it already has.
+/// `Ok(None)` means there is no document to merge — the premise imports nothing, or every
+/// ontology it imports is already in it (see [`unresolved_imports`]) — so there is no copy
+/// to pay for and the caller reasons over the dataset it already has.
+///
+/// The walk and the merge are [`ImportMap::closure`] and [`ImportClosure::merge`]: the
+/// closure is followed to a fixpoint, so an imported document's OWN imports are checked
+/// (`an_imported_document_is_itself_checked_for_imports` is the falsifiable form), and a
+/// cycle terminates without refusing, because OWL 2 §3.4 permits one.
+///
+/// A supplied document the closure never reaches is NOT refused here: an entailment
+/// [`ImportMap`] is a table of what the caller's ontology IRIs denote, shared with the RIF
+/// lane ([`rif_resolver`]), and a document one lane never reaches may be the one the other
+/// does.
 ///
 /// # Errors
 ///
 /// [`EntailError::UnresolvedImport`] naming the first ontology IRI, in import order, that
-/// `map` does not resolve; [`EntailError::Build`] if the merged dataset cannot be frozen.
+/// neither `map` nor the closure resolves; [`EntailError::Build`] if the merged dataset
+/// cannot be frozen.
 pub(crate) fn resolve(
     premise: &RdfDataset,
     map: &ImportMap,
 ) -> Result<Option<Arc<RdfDataset>>, EntailError> {
-    let direct = imported_iris(premise);
-    if direct.is_empty() {
-        return Ok(None);
+    let closure = map.closure(premise);
+    if let Some(iri) = closure.unresolved().first() {
+        return Err(EntailError::UnresolvedImport(iri.clone()));
     }
-
-    // Breadth-first over the import graph to a FIXPOINT, each document visited once. Two
-    // properties follow, and both matter:
-    //
-    // * an imported document's OWN imports are followed, so a resolver that stopped at depth
-    //   one — reasoning over a partial premise, which is the exact failure this module exists
-    //   to prevent — is not what runs here. `an_imported_document_is_itself_checked_for_imports`
-    //   is the falsifiable form.
-    // * a CYCLE terminates rather than looping, and it does so without refusing: OWL 2 §3.4
-    //   defines the imports closure as the transitive one and explicitly permits `A` to
-    //   import `B` to import `A`. Hard-failing a cycle would refuse an ontology the
-    //   specification allows, so the visited set is the answer and not a hedge.
-    let mut queue: VecDeque<String> = direct.into_iter().collect();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut documents: Vec<Arc<RdfDataset>> = Vec::new();
-    while let Some(iri) = queue.pop_front() {
-        if !seen.insert(iri.clone()) {
-            continue;
-        }
-        let Some(document) = map.get(&iri) else {
-            return Err(EntailError::UnresolvedImport(iri));
-        };
-        for onward in imported_iris(document) {
-            queue.push_back(onward);
-        }
-        documents.push(Arc::clone(document));
-    }
-
-    let mut b = RdfDatasetBuilder::new();
-    crate::engine::copy_into(&mut b, premise);
-    let mut next = max_scope(premise)
-        .checked_add(1)
-        .expect("blank-node scope counter exceeded u32::MAX");
-    for document in &documents {
-        let mut rescope = ScopeMap {
-            assigned: BTreeMap::new(),
-            next: &mut next,
-        };
-        for quad in document.quads() {
-            let s = intern_rescoped(&mut b, &document.term_value(quad.s), &mut rescope);
-            let p = intern_rescoped(&mut b, &document.term_value(quad.p), &mut rescope);
-            let o = intern_rescoped(&mut b, &document.term_value(quad.o), &mut rescope);
-            let g = quad
-                .g
-                .map(|g| intern_rescoped(&mut b, &document.term_value(g), &mut rescope));
-            b.push_quad(s, p, o, g);
-        }
-        for (reifier, triple, graph) in document.reifiers_with_graph() {
-            let reifier = intern_rescoped(&mut b, &document.term_value(reifier), &mut rescope);
-            let triple = intern_rescoped(&mut b, &document.term_value(triple), &mut rescope);
-            let graph =
-                graph.map(|g| intern_rescoped(&mut b, &document.term_value(g), &mut rescope));
-            b.push_reifier_in_graph(reifier, triple, graph);
-        }
-        for (reifier, predicate, object, graph) in document.annotations_with_graph() {
-            let reifier = intern_rescoped(&mut b, &document.term_value(reifier), &mut rescope);
-            let predicate = intern_rescoped(&mut b, &document.term_value(predicate), &mut rescope);
-            let object = intern_rescoped(&mut b, &document.term_value(object), &mut rescope);
-            let graph =
-                graph.map(|g| intern_rescoped(&mut b, &document.term_value(g), &mut rescope));
-            b.push_annotation_in_graph(reifier, predicate, object, graph);
-        }
-        for graph in document.named_graphs() {
-            let g = intern_rescoped(&mut b, &document.term_value(graph), &mut rescope);
-            b.declare_named_graph(g);
-        }
-    }
-    b.freeze()
-        .map(Some)
+    closure
+        .merge(premise)
         .map_err(|e| EntailError::Build(e.to_string()))
 }
 
@@ -368,9 +162,9 @@ mod tests {
 
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
-    use super::{ImportMap, resolve};
+    use super::{ImportMap, imported_iris, resolve, unresolved_imports};
     use crate::EntailError;
-    use crate::vocab::OWL_IMPORTS;
+    use crate::vocab::{OWL_IMPORTS, OWL_ONTOLOGY, OWL_VERSIONIRI, RDF_TYPE};
 
     const P: &str = "http://example.org/p";
 
@@ -491,7 +285,7 @@ mod tests {
             "http://example.org/lib",
             document("b", "http://example.org/o", &[]),
         );
-        let mut resolve = map.rif_resolver();
+        let mut resolve = super::rif_resolver(&map);
         assert!(
             resolve(&crate::RifImport {
                 location: "http://example.org/lib".to_owned(),
@@ -702,6 +496,213 @@ mod tests {
         assert!(
             scopes.contains(&BlankScope::DEFAULT.ordinal()),
             "the premise's own scope must survive the merge unmoved"
+        );
+    }
+
+    // ── The in-graph resolution rule ────────────────────────────────────────────────
+    //
+    // The same rule over the vendored W3C SHACL 1.2 vocabulary files themselves is held
+    // by `purrdf-shapes` (`imports::tests`), which reads Turtle; these are the headers
+    // those files carry, so this crate needs no parser to test the rule.
+
+    /// The ontology IRI `shnex.ttl` imports and `shacl.ttl` declares.
+    const SH: &str = "http://www.w3.org/ns/shacl#";
+    /// The ontology IRI `shnex.ttl` declares.
+    const SHNEX: &str = "http://www.w3.org/ns/shacl-node-expr#";
+
+    /// A dataset of the given IRI triples.
+    fn triples(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        for (s, p, o) in rows {
+            let s = b.intern_iri(s);
+            let p = b.intern_iri(p);
+            let o = b.intern_iri(o);
+            b.push_quad(s, p, o, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// `shnex.ttl`'s header: it declares its own ontology and imports `sh:`.
+    fn shnex_header() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![(SHNEX, RDF_TYPE, OWL_ONTOLOGY), (SHNEX, OWL_IMPORTS, SH)]
+    }
+
+    /// The merged SHACL 1.2 vocabularies: `shnex.ttl` imports `sh:`, and `shacl.ttl` is in
+    /// the same graph declaring `sh: a owl:Ontology`, so nothing is missing.
+    #[test]
+    fn import_present_in_graph_is_resolved() {
+        let mut rows = shnex_header();
+        rows.push((SH, RDF_TYPE, OWL_ONTOLOGY));
+        let merged = triples(&rows);
+        // The oracle observes the import: the graph DOES import `sh:`, so an empty answer
+        // is the rule resolving it, not a graph with nothing to resolve.
+        assert!(imported_iris(&merged).iter().any(|iri| iri == SH));
+        assert_eq!(unresolved_imports(&merged, &[]), Vec::<String>::new());
+        // …and `entails` takes the same verdict, with no import map at all.
+        resolve(&merged, &ImportMap::new()).expect("an in-graph ontology resolves its import");
+    }
+
+    /// The neighbour of the test above: `shnex.ttl` without `shacl.ttl` imports an ontology
+    /// the graph does not contain, and that import alone is named.
+    #[test]
+    fn absent_import_is_unresolved() {
+        let shnex = triples(&shnex_header());
+        assert_eq!(unresolved_imports(&shnex, &[]), vec![SH.to_owned()]);
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&shnex, &ImportMap::new()) else {
+            panic!("an import of an absent ontology must refuse");
+        };
+        assert_eq!(iri, SH);
+    }
+
+    /// A document that imports its OWN IRI — the SHACL `sh:prefixes/owl:imports*` idiom,
+    /// from a node that is no `owl:Ontology` — imports nothing missing once the caller says
+    /// the graph was read from that IRI. The neighbours: the same graph with no loaded IRI,
+    /// or with a different one, still refuses the import by name.
+    #[test]
+    fn self_import_is_resolved() {
+        const DOC: &str = "http://example.org/shapes/doc.ttl";
+        let graph = triples(&[
+            (
+                DOC,
+                "http://www.w3.org/ns/shacl#declare",
+                "http://example.org/shapes/doc.ttl#ex",
+            ),
+            (
+                "http://example.org/shapes/doc.ttl#Prefixes",
+                OWL_IMPORTS,
+                DOC,
+            ),
+        ]);
+        assert_eq!(imported_iris(&graph), vec![DOC.to_owned()]);
+        assert_eq!(unresolved_imports(&graph, &[DOC]), Vec::<String>::new());
+        assert_eq!(unresolved_imports(&graph, &[]), vec![DOC.to_owned()]);
+        assert_eq!(
+            unresolved_imports(&graph, &["http://example.org/shapes/other.ttl"]),
+            vec![DOC.to_owned()]
+        );
+
+        // `entails` takes the same verdict once the map knows where the premise came from.
+        let mut map = ImportMap::new();
+        assert!(resolve(&graph, &map).is_err());
+        map.declare_loaded(DOC);
+        assert!(
+            resolve(&graph, &map)
+                .expect("a self-import resolves")
+                .is_none()
+        );
+    }
+
+    /// An ontology whose `owl:versionIRI` is the imported IRI resolves it; the neighbour
+    /// whose version IRI is a different one does not.
+    #[test]
+    fn version_iri_resolves() {
+        const IMPORTER: &str = "http://example.org/importer";
+        const LIB: &str = "http://example.org/lib";
+        const V1: &str = "http://example.org/lib/1.0";
+        const V2: &str = "http://example.org/lib/2.0";
+
+        let with = |version: &str| {
+            triples(&[
+                (IMPORTER, RDF_TYPE, OWL_ONTOLOGY),
+                (IMPORTER, OWL_IMPORTS, V1),
+                (LIB, RDF_TYPE, OWL_ONTOLOGY),
+                (LIB, OWL_VERSIONIRI, version),
+            ])
+        };
+        assert_eq!(unresolved_imports(&with(V1), &[]), Vec::<String>::new());
+        assert_eq!(unresolved_imports(&with(V2), &[]), vec![V1.to_owned()]);
+    }
+
+    /// The closure is transitive both ways a document can arrive: an in-graph ontology's
+    /// own imports are checked, and a map-supplied document's declarations resolve an
+    /// import the walk met BEFORE reaching that document. Each unresolved IRI is named once,
+    /// in walk order.
+    #[test]
+    fn the_resolution_rule_is_transitive_over_the_import_closure() {
+        const ROOT: &str = "http://example.org/root";
+        const INNER: &str = "http://example.org/inner";
+        const DEEP: &str = "http://example.org/deep";
+        const EARLY: &str = "http://example.org/early";
+        const SUPPLIED: &str = "http://example.org/supplied";
+        const MISSING: &str = "http://example.org/missing";
+
+        // In-graph: `inner` is declared here, so it resolves — and ITS import of `deep`,
+        // declared nowhere, is what stays unresolved. `deep` is imported twice and named
+        // once.
+        let premise = triples(&[
+            (ROOT, RDF_TYPE, OWL_ONTOLOGY),
+            (ROOT, OWL_IMPORTS, INNER),
+            (INNER, RDF_TYPE, OWL_ONTOLOGY),
+            (INNER, OWL_IMPORTS, DEEP),
+            (ROOT, OWL_IMPORTS, DEEP),
+        ]);
+        assert_eq!(unresolved_imports(&premise, &[]), vec![DEEP.to_owned()]);
+
+        // Through a map: `early` is met first and supplied by no one, but the document the
+        // map supplies for `supplied` declares it; that document's own import of `missing`
+        // is followed and named.
+        let premise = triples(&[(ROOT, OWL_IMPORTS, EARLY), (ROOT, OWL_IMPORTS, SUPPLIED)]);
+        let mut map = ImportMap::new();
+        map.insert(
+            SUPPLIED,
+            triples(&[
+                (EARLY, RDF_TYPE, OWL_ONTOLOGY),
+                (SUPPLIED, OWL_IMPORTS, MISSING),
+            ]),
+        );
+        assert_eq!(map.unresolved_imports(&premise), vec![MISSING.to_owned()]);
+        // With no map, both of the premise's imports are missing, in import order.
+        assert_eq!(
+            unresolved_imports(&premise, &[]),
+            vec![EARLY.to_owned(), SUPPLIED.to_owned()]
+        );
+        // Supplying the last document closes the walk.
+        map.insert(MISSING, triples(&[]));
+        assert_eq!(map.unresolved_imports(&premise), Vec::<String>::new());
+    }
+
+    /// `entails` over a premise whose import is already in it runs with no map, and its
+    /// report says the closure was HAD — not that the imported axioms were missing.
+    #[test]
+    fn an_import_present_in_the_premise_needs_no_map_and_reports_resolved() {
+        use crate::report::Construct;
+        use crate::{Regime, entails};
+
+        const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        let premise = triples(&[
+            (
+                "http://example.org/o",
+                OWL_IMPORTS,
+                "http://example.org/schema",
+            ),
+            ("http://example.org/schema", RDF_TYPE, OWL_ONTOLOGY),
+            (
+                "http://example.org/Cat",
+                SUB_CLASS_OF,
+                "http://example.org/Animal",
+            ),
+            ("http://example.org/tom", RDF_TYPE, "http://example.org/Cat"),
+        ]);
+        let conclusion = triples(&[(
+            "http://example.org/tom",
+            RDF_TYPE,
+            "http://example.org/Animal",
+        )]);
+        let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+            .expect("the import is resolved in place");
+        let constructs: Vec<Construct> = certificate
+            .report()
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        assert!(
+            constructs.contains(&Construct::ResolvedOntologyImport),
+            "{constructs:?}"
+        );
+        assert!(
+            !constructs.contains(&Construct::UnresolvedOntologyImport),
+            "{constructs:?}"
         );
     }
 }

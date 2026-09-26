@@ -617,7 +617,7 @@ pub fn entail_explain_conclusion(
 ///
 /// Two arrays of different lengths are a caller error and are REFUSED, never truncated to
 /// the shorter one: a silently dropped tail is an import the caller believes was supplied.
-fn import_pairs<'a>(
+pub(crate) fn import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
 ) -> Result<Vec<(&'a str, &'a str)>, String> {
@@ -643,12 +643,15 @@ pub(crate) fn certain_answers_impl(
     pattern: &str,
     import_iris: &[String],
     import_documents: &[String],
+    premise_iris: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    certain_answers_to_string(regime, document, pattern, &imports).map(ReasoningAnswer::from)
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    certain_answers_to_string(regime, document, pattern, &imports, &premise_iris)
+        .map(ReasoningAnswer::from)
 }
 
-/// `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
+/// `entailCertainAnswers(regime, document, pattern, importIris, importDocuments, premiseIris)` → the substitutions the knowledge
 /// base ENTAILS the pattern under, as `var` and `row` lines.
 ///
 /// A certain answer is true in every model, not merely present in one closure, which is
@@ -682,16 +685,23 @@ pub(crate) fn certain_answers_impl(
 /// denotes the N-Quads document `importDocuments[i]`. A premise carrying an `owl:imports`
 /// states that its axioms are its own PLUS those of the documents it names, so this is where
 /// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
-/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve throws by name,
-/// never a network access and never a silently empty import. Two empty arrays are the
+/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve, and the premise
+/// does not already hold (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it), throws by
+/// name, never a network access and never a silently empty import. Two empty arrays are the
 /// ordinary "imports nothing" case, and both are required rather than defaulted.
+///
+/// `premiseIris` are the IRIs the premise DOCUMENT was read from — its retrieval IRI, or the
+/// base it was parsed under, when the host knows one. An `owl:imports` of one of these names
+/// the premise itself, so it is resolved in place rather than thrown as missing. A host
+/// handed bare text has no such IRI, and the empty array is that ordinary case; like the
+/// import table it is required rather than defaulted, in the same position on every host.
 ///
 /// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
 /// signature does not carry), on a malformed document, pattern or import document, on import
 /// arrays of different lengths, on a duplicate or empty import IRI, on a pattern that names
 /// a graph, on a pattern that writes a variable in a literal's DATATYPE — a slot RDF reserves
 /// for an IRI, and one a basic graph pattern has no binding to project — on an `owl:imports`
-/// the table does not resolve, and on an inconsistent premise — whose refusal carries the
+/// the table does not resolve and the premise does not hold, and on an inconsistent premise — whose refusal carries the
 /// full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -701,9 +711,17 @@ pub fn entail_certain_answers(
     pattern: &str,
     import_iris: Vec<String>,
     import_documents: Vec<String>,
+    premise_iris: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    certain_answers_impl(regime, document, pattern, &import_iris, &import_documents)
-        .map_err(|e| JsError::new(&e))
+    certain_answers_impl(
+        regime,
+        document,
+        pattern,
+        &import_iris,
+        &import_documents,
+        &premise_iris,
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
@@ -713,12 +731,15 @@ pub(crate) fn graph_entails_impl(
     conclusion: &str,
     import_iris: &[String],
     import_documents: &[String],
+    premise_iris: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    graph_entails_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris)
+        .map(ReasoningAnswer::from)
 }
 
-/// `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
+/// `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments, premiseIris)` → does the premise entail the
 /// conclusion GRAPH under the regime's rule table?
 ///
 /// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
@@ -737,7 +758,7 @@ pub(crate) fn graph_entails_impl(
 /// instead. Collapsing the second into the first would turn a limitation of this library
 /// into a false statement about the caller's data.
 ///
-/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s, and apply to the
+/// `importIris`/`importDocuments`/`premiseIris` are [`entail_certain_answers`]'s, and apply to the
 /// PREMISE: the conclusion is a graph to match rather than an ontology to close, so an
 /// `owl:imports` in it names nothing this service resolves.
 ///
@@ -750,9 +771,17 @@ pub fn entail_graph_entails(
     conclusion: &str,
     import_iris: Vec<String>,
     import_documents: Vec<String>,
+    premise_iris: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    graph_entails_impl(regime, premise, conclusion, &import_iris, &import_documents)
-        .map_err(|e| JsError::new(&e))
+    graph_entails_impl(
+        regime,
+        premise,
+        conclusion,
+        &import_iris,
+        &import_documents,
+        &premise_iris,
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
@@ -762,12 +791,15 @@ pub(crate) fn verify_entailment_impl(
     conclusion: &str,
     import_iris: &[String],
     import_documents: &[String],
+    premise_iris: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    verify_entailment_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris)
+        .map(ReasoningAnswer::from)
 }
 
-/// `entailVerifyEntailment(regime, premise, conclusion)` → [`entail_graph_entails`] with
+/// `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments, premiseIris)` → [`entail_graph_entails`] with
 /// the warrant re-decided, without running a reasoner.
 ///
 /// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
@@ -778,7 +810,7 @@ pub(crate) fn verify_entailment_impl(
 /// there is no evidence to re-decide, and a `false` there would read as a failed check
 /// rather than as an absent one.
 ///
-/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s. The re-check runs
+/// `importIris`/`importDocuments`/`premiseIris` are [`entail_certain_answers`]'s. The re-check runs
 /// against the premise AS WRITTEN rather than against its imports closure: a warrant
 /// re-decidable from the caller's own document is a stronger check than one only
 /// re-decidable against a graph the library assembled.
@@ -792,9 +824,17 @@ pub fn entail_verify_entailment(
     conclusion: &str,
     import_iris: Vec<String>,
     import_documents: Vec<String>,
+    premise_iris: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    verify_entailment_impl(regime, premise, conclusion, &import_iris, &import_documents)
-        .map_err(|e| JsError::new(&e))
+    verify_entailment_impl(
+        regime,
+        premise,
+        conclusion,
+        &import_iris,
+        &import_documents,
+        &premise_iris,
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 // ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
@@ -1185,7 +1225,8 @@ mod tests {
         let pattern = "<http://example.org/x> \
                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
 
-        let answers = certain_answers_impl("owl-rl", SCHEMA, pattern, &[], &[]).expect("answers");
+        let answers =
+            certain_answers_impl("owl-rl", SCHEMA, pattern, &[], &[], &[]).expect("answers");
         assert!(
             answers
                 .answer()
@@ -1198,14 +1239,15 @@ mod tests {
             answers.answer()
         );
 
-        let decided = graph_entails_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
+        let decided =
+            graph_entails_impl("owl-rl", SCHEMA, conclusion, &[], &[], &[]).expect("decides");
         assert_eq!(
             decided.answer(),
             "mechanism strict-table\nentailment entailed\n"
         );
 
         let checked =
-            verify_entailment_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
+            verify_entailment_impl("owl-rl", SCHEMA, conclusion, &[], &[], &[]).expect("decides");
         assert!(
             checked
                 .answer()
@@ -1238,7 +1280,8 @@ mod tests {
         let never = "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/Never> .\n";
-        let checked = verify_entailment_impl("owl-rl", SCHEMA, never, &[], &[]).expect("decides");
+        let checked =
+            verify_entailment_impl("owl-rl", SCHEMA, never, &[], &[], &[]).expect("decides");
         assert!(checked.answer().starts_with("mechanism strict-table\n"));
         assert!(checked.answer().contains("\nentailment not-entailed\n"));
         assert!(
@@ -1255,9 +1298,46 @@ mod tests {
                           <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                           <http://example.org/B> .\n";
         for regime in ["owl-direct", "rif"] {
-            let refused = graph_entails_impl(regime, SCHEMA, conclusion, &[], &[])
+            let refused = graph_entails_impl(regime, SCHEMA, conclusion, &[], &[], &[])
                 .expect_err("defined by an input this signature does not carry");
             assert!(refused.contains(regime), "{refused}");
+        }
+    }
+
+    /// `premise_iris` reaches the boundary: a premise importing its OWN IRI, with an empty
+    /// import table, is refused when no premise IRI is declared and answered when that IRI
+    /// is — the two calls differ in `premise_iris` alone.
+    #[test]
+    fn wasm_entail_premise_iris() {
+        const IRI: &str = "http://example.org/premise";
+        let premise = format!(
+            "<{IRI}> <http://www.w3.org/2002/07/owl#imports> <{IRI}> .\n\
+             <https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
+        );
+        let conclusion =
+            "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
+        let pattern = "<https://example.org/x> <https://example.org/p> ?o .\n";
+        let named = [IRI.to_owned()];
+        type Service = fn(
+            &str,
+            &str,
+            &str,
+            &[String],
+            &[String],
+            &[String],
+        ) -> Result<ReasoningAnswer, String>;
+        let services: [(Service, &str); 3] = [
+            (graph_entails_impl, conclusion),
+            (verify_entailment_impl, conclusion),
+            (certain_answers_impl, pattern),
+        ];
+        for (service, question) in services {
+            let refused = service("simple", &premise, question, &[], &[], &[])
+                .expect_err("an undeclared self-import is unresolved");
+            assert!(refused.contains(IRI), "{refused}");
+            let answered = service("simple", &premise, question, &[], &[], &named)
+                .expect("a declared premise IRI resolves the self-import");
+            assert!(answered.answer().starts_with("mechanism strict-table\n"));
         }
     }
 

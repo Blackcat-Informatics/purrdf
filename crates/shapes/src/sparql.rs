@@ -31,7 +31,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::report::{Severity, ValidationResult};
-use crate::term::{NamedNode, Term, term_value_to_native};
+use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -130,7 +130,8 @@ pub fn eval_sparql_constraint(
     component: &NamedNode,
     source_shape: &Term,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -144,7 +145,8 @@ pub fn eval_sparql_constraint(
         component,
         source_shape,
         severity,
-        message,
+        messages,
+        annotations,
         shapes_graph_iri,
         current_shape,
     )
@@ -163,7 +165,8 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     component: &NamedNode,
     source_shape: &Term,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -192,12 +195,16 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     let project = |solutions: &InternedSolutions<'_, '_, D>| {
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        // The column of each result annotation's variable, resolved once per
+        // solution set; empty (and allocation-free) for the common constraint that
+        // declares none.
+        let annotation_columns = annotation_columns(annotations, |name| solutions.column(name));
 
         // Message templating (§5.3.3) needs the solution's own bindings, so the
         // buffer is built once and refilled per row — and only when there is a
         // message to render, so the overwhelmingly common message-less constraint
         // pays nothing.
-        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
             Vec::with_capacity(solutions.variables().len() + 1)
         } else {
             Vec::new()
@@ -227,7 +234,9 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
             // This is also the ONE reader of every column, and the reason the
             // interned egress converts per cell rather than per row: a constraint
             // with no `sh:message` never asks for a cell it does not report.
-            let message = message.map(|m| {
+            let messages = if messages.is_empty() {
+                Vec::new()
+            } else {
                 template_bindings.clear();
                 for (index, var) in solutions.variables().iter().enumerate() {
                     if let Some(value) = solutions.cell(row, index) {
@@ -238,7 +247,21 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 if !template_bindings.iter().any(|(n, _)| n == "this") {
                     template_bindings.push(("this".to_owned(), focus.clone()));
                 }
-                crate::components::substitute_message_templates(m, &template_bindings)
+                crate::components::render_message_templates(messages, &template_bindings)
+            };
+            // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
+            // binding of each annotation's variable, or its defaults when unbound.
+            // `$this` is pre-bound whether or not the query projects it, so an
+            // annotation reading `this` sees the focus node exactly as a message
+            // template does.
+            let annotations = crate::result_annotations::annotate(annotations, |name| {
+                annotation_columns
+                    .iter()
+                    .find(|(variable, _)| *variable == name)
+                    .and_then(|(_, column)| column.and_then(|i| solutions.cell(row, i)))
+                    .as_ref()
+                    .map(term_value_to_native)
+                    .or_else(|| (name == "this").then(|| focus.clone()))
             });
             out.push(ValidationResult {
                 focus_node: focus.clone(),
@@ -248,17 +271,32 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 source_constraint_component: component.clone(),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message,
+                messages,
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
+                annotations,
             });
         }
         Ok(out)
     };
     run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project)
         .map_err(|e| format!("SPARQLConstraint {e}"))
+}
+
+/// The solution-set column of every result annotation's variable, looked up with
+/// `column`. Empty, and allocation-free, when there are no annotations.
+pub(crate) fn annotation_columns(
+    annotations: &[crate::shapes::ResultAnnotation],
+    column: impl Fn(&str) -> Option<usize>,
+) -> Vec<(&str, Option<usize>)> {
+    annotations
+        .iter()
+        .filter_map(|annotation| annotation.variable.as_deref())
+        .map(|variable| (variable, column(variable)))
+        .collect()
 }
 
 /// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
@@ -340,6 +378,33 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
         .collect();
     run_select_generic_view(dataset, select, &subs, project_scalar)
         .map_err(|e| format!("scalar expression {e}"))
+}
+
+/// [`eval_scalar_query_view`], with every blank node the evaluation mints (`BNODE()`)
+/// labelled `{bnode_mint_prefix}…` — how a caller that evaluates one expression many
+/// times keeps each evaluation's fresh blank nodes distinct from every other's.
+pub(crate) fn eval_scalar_query_view_minting<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    select: &str,
+    args: &[(String, Term)],
+    bnode_mint_prefix: &str,
+) -> Result<Option<Term>, String> {
+    let subs: Vec<Prebinding<'_>> = args
+        .iter()
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
+        .collect();
+    run_query_view(
+        dataset,
+        select,
+        &subs,
+        ShaclPrebinding::None,
+        Some(bnode_mint_prefix),
+        |outcome| project_solutions(outcome, project_scalar),
+    )
+    .map_err(|e| format!("scalar expression {e}"))
 }
 
 /// The single `?result` binding a scalar expression's wrapper SELECT produces.
@@ -2285,7 +2350,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            None,
+            &[],
+            &[],
             None,
             None,
         )
@@ -2307,7 +2373,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            None,
+            &[],
+            &[],
             None,
             None,
         )
@@ -2354,7 +2421,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2362,7 +2430,7 @@ mod tests {
 
         assert_eq!(results.len(), 1, "exactly one untyped literal");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some(
                 "Property http://www.w3.org/2000/01/rdf-schema#label contains an untyped \
                  plain string literal: 'Stakeholder requirement'."
@@ -2392,13 +2460,14 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
         .expect("eval must succeed");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("value is 'Stakeholder requirement'")
         );
     }
@@ -2418,13 +2487,14 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
         .expect("eval must succeed");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("focus http://example.org/s failed"),
             "{{$this}} resolves from the pre-binding, not from the projection"
         );
@@ -2449,7 +2519,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2457,7 +2528,7 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("unbound {$value}, absent {$nosuchvar}, literal {not-a-var}"),
             "unbound and non-variable placeholders are left exactly as authored"
         );
@@ -2483,7 +2554,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2492,7 +2564,12 @@ mod tests {
         assert_eq!(results.len(), 2);
         let mut rendered: Vec<&str> = results
             .iter()
-            .map(|r| r.message.as_deref().expect("message present"))
+            .map(|r| {
+                r.messages
+                    .first()
+                    .map(Literal::value)
+                    .expect("message present")
+            })
             .collect();
         rendered.sort_unstable();
         assert_eq!(
@@ -2517,12 +2594,16 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
         .expect("eval must succeed");
-        assert_eq!(results[0].message.as_deref(), Some("Values must be typed."));
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("Values must be typed.")
+        );
     }
 
     // ── eval_scalar_expr ──────────────────────────────────────────────────────
@@ -2953,7 +3034,9 @@ mod tests {
         "#;
         let shapes_dataset =
             crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
-        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let prefixes = crate::text_ingest::parse_turtle_document(shapes_ttl, None)
+            .expect("fixture parses")
+            .prefixes;
         let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
             .expect("parse shapes");
 
@@ -3014,7 +3097,9 @@ mod tests {
         "#;
         let shapes_dataset =
             crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
-        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let prefixes = crate::text_ingest::parse_turtle_document(shapes_ttl, None)
+            .expect("fixture parses")
+            .prefixes;
         let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
             .expect("parse shapes");
         let data = dataset_from_ntriples(&[
@@ -3057,7 +3142,9 @@ mod tests {
         "#;
         let shapes_dataset =
             crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
-        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let prefixes = crate::text_ingest::parse_turtle_document(shapes_ttl, None)
+            .expect("fixture parses")
+            .prefixes;
         let shapes = crate::shapes::from_dataset_with_config_and_graph(
             &shapes_dataset,
             &prefixes,

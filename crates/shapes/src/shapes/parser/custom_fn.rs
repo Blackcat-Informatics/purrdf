@@ -28,12 +28,13 @@
 //! declaration first means every call site — in a shape, in another function's body,
 //! or in the function's own body — resolves to the same `Arc`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use crate::expression::{ArgKey, CustomFnKind, CustomFunction};
 use crate::model::{rdf, sh, shnex};
 use crate::shapes::{InFlight, Parser};
+use crate::spec::FunctionClass;
 use crate::term::Term;
 
 /// Every custom node-expression function a shapes graph declares, plus the
@@ -69,10 +70,54 @@ impl CustomFnIndex {
         self.by_iri.values()
     }
 
+    /// Every key parameter with the function it identifies, in path order.
+    pub(crate) fn key_parameters(&self) -> Vec<(String, String)> {
+        self.by_key_param
+            .iter()
+            .map(|(path, function)| (path.clone(), function.clone()))
+            .collect()
+    }
+
     /// Whether the graph declares no custom node-expression function at all (the
     /// overwhelmingly common case).
     pub(crate) fn is_empty(&self) -> bool {
         self.by_iri.is_empty()
+    }
+}
+
+/// What linking a shapes graph's function declarations produced: the custom
+/// functions, and the built-in LIST-parameter functions the graph declares.
+///
+/// The built-ins are kept apart on purpose — a built-in's declaration adds nothing
+/// to [`CustomFnIndex`]. They are recorded only because SHACL 1.2 SPARQL Extensions
+/// §7.3 asks an engine to register a SPARQL function for every declared instance of
+/// `sh:ListParameterExpressionFunction`, and a built-in is registered with its
+/// native implementation.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct LinkedFunctions {
+    /// The custom declarations.
+    pub(crate) custom: CustomFnIndex,
+    /// The IRIs of the built-in list-parameter functions the graph declares, in
+    /// IRI order.
+    pub(crate) native_list: BTreeSet<String>,
+}
+
+/// Refuse a custom function whose call key is node-expression vocabulary.
+///
+/// SHACL 1.2 Node Expressions §6.1: "The key parameters of all node expression
+/// functions (including the built-in ones from the shnex: namespace) must be
+/// disjoint." A custom key that is a built-in's key — or an AF spelling of one, or
+/// any other structural node-expression term — would never reach the custom
+/// function: the call site dispatches to the built-in first.
+fn refuse_reserved_key(function: &str, key: &str) -> Result<(), String> {
+    match crate::spec::reserved_key(key) {
+        Some(why) => Err(format!(
+            "custom node-expression function <{function}> is keyed by <{key}>, which is {why}; \
+             SHACL 1.2 Node Expressions §6.1: \"The key parameters of all node expression \
+             functions (including the built-in ones from the shnex: namespace) must be \
+             disjoint.\""
+        )),
+        None => Ok(()),
     }
 }
 
@@ -88,8 +133,10 @@ struct RawParam {
 }
 
 impl Parser<'_> {
-    /// Discover every custom node-expression function declaration, WITHOUT parsing
-    /// any body (see the module doc for why the two passes are separate).
+    /// Link every node-expression function declaration: bind each BUILT-IN's
+    /// declaration to its native implementation (see [`crate::spec`]), and discover
+    /// every CUSTOM declaration WITHOUT parsing any body (see the module doc for why
+    /// the two passes are separate).
     ///
     /// # Errors
     ///
@@ -98,37 +145,68 @@ impl Parser<'_> {
     /// not the contiguous `shnex:arg0 … shnex:arg{n-1}` block §6.2 defines, a
     /// required parameter after an optional one, a named-parameter function with no
     /// `sh:keyParameter true`, or a key parameter already claimed by another
-    /// function.
-    pub(crate) fn discover_custom_functions(&self) -> Result<CustomFnIndex, String> {
-        let mut index = CustomFnIndex::default();
-        for (class, kind) in [
-            (
-                sh::LIST_PARAMETER_EXPRESSION_FUNCTION,
-                CustomFnKind::ListParameter,
-            ),
-            (
-                sh::NAMED_PARAMETER_EXPRESSION_FUNCTION,
-                CustomFnKind::NamedParameter,
-            ),
+    /// function. Hard-fails too on a built-in's declaration that supplies an
+    /// implementation (duplicate definition), names another declaring class or a
+    /// foreign parameter (kind or signature mismatch), and on a custom function
+    /// keyed by built-in node-expression vocabulary (key clash).
+    pub(crate) fn discover_custom_functions(&self) -> Result<LinkedFunctions, String> {
+        let mut linked = LinkedFunctions::default();
+        for class in [
+            FunctionClass::ListParameter,
+            FunctionClass::NamedParameter,
+            FunctionClass::Plain,
         ] {
+            // A graph that never mentions the class IRI declares nothing under it;
+            // answering that from the term table costs no allocation, which is what
+            // keeps this pass free for the overwhelmingly common graph that declares
+            // no function at all.
+            if self.data.term_id_by_iri(class.iri()).is_none() {
+                continue;
+            }
             let mut ids: Vec<Term> = self
-                .quads_with(None, Some(rdf::TYPE), Some(class))
+                .quads_with(None, Some(rdf::TYPE), Some(class.iri()))
                 .into_iter()
                 .map(|(subject, _, _)| subject)
                 .collect();
             crate::term::sort_terms_canonical(&mut ids);
             ids.dedup();
             for id in ids {
+                let kind = match class {
+                    FunctionClass::ListParameter => Some(CustomFnKind::ListParameter),
+                    FunctionClass::NamedParameter => Some(CustomFnKind::NamedParameter),
+                    FunctionClass::Plain => None,
+                };
                 // §6.1/§6.2 both say "an IRI in a shapes graph that is a SHACL
                 // instance of …": a blank-node declaration names nothing a call site
                 // could reference, so it is a malformed declaration rather than a
-                // function nobody can call.
+                // function nobody can call. `sh:NodeExpressionFunction` itself has no
+                // call form, so a node typed with it alone declares nothing callable.
                 let Term::NamedNode(iri) = &id else {
+                    if kind.is_none() {
+                        continue;
+                    }
                     return Err(format!(
-                        "<{class}> declaration {id} is not an IRI; a custom node-expression \
-                         function must be named by an IRI so a call site can reference it"
+                        "<{}> declaration {id} is not an IRI; a custom node-expression \
+                         function must be named by an IRI so a call site can reference it",
+                        class.iri()
                     ));
                 };
+                // The linker (`crate::spec`). A declaration of a built-in is its
+                // SIGNATURE: it binds natively — checked against the native class
+                // and signature, and refused if it tries to supply a second
+                // implementation — and adds nothing to the custom index.
+                crate::spec::refuse_function_declared_component(iri.as_str(), class)?;
+                if let Some(native) = crate::spec::native_function(iri.as_str()) {
+                    crate::spec::bind_native_function(self.data, iri.as_str(), class, native)?;
+                    if class == FunctionClass::ListParameter {
+                        linked.native_list.insert(iri.as_str().to_owned());
+                    }
+                    continue;
+                }
+                let Some(kind) = kind else {
+                    continue;
+                };
+                let index = &mut linked.custom;
                 if index.by_iri.contains_key(iri.as_str()) {
                     return Err(format!(
                         "<{}> is declared both a sh:ListParameterExpressionFunction and a \
@@ -138,11 +216,19 @@ impl Parser<'_> {
                 }
                 let raw = self.custom_fn_params(&id)?;
                 let (params, required) = match kind {
-                    CustomFnKind::ListParameter => Self::list_parameter_keys(iri.as_str(), &raw)?,
+                    CustomFnKind::ListParameter => {
+                        // A list-parameter function's own IRI IS its call key
+                        // (`[ ex:f ( … ) ]`), so it must not be one the built-ins
+                        // already claim — the call site would dispatch to the
+                        // built-in and the declaration would be unreachable.
+                        refuse_reserved_key(iri.as_str(), iri.as_str())?;
+                        Self::list_parameter_keys(iri.as_str(), &raw)?
+                    }
                     CustomFnKind::NamedParameter => Self::named_parameter_keys(iri.as_str(), &raw)?,
                 };
                 if matches!(kind, CustomFnKind::NamedParameter) {
                     for param in raw.iter().filter(|p| p.key) {
+                        refuse_reserved_key(iri.as_str(), &param.path)?;
                         if let Some(other) = index
                             .by_key_param
                             .insert(param.path.clone(), iri.as_str().to_owned())
@@ -170,7 +256,7 @@ impl Parser<'_> {
                 );
             }
         }
-        Ok(index)
+        Ok(linked)
     }
 
     /// Parse every `sh:parameter` of a declaring node into a [`RawParam`], ordered
@@ -455,12 +541,21 @@ fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
         NodeExpr::Filter { nodes, .. }
         | NodeExpr::FindFirst { nodes, .. }
         | NodeExpr::MatchAll { nodes, .. } => collect_arg_keys(nodes, out),
-        NodeExpr::ConformsToShape { node, .. } => collect_arg_keys(node, out),
+        NodeExpr::ConformsToShape { node, shape } => {
+            collect_arg_keys(node, out);
+            // A COMPUTED shape argument is a node expression evaluated in the same
+            // scope as the node argument (§4.5.3), so an argument it reads is read
+            // by this body.
+            if let crate::expression::ShapeArg::Computed { expr, .. } = shape {
+                collect_arg_keys(expr, out);
+            }
+        }
         NodeExpr::PathValues { focus, .. } => collect_arg_keys(focus, out),
         NodeExpr::Count { of, .. } | NodeExpr::Limit { of, .. } | NodeExpr::Offset { of, .. } => {
             collect_arg_keys(of, out);
         }
         NodeExpr::Distinct(inner)
+        | NodeExpr::InstancesOf(inner)
         | NodeExpr::Min(inner)
         | NodeExpr::Max(inner)
         | NodeExpr::Sum(inner)
@@ -472,7 +567,6 @@ fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
         | NodeExpr::Empty
         | NodeExpr::Var(_)
         | NodeExpr::List(_)
-        | NodeExpr::InstancesOf(_)
         | NodeExpr::NodesMatching(_)
         | NodeExpr::Select { .. } => {}
     }

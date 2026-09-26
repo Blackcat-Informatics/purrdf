@@ -19,9 +19,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ::purrdf::parse_dataset;
+use ::purrdf::{ParseOptions, parse_dataset_with};
 use ::purrdf::{RdfDataset, RdfDatasetBuilder};
 
+use crate::imports::ShapesImports;
 use crate::shapes::{self, Shapes};
 
 /// Shape files excluded from the data-graph union (DSL / manifest lints).
@@ -72,7 +73,8 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// parse it into a typed [`Shapes`]. Returns both so a caller (e.g. the instance
 /// projector) can reuse the dataset.
 ///
-/// The union's document `@prefix` declarations are recovered and threaded into
+/// The union's document `@prefix` declarations (each file's, as the Turtle codec
+/// recorded them while parsing it) are threaded into
 /// [`shapes::from_dataset_with_prefixes`] (the frozen IR does not retain prefix
 /// maps): SHACL-AF `sh:select` queries — e.g. the music `MetricGroupShape`
 /// uniqueness constraint — use prefixed names like `meta:` and fail to parse
@@ -98,28 +100,35 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// # Errors
 ///
 /// Returns `Err` when a file cannot be read, has no derivable retrieval IRI, fails to
-/// parse as Turtle, or when [`shapes::from_dataset_with_prefixes`] rejects an unsupported
-/// SHACL construct.
+/// parse as Turtle, or when [`shapes::from_dataset_with_base`] rejects the union — an
+/// `owl:imports` no member file resolves, or an unsupported SHACL construct.
 pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let files = shape_files(repo_root)?;
     let mut prefix_map: BTreeMap<String, String> = BTreeMap::new();
     let mut per_file: Vec<Arc<RdfDataset>> = Vec::with_capacity(files.len());
+    // Every file's own IRI is a document this union was read from, so an `owl:imports`
+    // of one names a document in hand (see `crate::imports`).
+    let mut imports = ShapesImports::new();
     for file in &files {
         let bytes = std::fs::read(file)
             .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|e| format!("shape file {} is not UTF-8: {e}", file.display()))?;
         // The document's own origin, through the workspace's one RFC-8089 derivation
         // (`purrdf_slice::retrieval_base_iri`) rather than a second copy of it here.
         let base = purrdf_slice::retrieval_base_iri(file)
             .map_err(|e| format!("shape file {}: {e}", file.display()))?;
-        // Parse via the native codecs. The native codec drops document
-        // prefixes once it folds to the IR, so the per-file `@prefix` map is
-        // recovered by scanning the source text — see the doc comment above.
-        let dataset = parse_dataset(&bytes, "text/turtle", Some(base.as_str()))
-            .map_err(|e| format!("failed to parse Turtle shape file {}: {e}", file.display()))?;
-        per_file.push(dataset);
-        for (prefix, namespace) in crate::text_ingest::extract_prefixes(text) {
+        imports.declare_loaded(base.as_str());
+        // Parse via the native codecs. The frozen IR keeps no prefix map, so the
+        // per-file `@prefix` map comes back from the same parse — the codec's own
+        // record of the directives it read (see the doc comment above).
+        let outcome = parse_dataset_with(
+            &bytes,
+            "text/turtle",
+            Some(base.as_str()),
+            &ParseOptions::default(),
+        )
+        .map_err(|e| format!("failed to parse Turtle shape file {}: {e}", file.display()))?;
+        per_file.push(outcome.dataset);
+        for (prefix, namespace) in outcome.document_prefixes {
             prefix_map.insert(prefix, namespace);
         }
     }
@@ -133,7 +142,8 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
         Arc::new(RdfDataset::union(&refs))
     };
     let doc_prefixes: Vec<(String, String)> = prefix_map.into_iter().collect();
-    let shapes = shapes::from_dataset_with_prefixes(&merged, &doc_prefixes)?;
+    let shapes =
+        shapes::from_dataset_with_base(&merged, None, &doc_prefixes, None, None, &imports)?;
     Ok((merged, shapes))
 }
 

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import CapsuleType
 from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
 
@@ -168,6 +168,7 @@ class RdfFormat:
     HEXTUPLES: RdfFormat
     JSON_LD: RdfFormat
     YAML_LD: RdfFormat
+    RDF_XML: RdfFormat
 
 class CompiledJsonLdContext:
     def __init__(self, options_json: str) -> None: ...
@@ -637,6 +638,11 @@ class QuadIter:
 class Store:
     def __init__(self) -> None: ...
     def __iter__(self) -> QuadIter: ...
+    # Returns the document's prefix map from the same parse: the `@prefix` / `PREFIX`
+    # bindings a Turtle or TriG document left in force at its end, as
+    # `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
+    # every other format. It is the parser's own record, so a `PREFIX` line quoted
+    # inside a string literal is never reported.
     def load(
         self,
         input: bytes | str | None = ...,
@@ -644,14 +650,15 @@ class Store:
         *,
         path: str | None = ...,
         base: str | None = ...,
-    ) -> None: ...
+    ) -> list[tuple[str, str]]: ...
     def bulk_load(
         self,
         input: bytes | str | None = ...,
         format: RdfFormat | None = ...,
         *,
         path: str | None = ...,
-    ) -> None: ...
+        base: str | None = ...,
+    ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> None: ...
     def remove(self, quad: Quad) -> None: ...
     # Fold everything mutated so far into this store's BASE, leaving the copy-on-write
@@ -911,6 +918,7 @@ class Store:
 class MutableDataset:
     def __init__(self) -> None: ...
     def __iter__(self) -> QuadIter: ...
+    # Returns the document's prefix map exactly as `Store.load` does.
     def load(
         self,
         input: bytes | str | None = ...,
@@ -918,7 +926,7 @@ class MutableDataset:
         *,
         path: str | None = ...,
         base: str | None = ...,
-    ) -> None: ...
+    ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> bool: ...
     def remove(self, quad: Quad) -> bool: ...
     def contains(self, quad: Quad) -> bool: ...
@@ -1553,6 +1561,8 @@ class _ValidationReport:
 
     @property
     def conforms(self) -> bool: ...
+    # Each result dict carries "messages": every sh:resultMessage, as
+    # {"text": str, "language"?: str, "direction"?: "ltr" | "rtl", "datatype"?: str}.
     @property
     def results(self) -> list[dict[str, builtins.object]]: ...
     def to_ntriples(self) -> str: ...
@@ -1564,7 +1574,16 @@ class _Shapes:
     # `base` is the shapes document's own base IRI, resolving its relative IRI
     # references. Omitted, only an in-document `@base` can establish one and a
     # relative reference raises ValueError rather than being silently unresolved.
-    def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
+    # `imports` is the shapes graph's owl:imports table (see `shapes.validate`): the
+    # parsed shapes are the whole closure, and one not in hand raises
+    # ShapesImportError.
+    def __init__(
+        self,
+        shapes_ttl: str,
+        *,
+        base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+    ) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
     # a frozen dataset behind their copy-on-write overlay, so neither is serialized
@@ -1607,6 +1626,20 @@ class _ShapesProductError(ValueError):
     """
 
     dimension: str | None
+
+class _ShapesImportError(ValueError):
+    """A shapes graph's `owl:imports` closure is not in hand, or the `imports` table
+    cannot be used — the one refusal every shapes-graph entry point raises, on every
+    PurRDF host alike.
+
+    `kind` is `unresolved-import` (pass the named documents in `imports`),
+    `unreached-import` (a table entry no import names) or `invalid-import` (a key that
+    is not an absolute IRI, a key named twice, or a document that is not Turtle);
+    `iris` are the IRIs it names. Branch on `kind`, never on `str(exc)`.
+    """
+
+    kind: str
+    iris: list[str]
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as
@@ -1710,26 +1743,137 @@ class shapes:
     ChangeValidation: TypeAlias = _ChangeValidation
     ShapesProduct: TypeAlias = _ShapesProduct
     ShapesProductError: TypeAlias = _ShapesProductError
+    ShapesImportError: TypeAlias = _ShapesImportError
     # Compile a Turtle shapes graph into a prepared product in one call — the
-    # composition of `Shapes(...).prepare().to_product()`.
+    # composition of `Shapes(...).prepare().to_product()`. The product carries the
+    # merged owl:imports closure; one not in hand raises ShapesImportError.
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None = None) -> bytes: ...
+    def pack_product(
+        shapes_ttl: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+    ) -> bytes: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
     # `shapes_base` is the base IRI the SHAPES document's relative IRI references
     # resolve against; `data_nt` needs no counterpart because N-Triples admits no
     # relative IRI by grammar.
+    #
+    # `conformance_disallows` is the conformance-disallow set: severity IRIs whose
+    # results make the data non-conforming. `None` is SHACL's default set
+    # (sh:Violation, sh:Warning, sh:Info); an empty sequence or a non-IRI raises
+    # ValueError. The dict carries "conforms", "conformance_disallows" (the set the
+    # report was judged against) and "results", each result's "severity" being its
+    # IRI — sh:Debug and sh:Trace included, which the default set does not block —
+    # and its "messages" EVERY sh:resultMessage, each {"text", and "language" /
+    # "direction" / "datatype" when present}; a result carrying SHACL-SPARQL result
+    # annotations (sh:resultAnnotation) also has "annotations", a list of
+    # (property IRI, value in N-Triples syntax) tuples.
+    #
+    # `imports` is the shapes graph's owl:imports table: (ontology IRI, Turtle
+    # document) pairs, each document parsed under its IRI. Every shapes-graph function
+    # here takes it. An owl:imports is resolved by a table entry, by `shapes_base` (or
+    # the document's own @base) naming the imported document, by the closure
+    # declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
+    # owl:versionIRI is `<X>`), or by the closure describing `<X>` with sh:declare
+    # (SHACL's prefix-declaration idiom); anything else — or a table entry no import names —
+    # raises ShapesImportError. PurRDF fetches nothing; an omitted table still
+    # enforces the rule.
     @staticmethod
     def validate(
-        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+        shapes_ttl: str,
+        data_nt: str,
+        *,
+        shapes_base: str | None = None,
+        conformance_disallows: Sequence[str] | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, builtins.object]: ...
-    # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
-    # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base
-    # graph plus every inferred triple) as a canonical N-Triples string.
+    # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
+    # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
+    # layer in ascending sh:layer order; within a layer the sh:runOnce rules once,
+    # then the iterating rules repeatedly while an iteration infers a new triple,
+    # each iteration running the rules in sh:order groups (one group's inferences
+    # visible to the next, same-order rules concurrent); derived and temporary
+    # triples deleted at the end of their layer — and return the base graph plus
+    # every inferred triple as a canonical N-Triples string.
     @staticmethod
     def entail(
-        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+        shapes_ttl: str,
+        data_nt: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> str: ...
+    # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
+    # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
+    # canonical order, "proof": the proof text when explain=True, else None}. The rule
+    # source is exactly one of `shapes_ttl` (a SHACL shapes graph's default rule set)
+    # and `srl` (a SPARQL 1.2 RL rule set); neither or both raises ValueError.
+    #
+    # `max_term_generating_rounds` bounds the rounds that infer a term the graph did
+    # not hold; one more raises ValueError naming the limit. None keeps the default, a
+    # divergence criterion derived from the input: at most max(256, 4 x N) such rounds
+    # for N distinct input terms, past which the rule set is refused as divergent,
+    # naming its rules. A rule set bounded by a constant past that horizon states its
+    # bound.
+    @staticmethod
+    def apply_rules(
+        data_nt: str,
+        shapes_ttl: str | None = None,
+        *,
+        srl: str | None = None,
+        shapes_base: str | None = None,
+        srl_base: str | None = None,
+        explain: bool = False,
+        max_term_generating_rounds: int | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+    ) -> dict[str, str | None]: ...
+    # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
+    # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
+    # sequence order. The expression is named exactly one way: `expr` is an absolute
+    # IRI or "_:label" (a blank node the shapes document labels so); or `expr` is None
+    # and `expr_at` names a node and `expr_via` the predicate IRIs a walk from it
+    # follows, each step reaching exactly one value (an anonymous `[ ... ]`
+    # expression); or `expr` is None and `expr_turtle` is the expression as a Turtle
+    # document, read under the shapes document's prefixes and base, whose one root
+    # blank node is the expression. `focus` and each `scope` value are an absolute
+    # IRI or an N-Triples term; `scope` maps each shnex:var name to its node. None or
+    # several selectors, a walk step reaching no value or several, an inline document
+    # without exactly one root, the name "focusNode", an unknown label and any parse
+    # or evaluation failure raise ValueError.
+    @staticmethod
+    def eval_node_expr(
+        shapes_ttl: str,
+        data_nt: str,
+        expr: str | None,
+        focus: str,
+        *,
+        expr_at: str | None = None,
+        expr_via: Sequence[str] = ...,
+        expr_turtle: str | None = None,
+        scope: Mapping[str, str] | None = None,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+    ) -> list[str]: ...
+    # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
+    # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
+    # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None),
+    # "calls" (each function call site's "binding" / "function" / "owner", None when
+    # the loader refused the graph), "alternatives" (each validator declared for a
+    # built-in constraint component, superseded by the native implementation:
+    # "component" / "attachment" / "validator" / "language"; never findings; None
+    # when the loader refused the graph), "report" (the deterministic text every host
+    # prints)}. The report certifies the whole owl:imports closure; one not in hand
+    # raises ShapesImportError, never a report about the importing document alone.
+    # Otherwise raises ValueError only when the document is not Turtle.
+    @staticmethod
+    def lint_shapes(
+        shapes_ttl: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+    ) -> dict[str, builtins.object]: ...
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes
@@ -1976,12 +2120,19 @@ class entail:
     # access and never a silently empty import. `[]` is the ordinary "imports
     # nothing" case; the argument is required, not defaulted, and sits in the
     # same position on all four hosts.
+    #
+    # `premise_iris` are the IRIs the premise document was read from (its
+    # retrieval IRI or parse base, when the caller knows one): an `owl:imports`
+    # of one names the premise itself and is resolved in place. `[]` is the
+    # ordinary case for bare text; required like `imports`, same position on
+    # all four hosts.
     @staticmethod
     def certain_answers(
         regime: RegimeLike,
         data: str,
         pattern: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -1990,7 +2141,7 @@ class entail:
     # `mechanism <name>` — which of the six mechanisms reached the verdict — and
     # then gives THREE verdicts, never two: `not-entailed` is a PROOF, and
     # `undecided` is what an incomplete procedure is entitled to say instead.
-    # `imports` is `certain_answers`'s, and applies to the PREMISE: the
+    # `imports` and `premise_iris` are `certain_answers`'s, and apply to the PREMISE: the
     # conclusion is a graph to match, not an ontology to close.
     @staticmethod
     def graph_entails(
@@ -1998,12 +2149,13 @@ class entail:
         premise: str,
         conclusion: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
     # `warrant absent` is a not-entailed or an undecided, where there is no
     # evidence to re-decide and a `false` would read as a failed check rather
-    # than an absent one. `imports` is `certain_answers`'s; the re-check runs
+    # than an absent one. `imports`/`premise_iris` are `certain_answers`'s; the re-check runs
     # against the premise AS WRITTEN, which is a stronger check than one only
     # re-decidable against a graph the library assembled.
     @staticmethod
@@ -2012,6 +2164,7 @@ class entail:
         premise: str,
         conclusion: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

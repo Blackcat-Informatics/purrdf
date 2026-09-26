@@ -195,8 +195,9 @@ const SECTION_AST: u32 = 2;
 const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 
 /// The PREPARATION STAGE ID: a content-derived capability digest over the whole
-/// declarative model, the tables the model's meaning depends on, and the CLASS
-/// ANALYSIS DERIVATION a product carries the result of.
+/// declarative model, the tables the model's meaning depends on — the spec symbol
+/// table ([`crate::spec`]) among them — and the CLASS ANALYSIS DERIVATION a product
+/// carries the result of.
 ///
 /// The last of those is the one that is not a declaration. The class walk is an
 /// algorithm, so its meaning lives in function bodies: a build could stop
@@ -210,16 +211,16 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// which re-derives.
 ///
 /// Derived, never hand-incremented. `crates/shapes/tests/product_model_census.rs`
-/// computes it from the live sources with `syn` and pins the result as
-/// `STAGE_ID_GOLDEN`; the bytes here are that digest. Re-derive them from a
-/// failing `stage_id_matches_golden` rather than editing either by hand. A
+/// computes it from the live sources with `syn`, and
+/// `stage_id_matches_shipped_constant` asserts it equals these bytes. Re-derive
+/// them from that test's failure message rather than editing them by hand. A
 /// hand-maintained version counter is precisely how an authenticated cache serves
 /// stale-but-verified wrong answers: the bytes verify, the counter matches, and
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x10, 0xfb, 0x65, 0x93, 0x69, 0x14, 0x91, 0x0c, 0x8e, 0xf2, 0x6a, 0x51, 0x76, 0xf5, 0x80, 0x1f,
-    0x4f, 0x6d, 0x2a, 0x36, 0x45, 0xe3, 0xb0, 0xb3, 0xf3, 0x42, 0x48, 0x60, 0x21, 0x30, 0x12, 0xce,
+    0x11, 0xce, 0x88, 0x6c, 0x7d, 0xec, 0x84, 0x68, 0xdc, 0xaa, 0x44, 0x3c, 0x7b, 0x3c, 0xcf, 0x39,
+    0x28, 0x4e, 0xdb, 0x2b, 0xc7, 0x8b, 0x7a, 0x7a, 0xe9, 0x38, 0xbb, 0xd5, 0x01, 0x4e, 0xeb, 0x04,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -1264,9 +1265,11 @@ impl<'a> ShapesProductView<'a> {
         // is what the restored `Shapes` must carry for identity row 6 to be the row
         // a parse of this graph would have produced.
         let mut functions = UserFunctionRegistry::new();
-        crate::shapes::register_declared_sparql_functions(
+        let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
+            &parts.custom_functions,
+            &parts.node_shapes,
             &mut functions,
         )
         .map_err(|error| {
@@ -1280,9 +1283,11 @@ impl<'a> ShapesProductView<'a> {
             &parts.node_shapes,
             &parts.shape_index,
             &parts.custom_functions,
+            &native_list,
             BTreeMap::new(),
             &mut functions,
         )?;
+        link::link_global_rules(&parts.rules.global_rules, &parts.shape_index)?;
 
         // The two carriers of the parse configuration must agree. Both are
         // authenticated, so a disagreement is not tampering — it is a product whose
@@ -1305,9 +1310,11 @@ impl<'a> ShapesProductView<'a> {
 
         let shapes = Shapes {
             node_shapes: parts.node_shapes,
+            rules: parts.rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),
+            validation_options: crate::engine::ValidationOptions::default(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,
             shapes_dataset: dataset,
@@ -1398,7 +1405,10 @@ impl<'a> ShapesProductView<'a> {
         self.refuse_ungovernable_decode()?;
 
         let dataset = dataset::open_dataset(self.section(SECTION_DATASET)?)?;
-        let shapes = crate::shapes::from_dataset_with_base(
+        // The carried dataset IS the shapes graph's resolved `owl:imports` closure — the
+        // packer resolved it before it wrote this product — so it re-derives without
+        // resolving again.
+        let shapes = crate::shapes::from_resolved_dataset(
             &dataset,
             self.provenance.base(),
             self.provenance.doc_prefixes(),

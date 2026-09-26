@@ -35,6 +35,16 @@
 //!
 //! Nothing here asserts a verdict. A consumer that discovered zero cases gets a
 //! panic from the count assertions, not an empty vector.
+//!
+//! Two submodules extend this reader rather than copying it:
+//!
+//! * [`shacl12`] discovers the vendored W3C SHACL 1.2 suite
+//!   (`vectors/shacl12/tests/`) through the same [`walk_manifest`] and the same
+//!   `sht:Validate` entry parser, adding the 1.2 test types.
+//! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
+//!   asserts none, so both W3C harnesses grade a validation case identically.
+//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the upstream
+//!   errata table, shared by the library harness and the command-line harness.
 
 #![allow(
     dead_code,
@@ -50,7 +60,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::RdfDataset;
+use purrdf_shapes::ShapesImports;
 use purrdf_shapes::data::{GraphFilter, native_quads};
+
+pub(crate) mod node_expr_grading;
+pub(crate) mod report_grading;
+pub(crate) mod shacl12;
 use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
 use purrdf_shapes::term::{NamedNode, Term};
 
@@ -67,18 +82,73 @@ pub(crate) const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus
 ///
 /// Note: the corpus ships 121 files with a `sht:Validate` entry in `core/` +
 /// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
-/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
+/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120. That file's
+/// entry is `sht:proposed`, not approved; it is graded apart, under its own
+/// category (see [`W3C_PROPOSED_UNINCLUDED`]).
 /// The SHACL-AF seam at `af/` adds 9 more `sht:Validate` entries — 6 vendored
 /// from pySHACL's DASH tests and 3 first-party (no W3C SHACL-AF conformance
 /// suite exists; see `vectors/shacl/af/README.md`).
 pub(crate) const W3C_TOTAL_CASES: usize = 129;
+
+/// Vendored SHACL 1.0 files that carry a `sht:Validate` entry no upstream manifest
+/// includes, and whose entry is `mf:status sht:proposed` rather than approved:
+/// `(path relative to the suite root, why it is walked)`.
+///
+/// A test that exists but runs nowhere is silent coverage loss, so each file is
+/// walked as a manifest root of its own and its entry graded by the same grader as
+/// the approved suite ([`w3c_proposed_cases`]). Grading it is not counting it: it is
+/// reported as "proposed, graded", never among the approved suite's passes.
+pub(crate) const W3C_PROPOSED_UNINCLUDED: &[(&str, &str)] = &[(
+    "sparql/component/nodeValidator-001.ttl",
+    "sht:proposed sh:nodeValidator test (a SELECT validator pre-binding a required \
+     parameter); sparql/component/manifest.ttl does not include it",
+)];
+
+const MF_STATUS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#status";
+const SHT_PROPOSED: &str = "http://www.w3.org/ns/shacl-test#proposed";
+
+/// The `sht:Validate` entries of [`W3C_PROPOSED_UNINCLUDED`], in table order.
+///
+/// Asserts that every file yields exactly one entry and that the entry IS
+/// `sht:proposed`: an entry upstream approves belongs in the approved walk, and a
+/// file that stopped yielding its entry would otherwise vanish.
+pub(crate) fn w3c_proposed_cases() -> Vec<W3cCase> {
+    let root = w3c_root();
+    let mut cases: Vec<W3cCase> = Vec::new();
+    for (relative, _) in W3C_PROPOSED_UNINCLUDED {
+        let path = root.join(relative);
+        let before = cases.len();
+        walk_manifest(&path, &mut |g, entry, manifest| {
+            if let Some(tc) = parse_entry(g, entry, manifest, &root) {
+                let proposed = objects(g, entry, MF_STATUS)
+                    .iter()
+                    .any(|t| matches!(t, Term::NamedNode(n) if n.as_str() == SHT_PROPOSED));
+                assert!(
+                    proposed,
+                    "{}: entry {} is not sht:proposed; an approved entry belongs in the \
+                     approved walk",
+                    path.display(),
+                    tc.id
+                );
+                cases.push(tc);
+            }
+        });
+        assert_eq!(
+            cases.len() - before,
+            1,
+            "{} must yield exactly one sht:Validate entry",
+            path.display()
+        );
+    }
+    cases
+}
 
 /// Exact number of case directories under [`CORPUS_DIR`].
 ///
 /// Asserted rather than merely non-empty so a removed or renamed corpus
 /// directory fails fast instead of silently reducing coverage. Bump this when
 /// adding a case.
-pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 71;
+pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 73;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────
 
@@ -106,12 +176,34 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 
 // ── The discovered case models ────────────────────────────────────────────────
 
-/// Comparison tuple: `(focus, path, value, component, severity)` — see [`norm`]
-/// for the normalization rules.
-pub(crate) type Tuple = (String, Option<String>, Option<String>, String, String);
+/// Comparison tuple: `(focus, path, value, component, severity, source shape)` —
+/// see [`norm`] for the normalization rules. A blank-node source shape compares as
+/// `_:`, like every other blank node.
+pub(crate) type Tuple = (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    String,
+);
 
 /// Result multiset: tuple → occurrence count.
 pub(crate) type Multiset = BTreeMap<Tuple, usize>;
+
+/// One expected result as the `sh:detail` grader reads it: its comparison tuple
+/// and, when the expected report states any, its nested `sh:detail` results.
+///
+/// `details` is `None` when the expected result states no `sh:detail` — the
+/// result's details are then not graded (see the `report_grading` module docs
+/// for the SHACL 1.2 Core text that makes them optional) — and `Some` when it
+/// states at least one, in which case the produced result's details must be
+/// EXACTLY that multiset, recursively.
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedResult {
+    pub(crate) tuple: Tuple,
+    pub(crate) details: Option<Vec<Self>>,
+}
 
 /// What the manifest says a case's outcome must be.
 pub(crate) enum Expected {
@@ -133,6 +225,29 @@ pub(crate) struct W3cCase {
     /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
     pub(crate) shapes_graph_iri: Option<String>,
     pub(crate) expected: Expected,
+    /// The `sh:conformanceDisallows` IRIs of the EXPECTED report, which the suite
+    /// uses as a validation parameter ("the test framework needs to use the
+    /// values of sh:conformanceDisallows from the mf:result", W3C
+    /// `core/validation-reports/conformance-disallows-001`). Empty when the
+    /// expected report states none, which means the default set.
+    pub(crate) conformance_disallows: Vec<String>,
+    /// Every expected result that carries `sh:resultMessage`, with its messages
+    /// as [`message_key`]s — compared EXACTLY, as a set. The suite asks a harness "to preserve all
+    /// sh:resultMessage triples that are mentioned in the 'expected' results
+    /// graph" (W3C `core/misc/message-001`), so these are graded beside the tuple
+    /// multiset.
+    pub(crate) expected_messages: Vec<(Tuple, BTreeSet<String>)>,
+    /// Every expected result that carries a SHACL-SPARQL result annotation — a
+    /// predicate outside `rdf:type` and the SHACL namespaces (SHACL 1.2 SPARQL
+    /// Extensions, "Annotation Properties": the processor "copies the binding …
+    /// into the validation result") — with its `(property, value)` pairs,
+    /// compared EXACTLY as a set, the way messages are.
+    pub(crate) expected_annotations: Vec<(Tuple, BTreeSet<(String, String)>)>,
+    /// Every top-level expected result that states `sh:detail`, with its nested
+    /// results — graded beside the tuple multiset: each must be carried by a
+    /// distinct produced result with the same tuple whose details are exactly
+    /// the stated ones (see [`ExpectedResult`]).
+    pub(crate) expected_details: Vec<ExpectedResult>,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -155,12 +270,12 @@ pub(crate) fn first_party_box_role_vocab() -> BoxRoleVocab {
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
-fn named(iri: &str) -> Term {
+pub(crate) fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
 
 /// All objects of `(subject, predicate, ?)`.
-fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
+pub(crate) fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     native_quads(
         g,
         Some(subject),
@@ -174,26 +289,41 @@ fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
-fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
+pub(crate) fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects(g, subject, predicate).into_iter().next()
 }
 
 /// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order.
-fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
+///
+/// The corpora are frozen, so a malformed list — a cell with no `rdf:first`, no
+/// `rdf:rest`, more than one of either, or a `rdf:rest` chain that revisits a
+/// cell — is a discovery bug, not something to read around: stopping early would
+/// hand every consumer a SHORTER list (fewer entries, fewer expected results),
+/// and a shorter list is a greener harness. It panics instead.
+pub(crate) fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
     let mut items = Vec::new();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut node = head.clone();
     loop {
         if matches!(&node, Term::NamedNode(n) if n.as_str() == RDF_NIL) {
             break;
         }
-        let Some(first) = object(g, &node, RDF_FIRST) else {
-            break; // malformed list — stop rather than loop
+        assert!(
+            visited.insert(node.to_string()),
+            "malformed RDF list: the rdf:rest chain from {head} revisits {node}"
+        );
+        let firsts = objects(g, &node, RDF_FIRST);
+        let rests = objects(g, &node, RDF_REST);
+        let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
+            panic!(
+                "malformed RDF list: cell {node} (from {head}) has {} rdf:first and {} \
+                 rdf:rest values, exactly one of each is required",
+                firsts.len(),
+                rests.len()
+            );
         };
-        items.push(first);
-        match object(g, &node, RDF_REST) {
-            Some(rest) => node = rest,
-            None => break,
-        }
+        items.push(first.clone());
+        node = rest.clone();
     }
     items
 }
@@ -213,11 +343,70 @@ pub(crate) fn norm(t: &Term) -> String {
 
 // ── IRI ↔ path mapping ────────────────────────────────────────────────────────
 
+// ── The vendored suites' owl:imports ─────────────────────────────────────────
+
+/// DASH, the TopBraid vocabulary the vendored W3C `sparql/component/validator-001`
+/// cases (SHACL 1.0 and SHACL 1.2) import.
+pub(crate) const DASH: &str = "http://datashapes.org/dash";
+
+/// The imports no document can be supplied for, so a case that imports one is an
+/// EXPECTED REFUSAL rather than a validation.
+///
+/// DASH cannot be supplied as it is published, because it is not well-formed
+/// SHACL: it gives `sh:validator` values that are `sh:JSValidator`s, where SHACL 1.2
+/// SPARQL Extensions §4.2.3 says "The values of sh:validator must be ASK-based
+/// validators", and `dash:uriTemplate` declares a parameter named `value`, which
+/// §4.2.1 forbids. Its shapes would also change the case's verdict. A stand-in
+/// document would be a fabricated ontology. PurRDF fetches nothing and refuses a
+/// shapes graph whose imports closure is not in hand, so the honest grade of such a
+/// case is that refusal, exactly.
+pub(crate) const UNRESOLVABLE_IMPORTS: &[&str] = &[DASH];
+
+/// The vendored W3C cases whose shapes graph imports an [`UNRESOLVABLE_IMPORTS`]
+/// ontology: `(case id, the imports it must be refused for)`. The same id names the
+/// case in the SHACL 1.0 and the SHACL 1.2 suite. Each is graded by
+/// [`report_grading::grade_refused_import`] as an exact expected refusal and
+/// reported as "refused: unresolvable import" — never as a pass.
+pub(crate) const REFUSED_UNRESOLVABLE_IMPORT: &[(&str, &[&str])] =
+    &[("sparql/component/validator-001", &[DASH])];
+
+/// The expected refusal of `id`, if it is one.
+pub(crate) fn refused_import(id: &str) -> Option<&'static [&'static str]> {
+    REFUSED_UNRESOLVABLE_IMPORT
+        .iter()
+        .find(|(case, _)| *case == id)
+        .map(|(_, iris)| *iris)
+}
+
+/// The import table a vendored W3C case's shapes graph loads with: for every
+/// `owl:imports` the graph does not already resolve itself, the document the harness
+/// supplies for it.
+///
+/// PurRDF refuses a shapes graph whose imports closure is not in hand. A harness is a
+/// caller like any other, so it resolves imports the way a caller does: by supplying a
+/// document. The prefix idiom the suites use (`owl:imports` of a node the case describes
+/// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. An
+/// [`UNRESOLVABLE_IMPORTS`] ontology is left unresolved on purpose, so the load refuses
+/// it. Any other import panics: a newly vendored case with an import has to be resolved
+/// here on purpose, not skipped.
+pub(crate) fn w3c_case_imports(dataset: &RdfDataset) -> ShapesImports {
+    let imports = ShapesImports::new();
+    for iri in imports.import_map().unresolved_imports(dataset) {
+        assert!(
+            UNRESOLVABLE_IMPORTS.contains(&iri.as_str()),
+            "a vendored case owl:imports <{iri}>, which the harness does not supply a \
+             document for; resolve it in `w3c_case_imports` or, if no document can be \
+             supplied, list it in UNRESOLVABLE_IMPORTS"
+        );
+    }
+    imports
+}
+
 pub(crate) fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
-fn iri_to_path(iri: &str) -> PathBuf {
+pub(crate) fn iri_to_path(iri: &str) -> PathBuf {
     PathBuf::from(
         iri.strip_prefix("file://")
             .unwrap_or_else(|| panic!("expected a file:// IRI, got {iri}")),
@@ -275,29 +464,67 @@ pub(crate) fn w3c_cases() -> Vec<W3cCase> {
 
 /// Recursively collect `sht:Validate` test cases from `manifest_path`.
 fn collect_manifest(manifest_path: &Path, root: &Path, cases: &mut Vec<W3cCase>) {
-    let g =
-        parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
+    walk_manifest(manifest_path, &mut |g, entry, manifest| {
+        if let Some(tc) = parse_entry(g, entry, manifest, root) {
+            cases.push(tc);
+        }
+    });
+}
 
-    // Sub-manifests: recurse in sorted order for a deterministic scoreboard.
-    let mut includes: Vec<PathBuf> = native_quads(
-        &g,
+/// The `mf:include` targets of one manifest, in sorted order.
+///
+/// Both spellings the W3C suites use are read: one `mf:include <m.ttl>` triple
+/// per sub-manifest (the data-shapes suites), and ONE `mf:include ( <a> <b> )`
+/// whose object is an RDF list (the SPARQL 1.2 RL suite). A list member, like a
+/// single object, must be an IRI.
+fn manifest_includes(g: &RdfDataset, manifest_path: &Path) -> Vec<PathBuf> {
+    let mut includes: Vec<PathBuf> = Vec::new();
+    for (_, _, object) in native_quads(
+        g,
         None,
         Some(&named(mf::INCLUDE)),
         None,
         GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| match object {
-        Term::NamedNode(n) => iri_to_path(n.as_str()),
-        other => panic!(
-            "{}: mf:include object must be an IRI, got {other}",
-            manifest_path.display()
-        ),
-    })
-    .collect();
+    ) {
+        let members = match &object {
+            Term::NamedNode(_) => vec![object.clone()],
+            Term::BlankNode(_) => list_items(g, &object),
+            other => panic!(
+                "{}: mf:include object must be an IRI or a list of IRIs, got {other}",
+                manifest_path.display()
+            ),
+        };
+        for member in members {
+            match member {
+                Term::NamedNode(n) => includes.push(iri_to_path(n.as_str())),
+                other => panic!(
+                    "{}: mf:include member must be an IRI, got {other}",
+                    manifest_path.display()
+                ),
+            }
+        }
+    }
     includes.sort();
-    for include in includes {
-        collect_manifest(&include, root, cases);
+    includes
+}
+
+/// Walk the manifest tree rooted at `manifest_path`: every `mf:include` is
+/// recursed into (sorted, for a deterministic scoreboard), then every member of
+/// every `mf:entries` list is handed to `visit` in list (document) order,
+/// together with the manifest dataset it lives in and that manifest's path.
+///
+/// The walker judges nothing about an entry — which test types a harness grades
+/// is the visitor's decision — so the two SHACL harnesses share one list-chasing
+/// implementation and differ only in what they keep.
+pub(crate) fn walk_manifest(
+    manifest_path: &Path,
+    visit: &mut dyn FnMut(&Arc<RdfDataset>, &Term, &Path),
+) {
+    let g =
+        parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
+
+    for include in manifest_includes(&g, manifest_path) {
+        walk_manifest(&include, visit);
     }
 
     // Entries: an RDF list, in list (document) order.
@@ -313,15 +540,18 @@ fn collect_manifest(manifest_path: &Path, root: &Path, cases: &mut Vec<W3cCase>)
     .collect();
     for head in entry_heads {
         for entry in list_items(&g, &head) {
-            if let Some(tc) = parse_entry(&g, &entry, manifest_path, root) {
-                cases.push(tc);
-            }
+            visit(&g, &entry, manifest_path);
         }
     }
 }
 
 /// Parse one manifest entry into a [`W3cCase`] (skipping non-`sht:Validate`).
-fn parse_entry(g: &RdfDataset, entry: &Term, manifest_path: &Path, root: &Path) -> Option<W3cCase> {
+pub(crate) fn parse_entry(
+    g: &RdfDataset,
+    entry: &Term,
+    manifest_path: &Path,
+    root: &Path,
+) -> Option<W3cCase> {
     let is_validate = objects(g, entry, rdf::TYPE)
         .iter()
         .any(|t| matches!(t, Term::NamedNode(n) if n.as_str() == sht::VALIDATE));
@@ -363,12 +593,36 @@ fn parse_entry(g: &RdfDataset, entry: &Term, manifest_path: &Path, root: &Path) 
 
     let result = object(g, entry, mf::RESULT)
         .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
-    let expected = match &result {
-        Term::NamedNode(n) if n.as_str() == sht::FAILURE => Expected::Failure,
-        report_node => Expected::Report {
-            conforms: expected_conforms(g, report_node, &id),
-            results: expected_multiset(g, report_node),
-        },
+    let (
+        expected,
+        conformance_disallows,
+        expected_messages,
+        expected_annotations,
+        expected_details,
+    ) = match &result {
+        Term::NamedNode(n) if n.as_str() == sht::FAILURE => (
+            Expected::Failure,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        report_node => (
+            Expected::Report {
+                conforms: expected_conforms(g, report_node, &id),
+                results: expected_multiset(g, report_node),
+            },
+            objects(g, report_node, sh::CONFORMANCE_DISALLOWS)
+                .into_iter()
+                .map(|level| match level {
+                    Term::NamedNode(n) => n.as_str().to_owned(),
+                    other => panic!("{id}: sh:conformanceDisallows value {other} is not an IRI"),
+                })
+                .collect(),
+            expected_result_messages(g, report_node),
+            expected_result_annotations(g, report_node),
+            expected_result_details(g, report_node, &id),
+        ),
     };
 
     Some(W3cCase {
@@ -378,6 +632,10 @@ fn parse_entry(g: &RdfDataset, entry: &Term, manifest_path: &Path, root: &Path) 
         data_path,
         shapes_graph_iri,
         expected,
+        conformance_disallows,
+        expected_messages,
+        expected_annotations,
+        expected_details,
     })
 }
 
@@ -393,20 +651,117 @@ fn expected_conforms(g: &RdfDataset, report_node: &Term, id: &str) -> bool {
     }
 }
 
+/// The comparison tuple of one expected result node.
+fn expected_tuple(g: &RdfDataset, result: &Term) -> Tuple {
+    let focus = object(g, result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));
+    let path = object(g, result, sh::RESULT_PATH).map(|t| norm(&t));
+    let value = object(g, result, sh::VALUE).map(|t| norm(&t));
+    let component =
+        object(g, result, sh::SOURCE_CONSTRAINT_COMPONENT).map_or_else(String::new, |t| norm(&t));
+    let severity = object(g, result, sh::RESULT_SEVERITY)
+        .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
+    // An expected result that states no source shape compares as the empty string,
+    // which no produced result carries: every result the engine produces names its
+    // shape, so such an expectation fails loudly instead of matching anything.
+    let source_shape = object(g, result, sh::SOURCE_SHAPE).map_or_else(String::new, |t| norm(&t));
+    (focus, path, value, component, severity, source_shape)
+}
+
+/// One message as the grader compares it: the literal's N-Triples rendering, so
+/// the lexical form, the language tag, the base direction and the datatype all
+/// take part.
+pub(crate) fn message_key(message: &Term) -> String {
+    message.to_string()
+}
+
+/// Every expected result carrying `sh:resultMessage`, with its messages as
+/// [`message_key`]s.
+fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, BTreeSet<String>)> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .filter_map(|result| {
+            let messages: BTreeSet<String> = objects(g, &result, sh::RESULT_MESSAGE)
+                .into_iter()
+                .map(|message| message_key(&message))
+                .collect();
+            (!messages.is_empty()).then(|| (expected_tuple(g, &result), messages))
+        })
+        .collect()
+}
+
+/// Whether `predicate` is a result-annotation property on an expected result:
+/// neither `rdf:type` nor a term of the SHACL or SHACL node-expression namespace.
+pub(crate) fn is_annotation_property(predicate: &str) -> bool {
+    predicate != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        && !predicate.starts_with("http://www.w3.org/ns/shacl#")
+        && !predicate.starts_with("http://www.w3.org/ns/shacl-node-expr#")
+}
+
+/// Every expected result carrying result annotations, with its `(property,
+/// value)` pairs, each value [`norm`]alized.
+fn expected_result_annotations(
+    g: &RdfDataset,
+    report_node: &Term,
+) -> Vec<(Tuple, BTreeSet<(String, String)>)> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .filter_map(|result| {
+            let pairs: BTreeSet<(String, String)> =
+                native_quads(g, Some(&result), None, None, GraphFilter::AnyGraph)
+                    .into_iter()
+                    .filter(|(_, predicate, _)| is_annotation_property(predicate.as_str()))
+                    .map(|(_, predicate, value)| {
+                        (format!("<{}>", predicate.as_str()), norm(&value))
+                    })
+                    .collect();
+            (!pairs.is_empty()).then(|| (expected_tuple(g, &result), pairs))
+        })
+        .collect()
+}
+
+/// Every top-level expected result that states `sh:detail`, as an
+/// [`ExpectedResult`] tree.
+fn expected_result_details(g: &RdfDataset, report_node: &Term, id: &str) -> Vec<ExpectedResult> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .map(|result| expected_result(g, &result, id, &mut Vec::new()))
+        .filter(|result| result.details.is_some())
+        .collect()
+}
+
+/// One expected result and, recursively, the `sh:detail` results it states. A
+/// detail chain that revisits a result is a malformed frozen corpus and panics,
+/// as a malformed RDF list does.
+fn expected_result(
+    g: &RdfDataset,
+    result: &Term,
+    id: &str,
+    path: &mut Vec<Term>,
+) -> ExpectedResult {
+    assert!(
+        !path.contains(result),
+        "{id}: the sh:detail chain revisits the expected result {result}"
+    );
+    path.push(result.clone());
+    let details = objects(g, result, sh::DETAIL);
+    let details = (!details.is_empty()).then(|| {
+        details
+            .iter()
+            .map(|detail| expected_result(g, detail, id, path))
+            .collect()
+    });
+    path.pop();
+    ExpectedResult {
+        tuple: expected_tuple(g, result),
+        details,
+    }
+}
+
 /// Build the expected result multiset from the expected-report node.
 fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
     let mut multiset = Multiset::new();
     for result in objects(g, report_node, sh::RESULT) {
-        let focus = object(g, &result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));
-        let path = object(g, &result, sh::RESULT_PATH).map(|t| norm(&t));
-        let value = object(g, &result, sh::VALUE).map(|t| norm(&t));
-        let component = object(g, &result, sh::SOURCE_CONSTRAINT_COMPONENT)
-            .map_or_else(String::new, |t| norm(&t));
-        let severity = object(g, &result, sh::RESULT_SEVERITY)
-            .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
+        *multiset.entry(expected_tuple(g, &result)).or_insert(0) += 1;
     }
     multiset
 }

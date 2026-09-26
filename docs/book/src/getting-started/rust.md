@@ -18,8 +18,10 @@ a sub-crate.
 cargo add purrdf
 ```
 
-The MSRV is Rust **1.98** (stable toolchain only; the workspace is
-nightly-free by policy).
+The MSRV is Rust **1.98** on the stable channel: by policy the code uses zero
+nightly (unstable) features, so stable 1.98 builds it. The repository's own
+toolchain floats on nightly for its sharper lints; see
+[Versioning & Releases](../project/releases.md).
 
 ## Build, freeze, serialize, parse
 

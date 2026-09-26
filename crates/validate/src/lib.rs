@@ -33,6 +33,9 @@
 //!   change path, returning the SARIF log beside the scope it describes.
 //! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
 //!   canonical N-Triples.
+//! * [`shapes_tools`] — the shapes-graph tools beside validation: running SHACL or
+//!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), evaluating one node expression
+//!   ([`eval_node_expr_to_terms`]) and certifying a shapes graph ([`lint_shapes_ttl`]).
 //! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
 //!   plus a deterministically rendered [`ReasoningReport`]. Despite the name, this
 //!   is *not* the same thing as [`entail`]; that module's docs spell the
@@ -57,19 +60,21 @@
 
 pub mod build;
 pub mod entail;
+pub mod expr_selector;
 pub mod model;
 pub mod path_syntax;
 pub mod product;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
+pub mod shapes_tools;
 
 pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
     build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
 };
 pub use entail::entail_to_ntriples_string;
-pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
+pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
     IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
     admit_shapes_product_expecting, admit_shapes_product_with_implementations,
@@ -96,4 +101,34 @@ pub use regime::{
 // name the type it is handed would have to re-spell it, and two spellings of one
 // answer is how the two arms end up collapsed.
 pub use purrdf_shapes::engine::ChangeScope;
+/// The validation-request options and the conformance-disallow set they carry,
+/// re-exported so a host binding names them without depending on the engine
+/// crate — [`SarifOptions::validation`] is where they travel.
+pub use purrdf_shapes::engine::ValidationOptions;
+/// The cold-certify report [`lint_shapes_ttl`] returns, re-exported so a host binding names
+/// it without depending on the engine crate.
+pub use purrdf_shapes::lint::LintReport;
+pub use purrdf_shapes::report::ConformanceDisallows;
+/// The shapes-graph error every entry point on this boundary returns, and the typed
+/// `owl:imports` refusal it carries, re-exported so a host binding names them without
+/// depending on the engine crate.
+pub use purrdf_shapes::{ShaclJsRefusal, ShapesError, ShapesImportError};
 pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
+
+/// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`
+/// pairs, each document Turtle text parsed with its ontology IRI as its base.
+///
+/// Every shapes-graph entry point on this boundary takes one, and every host spells it
+/// its own way — Python `imports=[(iri, turtle), ...]`, JavaScript `importIris` /
+/// `importDocuments`, C `import_iris` / `import_documents` / `import_count` — and hands
+/// it over here unchanged. The empty list is the ordinary "imports nothing" case, and it
+/// still enforces the rule: a shapes graph that imports a document the list does not
+/// supply is refused with [`ShapesError::Imports`], on every host alike. A list rather
+/// than a map because order is the caller's and this boundary's output is deterministic.
+/// See [`purrdf_shapes::imports`].
+pub type ShapesImportList<'a> = [(&'a str, &'a str)];
+pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};
+pub use shapes_tools::{
+    NodeExprRequest, RulesOutcome, RulesRequest, apply_rules_to_ntriples, eval_node_expr_to_terms,
+    lint_shapes_ttl, parse_scope_binding,
+};

@@ -10,3 +10,8 @@ crates/rdf/tests/fixtures/obographs-0.3.2/README.upstream.md -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/pom.upstream.xml -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/obographs-schema.json -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff
+
+# Preserve the pinned W3C SHACL 1.2 vocabularies and shacl12-test-suite
+# byte-for-byte, including the crate-local runtime copy of the vocabularies.
+vectors/shacl12/** -text -diff
+crates/shapes/spec/** -text -diff

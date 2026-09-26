@@ -82,16 +82,18 @@ vendored suite does not exercise:
   output, in a later round).
 - **`fp-condition-gating`** — `sh:condition` gating: one focus node fires, another
   is skipped.
-- **`fp-order`** — `sh:order` on two INDEPENDENT MONOTONIC rules; such strata
+- **`fp-order`** — `sh:order` on two INDEPENDENT MONOTONIC rules; such groups
   commute, so the final closure is the same either way — additionally proven by a
   Rust test in the harness.
-- **`layered-stratum-gating`** — layered stratified execution (SPARQL 1.2 RL §6.5):
-  the order-0 stratum's inferences are materialized before the order-1 rule's
-  `sh:condition` runs, so a condition reading ABSENCE now fails and the order-1
-  head is absent. Distinguishes layered execution from a single flat fixpoint.
-- **`once-stratum-mint`** — a run-once rule (blank node in the CONSTRUCT template,
-  SPARQL 1.2 RL §4.4) starting the order-1 layer: it sees the order-0 layer's
-  output and mints exactly one resource per focus node.
+- **`layered-stratum-gating`** — ordered execution inside one layer (SHACL 1.2
+  Inference Rules: "The inferred triples of one rule (or group of same-order rules)
+  become immediately visible to the subsequent rule"): the order-0 rule's
+  inferences are visible before the order-1 rule's `sh:condition` runs, so a
+  condition reading ABSENCE fails and the order-1 head is absent. Distinguishes
+  ordered execution from a single flat fixpoint.
+- **`once-stratum-mint`** — a run-once rule (`sh:runOnce true`, a blank node in its
+  CONSTRUCT template) in layer 1: it sees layer 0's output and mints exactly one
+  resource per focus node.
 - **`fp-deactivated`** — a `sh:deactivated` rule and a `sh:deactivated` shape are
   both skipped; only the active rule fires.
 - **`fp-cyclic-data`** — a symmetric-closure rule over a 3-cycle terminates
@@ -99,15 +101,21 @@ vendored suite does not exercise:
 - **`fp-nonmonotonic`** — a rule gated on `sh:maxCount 0` whose own head would
   break the condition next round: SHACL Rules are monotonic-accumulative, so the
   rule fires once at check time and the derived triple is never retracted.
-- **`fp-blank-minting`** — a `sh:SPARQLRule` CONSTRUCT that mints a fresh blank
-  node (compared by isomorphism); a run-once rule under SPARQL 1.2 RL §4.4.
+- **`fp-blank-minting`** — a run-once (`sh:runOnce true`) `sh:SPARQLRule` CONSTRUCT
+  that mints a fresh blank node (compared by isomorphism).
 - **`fp-named-graph`** — data in a named graph; the rules see the flattened
   default-graph projection.
-- **`err-literal-subject`** — a rule producing a literal in subject position;
-  `apply_rules` must error.
-- **`err-diverging-fresh-term`** — a GENERAL rule (no blank in the CONSTRUCT
-  template) minting a strictly longer IRI every round; `apply_rules` must error at
-  the divergence bound rather than loop forever.
+- **`fp-ill-formed-skipped`** — a triple rule whose subject expression yields a
+  literal and an IRI: SHACL 1.2 Inference Rules, "Skip ill-formed triples", so the
+  literal combination infers nothing and the IRI combination is inferred.
+- **`fp-literal-subject-skipped`** — a triple rule whose CONSTANT subject is a
+  literal: its one combination is ill-formed and skipped, not an error, while a
+  control rule differing only in its IRI subject infers its triple.
+- **`err-diverging-fresh-term`** — an iterating rule minting a strictly longer IRI
+  every pass; `apply_rules` must refuse it rather than loop forever. Under the
+  default term-generating limit it is refused as divergent once its term-generating
+  rounds pass the horizon its input grants (`max(256, 4 × N)` for `N` distinct
+  input terms), naming the rule.
 
 The `entail_dataset = apply_rules ∘ project_dataset` composition is pinned by a
 Rust test (`entail_dataset_composes_project_then_apply_rules`) in the harness.

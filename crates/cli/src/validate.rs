@@ -129,11 +129,11 @@
 //! The SHAPES graph is read through [`load_shapes`], in two steps that
 //! [`purrdf_shapes::engine::parse_shapes`] performs as one:
 //! [`crate::shapes_source::read_shapes_document`] freezes the document into a graph, and
-//! only then is that graph asked to be `Shapes`. That read-then-fold seam lives in
-//! [`crate::shapes_source`] rather than here, because `shacl pack` needs the identical
-//! sequence — a product packed with an `--import` table must fold the same closure
-//! `validate --shapes --import` does, or the two commands would disagree about what the
-//! shapes graph even is. Turtle
+//! only then is that graph asked to be `Shapes`. That read seam, and the `--import` table
+//! beside it, live in [`crate::shapes_source`] rather than here, because `shacl pack` needs
+//! the identical sequence — a product packed with an `--import` table must resolve the same
+//! closure `validate --shapes --import` does, or the two commands would disagree about what
+//! the shapes graph even is. Turtle
 //! additionally carries its own `@prefix`/`PREFIX` map, recovered from the source text, as the
 //! fallback prefix environment for SHACL-AF `sh:select` queries. Every other syntax is parsed
 //! by the native codec into the same IR and carries no such fallback, because the fallback is
@@ -147,12 +147,12 @@
 //! `parse_shapes` that took no base at all, so the one document in this command that
 //! could not resolve a relative IRI was the one describing the constraints.
 //!
-//! Splitting the read from the parse is what makes `owl:imports` resolvable at all: the
-//! imports have to be read off the GRAPH, and the imported documents merged as graphs, before
-//! anything is asked to be a shape. [`crate::shapes_source::fold_shapes_imports`] walks that
-//! closure against the `--import IRI=FILE` table — PurRDF fetches nothing — and a shapes
-//! graph with no imports composes to exactly the `Shapes` `parse_shapes` produced before the
-//! seam existed.
+//! `owl:imports` are resolved by the engine, not here: [`crate::shapes_source::shapes_imports`]
+//! reads the `--import IRI=FILE` documents into the shapes graph's import table — PurRDF
+//! fetches nothing — and the `Shapes` constructor resolves the closure against it through the
+//! one helper every host shares (`purrdf_shapes::imports::resolve_shapes_imports`), refusing
+//! an import nothing resolves. A shapes graph with no imports composes to exactly the
+//! `Shapes` `parse_shapes` produces.
 //!
 //! # `--shapes-graph` is command-line text, and its refusal says so
 //!
@@ -224,15 +224,24 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`resolve_shapes_graph`](crate::shapes_source::resolve_shapes_graph) turns it into
     /// the absolute IRI the engine is handed.
     pub(crate) shapes_graph: Option<&'a str>,
+    /// `--shapes-base`: the base the shapes DOCUMENT parses under in place of its retrieval
+    /// IRI, and so also its own IRI for `owl:imports` resolution. See
+    /// [`shapes_document_base`].
+    pub(crate) shapes_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable: the local documents that resolve the shapes graph's
-    /// `owl:imports`. Empty means the operator named none, which is the pre-flag behaviour
-    /// plus a diagnostic — see [`crate::shapes_source::fold_shapes_imports`].
+    /// `owl:imports`. Empty means the operator named none, and an import nothing else
+    /// resolves is then refused — see [`crate::shapes_source::shapes_imports`].
     pub(crate) imports: &'a [String],
     /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
     /// `None` to leave the box-role annotation feature inactive. Threaded to
     /// [`purrdf_shapes::shapes::from_dataset_with_config`] through
     /// [`purrdf_shapes::model::BoxRoleVocab::for_namespace`] — see [`load_shapes`].
     pub(crate) box_role_vocab: Option<&'a str>,
+    /// `--conformance-disallows IRI`, repeatable: the conformance-disallow set this run
+    /// is judged against, as the operator wrote it. Empty means SHACL's default set.
+    /// [`validation_options`] turns it into the engine's
+    /// [`ValidationOptions`](purrdf_shapes::engine::ValidationOptions).
+    pub(crate) conformance_disallows: &'a [String],
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the DATA graph resolve against.
@@ -275,6 +284,21 @@ enum ShapesSource {
 }
 
 impl ShapesSource {
+    /// These shapes, answering every validation under `options` — the request's
+    /// conformance-disallow set — on both routes: the parsed shapes take them
+    /// directly, and a restored preparation, which the product never carries them
+    /// in, takes them through
+    /// [`PreparedShapes::with_validation_options`](engine::PreparedShapes::with_validation_options).
+    fn with_validation_options(self, options: engine::ValidationOptions) -> Self {
+        match self {
+            Self::Parsed(mut shapes) => {
+                shapes.set_validation_options(options);
+                Self::Parsed(shapes)
+            }
+            Self::Restored(prepared) => Self::Restored(prepared.with_validation_options(options)),
+        }
+    }
+
     /// The shapes to validate against.
     fn shapes(&self) -> &Shapes {
         match self {
@@ -326,6 +350,24 @@ impl ShapesSource {
     }
 }
 
+/// The validation-request options `--conformance-disallows` names: SHACL's default
+/// set when the flag is absent, exactly the named IRIs otherwise.
+///
+/// # Errors
+///
+/// A usage error when a value is not an absolute IRI.
+fn validation_options(
+    options: &ValidateOptions<'_>,
+) -> Result<engine::ValidationOptions, CliError> {
+    if options.conformance_disallows.is_empty() {
+        return Ok(engine::ValidationOptions::default());
+    }
+    let set =
+        purrdf::shapes::report::ConformanceDisallows::from_iris(options.conformance_disallows)
+            .map_err(|message| CliError::Usage(format!("--conformance-disallows: {message}")))?;
+    Ok(engine::ValidationOptions::default().with_conformance_disallows(set))
+}
+
 /// Run the `validate` subcommand.
 pub(crate) fn run(
     options: &ValidateOptions<'_>,
@@ -361,9 +403,11 @@ pub(crate) fn run(
     // fail against the command line rather than after the data has been parsed and
     // validated.
     let plan = ShapesPlan::decide(options)?;
+    // Decided off the command line too: an IRI that is not one is a malformed request.
+    let validation = validation_options(options)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
-    let source = plan.load(options)?;
+    let source = plan.load(options)?.with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
     // operator reading a failed run needs to know which shapes produced it even when the
     // validation below never gets to print anything. A restored product renders the
@@ -719,16 +763,26 @@ fn load_shapes(
     base: Option<&str>,
 ) -> Result<Shapes, CliError> {
     let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
-    let folded = crate::shapes_source::fold_shapes_imports(root, options.imports)?;
+    let table = crate::shapes_source::shapes_imports(&root, options.imports)?;
     let box_role_vocab = options
         .box_role_vocab
         .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
-    purrdf::shapes::shapes::from_dataset_with_config(
-        &folded.dataset,
-        &folded.prefixes,
+    purrdf::shapes::shapes::from_dataset_with_base(
+        &root.dataset,
+        None,
+        &root.prefixes,
         box_role_vocab,
+        None,
+        &table,
     )
-    .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
+    .map_err(|error| {
+        crate::shapes_source::shapes_error(
+            error,
+            &format!("--shapes {path}"),
+            &root,
+            "--shapes-base",
+        )
+    })
 }
 
 /// Everything DECIDED about the shapes side of this run, before either document is read.
@@ -802,7 +856,7 @@ impl<'a> ShapesPlan<'a> {
         // The shapes document's base is derived ONCE and spent twice: the document parses
         // under it, and `--shapes-graph` resolves against it. Deriving it separately per
         // consumer is how the flag would come to name a graph the shapes document cannot.
-        let base = shapes_document_base(path, format)?;
+        let base = shapes_document_base(path, format, options.shapes_base)?;
         let shapes_graph =
             crate::shapes_source::resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
         Ok(Self::Document {
@@ -895,14 +949,30 @@ impl<'a> ShapesPlan<'a> {
 /// The base the SHAPES document parses under, and the base `--shapes-graph` resolves
 /// against.
 ///
-/// It is [`source::effective_base`] with an explicit `None` for `--base`: that flag names
-/// the base of the DATA graph, and silently retargeting a second document with it is the
-/// confusion `--base`'s own help text promises this command does not create. A pack/GTS
-/// container stores resolved IRIs and has no document base to derive.
-fn shapes_document_base(path: &str, format: SourceFormat) -> Result<Option<String>, CliError> {
+/// It is [`source::effective_base`] with `--shapes-base` as the explicit base — never
+/// `--base`: that flag names the base of the DATA graph, and silently retargeting a second
+/// document with it is the confusion `--base`'s own help text promises this command does
+/// not create. `--shapes-base` is the same job `shacl pack --base` does for the document it
+/// packs, so the two commands parse one shapes document identically.
+///
+/// A pack/GTS container stores resolved IRIs and has no document base to derive, so a
+/// `--shapes-base` against one would be read and never used: a usage error, never a silent
+/// no-op.
+pub(crate) fn shapes_document_base(
+    path: &str,
+    format: SourceFormat,
+    shapes_base: Option<&str>,
+) -> Result<Option<String>, CliError> {
     match format {
-        SourceFormat::Native(native) => source::effective_base(path, native, None),
-        SourceFormat::Pack | SourceFormat::Gts => Ok(None),
+        SourceFormat::Native(native) => source::effective_base(path, native, shapes_base),
+        SourceFormat::Pack | SourceFormat::Gts => match shapes_base {
+            None => Ok(None),
+            Some(base) => Err(CliError::Usage(format!(
+                "--shapes-base {base}: the shapes input {path} is a container, which stores \
+                 resolved IRIs and has no document base to set. Drop --shapes-base, or give \
+                 --shapes an RDF text document"
+            ))),
+        },
     }
 }
 
@@ -1055,11 +1125,12 @@ fn refuse_a_rebuild_with_no_product(options: &ValidateOptions<'_>) -> Result<(),
 
 /// Refuse the shapes-PARSE flags against `--shapes-product`.
 ///
-/// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` all configure a
+/// `--shapes-from`, `--shapes-graph`, `--shapes-base`, `--import` and `--box-role-vocab`
+/// all configure a
 /// parse of a shapes DOCUMENT, and `--shapes-product` performs none: the product carries
 /// the compiled model and, in its own authenticated parse provenance and identity, the
 /// base, the prefix map, the `sh:shapesGraph` IRI and the box-role vocabulary it was
-/// prepared under. Accepting any of the four and quietly ignoring it is the silent no-op
+/// prepared under. Accepting any of the five and quietly ignoring it is the silent no-op
 /// this pipeline refuses everywhere else, and here it would be worse than usual — an
 /// operator who passed `--shapes-graph` and got a validation back would reasonably believe
 /// the shapes graph was exposed under the IRI they named.
@@ -1085,6 +1156,14 @@ fn refuse_parse_flags_against_a_product(options: &ValidateOptions<'_>) -> Result
              already recorded the IRI it was prepared under — which its identity binds, so \
              it cannot be changed without re-preparing. Pass `--shapes-graph` to `purrdf \
              shacl pack` instead, and re-pack",
+        ))
+    } else if options.shapes_base.is_some() {
+        Some((
+            "--shapes-base",
+            "sets the base a shapes DOCUMENT parses under, and this product already recorded \
+             the base it was prepared under — which its identity binds, so it cannot be \
+             changed without re-preparing. Pass `--base` to `purrdf shacl pack` instead, and \
+             re-pack",
         ))
     } else if !options.imports.is_empty() {
         Some((

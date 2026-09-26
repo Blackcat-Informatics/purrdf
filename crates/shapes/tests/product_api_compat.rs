@@ -78,7 +78,8 @@ fn shape_is_still_a_bare_literal() {
         constraints: vec![Constraint::MinCount(1)],
         property_shapes: Vec::<PropertyShape>::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -97,12 +98,15 @@ fn property_shape_is_still_a_bare_literal() {
     let property_shape = PropertyShape {
         id: iri("https://example.org/nameProp").into_term(),
         path: Path::Predicate(iri("https://example.org/name")),
+        values: None,
+        default_value: None,
         constraints: vec![Constraint::MinCount(1)],
         property_shapes: Vec::new(),
         reifier_shapes: Vec::new(),
         reification_required: false,
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
     };
@@ -136,7 +140,8 @@ fn shapes_still_builds_via_default_then_field_assignment() {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -187,11 +192,20 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
         Constraint::Sparql { .. } => "sparql",
         Constraint::Equals(_) => "equals",
         Constraint::Disjoint(_) => "disjoint",
+        Constraint::SubsetOf(_) => "subset-of",
+        Constraint::UniqueValuesFor { .. } => "unique-values-for",
         Constraint::LessThan(_) => "less-than",
         Constraint::LessThanOrEquals(_) => "less-than-or-equals",
         Constraint::QualifiedValueShape { .. } => "qualified-value-shape",
         Constraint::Expression { .. } => "expression",
         Constraint::NodeByExpression { .. } => "node-by-expression",
+        Constraint::MinListLength(_) => "min-list-length",
+        Constraint::MaxListLength(_) => "max-list-length",
+        Constraint::UniqueMembers(_) => "unique-members",
+        Constraint::MemberShape(_) => "member-shape",
+        Constraint::SingleLine(_) => "single-line",
+        Constraint::RootClass(_) => "root-class",
+        Constraint::SomeValue(_) => "some-value",
         Constraint::Component { .. } => "component",
     }
 }
@@ -200,6 +214,12 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
 fn constraint_match_is_exhaustive_and_reachable() {
     let constraint = Constraint::MinCount(1);
     assert_eq!(constraint_name(&constraint), "min-count");
+    // A class LIST is one constraint: a single-IRI value is a one-member list.
+    let list = Constraint::Class(vec![
+        iri("https://example.org/A"),
+        iri("https://example.org/B"),
+    ]);
+    assert_eq!(constraint_name(&list), "class");
 }
 
 /// Every [`NodeExpr`] variant (SHACL-AF plus the SHACL 1.2 Node Expressions and

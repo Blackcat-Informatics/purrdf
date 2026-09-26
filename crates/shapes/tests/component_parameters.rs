@@ -23,7 +23,7 @@ fn dataset(body: &str) -> Arc<RdfDataset> {
 }
 
 fn shapes(body: &str) -> Result<Shapes, String> {
-    from_dataset(&dataset(body))
+    from_dataset(&dataset(body)).map_err(String::from)
 }
 
 #[test]
@@ -252,18 +252,46 @@ fn repeated_parameter_values_preserve_rdf12_term_identity() {
     );
 }
 
+/// A built-in component's declaration carrying a VALIDATOR binds natively: the
+/// validator is an alternative implementation the native one supersedes (SHACL 1.2
+/// SPARQL Extensions, "Validators": a constraint uses "one of the values"), never run.
+/// The oracle observes which ran: the alternative's `FILTER (false)` would flag BOTH
+/// focus nodes, the native `sh:class` flags only the one that is not an `ex:Class`.
 #[test]
-fn imported_native_validator_does_not_duplicate_native_execution() {
+fn imported_native_validator_binds_as_a_superseded_alternative() {
     let body = r#"sh:ClassConstraintComponent a sh:ConstraintComponent ;
         sh:parameter [ sh:path sh:class ] ;
         sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
-        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; sh:class ex:Class ."#;
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class ."#;
+    let parsed = shapes(body).expect("the declared validator is an alternative");
+    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
+    );
+    assert_eq!(
+        report.results[0].source_constraint_component.as_str(),
+        sh::CLASS_CONSTRAINT_COMPONENT
+    );
+}
+
+/// The neighbour: the BARE declaration binds to the native component, which runs
+/// exactly once — the focus node that is an `ex:Class` conforms, the one that is
+/// not is reported once.
+#[test]
+fn imported_bare_native_declaration_binds_to_native_execution() {
+    let body = r"sh:ClassConstraintComponent a sh:ConstraintComponent ;
+        sh:parameter [ sh:path sh:class ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class .";
     let parsed = shapes(body).unwrap();
     assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
-    assert!(
-        validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed)
-            .unwrap()
-            .conforms
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
     );
 }
 
@@ -348,8 +376,21 @@ fn native_component_declarations_preserve_every_repeatable_constraint_family() {
         );
         let native = shapes(&body).unwrap();
         let imported = shapes(&format!("{body} sh:{component}ConstraintComponent a sh:ConstraintComponent ; sh:parameter [ sh:path sh:{parameter} ] .")).unwrap();
-        let before = &native.node_shapes[0].property_shapes[0].constraints;
-        let after = &imported.node_shapes[0].property_shapes[0].constraints;
+        // `ex:A` / `ex:B`, the values of the shape-expecting parameters, are shapes
+        // of the graph too, and top-level (an explicit shape target can name them),
+        // so the shape under test is found by its node rather than by position.
+        let shape = |shapes: &Shapes| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
+                .expect("ex:Shape is top-level")
+                .property_shapes[0]
+                .constraints
+                .clone()
+        };
+        let before = &shape(&native);
+        let after = &shape(&imported);
         assert_eq!(after.len(), 2, "sh:{parameter}");
         assert_eq!(
             format!("{before:?}"),
@@ -508,8 +549,22 @@ fn parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not()
     }
 
     // The near misses: same prefix, same suffix, different name. Every one must load.
-    for allowed in ["thisOne", "pathValue", "valued", "myValue", "currentShape"] {
+    //
+    // `VARNAME` is the SPARQL grammar's production, so a parameter named with a
+    // non-ASCII letter or a leading digit binds `?größe` / `?2d` and loads; a name
+    // SPARQL cannot bind (`a-b` lexes as three tokens) is still refused.
+    for allowed in [
+        "thisOne",
+        "pathValue",
+        "valued",
+        "myValue",
+        "currentShape",
+        "größe",
+        "2d",
+    ] {
         load(allowed)
             .unwrap_or_else(|e| panic!("a parameter named {allowed:?} must still load: {e}"));
     }
+    let error = load("a-b").expect_err("a name SPARQL cannot bind is refused");
+    assert!(error.contains("invalid SPARQL variable name"), "{error}");
 }

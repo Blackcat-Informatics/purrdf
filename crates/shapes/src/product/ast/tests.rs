@@ -17,10 +17,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY,
-    TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
-    TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
-    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity, write_varint,
+    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ANNOTATED_CONSTRAINT,
+    TAGS_ARG_KEY, TAGS_CLOSED_MODE, TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND,
+    TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_SEVERITY,
+    TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity,
+    write_varint,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -28,10 +29,11 @@ use crate::expression::{
 use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::report::Severity;
-use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
+use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes,
-    SparqlTargetType, Target, TargetTypeParam,
+    AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
+    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
+    Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -84,7 +86,8 @@ fn leaf_shape(id: &str) -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -145,6 +148,8 @@ fn sample_severities() -> Vec<Severity> {
         Severity::Violation,
         Severity::Warning,
         Severity::Info,
+        Severity::Debug,
+        Severity::Trace,
         Severity::Other(ex("Critical")),
     ]
 }
@@ -158,6 +163,7 @@ fn sample_node_kinds() -> Vec<NodeKindValue> {
         NodeKindValue::BlankNodeOrIri,
         NodeKindValue::BlankNodeOrLiteral,
         NodeKindValue::IriOrLiteral,
+        NodeKindValue::TripleTerm,
     ]
 }
 
@@ -186,6 +192,8 @@ fn sample_targets() -> Vec<Target> {
             select: "SELECT ?this WHERE { ?this a <https://example.org/Person> }".to_owned(),
             substitutions: vec![("kind".to_owned(), ex_term("Manager"))],
         },
+        Target::NodeExpression(NodeExpr::Path(Path::Predicate(ex("pointsAt")))),
+        Target::Where(Box::new(leaf_shape("Adult"))),
     ]
 }
 
@@ -214,21 +222,17 @@ fn sample_custom_fn_kinds() -> Vec<CustomFnKind> {
     vec![CustomFnKind::ListParameter, CustomFnKind::NamedParameter]
 }
 
-/// One [`RuleSchedule`] per tag.
-fn sample_rule_schedules() -> Vec<RuleSchedule> {
-    vec![RuleSchedule::Once, RuleSchedule::General]
-}
-
 /// One [`RuleBody`] per tag.
 fn sample_rule_bodies() -> Vec<RuleBody> {
     vec![
         RuleBody::Triple {
-            subject: NodeExpr::This,
-            predicate: NodeExpr::Constant(ex_term("derived")),
-            object: NodeExpr::Path(Path::Predicate(ex("source"))),
+            subject: None,
+            predicate: Some(NodeExpr::Constant(ex_term("derived"))),
+            object: Some(NodeExpr::Path(Path::Predicate(ex("source")))),
         },
         RuleBody::Sparql {
-            construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+            construct: "CONSTRUCT { $this <https://example.org/p> $v } WHERE {}".to_owned(),
+            parameters: vec![("v".to_owned(), ex_term("value"))],
         },
     ]
 }
@@ -326,7 +330,7 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
             nodes: this(),
             shape: Box::new(leaf_shape("AllShape")),
         },
-        NodeExpr::InstancesOf(ex("Person")),
+        NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(Term::NamedNode(ex("Person"))))),
         NodeExpr::NodesMatching(Box::new(leaf_shape("MatchingShape"))),
         NodeExpr::ConformsToShape {
             node: this(),
@@ -341,11 +345,30 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
 }
 
 /// One [`Constraint`] per tag, in tag order.
+/// A two-type `sh:closed sh:ByTypes` index, built out of canonical order.
+fn sample_type_index() -> Arc<ClosedTypeIndex> {
+    Arc::new(
+        ClosedTypeIndex::from_entries(vec![
+            (ex_term("Sub"), vec![ex("sub"), ex("root")]),
+            (ex_term("Root"), vec![ex("root")]),
+        ])
+        .expect("distinct types"),
+    )
+}
+
+/// One [`ClosedMode`] per tag.
+fn sample_closed_modes() -> Vec<ClosedMode> {
+    vec![
+        ClosedMode::Declared,
+        ClosedMode::ByTypes(sample_type_index()),
+    ]
+}
+
 fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
     vec![
-        Constraint::Class(ex("Person")),
-        Constraint::Datatype(ex("integer")),
-        Constraint::NodeKind(NodeKindValue::IriOrLiteral),
+        Constraint::Class(vec![ex("Person"), ex("Agent")]),
+        Constraint::Datatype(vec![ex("integer")]),
+        Constraint::NodeKind(vec![NodeKindValue::IriOrLiteral]),
         Constraint::MinCount(1),
         Constraint::MaxCount(5),
         Constraint::In(vec![ex_term("a"), ex_term("b")]),
@@ -362,6 +385,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::Not(Box::new(leaf_shape("NotShape"))),
         Constraint::Closed {
             ignored: vec![ex("ignored")],
+            mode: ClosedMode::ByTypes(sample_type_index()),
         },
         Constraint::MinInclusive(ex_term("zero")),
         Constraint::MaxInclusive(ex_term("hundred")),
@@ -373,13 +397,34 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::Node(Box::new(leaf_shape("NodeShape"))),
         Constraint::Sparql {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
-            message: Some("no".to_owned()),
+            messages: vec![Literal::new_simple_literal("no")],
             severity: Some(Severity::Warning),
+            // Two annotations in canonical order, one with a variable and defaults,
+            // so the result-annotation codec is exercised past the empty list.
+            annotations: vec![
+                crate::shapes::ResultAnnotation {
+                    property: ex("seen"),
+                    variable: Some("seen".to_owned()),
+                    default_values: vec![
+                        Term::Literal(Literal::new_simple_literal("unknown")),
+                        ex_term("never"),
+                    ],
+                },
+                crate::shapes::ResultAnnotation {
+                    property: ex("time"),
+                    variable: Some("when".to_owned()),
+                    default_values: vec![],
+                },
+            ],
         },
-        Constraint::Equals(ex("p")),
-        Constraint::Disjoint(ex("p")),
-        Constraint::LessThan(ex("p")),
-        Constraint::LessThanOrEquals(ex("p")),
+        // A composite path, so the pair tags are exercised past the IRI form.
+        Constraint::Equals(Path::Sequence(vec![
+            Path::Inverse(Box::new(Path::Predicate(ex("p")))),
+            Path::ZeroOrMore(Box::new(Path::Predicate(ex("q")))),
+        ])),
+        Constraint::Disjoint(Path::Predicate(ex("p"))),
+        Constraint::LessThan(Path::Predicate(ex("p"))),
+        Constraint::LessThanOrEquals(Path::Predicate(ex("p"))),
         Constraint::QualifiedValueShape {
             shape: Box::new(leaf_shape("Qualified")),
             siblings: vec![leaf_shape("Sibling")],
@@ -389,7 +434,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         },
         Constraint::Expression {
             expr: NodeExpr::Exists(Box::new(NodeExpr::Path(Path::Predicate(ex("p"))))),
-            message: None,
+            messages: vec![],
             severity: Some(Severity::Info),
         },
         Constraint::NodeByExpression {
@@ -398,7 +443,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
                 args: vec![(ArgKey::Index(0), NodeExpr::This)],
             },
             shapes: Arc::new(OnceLock::new()),
-            message: Some("shape".to_owned()),
+            messages: vec![Literal::new_simple_literal("shape")],
             severity: None,
         },
         Constraint::Component {
@@ -408,8 +453,33 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             validator: ComponentValidator::Ask {
                 ask: "ASK { $this ?p ?o }".to_owned(),
             },
-            message: None,
+            messages: vec![],
             severity: None,
+            // No variable: only the default applies.
+            annotations: vec![crate::shapes::ResultAnnotation {
+                property: ex("origin"),
+                variable: None,
+                default_values: vec![ex_term("component")],
+            }],
+        },
+        Constraint::MinListLength(1),
+        Constraint::MaxListLength(4),
+        Constraint::UniqueMembers(true),
+        Constraint::MemberShape(Box::new(leaf_shape("MemberShape"))),
+        Constraint::SingleLine(true),
+        Constraint::RootClass(vec![ex("RootA"), ex("RootB")]),
+        Constraint::SomeValue(Box::new(leaf_shape("SomeValue"))),
+        Constraint::SubsetOf(Path::Alternative(vec![
+            Path::Predicate(ex("p")),
+            Path::ZeroOrOne(Box::new(Path::Predicate(ex("q")))),
+        ])),
+        Constraint::UniqueValuesFor {
+            properties: vec![ex("notation"), ex("scheme")],
+            shape: ex_term("SchemeShape"),
+            targets: vec![
+                Target::Class(ex("Concept")),
+                Target::SubjectsOf(ex("notation")),
+            ],
         },
     ]
 }
@@ -553,23 +623,50 @@ fn full_fixture() -> Shapes {
     let property = PropertyShape {
         id: ex_term("PropertyShape"),
         path: Path::Sequence(sample_paths()),
+        values: None,
+        default_value: None,
         constraints: sample_constraints(&func),
         property_shapes: vec![PropertyShape {
             id: ex_term("NestedProperty"),
             path: Path::Predicate(ex("nested")),
+            values: Some(NodeExpr::Path(Path::Predicate(ex("computed")))),
+            default_value: Some(NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("fallback"),
+            ))),
             constraints: vec![Constraint::MinCount(1)],
             property_shapes: Vec::new(),
             reifier_shapes: Vec::new(),
             reification_required: false,
             severity: Severity::Warning,
-            message: Some("nested".to_owned()),
+            messages: vec![Literal::new_simple_literal("nested")],
+            constraint_annotations: vec![],
             deactivated: true,
             box_roles: vec![ex("role/abox")],
         }],
         reifier_shapes: vec![leaf_shape("ReifierShape")],
         reification_required: true,
         severity: Severity::Other(ex("Critical")),
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Constraint(0),
+                severity: Some(Severity::Debug),
+                messages: vec![
+                    Literal::new_language_tagged_literal_unchecked("erste", "de"),
+                    Literal::new_simple_literal("first"),
+                ],
+            },
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Constraint(2),
+                severity: None,
+                messages: vec![Literal::new_simple_literal("third")],
+            },
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Reifier,
+                severity: Some(Severity::Trace),
+                messages: vec![],
+            },
+        ],
         deactivated: false,
         box_roles: vec![ex("role/tbox"), ex("role/rbox")],
     };
@@ -578,7 +675,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|expr| Constraint::Expression {
             expr,
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -587,7 +684,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|call| Constraint::Expression {
             expr: NodeExpr::Call(call),
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -599,7 +696,7 @@ fn full_fixture() -> Shapes {
                 node: Box::new(NodeExpr::This),
                 shape,
             },
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -616,7 +713,7 @@ fn full_fixture() -> Shapes {
 
     let kind_constraints: Vec<Constraint> = sample_node_kinds()
         .into_iter()
-        .map(Constraint::NodeKind)
+        .map(|kind| Constraint::NodeKind(vec![kind]))
         .collect();
 
     let validator_constraints: Vec<Constraint> = sample_component_validators()
@@ -626,8 +723,9 @@ fn full_fixture() -> Shapes {
             source_shape: ex_term("SourceShape"),
             bindings: Vec::new(),
             validator,
-            message: None,
+            messages: vec![],
             severity: None,
+            annotations: vec![],
         })
         .collect();
 
@@ -635,8 +733,9 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|severity| Constraint::Sparql {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
-            message: None,
+            messages: vec![],
             severity: Some(severity),
+            annotations: vec![],
         })
         .collect();
 
@@ -644,25 +743,40 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|key| Constraint::Expression {
             expr: NodeExpr::Arg(key),
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
 
     let mut rules = Vec::new();
     for (index, body) in sample_rule_bodies().into_iter().enumerate() {
-        for (offset, schedule) in sample_rule_schedules().into_iter().enumerate() {
+        for (offset, run_once) in [true, false].into_iter().enumerate() {
             rules.push(Rule {
                 id: ex_term(&format!("rule/{index}-{offset}")),
                 body: body.clone(),
                 conditions: vec![leaf_shape("Condition")],
+                layer: if offset == 1 {
+                    Some(OrderKey::new(3.0))
+                } else {
+                    None
+                },
                 order: if offset == 0 {
                     Some(OrderKey::new(1.5))
                 } else {
                     None
                 },
+                run_once,
                 deactivated: offset == 1,
-                schedule,
+                expected_predicates: if offset == 0 {
+                    vec![ex("expected")]
+                } else {
+                    Vec::new()
+                },
+                processors: if offset == 0 {
+                    vec![ex_term("processor")]
+                } else {
+                    Vec::new()
+                },
             });
         }
     }
@@ -684,7 +798,12 @@ fn full_fixture() -> Shapes {
         constraints,
         property_shapes: vec![property],
         severity: Severity::Info,
-        message: Some("everything".to_owned()),
+        messages: vec![Literal::new_simple_literal("everything")],
+        constraint_annotations: vec![ConstraintAnnotation {
+            constraint: AnnotatedConstraint::Constraint(1),
+            severity: Some(Severity::Other(ex("Critical"))),
+            messages: vec![],
+        }],
         deactivated: false,
         box_roles: vec![ex("role/cbox")],
         rules,
@@ -808,16 +927,6 @@ fn every_known_tag_decodes() {
         reader_fn!(custom_fn_kind),
     );
     roundtrip_tags(
-        "RuleSchedule",
-        TAGS_RULE_SCHEDULE,
-        &sample_rule_schedules(),
-        |writer, value| {
-            writer.rule_schedule(*value);
-            Ok(())
-        },
-        reader_fn!(rule_schedule),
-    );
-    roundtrip_tags(
         "RuleBody",
         TAGS_RULE_BODY,
         &sample_rule_bodies(),
@@ -852,6 +961,13 @@ fn every_known_tag_decodes() {
         AstWriter::constraint,
         reader_fn!(constraint),
     );
+    roundtrip_tags(
+        "ClosedMode",
+        TAGS_CLOSED_MODE,
+        &sample_closed_modes(),
+        AstWriter::closed_mode,
+        reader_fn!(closed_mode),
+    );
 }
 
 /// The invalid neighbour of every case above, stated on its own so the refusal is
@@ -868,6 +984,7 @@ fn unknown_variant_tag_is_unsupported_capability() {
         ("Path", TAGS_PATH, reader_probe!(path)),
         ("Target", TAGS_TARGET, reader_probe!(target)),
         ("Constraint", TAGS_CONSTRAINT, reader_probe!(constraint)),
+        ("ClosedMode", TAGS_CLOSED_MODE, reader_probe!(closed_mode)),
         ("NodeExpr", TAGS_NODE_EXPR, reader_probe!(node_expr)),
         ("FnCall", TAGS_FN_CALL, reader_probe!(fn_call)),
         ("ShapeArg", TAGS_SHAPE_ARG, reader_probe!(shape_arg)),
@@ -882,11 +999,6 @@ fn unknown_variant_tag_is_unsupported_capability() {
             "CustomFnKind",
             TAGS_CUSTOM_FN_KIND,
             reader_probe!(custom_fn_kind),
-        ),
-        (
-            "RuleSchedule",
-            TAGS_RULE_SCHEDULE,
-            reader_probe!(rule_schedule),
         ),
     ];
 
@@ -1119,11 +1231,15 @@ fn shapes_with_order(order: Option<OrderKey>) -> Shapes {
             id: ex_term("rule"),
             body: RuleBody::Sparql {
                 construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+                parameters: Vec::new(),
             },
             conditions: Vec::new(),
+            layer: None,
             order,
+            run_once: false,
             deactivated: false,
-            schedule: RuleSchedule::General,
+            expected_predicates: Vec::new(),
+            processors: Vec::new(),
         }],
         ..leaf_shape("Ordered")
     }])
@@ -1188,7 +1304,7 @@ fn custom_function_cycle_encodes_as_dag() {
                     func: Arc::clone(&func),
                     args: vec![(ArgKey::Index(0), NodeExpr::This)],
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             // A SECOND call site of the SAME declaration: the table must still
@@ -1198,7 +1314,7 @@ fn custom_function_cycle_encodes_as_dag() {
                     func: Arc::clone(&func),
                     args: vec![(ArgKey::Index(1), NodeExpr::Empty)],
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
         ],
@@ -1250,7 +1366,7 @@ fn custom_function_cycle_encodes_as_dag() {
                 func: fixture_fn(),
                 args: Vec::new(),
             },
-            message: None,
+            messages: vec![],
             severity: None,
         }],
         ..leaf_shape("Bodiless")
@@ -1270,7 +1386,7 @@ fn two_declarations_of_one_function_iri_are_refused() {
             func,
             args: Vec::new(),
         },
-        message: None,
+        messages: vec![],
         severity: None,
     };
 
@@ -1353,39 +1469,91 @@ fn sparql_target_type_round_trips() {
 
 // ── Rules ───────────────────────────────────────────────────────────────────────
 
-/// Every [`RuleSchedule`] variant survives, and the two are distinguishable.
+/// A run-once rule and an iterating rule survive a round trip, and are distinguishable.
 #[test]
-fn rule_schedule_round_trips() {
-    let schedules = sample_rule_schedules();
-    assert_eq!(schedules.len(), usize::from(TAGS_RULE_SCHEDULE));
-
+fn run_once_round_trips() {
     let mut encodings = Vec::new();
-    for schedule in schedules {
+    for run_once in [true, false] {
         let shapes = shapes_of(vec![Shape {
             rules: vec![Rule {
                 id: ex_term("rule"),
                 body: RuleBody::Sparql {
                     construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+                    parameters: Vec::new(),
                 },
                 conditions: vec![leaf_shape("Condition")],
+                layer: Some(OrderKey::new(1.0)),
                 order: Some(OrderKey::new(2.0)),
+                run_once,
                 deactivated: false,
-                schedule,
+                expected_predicates: Vec::new(),
+                processors: Vec::new(),
             }],
             ..leaf_shape("Scheduled")
         }]);
         let bytes = encode_ast_derived(&shapes).expect("encodes");
         let parts = decode_ast(&bytes).expect("decodes");
         assert_eq!(
-            parts.node_shapes[0].rules[0].schedule, schedule,
-            "a run-once rule and a general rule run on different schedules; collapsing them would \
-             change what the closure contains",
+            parts.node_shapes[0].rules[0].run_once, run_once,
+            "a run-once rule and an iterating rule run on different schedules; collapsing them \
+             would change what the inferences contain",
         );
         encodings.push(bytes);
     }
     assert_ne!(
         encodings[0], encodings[1],
         "the two schedules must not share a byte form",
+    );
+}
+
+/// The global rules, the rule sets and the rules entailment declaration round-trip.
+#[test]
+fn rule_graph_round_trips() {
+    let shapes = Shapes {
+        rules: RuleGraph {
+            global_rules: vec![Rule {
+                id: ex_term("global"),
+                body: RuleBody::Triple {
+                    subject: Some(NodeExpr::Constant(ex_term("s"))),
+                    predicate: Some(NodeExpr::Constant(ex_term("p"))),
+                    object: None,
+                },
+                conditions: Vec::new(),
+                layer: Some(OrderKey::new(-1.0)),
+                order: None,
+                run_once: true,
+                deactivated: false,
+                expected_predicates: vec![ex("expected")],
+                processors: vec![ex_term("processor")],
+            }],
+            rule_sets: vec![RuleSetDeclaration {
+                id: ex("set"),
+                rules: vec![ex_term("global")],
+                includes: vec![ex("other-set")],
+                processors: vec![ex_term("processor")],
+            }],
+            entailment: true,
+        },
+        ..shapes_of(vec![leaf_shape("S")])
+    };
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
+    let parts = decode_ast(&bytes).expect("decodes");
+    assert_eq!(parts.rules.global_rules.len(), 1);
+    assert!(parts.rules.global_rules[0].run_once);
+    assert_eq!(
+        parts.rules.global_rules[0].processors,
+        [ex_term("processor")]
+    );
+    assert_eq!(parts.rules.rule_sets, shapes.rules.rule_sets);
+    assert!(parts.rules.entailment);
+    let without = Shapes {
+        rules: RuleGraph::default(),
+        ..shapes_of(vec![leaf_shape("S")])
+    };
+    assert_ne!(
+        encode_ast_derived(&without).expect("encodes"),
+        bytes,
+        "the rule graph reaches the byte form"
     );
 }
 
@@ -1718,13 +1886,13 @@ fn the_decoded_shape_index_is_one_shared_handle() {
             Constraint::NodeByExpression {
                 expr: NodeExpr::This,
                 shapes: Arc::new(OnceLock::new()),
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             Constraint::NodeByExpression {
                 expr: NodeExpr::Empty,
                 shapes: Arc::new(OnceLock::new()),
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             Constraint::Expression {
@@ -1735,7 +1903,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
                         shapes: Arc::new(OnceLock::new()),
                     },
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
         ],
@@ -1801,4 +1969,190 @@ fn an_empty_shapes_graph_round_trips() {
         ..Shapes::default()
     };
     assert_eq!(encode_ast_derived(&rebuilt).expect("re-encodes"), bytes);
+}
+
+// ── `sh:closed sh:ByTypes` ──────────────────────────────────────────────────────
+
+/// Two `sh:closed sh:ByTypes` constraints carrying one index decode to ONE shared
+/// index, as the parse that wrote them shared one; a different index stays apart.
+#[test]
+fn equal_type_indexes_decode_to_one_shared_index() {
+    let shared = sample_type_index();
+    let other = Arc::new(
+        ClosedTypeIndex::from_entries(vec![(ex_term("Other"), vec![ex("other")])])
+            .expect("one type"),
+    );
+    let mut writer = test_writer();
+    for index in [&shared, &shared, &other] {
+        writer
+            .closed_mode(&ClosedMode::ByTypes(Arc::clone(index)))
+            .expect("encodes");
+    }
+    let bytes = writer.out;
+    let mut reader = test_reader(&bytes);
+    let decoded: Vec<Arc<ClosedTypeIndex>> = (0..3)
+        .map(|_| match reader.closed_mode().expect("decodes") {
+            ClosedMode::ByTypes(index) => index,
+            ClosedMode::Declared => panic!("a ByTypes mode decodes as ByTypes"),
+        })
+        .collect();
+    assert!(Arc::ptr_eq(&decoded[0], &decoded[1]));
+    assert!(!Arc::ptr_eq(&decoded[1], &decoded[2]));
+    assert_eq!(*decoded[0], *shared);
+    assert_eq!(*decoded[2], *other);
+}
+
+/// A type index out of canonical order is refused as malformed rather than
+/// re-sorted, so a product's bytes stay the canonical form of what they decode
+/// to; the same entries in canonical order decode.
+#[test]
+fn a_non_canonical_type_index_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |entries: &[(&str, &[&str])]| {
+        let mut writer = test_writer();
+        writer.tag(1);
+        writer.count(entries.len());
+        for (ty, properties) in entries {
+            writer.term(&ex_term(ty)).expect("an IRI encodes");
+            writer.count(properties.len());
+            for property in *properties {
+                writer.named_node(&ex(property));
+            }
+        }
+        writer.out
+    };
+    let unsorted = encode(&[("Sub", &["sub"]), ("Root", &["root"])]);
+    let error = test_reader(&unsorted)
+        .closed_mode()
+        .expect_err("out-of-order types are refused");
+    assert_eq!(error.dimension(), ProductDimension::Malformed);
+    let empty = encode(&[("Root", &[])]);
+    assert_eq!(
+        test_reader(&empty)
+            .closed_mode()
+            .expect_err("an empty property list is refused")
+            .dimension(),
+        ProductDimension::Malformed
+    );
+    let canonical = encode(&[("Root", &["root"]), ("Sub", &["root", "sub"])]);
+    assert!(matches!(
+        test_reader(&canonical).closed_mode(),
+        Ok(ClosedMode::ByTypes(_))
+    ));
+}
+
+/// A per-constraint annotation list the shapes parser could not have written is
+/// refused as malformed — out of range, out of order, a reifier annotation on a
+/// node shape, an override of nothing — and the canonical list beside each
+/// decodes; the tag past `AnnotatedConstraint`'s space is an unknown capability.
+#[test]
+fn a_non_canonical_constraint_annotation_list_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |entries: &[(Option<usize>, Option<Severity>, Option<&str>)]| {
+        let mut writer = test_writer();
+        writer.count(entries.len());
+        for (index, severity, message) in entries {
+            match index {
+                Some(index) => {
+                    writer.tag(0);
+                    writer.count(*index);
+                }
+                None => writer.tag(1),
+            }
+            writer.opt_severity(severity.as_ref());
+            let messages: Vec<Literal> = message
+                .iter()
+                .map(|m| Literal::new_simple_literal(*m))
+                .collect();
+            writer.messages(&messages);
+        }
+        writer.out
+    };
+    let decode = |bytes: &[u8], constraints: usize, property_shape: bool| {
+        test_reader(bytes).constraint_annotations(constraints, property_shape)
+    };
+    let warning = || Some(Severity::Warning);
+
+    let canonical = encode(&[(Some(0), warning(), None), (None, None, Some("m"))]);
+    let decoded = decode(&canonical, 1, true).expect("the canonical list decodes");
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[1].constraint, AnnotatedConstraint::Reifier);
+
+    for (label, bytes, constraints, property_shape) in [
+        (
+            "past the constraints",
+            encode(&[(Some(1), warning(), None)]),
+            1,
+            true,
+        ),
+        (
+            "out of order",
+            encode(&[(Some(1), warning(), None), (Some(0), warning(), None)]),
+            2,
+            true,
+        ),
+        (
+            "a reifier on a node shape",
+            encode(&[(None, warning(), None)]),
+            1,
+            false,
+        ),
+        (
+            "overriding nothing",
+            encode(&[(Some(0), None, None)]),
+            1,
+            true,
+        ),
+    ] {
+        assert_eq!(
+            decode(&bytes, constraints, property_shape)
+                .expect_err(label)
+                .dimension(),
+            ProductDimension::Malformed,
+            "{label}"
+        );
+    }
+
+    let mut unknown = test_writer();
+    unknown.count(1);
+    unknown.tag(TAGS_ANNOTATED_CONSTRAINT);
+    assert_eq!(
+        decode(&unknown.out, 1, true)
+            .expect_err("an unknown AnnotatedConstraint tag is refused")
+            .dimension(),
+        ProductDimension::UnsupportedCapability
+    );
+}
+
+/// A message set out of canonical order, repeated, or holding a literal SHACL
+/// does not permit as an `sh:message` is malformed; the canonical set of tagged
+/// messages beside it decodes with every tag intact.
+#[test]
+fn a_non_canonical_message_set_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |messages: &[Literal]| {
+        let mut writer = test_writer();
+        writer.count(messages.len());
+        for message in messages {
+            writer.literal(message);
+        }
+        writer.out
+    };
+    let en = Literal::new_language_tagged_literal_unchecked("Too many", "en");
+    let de = Literal::new_language_tagged_literal_unchecked("Zu viele", "de");
+    let decoded = test_reader(&encode(&[en.clone(), de.clone()]))
+        .messages()
+        .expect("the canonical set decodes");
+    assert_eq!(decoded, vec![en.clone(), de.clone()]);
+    for (label, bytes) in [
+        ("out of order", encode(&[de, en.clone()])),
+        ("repeated", encode(&[en.clone(), en])),
+        (
+            "not a message literal",
+            encode(&[Literal::new_typed_literal("1", ex("Datatype"))]),
+        ),
+    ] {
+        assert_eq!(
+            test_reader(&bytes).messages().expect_err(label).dimension(),
+            ProductDimension::Malformed,
+            "{label}"
+        );
+    }
 }

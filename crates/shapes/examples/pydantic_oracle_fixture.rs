@@ -6,6 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[path = "support/shacl_lists.rs"]
+mod shacl_lists;
+#[path = "support/shacl_temporal.rs"]
+mod shacl_temporal;
+
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
@@ -197,6 +202,68 @@ fn routed_config(include_empty: bool) -> Result<PydanticConfig, Box<dyn Error>> 
         "1.2.3+oracle.1",
         "Caller-owned routed oracle version documentation.",
     )?)?)
+}
+
+/// The SHACL list-component fixture (see `support/shacl_lists.rs`) emitted as a
+/// Pydantic package, with the projected instances of real data and their SHACL
+/// verdicts; the package enforces every list component, so the oracle expects
+/// every probe to agree.
+fn lists_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_lists::compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_list_models",
+            "Caller-owned SHACL list-component oracle package documentation.",
+            "Caller-owned SHACL list-component oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_lists::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "probes": probes,
+    }))
+}
+
+/// The temporal range-bound fixture (see `support/shacl_temporal.rs`) emitted
+/// as a package: each bound is the negation of the values it rejects, which the
+/// generated runtime check evaluates over the raw JSON input, so every probe
+/// must agree with its SHACL verdict.
+fn temporal_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_temporal::compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_temporal_models",
+            "Caller-owned temporal range-bound oracle package documentation.",
+            "Caller-owned temporal range-bound oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_temporal::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "probes": probes,
+    }))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -416,6 +483,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<BTreeMap<_, _>>();
     let output = json!({
+        "lists": lists_fixture()?,
+        "temporal": temporal_fixture()?,
         "artifacts": artifacts,
         "model_paths": package.model_paths,
         "reverse": reverse,

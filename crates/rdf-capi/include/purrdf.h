@@ -76,29 +76,31 @@
  * recompiled once for all of them; splitting would have broken the same consumer four
  * times for one reason.
  *
- * # `0.7.0` → `0.8.0`: nine added symbols and an appended status
+ * # `0.7.0` → `0.8.0`: twelve added symbols and an appended status
  *
  * The prepared-shapes-product surface exports eight new entry points —
  * `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
  * `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDS
  * `PurrdfStatus::ShapesProductError = 11`. The SHACL change path exports a ninth,
  * `purrdf_shacl_validate_changes_to_sarif`, with its own `PurrdfShaclChangeScopeKind`
- * discriminant.
+ * discriminant. The shapes-graph tools export three more —
+ * `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr` and
+ * `purrdf_shacl_lint_shapes`.
  *
- * The ninth rides this SAME unreleased bump rather than a tenth one, exactly as the
+ * The ninth to twelfth ride this SAME unreleased bump rather than a later one, exactly as the
  * `0.6.0` → `0.7.0` breaks were bundled: `0.8.0` has shipped in nothing, so there is
  * no library answering it that exports a different surface, and splitting would make a
  * consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
  * different question, and the paragraph below is the answer to it.
  *
- * Every one of those is additive: no existing prototype was retyped, reordered,
- * removed or given a parameter, and no discriminant was renumbered. A host built
- * against `0.7.0` calls everything it called before, with the same arguments, and gets
- * the same values back.
+ * Every one of those twelve is additive: no discriminant was renumbered, and a host
+ * built against `0.7.0` calls each symbol it called before with the same arguments —
+ * except `purrdf_shacl_validate_to_sarif` and the three conclusion-directed
+ * `purrdf_entail_*` services, whose incompatible changes are described below.
  *
  * It bumps anyway, and the reason is the sentence at the top of this comment rather
  * than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
- * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export nine fewer symbols than this
+ * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export twelve fewer symbols than this
  * one does. Leaving the triple still would mean two different shippable libraries
  * answering `purrdf_abi_version` identically while exporting different surfaces, so a
  * host that compiled against this header and loaded the older library would be told
@@ -106,6 +108,32 @@
  * make that question answerable, and a number that cannot distinguish two shipped
  * libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
  * for the VERSION.
+ *
+ * The same unshipped bump also carries four INCOMPATIBLE changes:
+ * `purrdf_shacl_validate_to_sarif` gained `conformance_disallows` /
+ * `conformance_disallows_count` — the SHACL 1.2 conformance-disallow set — between
+ * `data_nt` and `out_buffer`; and `purrdf_entail_certain_answers`,
+ * `purrdf_entail_graph_entails` and `purrdf_entail_verify_entailment` each gained
+ * `premise_iris` / `premise_iri_count` — the IRIs the premise document was read from, so
+ * an `owl:imports` of the premise's own IRI resolves in place — between `import_count`
+ * and `out_answer`. A host built against `0.7.0` must recompile; the bump they ride is
+ * the one that already says so, rather than a second export for the same job.
+ *
+ * The same unshipped bump carries the shapes graph's `owl:imports` table, too. Seven
+ * shapes-graph entry points — `purrdf_shacl_validate_to_sarif`,
+ * `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`,
+ * `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`, `purrdf_shacl_lint_shapes`
+ * and `purrdf_shapes_product_encode` — each gained `import_iris` / `import_documents` /
+ * `import_count` before their out-parameters (incompatible: a `0.7.0` host passes its
+ * out-pointer into `import_iris`); `PurrdfStatus::ShapesImportError = 12` is APPENDED;
+ * and three accessors are added, `purrdf_shapes_import_error_kind`,
+ * `purrdf_shapes_import_error_iri_count` and `purrdf_shapes_import_error_iri`. Every host
+ * now refuses a shapes graph whose `owl:imports` closure is not in hand with the same
+ * typed refusal, where the C surface used to validate the importing document alone.
+ *
+ * `purrdf_shacl_eval_node_expr`, one of the symbols this bump adds, names its node
+ * expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
+ * `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
  *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
@@ -183,6 +211,15 @@ enum PurrdfStatus
      * distinguish them.
      */
     PURRDF_STATUS_SHAPES_PRODUCT_ERROR = 11,
+    /**
+     * A shapes graph's `owl:imports` closure is not in hand, or the import table the
+     * caller passed cannot be used — the one refusal every shapes-graph entry point
+     * raises, on every PurRDF host alike. The error carries the refusal's KIND
+     * (`purrdf_shapes_import_error_kind`: `unresolved-import`, `unreached-import` or
+     * `invalid-import`) and the IRIs it names (`purrdf_shapes_import_error_iri_count`,
+     * `purrdf_shapes_import_error_iri`).
+     */
+    PURRDF_STATUS_SHAPES_IMPORT_ERROR = 12,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -1496,16 +1533,26 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
  * so this is where those documents arrive — and the `owl:imports` triple stays exactly
  * where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
- * resolve is an error naming the document, never a network access and never a silently
- * empty import. `import_count == 0` with two NULL arrays is the ordinary "imports nothing"
- * case and is accepted; a NULL array with a non-zero count is a caller error and is
- * refused, never dereferenced. Resolution is transitive to a fixpoint.
+ * resolve, and the premise does not already hold (`<X> a owl:Ontology`, or an
+ * `owl:versionIRI` naming it), is an error naming the document, never a network access
+ * and never a silently empty import. `import_count == 0` with two NULL arrays is the
+ * ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
+ * caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
+ *
+ * `premise_iris` / `premise_iri_count` are the IRIs the premise DOCUMENT was read from —
+ * its retrieval IRI, or the base it was parsed under, when the host knows one. An
+ * `owl:imports` of one of these names the premise itself, so it is resolved in place
+ * rather than refused as missing. `premise_iri_count == 0` (the array may then be NULL) is
+ * the ordinary case for a host handed bare text; like the import table it is required, in
+ * the same position on every host.
  *
  * # Safety
  * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
- * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
- * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ * least `import_count` readable, non-null, NUL-terminated C strings; when
+ * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
+ * NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+ * `out_error` must be null or writable.
  */
 int32_t purrdf_entail_certain_answers(const char *regime,
                                       const char *document,
@@ -1513,6 +1560,8 @@ int32_t purrdf_entail_certain_answers(const char *regime,
                                       const char *const *import_iris,
                                       const char *const *import_documents,
                                       size_t import_count,
+                                      const char *const *premise_iris,
+                                      size_t premise_iri_count,
                                       PurrdfBuffer **out_answer,
                                       PurrdfBuffer **out_certificate,
                                       PurrdfError **out_error);
@@ -1543,16 +1592,18 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * turn a limitation of this library into a false statement about the caller's data.
  * **Free BOTH buffers with `purrdf_buffer_free`.**
  *
- * `import_iris`, `import_documents` and `import_count` are
- * `purrdf_entail_certain_answers`'s, and apply to the PREMISE: the conclusion is a graph to
+ * `import_iris`, `import_documents`, `import_count`, `premise_iris` and
+ * `premise_iri_count` are `purrdf_entail_certain_answers`'s, and apply to the PREMISE: the conclusion is a graph to
  * match rather than an ontology to close, so an `owl:imports` in it names nothing this
  * service resolves.
  *
  * # Safety
  * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
- * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
- * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ * least `import_count` readable, non-null, NUL-terminated C strings; when
+ * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
+ * NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+ * `out_error` must be null or writable.
  */
 int32_t purrdf_entail_graph_entails(const char *regime,
                                     const char *premise,
@@ -1560,6 +1611,8 @@ int32_t purrdf_entail_graph_entails(const char *regime,
                                     const char *const *import_iris,
                                     const char *const *import_documents,
                                     size_t import_count,
+                                    const char *const *premise_iris,
+                                    size_t premise_iri_count,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
                                     PurrdfError **out_error);
@@ -1580,8 +1633,8 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * there would read as a failed check rather than as an absent one.
  * **Free BOTH buffers with `purrdf_buffer_free`.**
  *
- * `import_iris`, `import_documents` and `import_count` are
- * `purrdf_entail_certain_answers`'s. The re-check runs against the premise AS WRITTEN
+ * `import_iris`, `import_documents`, `import_count`, `premise_iris` and
+ * `premise_iri_count` are `purrdf_entail_certain_answers`'s. The re-check runs against the premise AS WRITTEN
  * rather than against its imports closure: a warrant re-decidable from the caller's own
  * document is a stronger check than one only re-decidable against a graph the library
  * assembled.
@@ -1589,8 +1642,10 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * # Safety
  * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
- * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
- * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ * least `import_count` readable, non-null, NUL-terminated C strings; when
+ * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
+ * NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+ * `out_error` must be null or writable.
  */
 int32_t purrdf_entail_verify_entailment(const char *regime,
                                         const char *premise,
@@ -1598,6 +1653,8 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
                                         const char *const *import_iris,
                                         const char *const *import_documents,
                                         size_t import_count,
+                                        const char *const *premise_iris,
+                                        size_t premise_iri_count,
                                         PurrdfBuffer **out_answer,
                                         PurrdfBuffer **out_certificate,
                                         PurrdfError **out_error);
@@ -2566,14 +2623,49 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
  * grammar, so a base there could only be ignored.
  *
+ * `conformance_disallows` / `conformance_disallows_count` name the
+ * conformance-disallow set: the severity IRIs whose results make the data
+ * non-conforming — the report's verdict and every nested `sh:node` / `sh:not` /
+ * `sh:and` / `sh:or` / `sh:xone` check alike. `count == 0` (the array may then be
+ * NULL) is SHACL's default set, `sh:Violation`, `sh:Warning` and `sh:Info`; a
+ * value that is not an absolute IRI is a `ParseError`. The SARIF run carries
+ * `properties.shaclConforms` and `properties.shaclConformanceDisallows`, because the
+ * results alone cannot say whether the data conforms: an `sh:Debug` / `sh:Trace`
+ * result (SARIF `kind` `informational`, `level` `none`) appears in the log of a
+ * conforming report. A result's `message.text` is its untagged `sh:resultMessage`
+ * when it has one, else the first in canonical order; whenever that text alone
+ * would lose something (several messages, a language tag, a direction, an
+ * `rdf:HTML` message) the result's `properties.shaclMessages` lists every message
+ * as `{"text", "language"?, "direction"?, "datatype"?}`.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table: entry `i` declares that `import_iris[i]` names the Turtle document
+ * `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
+ * arrays may then be NULL) is the empty table. An `owl:imports` is resolved by a table
+ * entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
+ * document, by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+ * ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
+ * `sh:declare` — SHACL's prefix-declaration idiom; anything else — or a table entry
+ * nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
+ * smaller shapes graph than the one named. Read its kind and IRIs with
+ * `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string;
- * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+ * `shapes_base_iri` must be null or a NUL-terminated C string; when
+ * `conformance_disallows_count` is non-zero, `conformance_disallows` must address
+ * that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings; `out_buffer` must be a writable
+ * pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        const char *shapes_base_iri,
                                        const char *data_nt,
+                                       const char *const *conformance_disallows,
+                                       size_t conformance_disallows_count,
+                                       const char *const *import_iris,
+                                       const char *const *import_documents,
+                                       size_t import_count,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
 
@@ -2595,6 +2687,9 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * `purrdf_shacl_validate_to_sarif` — the shapes document's own base IRI, nullable.
  * The three N-Triples documents need no counterpart; N-Triples admits no relative
  * IRI by grammar.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`).
  *
  * # Read the scope before the report
  *
@@ -2623,14 +2718,18 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
  * `shapes_base_iri`, `added_nt` and `removed_nt` must be null or NUL-terminated C
- * strings; `out_buffer`, `out_scope`, `out_focus_nodes` and `out_reason` must be
- * writable pointers; `out_error` must be null or writable.
+ * strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings; `out_buffer`, `out_scope`, `out_focus_nodes` and
+ * `out_reason` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
                                                const char *shapes_base_iri,
                                                const char *data_nt,
                                                const char *added_nt,
                                                const char *removed_nt,
+                                               const char *const *import_iris,
+                                               const char *const *import_documents,
+                                               size_t import_count,
                                                PurrdfBuffer **out_buffer,
                                                int32_t *out_scope,
                                                size_t *out_focus_nodes,
@@ -2650,16 +2749,163 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
  * canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
  * are single-graph syntaxes, not because a graph slot was discarded.
  *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
+ * run.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string;
+ * `shapes_base_iri` must be null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *shapes_base_iri,
                                         const char *data_nt,
+                                        const char *const *import_iris,
+                                        const char *const *import_documents,
+                                        size_t import_count,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfError **out_error);
+
+/**
+ * Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
+ * inferred triples only, never the data graph — as N-Triples 1.2 bytes, one triple per
+ * line in canonical order, to `*out_inferred` (free with `purrdf_buffer_free`).
+ *
+ * The rule source is exactly one of `shapes_ttl` — a SHACL shapes graph (Turtle), whose
+ * default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; both NULL, or both
+ * non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
+ * IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
+ *
+ * `max_term_generating_rounds` may be NULL for the engine default, a divergence criterion
+ * derived from the input: at most max(256, 4 × N) evaluation rounds that infer a term the
+ * graph did not hold, N the distinct input terms, past which the rule set is refused as
+ * divergent, naming its rules. Otherwise it points at an exact limit, and one more round
+ * fails the call naming the limit. A rule set bounded by a constant past the horizon
+ * terminates; its host passes the bound.
+ *
+ * `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
+ * proof of every inferred triple (`derived S P O .`, then `  rule R` and one
+ * `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
+ * triple), freed with `purrdf_buffer_free`.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
+ * run. A SPARQL 1.2 RL rule set reads no table, so a non-empty one beside `srl` is a
+ * `ParseError`.
+ *
+ * # Safety
+ * `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
+ * `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
+ * `max_term_generating_rounds` must be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings; `out_inferred`
+ * must be writable; `out_proof` and `out_error` must each be null or writable.
+ */
+int32_t purrdf_shacl_apply_rules(const char *data_nt,
+                                 const char *shapes_ttl,
+                                 const char *shapes_base_iri,
+                                 const char *srl,
+                                 const char *srl_base_iri,
+                                 const uint64_t *max_term_generating_rounds,
+                                 const char *const *import_iris,
+                                 const char *const *import_documents,
+                                 size_t import_count,
+                                 PurrdfBuffer **out_inferred,
+                                 PurrdfBuffer **out_proof,
+                                 PurrdfError **out_error);
+
+/**
+ * Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
+ * graph (N-Triples) — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode,
+ * scope)` — and write its output nodes to `*out_terms` (free with `purrdf_buffer_free`):
+ * one N-Triples 1.2 term per line, in the order the expression's sequence semantics
+ * define. N-Triples escapes every line break inside a term, so each line is one term; an
+ * expression with no output writes an empty buffer.
+ *
+ * The expression is named exactly one way: exactly one of `expr`, `expr_at` and
+ * `expr_turtle` is non-NULL. `expr` is an absolute IRI or `_:label` for a blank node the
+ * shapes document labels so. `expr_at` names a node and `expr_via` / `expr_via_count` the
+ * predicate IRIs a walk from it follows, each step reaching exactly one value — how an
+ * anonymous `[ … ]` expression is named (`expr_via_count == 0` with `expr_at` is
+ * refused; `expr_via` may be NULL only when the count is 0). `expr_turtle` is the
+ * expression as a Turtle document, read under the shapes document's prefixes and base and
+ * merged into the shapes graph, whose one root blank node is the expression. None or
+ * several selectors, walk predicates with no `expr_at`, a walk step reaching no value or
+ * several, and an inline document without exactly one root are a `ParseError`.
+ *
+ * `focus` is an absolute IRI or any N-Triples term. `scope` / `scope_count` are
+ * `NAME=TERM` bindings read by `shnex:var "NAME"`, the term spelled as `focus` is;
+ * `scope_count == 0` binds nothing (`scope` may then be NULL). A label the shapes
+ * document never wrote, a binding named `focusNode` or bound twice (neither could ever
+ * be read), and any parse or evaluation failure are a `ParseError`.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's functions
+ * and shapes are in scope.
+ *
+ * # Safety
+ * `shapes_ttl`, `data_nt` and `focus` must be non-null NUL-terminated C strings;
+ * `shapes_base_iri`, `expr`, `expr_at` and `expr_turtle` must each be null or a
+ * NUL-terminated C string; when `expr_via_count` is non-zero, `expr_via` must address
+ * that many NUL-terminated C strings; when `scope_count` is
+ * non-zero, `scope` must address that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings;
+ * `out_terms` must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
+                                    const char *shapes_base_iri,
+                                    const char *data_nt,
+                                    const char *expr,
+                                    const char *expr_at,
+                                    const char *const *expr_via,
+                                    size_t expr_via_count,
+                                    const char *expr_turtle,
+                                    const char *focus,
+                                    const char *const *scope,
+                                    size_t scope_count,
+                                    const char *const *import_iris,
+                                    const char *const *import_documents,
+                                    size_t import_count,
+                                    PurrdfBuffer **out_terms,
+                                    PurrdfError **out_error);
+
+/**
+ * Certify a shapes graph (Turtle) COLD — the loader's verdict, every result of validating
+ * it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
+ * function call binds to — and write the report's deterministic text to `*out_report`
+ * (free with `purrdf_buffer_free`): the `load`, `shacl-shacl` (`result …` lines,
+ * `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed),
+ * `functions` (`call BINDING <IRI> in OWNER`) and `validators` (`alternative
+ * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
+ * declared for a built-in component) sections, then `findings N` and `clean true|false`.
+ *
+ * `*out_clean` receives 1 when the report carries no finding — the loader accepted the
+ * graph and every `shacl-shacl.ttl` result is superseded — and 0 otherwise;
+ * `*out_findings` receives the finding count. A malformed shapes graph is a report with
+ * findings and status `Ok`; only a document that is not Turtle is a `ParseError`.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). The report certifies the
+ * whole closure; one that is not in hand returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` and
+ * no report — never a report about the importing document alone, which would call a
+ * shapes graph clean that validation refuses.
+ *
+ * # Safety
+ * `shapes_ttl` must be a non-null NUL-terminated C string; `shapes_base_iri` must be
+ * null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings; `out_report`, `out_clean` and
+ * `out_findings` must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_shacl_lint_shapes(const char *shapes_ttl,
+                                 const char *shapes_base_iri,
+                                 const char *const *import_iris,
+                                 const char *const *import_documents,
+                                 size_t import_count,
+                                 PurrdfBuffer **out_report,
+                                 int32_t *out_clean,
+                                 size_t *out_findings,
+                                 PurrdfError **out_error);
 
 /**
  * Compile a Turtle shapes graph into a PREPARED PRODUCT and write its bytes to
@@ -2681,13 +2927,22 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * `purrdf_shapes_product_error_dimension`, and is NULL when the shapes document simply
  * did not parse (no product existed to name a dimension of).
  *
+ * `import_iris` / `import_documents` / `import_count` are the shapes graph's
+ * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). The product carries the merged
+ * closure, so a restore needs no documents; one that is not in hand returns
+ * `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, exactly as validation does.
+ *
  * # Safety
  * `shapes_ttl` must be a non-null, NUL-terminated C string; `shapes_base_iri` must be
- * null or a NUL-terminated C string; `out_buffer` must be a writable pointer;
- * `out_error` must be null or writable.
+ * null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * address that many NUL-terminated C strings; `out_buffer` must be a writable
+ * pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
                                      const char *shapes_base_iri,
+                                     const char *const *import_iris,
+                                     const char *const *import_documents,
+                                     size_t import_count,
                                      PurrdfBuffer **out_buffer,
                                      PurrdfError **out_error);
 
@@ -2902,6 +3157,46 @@ int32_t purrdf_shapes_product_certify(const uint8_t *product,
  * freed.
  */
 const char *purrdf_shapes_product_error_dimension(const PurrdfError *err);
+
+/**
+ * The KIND of the shapes-graph `owl:imports` refusal `err` is, or NULL.
+ *
+ * A borrowed, NUL-terminated string valid until `purrdf_error_free(err)`; the C side
+ * must not free it. One of `unresolved-import` (the closure imports ontologies nothing
+ * in hand resolves — pass their documents in the import table), `unreached-import` (the
+ * table supplies documents no import names) or `invalid-import` (a key that is not an
+ * absolute IRI, a key named twice, or a document that is not Turtle).
+ *
+ * NULL — never an empty string — when `err` is null or is not a
+ * `PURRDF_STATUS_SHAPES_IMPORT_ERROR`. Branch on it rather than on
+ * `purrdf_error_message`, whose prose names the fix and may be reworded.
+ *
+ * # Safety
+ * `err` must be null or a pointer returned by a libpurrdf entry point and not yet
+ * freed.
+ */
+const char *purrdf_shapes_import_error_kind(const PurrdfError *err);
+
+/**
+ * How many IRIs the shapes-graph `owl:imports` refusal `err` names: 0 when `err` is
+ * null or is not a `PURRDF_STATUS_SHAPES_IMPORT_ERROR`.
+ *
+ * # Safety
+ * Same contract as [`purrdf_shapes_import_error_kind`].
+ */
+size_t purrdf_shapes_import_error_iri_count(const PurrdfError *err);
+
+/**
+ * The `index`-th IRI the shapes-graph `owl:imports` refusal `err` names, in the
+ * engine's order, or NULL when `err` is null, is not a
+ * `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, or `index` is out of range.
+ *
+ * A borrowed, NUL-terminated string valid until `purrdf_error_free(err)`.
+ *
+ * # Safety
+ * Same contract as [`purrdf_shapes_import_error_kind`].
+ */
+const char *purrdf_shapes_import_error_iri(const PurrdfError *err, size_t index);
 
 /**
  * Render a single term view to one N-Triples term token (e.g. `<iri>`, `_:b`,

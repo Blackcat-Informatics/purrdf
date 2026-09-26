@@ -464,7 +464,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/rdf/tests/gts_certify.rs", "the plan's"),
-        ("crates/shapes/src/instance.rs", "Task 6"),
         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
         # which reads the label's POSITION rather than the punctuation after it.
         # `F6:` in this same file was already registered; these are the same
@@ -573,6 +572,13 @@ PY_STRING_PREFIXES = frozenset({"r", "b", "u", "f", "rb", "br", "rf", "fr"})
 # ``<IRIREF>``), so one lexer reads all four.
 RDF_SUFFIXES = (".ttl", ".nt", ".nq", ".rq")
 
+# JavaScript and TypeScript: the wasm package's shipped wrapper and type
+# declarations, its node tests and benches, the emitter oracles, the playground,
+# and the determinism probes under ``scripts/``. A first-party test comment in
+# ``.mjs`` read "The issue's reproducer on wasm" while every host's Rust and
+# Python twin of the same sentence was rejected: no scanner read these files.
+JS_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts")
+
 # The first-party RDF/SPARQL text this lint reads, as ``git ls-files`` path
 # shapes. Two families:
 #
@@ -635,7 +641,8 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     """Yield every tracked source file the lint enforces.
 
     Covered: ``.rs``/``.md``/``.toml`` under ``crates``/``bindings``/``docs``
-    (plus root ``.md``/``.toml``), ``.py`` under those dirs and ``scripts``,
+    (plus root ``.md``/``.toml``), ``.py`` and JavaScript/TypeScript under those dirs and
+    ``scripts``,
     ``.ttl``/``.nt``/``.nq``/``.rq`` under ``generated``/``queries`` and under
     the first-party ``crates/*/corpus/`` trees, and ``.yaml``/``.yml`` GitHub
     workflow files under ``.github``.
@@ -656,7 +663,8 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
         if suffix not in (
-            ".rs", ".md", ".toml", ".py", ".pyi", ".sh", ".yaml", ".yml", *RDF_SUFFIXES
+            ".rs", ".md", ".toml", ".py", ".pyi", ".sh", ".yaml", ".yml",
+            *RDF_SUFFIXES, *JS_SUFFIXES,
         ):
             continue
         if _is_vendored_payload(rel):
@@ -686,6 +694,11 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             # this gate clean, and a commit message then credited the registry with
             # absorbing two phrases the registry had never been shown. Same scope as
             # `.py` -- these are the maintenance scripts this lint most wants to cover.
+            if top not in PY_SCAN_DIRS:
+                continue
+        elif suffix in JS_SUFFIXES:
+            # Same scope as `.py`: first-party trees plus `scripts/`. `vectors/` is
+            # frozen upstream conformance payload and stays outside the scan.
             if top not in PY_SCAN_DIRS:
                 continue
         elif suffix in (".py", ".pyi"):
@@ -1441,6 +1454,155 @@ def scan_yaml(src: str) -> list[tuple[int, int, str, str, str]]:
     return scan_comments(yaml_comments(src))
 
 
+# Characters after which a ``/`` begins a regular-expression literal rather than
+# a division: an operator, an opening delimiter, or nothing at all.
+_JS_REGEX_PRECEDERS = frozenset("(,=:[!&|?{};+-*%<>~^")
+# Keywords after which a ``/`` likewise begins a regular expression.
+_JS_REGEX_KEYWORDS = frozenset(
+    {"return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+     "throw", "case", "do", "else", "yield", "await"}
+)
+
+
+def _js_regex_allowed(src: str, i: int) -> bool:
+    """Whether a ``/`` at ``i`` opens a regular-expression literal."""
+    j = i - 1
+    while j >= 0 and src[j] in " \t\r\n":
+        j -= 1
+    if j < 0:
+        return True
+    prev = src[j]
+    if prev in _JS_REGEX_PRECEDERS:
+        return True
+    if prev.isalnum() or prev in "_$":
+        k = j
+        while k >= 0 and (src[k].isalnum() or src[k] in "_$"):
+            k -= 1
+        return src[k + 1 : j + 1] in _JS_REGEX_KEYWORDS
+    return False
+
+
+def js_comments_and_literals(
+    src: str,
+) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str]]]:
+    """One pass over JavaScript/TypeScript, returning its comments and literals.
+
+    Like the Rust lexer, its job is to not mistake ``//`` inside a string, a
+    template or a regular expression for a comment. It understands line and
+    (non-nesting) block comments, single- and double-quoted strings, template
+    literals with arbitrarily nested ``${…}`` substitutions (whose code may hold
+    comments and strings of its own), and regular-expression literals, told
+    apart from division by the token before the ``/``. Template text between
+    substitutions is reported as literal text.
+    """
+    comments: list[tuple[int, int, str]] = []
+    literals: list[tuple[int, int, str]] = []
+    n = len(src)
+    i = 0
+    # One entry per open template substitution: the brace depth inside it.
+    substitutions: list[int] = []
+
+    def template_from(i: int) -> int:
+        """Scan template text from ``i``; return the index after it ends."""
+        start = i
+        while i < n:
+            c = src[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "`":
+                literals.append((*pos_to_line_col(src, start), src[start:i]))
+                return i + 1
+            if c == "$" and i + 1 < n and src[i + 1] == "{":
+                literals.append((*pos_to_line_col(src, start), src[start:i]))
+                substitutions.append(0)
+                return i + 2
+            i += 1
+        literals.append((*pos_to_line_col(src, start), src[start:i]))
+        return n
+
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            if j == -1:
+                j = n
+            comments.append((*pos_to_line_col(src, i), src[i:j]))
+            i = j
+            continue
+
+        if c == "/" and nxt == "*":
+            j = src.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            comments.append((*pos_to_line_col(src, i), src[i:j]))
+            i = j
+            continue
+
+        if c in "\"'":
+            start = i + 1
+            j = start
+            while j < n and src[j] != c and src[j] != "\n":
+                j += 2 if src[j] == "\\" else 1
+            literals.append((*pos_to_line_col(src, start), src[start:j]))
+            i = j + 1
+            continue
+
+        if c == "`":
+            i = template_from(i + 1)
+            continue
+
+        if c == "{" and substitutions:
+            substitutions[-1] += 1
+            i += 1
+            continue
+
+        if c == "}" and substitutions:
+            if substitutions[-1] == 0:
+                substitutions.pop()
+                i = template_from(i + 1)
+                continue
+            substitutions[-1] -= 1
+            i += 1
+            continue
+
+        if c == "/" and _js_regex_allowed(src, i):
+            j = i + 1
+            in_class = False
+            while j < n and src[j] != "\n":
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == "[":
+                    in_class = True
+                elif src[j] == "]":
+                    in_class = False
+                elif src[j] == "/" and not in_class:
+                    break
+                j += 1
+            i = j + 1
+            continue
+
+        i += 1
+
+    return comments, literals
+
+
+def scan_js(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in JavaScript/TypeScript source text.
+
+    Comments are scanned for every family; literals, as in Rust, only for the
+    issue families (see ``literal_issue_hits``). JSDoc is not rendered Markdown
+    for any consumer here, so no inline-code exclusion applies.
+    """
+    comments, literals = js_comments_and_literals(src)
+    found = scan_comments(comments)
+    found.extend(literal_issue_hits(scan_comments(literals)))
+    found.sort(key=lambda hit: (hit[0], hit[1]))
+    return found
+
+
 def find_inline_code_spans(line: str) -> list[tuple[int, int]]:
     """Return ``(start, end)`` column ranges of inline code spans in ``line``."""
     spans: list[tuple[int, int]] = []
@@ -1572,6 +1734,8 @@ def scan_source(suffix: str, src: str) -> list[tuple[int, int, str, str, str]]:
         return scan_shell(src)
     if suffix in (".yaml", ".yml"):
         return scan_yaml(src)
+    if suffix in JS_SUFFIXES:
+        return scan_js(src)
     raise SystemExit(
         f"check-issue-refs: {suffix!r} is enumerated for scanning but no scanner "
         "reads it — the gate would report clean over a surface it never inspected."
@@ -2039,6 +2203,36 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         "an ASCII word that merely ends in a token shape stays spared",
         ".md",
         "the MAC1 register and the SHA256 digest and ACID transactions\n",
+        None,
+    ),
+    (
+        "issue-provenance phrasing in a JavaScript test comment (the shape that shipped)",
+        ".mjs",
+        "// The issue's reproducer on wasm: the declaration loads.\ntest(\"x\", () => {});\n",
+        "The issue's",
+    ),
+    (
+        "a #NNN in a comment inside a template substitution",
+        ".mjs",
+        "const s = `a ${f(/* see #31 */ 1)} b`;\n",
+        "#31",
+    ),
+    (
+        "an issue URL in a TypeScript declaration's JSDoc",
+        ".ts",
+        f"/** The form proposed at <{_SHIPPED_URL}>. */\nexport declare function f(): void;\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "a comment after a regex holding a quote and a slash is still read",
+        ".mjs",
+        "const re = /['\\/]+/g; // this branch adds it\n",
+        "this branch",
+    ),
+    (
+        "a URL in a JavaScript string and a division are not comments",
+        ".mjs",
+        "const u = 'http://example.org/ns#31'; const r = a / b / c;\n",
         None,
     ),
     (

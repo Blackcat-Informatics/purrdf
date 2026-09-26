@@ -185,6 +185,17 @@ impl Literal {
     pub fn direction(&self) -> Option<RdfTextDirection> {
         self.direction
     }
+
+    /// This literal with its lexical form replaced, keeping its datatype,
+    /// language tag and base direction — how a message template is rendered
+    /// without losing what language the message is in.
+    #[must_use]
+    pub fn with_value(&self, lexical: impl Into<String>) -> Self {
+        Self {
+            lexical: lexical.into(),
+            ..self.clone()
+        }
+    }
 }
 
 /// A native RDF 1.2 quoted triple (statement-layer term).

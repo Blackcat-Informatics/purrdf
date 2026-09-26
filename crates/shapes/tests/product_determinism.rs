@@ -64,7 +64,18 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 ///
 /// This is the "intermediate bytes" measurement for the fixture, pinned as a fact
 /// the build checks rather than a figure quoted from a run nobody can reproduce.
-const GOLDEN_LEN: usize = 4_680;
+///
+/// 4,688 since shapes carry their per-constraint reifier annotations: every node
+/// and property shape the fixture holds now writes the (empty) annotation list's
+/// one-byte count, and the fixture holds eight of them. Writing each message set
+/// as a count of literals rather than an optional string left it there: the
+/// fixture declares no message, and an empty set's count is the one byte the
+/// absent string's flag was.
+///
+/// 4,696 since a property shape carries its `sh:values` and `sh:defaultValue`
+/// expressions: each property shape writes one presence flag for each, and the
+/// fixture's four property shapes declare neither (+8).
+const GOLDEN_LEN: usize = 4_696;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

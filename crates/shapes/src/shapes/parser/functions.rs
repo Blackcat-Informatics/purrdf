@@ -4,6 +4,7 @@
 //! Parsing for SHACL-AF `sh:SPARQLFunction` declarations.
 
 use ::purrdf::FastSet;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ::purrdf::{RdfDataset, TermValue};
@@ -14,11 +15,15 @@ use purrdf_sparql_eval::{
 };
 
 use crate::data::ShaclData;
-use crate::expression::{CustomFunction, RecursionGuard, eval_custom_function_call};
-use crate::model::{rdf, sh};
+use crate::expression::{
+    CustomFunction, FnCall, NodeExpr, RecursionGuard, ShapeArg, SparqlCallForm,
+    eval_custom_function_call, eval_node_expr, sparql_ns_lowering,
+};
+use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::provenance::ParseProvenance;
+use crate::shapes::link::ShapeIndex;
 use crate::sparql::enter_call_depth_scope;
-use crate::term::{Term, term_value_to_native};
+use crate::term::{NamedNode, Term, term_value_to_native};
 
 use crate::shapes::Parser;
 
@@ -73,8 +78,10 @@ use crate::shapes::Parser;
 pub(crate) fn register_declared_sparql_functions(
     dataset: &Arc<RdfDataset>,
     provenance: &ParseProvenance,
+    reached: &[Arc<CustomFunction>],
+    node_shapes: &[crate::shapes::Shape],
     registry: &mut UserFunctionRegistry,
-) -> Result<(), String> {
+) -> Result<BTreeSet<String>, String> {
     let mut parser = Parser::new(
         dataset.as_ref(),
         provenance.base().map(ToOwned::to_owned),
@@ -83,11 +90,77 @@ pub(crate) fn register_declared_sparql_functions(
         Arc::clone(dataset),
         provenance.shapes_graph().map(ToOwned::to_owned),
     );
-    parser.custom_fns = parser.discover_custom_functions()?;
-    parser.parse_sparql_functions(registry)
+    let linked = parser.discover_custom_functions()?;
+    parser.custom_fns = linked.custom;
+    parser.parse_sparql_functions(registry)?;
+    parser.register_unreached_list_functions(reached, node_shapes, registry)?;
+    Ok(linked.native_list)
 }
 
 impl Parser<'_> {
+    /// Register, from the shapes DATASET, every custom LIST-parameter function the
+    /// decoded model does not reach — the restore-time half of SHACL 1.2 SPARQL
+    /// Extensions §7.3 registration.
+    ///
+    /// A prepared product's model carries the custom declarations its node
+    /// expressions CALL, because those are what its call sites point at. A
+    /// declaration called only from SPARQL text (`BIND (ex:f('a') AS ?v)` inside a
+    /// `sh:sparql`) has no call site in the model, so the model does not carry it;
+    /// yet a parse registers it, and a restore that did not would resolve that
+    /// query's call to nothing. Its declaration and body are in the carried shapes
+    /// graph, so they are re-derived here — by the one parser, as a parse would —
+    /// exactly as `sh:SPARQLFunction` declarations are.
+    ///
+    /// Free in the common case: nothing is parsed unless the graph declares a list
+    /// function the model does not reach. When it does, EVERY declaration's body is
+    /// parsed into this parser's own handles, because an unreached body may call a
+    /// reached function and must find it filled.
+    fn register_unreached_list_functions(
+        &mut self,
+        reached: &[Arc<CustomFunction>],
+        node_shapes: &[crate::shapes::Shape],
+        registry: &mut UserFunctionRegistry,
+    ) -> Result<(), String> {
+        let reached: BTreeSet<&str> = reached.iter().map(|f| f.iri.as_str()).collect();
+        let unreached: Vec<Arc<CustomFunction>> = self
+            .custom_fns
+            .iter()
+            .filter(|f| {
+                matches!(f.kind, crate::expression::CustomFnKind::ListParameter)
+                    && !reached.contains(f.iri.as_str())
+            })
+            .map(Arc::clone)
+            .collect();
+        if unreached.is_empty() {
+            return Ok(());
+        }
+        let index = self.custom_fns.clone();
+        let mut bodies = self.parse_custom_function_bodies(&index)?;
+        for func in index.iter() {
+            if let Some(body) = bodies.remove(func.iri.as_str()) {
+                func.body.set(body).map_err(|_| {
+                    format!(
+                        "internal error: custom node-expression function <{}> already had a \
+                         body installed",
+                        func.iri.as_str()
+                    )
+                })?;
+            }
+        }
+        // A body may resolve a computed shape argument against the graph's shape
+        // index; fill this parser's cell from the model's own shapes when one did.
+        if Arc::strong_count(&self.node_shape_index) > 1 {
+            let _ = self.node_shape_index.set(
+                node_shapes
+                    .iter()
+                    .map(|shape| (shape.id.clone(), shape.clone()))
+                    .collect(),
+            );
+        }
+        crate::shapes::link::register_expression_bodied_functions(&unreached, registry);
+        Ok(())
+    }
+
     /// Parse every `sh:SPARQLFunction` (or `sh:Function`) declaration in the shapes
     /// graph into `registry`: ordered `sh:parameter`s (pre-bound variable = the
     /// parameter predicate's local name), the required-arity count, the
@@ -126,9 +199,14 @@ impl Parser<'_> {
         fn_ids.dedup();
 
         for id in fn_ids {
-            // Only IRI-named functions are callable (the call site is an IRI).
+            // Only IRI-named functions are callable (the call site is an IRI), so a
+            // blank-node declaration declares nothing any query could call: a
+            // malformed declaration, refused rather than skipped.
             let Term::NamedNode(iri) = &id else {
-                continue;
+                return Err(format!(
+                    "the sh:SPARQLFunction / sh:Function declaration {id} is not an IRI; a \
+                     function must be named by an IRI so a query can call it"
+                ));
             };
             // A node typed both `sh:SPARQLFunction` and one of the custom
             // node-expression classes has already been parsed as the latter, body and
@@ -136,6 +214,18 @@ impl Parser<'_> {
             // IRI. The declaring class it carries decides, once.
             if self.custom_fns.get(iri.as_str()).is_some() {
                 continue;
+            }
+            // A built-in node-expression function already has its implementation;
+            // a SPARQL body for it is a second definition, refused by the linker's
+            // rule rather than registered over the built-in.
+            if crate::spec::native_function(iri.as_str()).is_some() {
+                return Err(format!(
+                    "duplicate definition of <{}>: it is a node-expression function this \
+                     engine implements natively, and the shapes graph also declares it a \
+                     sh:SPARQLFunction with a SPARQL body; a built-in cannot be redefined, so \
+                     declare the SPARQL function under an IRI of your own",
+                    iri.as_str()
+                ));
             }
             let func = self.parse_one_sparql_function(&id)?;
             registry.insert(iri.as_str().to_owned(), func);
@@ -312,7 +402,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        let body_text = format!("{}{raw_body}", self.prefix_header(&[id]));
+        let body_text = format!("{}{raw_body}", self.prefix_header(&[id])?);
         // A GRAMMAR check, and deliberately only that.
         //
         // This parse runs under default options — no registered relation IRIs —
@@ -417,6 +507,112 @@ pub(crate) fn invoke_expression_function(
     let result = eval_custom_function_call(&store, func, &args, &mut guard)
         .map_err(|e| EvalError::function(format!("custom SPARQL function: {e}")))?;
     Ok(result.as_ref().map(Term::to_term_value))
+}
+
+/// What a declared built-in LIST-parameter function calls, resolved ONCE when the
+/// function is registered: the spec symbol table and the `sparql:` resolver are
+/// load-time lookups, and a query that calls the function once per solution row
+/// must not repeat them per call. Only the arity-dependent rendering is per call.
+#[derive(Debug, Clone)]
+pub(crate) enum NativeListCallee {
+    /// `shnex:conformsToShape`.
+    ConformsToShape,
+    /// A `sparql:<NAME>` function: its SPARQL call form, or why the IRI resolves
+    /// to none — kept, not dropped, so every call answers with that error exactly
+    /// as an unresolved call always has.
+    Sparql(Result<SparqlCallForm, String>),
+}
+
+impl NativeListCallee {
+    /// Resolve `iri` — one of the declared built-ins the linker registers.
+    pub(crate) fn resolve(iri: &str) -> Self {
+        if iri == shnex::CONFORMS_TO_SHAPE {
+            return Self::ConformsToShape;
+        }
+        Self::Sparql(match iri.strip_prefix(sparql_ns::NS) {
+            Some(local) => sparql_ns_lowering(local),
+            None => Err(format!(
+                "<{iri}> is registered as a built-in list-parameter function but is neither \
+                 shnex:conformsToShape nor a sparql: function"
+            )),
+        })
+    }
+}
+
+/// Evaluate one SPARQL call of a built-in LIST-parameter function the shapes graph
+/// declares — the closure [`crate::shapes::link::register_native_list_functions`]
+/// installs (SHACL 1.2 SPARQL Extensions §7.3).
+///
+/// The call is the node expression the parser builds for `[ <iri> ( a0 … aN ) ]`
+/// over the already-evaluated arguments, evaluated by the SAME evaluator a node
+/// expression uses — so `shnex:conformsToShape(?x, ex:S)` in a query and
+/// `[ shnex:conformsToShape ( … ) ]` in a shape can never disagree:
+///
+/// * `shnex:conformsToShape` resolves its shape argument against the shapes
+///   graph's shape index, exactly as a computed shape argument does;
+/// * `sparql:<NAME>` renders its SPARQL form for this call's arity.
+///
+/// An unbound argument leaves the call with no value (SPARQL's own
+/// expression-error result), and the result follows the §7.3 rule a custom
+/// function's does: one output node is the value, none is no value, more than one
+/// is an error.
+pub(crate) fn invoke_native_list_function(
+    iri: &str,
+    callee: &NativeListCallee,
+    shape_index: &ShapeIndex,
+    call: &ExprFnCall<'_>,
+) -> Result<Option<TermValue>, EvalError> {
+    let mut args: Vec<NodeExpr> = Vec::with_capacity(call.args.len());
+    for value in call.args {
+        match value {
+            Some(bound) => args.push(NodeExpr::Constant(term_value_to_native(bound))),
+            None => return Ok(None),
+        }
+    }
+    let expr = if let NativeListCallee::Sparql(form) = callee {
+        let rendered = form
+            .clone()
+            .and_then(|form| form.render(iri, args.len()))
+            .map_err(EvalError::function)?;
+        NodeExpr::Call(FnCall::Sparql {
+            iri: NamedNode::from(iri),
+            expr: rendered,
+            args,
+        })
+    } else {
+        let [node, shape]: [NodeExpr; 2] = args.try_into().map_err(|args: Vec<NodeExpr>| {
+            EvalError::function(format!(
+                "shnex:conformsToShape takes exactly 2 arguments, got {}",
+                args.len()
+            ))
+        })?;
+        NodeExpr::ConformsToShape {
+            node: Box::new(node),
+            shape: ShapeArg::Computed {
+                expr: Box::new(shape),
+                shapes: Arc::clone(shape_index),
+            },
+        }
+    };
+    let store = ShaclData::new(
+        Arc::clone(call.focus_graph),
+        Arc::clone(call.focus_graph),
+        None,
+    );
+    let mut guard = RecursionGuard::with_depth(call.depth);
+    let _depth = enter_call_depth_scope(call.depth);
+    let focus = Term::NamedNode(NamedNode::from(iri));
+    let out = eval_node_expr(&store, &focus, &expr, &mut guard)
+        .map_err(|e| EvalError::function(format!("built-in SPARQL function <{iri}>: {e}")))?;
+    match out.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.to_term_value())),
+        more => Err(EvalError::function(format!(
+            "built-in SPARQL function <{iri}> produced {} output nodes; SHACL 1.2 SPARQL \
+             Extensions §7.3 returns a value only when exactly one is produced",
+            more.len()
+        ))),
+    }
 }
 
 /// Map a `sh:nodeKind` object IRI to the evaluator's [`EvalNodeKind`] for a

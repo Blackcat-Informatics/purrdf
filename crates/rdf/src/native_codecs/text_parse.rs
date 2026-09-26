@@ -33,7 +33,7 @@
 //! sparql-algebra lexer, which decodes them in `IRIREF` position), so `test060`
 //! now parses.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
@@ -216,12 +216,17 @@ pub(super) enum LineParseMode {
 /// force at the END of the document — which is what the parse leg reports to its caller.
 /// N-Triples / N-Quads have no base directive and leave it untouched, so the answer there
 /// is the caller's base without those grammars having to say anything.
+///
+/// `prefixes` receives, for Turtle and TriG, the prefix bindings the document declared
+/// and left in force at its END (see [`document_statements`]); N-Triples / N-Quads have
+/// no prefix directive and leave it untouched.
 pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
     base: &mut BaseScope,
     mode: LineParseMode,
     collector: &mut S,
+    prefixes: &mut Vec<(String, String)>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let statements = match format {
         // N-Triples / N-Quads admit no relative reference by grammar, so they never
@@ -229,8 +234,8 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
         // arm matches the `admits_relative_iri = false` column for those two rows.
         NativeRdfFormat::NTriples => parse_lines(text, false, mode, base, collector)?,
         NativeRdfFormat::NQuads => parse_lines(text, true, mode, base, collector)?,
-        NativeRdfFormat::Turtle => document_statements(text, base, false, collector)?,
-        NativeRdfFormat::TriG => document_statements(text, base, true, collector)?,
+        NativeRdfFormat::Turtle => document_statements(text, base, false, collector, prefixes)?,
+        NativeRdfFormat::TriG => document_statements(text, base, true, collector, prefixes)?,
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
@@ -251,18 +256,36 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
 ///
 /// The write-back is the whole point: `@base` rebinding is document state, and a parser
 /// that swallowed it would leave the caller unable to re-serialize under the base the
-/// document itself declared without re-reading the text by hand. On an ERROR the scope is
-/// deliberately left untouched — a document that failed to parse declared nothing.
+/// document itself declared without re-reading the text by hand.
+///
+/// `prefixes` is written back the same way and for the same reason: the prefix map is
+/// document state the grammar alone can read. A consumer that needs it (a SHACL shapes
+/// graph whose SPARQL queries fall back to the document's prefixes) must get it from the
+/// parse that decided what every prefixed name meant, not from a second reader of the
+/// text — a line scan cannot tell a directive from the same characters quoted inside a
+/// long string literal. The report is the binding each declared label had at the END of
+/// the document (a redeclaration replaces the earlier namespace), sorted by label, each
+/// namespace resolved against the base in force when it was declared. The parser's
+/// built-in `rdf:` convenience binding is not a declaration and is not reported.
+///
+/// On an ERROR both are written back as they stood where the parse stopped: every
+/// directive read before the failing token is in them, nothing after it. That is what a
+/// statement-by-statement recovery needs to carry on past a malformed statement with
+/// the directives the document really made
+/// ([`ParseFailure`](super::parse::ParseFailure)); a caller that only wants the
+/// dataset discards them with the error.
 fn document_statements<S: SpanCollector>(
     text: &str,
     base: &mut BaseScope,
     allow_named_graphs: bool,
     collector: &mut S,
+    prefixes: &mut Vec<(String, String)>,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut parser = DocParser::new(text, base.clone(), allow_named_graphs, collector);
-    let statements = parser.parse()?;
+    let statements = parser.parse();
     *base = parser.base;
-    Ok(statements)
+    *prefixes = parser.declared_prefixes.into_iter().collect();
+    statements
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1284,6 +1307,15 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     /// rather than at use time is what makes `p:x` denote one IRI for the whole
     /// document even if a later `@base` rebinds.
     prefixes: HashMap<String, String>,
+    /// Every prefix a `@prefix` / `PREFIX` directive of THIS document declared, bound
+    /// to the resolved namespace its LAST declaration gave it.
+    ///
+    /// Kept apart from [`Self::prefixes`] because that table is seeded with the
+    /// parser's own `rdf:` convenience binding, which the document never declared:
+    /// reporting it would hand a consumer a prefix the source text does not contain.
+    /// A `BTreeMap` so the report is sorted by label and so a redeclaration replaces
+    /// the earlier binding rather than appearing twice.
+    declared_prefixes: BTreeMap<String, String>,
     /// The stack of base IRIs in scope. Empty means no base at all, which is a
     /// first-class state: it is not an error until a relative reference needs one.
     base: BaseScope,
@@ -1327,6 +1359,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             tokens: Vec::new(),
             pos: 0,
             prefixes,
+            declared_prefixes: BTreeMap::new(),
             base,
             rdf_type: vocab(RDF_TYPE),
             rdf_first: vocab(RDF_FIRST),
@@ -1507,6 +1540,8 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             .map_err(|e| iri_err_at(&e, l, c))?
             .as_str()
             .to_owned();
+        self.declared_prefixes
+            .insert(prefix.clone(), namespace.clone());
         self.prefixes.insert(prefix, namespace);
         if require_dot {
             self.expect(&Token::Dot)?;

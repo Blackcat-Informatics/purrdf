@@ -16,24 +16,40 @@
 //!
 //! ## Comparison contract (caveats)
 //!
-//! The expected `sh:ValidationReport` graphs in the suite carry more detail
-//! than the engine emits. The harness therefore compares on the SHARED tuple
-//! subset, as a MULTISET:
+//! Each expected `sh:ValidationReport` is compared, as a MULTISET, on the tuple
 //!
-//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity)`
+//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity,
+//!   sourceShape)`
 //!
 //! with these normalizations:
 //!
-//! - **blank nodes** (focus/value/path) normalize to the placeholder `_:` —
-//!   expected reports use their own bnode labels which cannot match the
-//!   engine's; complex `sh:resultPath` structures (inverse/sequence/alternative
-//!   path bnodes) normalize the same way, so only a *simple* (IRI) result path
-//!   is compared by identity;
-//! - **`sh:sourceShape` is NOT compared** — many suite shapes are blank nodes;
-//! - **`sh:resultMessage` and nested `sh:detail` are NOT compared** — the
-//!   engine's message text is its own, and it does not emit `sh:detail`;
+//! - **blank nodes** (focus/value/path/source shape) normalize to the
+//!   placeholder `_:` — expected reports use their own bnode labels which cannot
+//!   match the engine's; complex `sh:resultPath` structures
+//!   (inverse/sequence/alternative path bnodes) normalize the same way, so only a
+//!   *simple* (IRI) result path is compared by identity, and a blank-node source
+//!   shape is compared as "a blank node";
+//! - **`sh:resultMessage` is compared only where the expected report states
+//!   one** — the suite asks a harness "to preserve all sh:resultMessage triples
+//!   that are mentioned in the 'expected' results graph", so a produced result
+//!   with the same tuple must carry EXACTLY that message set (language tags,
+//!   directions and datatypes included); an engine-generated message on a result
+//!   the suite states none for is the engine's own;
+//! - **nested `sh:detail` is compared where the expected report states it** —
+//!   such a result's produced details must be exactly the stated ones, as a
+//!   multiset of the same tuple, recursively; a result the expected report
+//!   states no details for is not graded on details, since SHACL 1.2 Core makes
+//!   them optional and processor-dependent (quoted in `report_grading`);
+//! - the expected report's `sh:conformanceDisallows` values are the validation
+//!   parameter the case runs under, and the report must echo them;
 //! - `mf:result sht:Failure` means the validator must REJECT the test input
-//!   (any engine `Err` passes; a successful validation fails).
+//!   (any engine `Err` passes; a successful validation fails);
+//! - a case whose shapes graph imports an ontology no document can be supplied
+//!   for (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT` — `validator-001`, which
+//!   imports DASH) is graded as an EXACT expected refusal: the load must fail with
+//!   `ShapesImportError::Unresolved` naming exactly that import, and a load that
+//!   succeeds is a failure. It is reported as "refused: unresolvable import",
+//!   never as a pass.
 //!
 //! ## Xfail ledger
 //!
@@ -49,9 +65,9 @@
 mod shacl_corpora;
 
 use std::collections::BTreeMap;
-use std::fs;
 
-use shacl_corpora::{Expected, Multiset, W3C_TOTAL_CASES, W3cCase, file_iri, norm, w3c_cases};
+use shacl_corpora::report_grading::{grade_refused_import, run_validate_case};
+use shacl_corpora::{W3C_PROPOSED_UNINCLUDED, W3C_TOTAL_CASES, w3c_cases, w3c_proposed_cases};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -66,119 +82,15 @@ const XFAIL: &[(&str, &str)] = &[
     // validation-only gaps are discovered.
 ];
 
+/// The SHACL 1.0 cases graded as an expected refusal of an unresolvable import
+/// (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`): `sparql/component/validator-001`,
+/// which imports DASH.
+const W3C_REFUSED_IMPORTS: usize = 1;
+
 // ── Running one case ──────────────────────────────────────────────────────────
-
-/// Load graphs, run the engine. `Err` carries the parse/validation error.
-fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
-    let shapes_text = fs::read_to_string(&tc.shapes_path)
-        .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
-        Some(&file_iri(&tc.shapes_path)),
-    )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
-    let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
-    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
-        &shapes_dataset,
-        &doc_prefixes,
-        None,
-        shapes_graph_iri.map(ToOwned::to_owned),
-    )
-    .map_err(|e| format!("shapes parse error: {e}"))?;
-
-    let data_dataset = if tc.data_path == tc.shapes_path {
-        shapes_dataset
-    } else {
-        shacl_corpora::parse_turtle_file(&tc.data_path)
-            .map_err(|e| format!("data graph parse error: {e}"))?
-    };
-
-    purrdf_shapes::engine::validate_dataset_with_shapes_graph(
-        data_dataset.as_ref(),
-        &shapes,
-        shapes_graph_iri,
-    )
-    .map_err(|e| format!("validation error: {e}"))
-}
-
-/// Multiset of comparison tuples the engine produced.
-fn produced_multiset(report: &purrdf_shapes::report::ValidationReport) -> Multiset {
-    let mut multiset = Multiset::new();
-    for r in &report.results {
-        let focus = norm(&r.focus_node);
-        let path = r.result_path.as_ref().map(norm);
-        let value = r.value.as_ref().map(norm);
-        let component = format!("<{}>", r.source_constraint_component.as_str());
-        let severity = format!("<{}>", r.severity.iri());
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
-    }
-    multiset
-}
-
-/// [`validate_case`] hardened against engine panics: a panic is reported as a
-/// failure string rather than aborting the whole harness. The engine's
-/// SHACL-SPARQL path now rejects restricted queries at shape-load and surfaces
-/// residual evaluation failures as `Err` (no known panicking case remains);
-/// the guard stays as belt-and-braces so a regression reads as a FAIL with a
-/// message instead of a harness abort.
-fn validate_case_no_panic(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate_case(tc))).unwrap_or_else(
-        |payload| {
-            let msg = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("<non-string panic payload>");
-            Err(format!("engine panicked: {msg}"))
-        },
-    )
-}
-
-/// Run one test to a pass (`Ok`) / fail-with-reason (`Err`) verdict.
-fn run_case(tc: &W3cCase) -> Result<(), String> {
-    let outcome = validate_case_no_panic(tc);
-    match (&tc.expected, outcome) {
-        (Expected::Failure, Err(_)) => Ok(()),
-        (Expected::Failure, Ok(_)) => {
-            Err("suite expects sht:Failure but the engine validated successfully".to_owned())
-        }
-        (Expected::Report { .. }, Err(e)) => Err(e),
-        (Expected::Report { conforms, results }, Ok(report)) => {
-            if report.conforms != *conforms {
-                return Err(format!(
-                    "conforms mismatch: produced={}, expected={conforms}",
-                    report.conforms
-                ));
-            }
-            let produced = produced_multiset(&report);
-            if &produced != results {
-                return Err(multiset_diff(results, &produced));
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Human-readable multiset diff for the failure message.
-fn multiset_diff(expected: &Multiset, produced: &Multiset) -> String {
-    let mut lines = vec!["result multiset mismatch:".to_owned()];
-    for (tuple, n) in expected {
-        let have = produced.get(tuple).copied().unwrap_or(0);
-        if have != *n {
-            lines.push(format!("  expected x{n}, produced x{have}: {tuple:?}"));
-        }
-    }
-    for (tuple, n) in produced {
-        if !expected.contains_key(tuple) {
-            lines.push(format!("  expected x0, produced x{n}: {tuple:?}"));
-        }
-    }
-    lines.join("\n")
-}
+//
+// Grading lives in `shacl_corpora::report_grading`, shared with the SHACL 1.2
+// harness so both suites mean the same thing by "agrees with the manifest".
 
 // ── The harness ───────────────────────────────────────────────────────────────
 
@@ -200,24 +112,35 @@ fn w3c_shacl_conformance() {
     }
 
     let mut errors: Vec<String> = Vec::new();
-    // (section, passed, xfailed) in discovery order.
-    let mut sections: Vec<(String, usize, usize)> = Vec::new();
+    // (section, passed, xfailed, refused) in discovery order.
+    let mut sections: Vec<(String, usize, usize, usize)> = Vec::new();
     let mut total_passed = 0usize;
     let mut total_xfailed = 0usize;
+    let mut total_refused = 0usize;
 
     // Silence the default panic hook while running cases: engine panics are
-    // caught by `validate_case_no_panic` and reported as ledgered failures, so
+    // caught by `report_grading::no_panic` and reported as ledgered failures, so
     // their backtraces would only drown the scoreboard.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
 
     for tc in &tests {
-        if sections.last().is_none_or(|(s, _, _)| s != &tc.section) {
-            sections.push((tc.section.clone(), 0, 0));
+        if sections.last().is_none_or(|(s, ..)| s != &tc.section) {
+            sections.push((tc.section.clone(), 0, 0, 0));
         }
         let slot = sections.last_mut().expect("section pushed above");
 
-        let verdict = run_case(tc);
+        if let Some(iris) = shacl_corpora::refused_import(&tc.id) {
+            match grade_refused_import(tc, iris) {
+                Ok(()) => {
+                    slot.3 += 1;
+                    total_refused += 1;
+                }
+                Err(e) => errors.push(format!("FAIL [{id}]: {e}", id = tc.id)),
+            }
+            continue;
+        }
+        let verdict = run_validate_case(tc);
         match (verdict, xfail.get(tc.id.as_str())) {
             (Ok(()), None) => {
                 slot.1 += 1;
@@ -239,11 +162,15 @@ fn w3c_shacl_conformance() {
 
     // Scoreboard: one line per manifest section.
     println!("W3C SHACL conformance scoreboard ({} tests):", tests.len());
-    for (section, passed, xfailed) in &sections {
-        println!("  {section:<28} passed {passed:>3}  xfailed {xfailed:>3}");
+    for (section, passed, xfailed, refused) in &sections {
+        println!(
+            "  {section:<28} passed {passed:>3}  refused-unresolvable-import {refused:>2}  \
+             xfailed {xfailed:>3}"
+        );
     }
     println!(
-        "  TOTAL: passed {total_passed}, xfailed {total_xfailed}, ledger {}",
+        "  TOTAL: passed {total_passed}, refused-unresolvable-import {total_refused}, xfailed \
+         {total_xfailed}, ledger {}",
         XFAIL.len()
     );
 
@@ -261,8 +188,36 @@ fn w3c_shacl_conformance() {
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        total_passed + total_xfailed,
-        W3C_TOTAL_CASES,
-        "every discovered test must be a pass or a ledgered xfail"
+        total_refused, W3C_REFUSED_IMPORTS,
+        "every expected import refusal is reported as one, and nothing else is"
     );
+    assert_eq!(
+        total_passed + total_refused + total_xfailed,
+        W3C_TOTAL_CASES,
+        "every discovered test must be a pass, an expected import refusal or a ledgered xfail"
+    );
+}
+
+/// The vendored `sht:proposed` entries no manifest includes
+/// ([`W3C_PROPOSED_UNINCLUDED`]), graded by the approved suite's grader and reported
+/// under their own category, "proposed, graded" — never among the approved passes
+/// [`w3c_shacl_conformance`] counts. Every one must pass: a proposed test this engine
+/// fails is a defect to fix, or an expectation to dispute against the specification.
+#[test]
+fn w3c_shacl_proposed_unincluded_files() {
+    let cases = w3c_proposed_cases();
+    assert_eq!(cases.len(), W3C_PROPOSED_UNINCLUDED.len());
+    let mut errors: Vec<String> = Vec::new();
+    let mut passed = 0usize;
+    for tc in &cases {
+        match run_validate_case(tc) {
+            Ok(()) => passed += 1,
+            Err(e) => errors.push(format!("FAIL [{id}] (proposed): {e}", id = tc.id)),
+        }
+    }
+    println!(
+        "W3C SHACL proposed, graded (not counted among approved tests): passed {passed} of {}",
+        cases.len()
+    );
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }

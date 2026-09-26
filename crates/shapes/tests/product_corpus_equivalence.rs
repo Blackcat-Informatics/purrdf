@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! **Three ways to obtain a shapes graph must answer the same question the same
-//! way, over every shapes graph the two SHACL corpora contain.**
+//! way, over every shapes graph the three SHACL corpora contain** — the vendored
+//! W3C data-shapes suite, the `sht:Validate` entries of the vendored W3C SHACL 1.2
+//! suite, and the first-party corpus.
 //!
 //! A prepared shapes product exists so that a shapes graph compiled once can be
 //! executed later without being compiled again. That makes three lanes to the
@@ -112,30 +114,65 @@ use purrdf_shapes::product::{
 };
 use purrdf_shapes::shapes::Shapes;
 
+use shacl_corpora::shacl12::{Body, shacl12_cases};
 use shacl_corpora::{
     Expected, FIRST_PARTY_TOTAL_CASES, W3C_TOTAL_CASES, file_iri, first_party_box_role_vocab,
     first_party_cases, w3c_cases,
 };
 
-/// Every case both corpora contribute. Asserted exactly, so a corpus that grew or
-/// shrank without this harness noticing fails rather than quietly measuring less.
-const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES;
+/// The `sht:Validate` entries of the vendored W3C SHACL 1.2 suite — the third
+/// corpus whose shapes graphs the product must carry.
+const W3C12_VALIDATE_CASES: usize = 174;
+
+/// Every case the three corpora contribute. Asserted exactly, so a corpus that grew
+/// or shrank without this harness noticing fails rather than quietly measuring less.
+const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES + W3C12_VALIDATE_CASES;
 
 // ── Bucket 1: cases whose own RDF does not load ────────────────────────────────
 
 /// The exact number of cases whose shapes graph or data graph does not load.
 ///
-/// Today every one of them is a case the vendored manifest itself declares
-/// `mf:result sht:Failure` — an input the validator is REQUIRED to reject — and
-/// the corpus contains exactly seven such cases, all under
-/// `sparql/pre-binding/`, each carrying a `sh:sparql` body that SHACL's
-/// pre-binding rules forbid. So this bucket is not an excuse list: it is the
-/// suite's own refusal set, and `Case::refusal_is_declared` enforces that
-/// correspondence case by case rather than trusting the number.
+/// Two kinds of case land here, and both are declared rather than discovered:
+///
+/// * a case the vendored manifest itself declares `mf:result sht:Failure` — an
+///   input the validator is REQUIRED to reject. The SHACL 1.0 suite has exactly
+///   seven, all under `sparql/pre-binding/`, each carrying a `sh:sparql` body that
+///   SHACL's pre-binding rules forbid; the SHACL 1.2 suite has
+///   [`W3C12_DECLARED_FAILURES`];
+/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason; and
+/// * a case both conformance harnesses grade as an EXACT expected refusal of an
+///   unresolvable import (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`):
+///   `sparql/component/validator-001` in the SHACL 1.0 and the SHACL 1.2 suite,
+///   which imports DASH, a document no one supplies.
+///
+/// So this bucket is not an excuse list, and `Case::refusal_is_declared` enforces
+/// that correspondence case by case rather than trusting the number.
 ///
 /// The count is asserted in addition to the rule, because the rule alone would
 /// be satisfied by a parser that had started refusing NOTHING at all.
-const UNLOADABLE_CASES: usize = 7;
+const UNLOADABLE_CASES: usize =
+    7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len() + REFUSED_IMPORT_CASES;
+
+/// The cases, across both vendored suites, graded as an expected refusal of an
+/// unresolvable import: `validator-001` once in each.
+const REFUSED_IMPORT_CASES: usize = 2;
+
+/// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
+/// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
+/// unloadable bucket by the same rule as the seven SHACL 1.0 ones.
+const W3C12_DECLARED_FAILURES: usize = 5;
+
+/// W3C SHACL 1.2 `sht:Validate` entries whose shapes graph this engine REFUSES at
+/// load, each with the reason — SHACL 1.2 features `w3c12_conformance.rs` ledgers
+/// as unevaluated, where the engine's answer is a load error rather than a report. There is no shapes graph to pack, so the codec has nothing to say
+/// about them. The ledger runs both ways: an entry whose shapes graph starts
+/// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
+///
+/// It is empty: every SHACL 1.2 `sht:Validate` shapes graph that is not a declared
+/// failure or an unresolvable import loads, packs and agrees — including
+/// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
+/// regime runs the rules before validation.
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[];
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -171,10 +208,18 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// than a floor for the reason every count in this repository's conformance
 /// harnesses is exact: a floor absorbs a corpus that quietly shrank, and a lane
 /// that started erroring on a case it used to report on would slide under one.
-/// Moved from 192 when the first-party corpus gained its relation-reaching
-/// `sh:SPARQLFunction` case; see [`AGREED_WITH_RESULTS_CASES`] for why that case's
-/// arrival is visible in two counts rather than one.
-const AGREED_ON_REPORT_CASES: usize = 193;
+///
+/// # What it counts
+///
+/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 168 of the
+/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`] and `validator-001`,
+/// whose unresolvable import is graded as a refusal (see
+/// [`REFUSED_IMPORT_CASES`]). The other 194 come from the SHACL 1.0 suite and the
+/// first-party corpus. Among them are the first-party case whose shapes graph
+/// carries the W3C vocabulary's own declarations of three built-ins, and the two
+/// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
+/// which the product round trip carries without refusing the function.
+const AGREED_ON_REPORT_CASES: usize = 362;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -185,21 +230,37 @@ const AGREED_ON_REPORT_CASES: usize = 193;
 /// focus nodes; the remaining agreed cases are the ones the corpus expects to
 /// conform.
 ///
-/// # Why it moved from 179
+/// # Cases the count separates from an empty agreement
 ///
-/// The first-party corpus gained a case whose `sh:SPARQLFunction` body reaches the
-/// host-registered corpus relation, and this harness now installs that relation for
-/// the whole run.
+/// * The first-party case whose `sh:SPARQLFunction` body reaches the
+///   host-registered corpus relation counts here because this harness installs
+///   that relation for the whole run. Without it the call lowers to an ordinary
+///   triple pattern, matches nothing, and all three lanes agree on an EMPTY
+///   report — the answer a resolved relation never gives. That agreement counts
+///   toward [`AGREED_ON_REPORT_CASES`] and not toward this count, which is the
+///   difference this count exists to expose.
+/// * `shape-001`: the data graph's `sh:shape` declarations select its two focus
+///   nodes, and the lanes agree on the violation the suite expects. A lane that
+///   selected no focus node would agree on an empty report instead.
+/// * `sparql/node/prefixes-002`: the document prefix map is the Turtle codec's own
+///   record, and the first constraint takes `test:` from the `sh:ShapesGraph`'s
+///   implicit `sh:declare`, so its `FILTER (?value = test:Value)` matches and the
+///   lanes agree on the expected violation. Reading the `PREFIX test:` line quoted
+///   inside the SECOND constraint's `sh:select` as a document prefix would rebind
+///   `test:` and agree on an empty report.
+/// * `sparql/functions/instanceCount-example` reports the `sh:Warning` result
+///   carrying the computed instance count 2, its class read from `[ shnex:arg 0 ]`
+///   as SHACL 1.2 Node Expressions §4.5.1 declares `shnex:instancesOf`.
+/// * `73-expr-if-list-true` pins SHACL 1.2 Node Expressions §4.1.6 — `then` only
+///   for the condition list `( true )`: its `xsd:integer` condition `1` takes
+///   `shnex:else` and the lanes agree on that one violation, and on none for the
+///   `true` control.
 ///
-/// The move IS the evidence. Before the relation was installed, the case still
-/// AGREED across all three lanes — on an empty report, because the call lowered to an
-/// ordinary triple pattern, matched nothing, and every focus node scored the same.
-/// Three lanes agreeing on the answer a resolved relation would never give is exactly
-/// the failure this count exists to catch, and the count is what caught it: the case
-/// counted toward `AGREED_ON_REPORT_CASES` and not toward this one. It now counts
-/// toward both, because the relation resolved and produced the violation the corpus
-/// expects.
-const AGREED_WITH_RESULTS_CASES: usize = 180;
+/// Agreed cases outside this count expect conformance — among them
+/// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
+/// deactivates) and `property-select-001` (whose computed full name satisfies
+/// `sh:hasValue "John Muir"`).
+const AGREED_WITH_RESULTS_CASES: usize = 341;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -273,18 +334,22 @@ enum Bucket {
 fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
     let shapes_text = fs::read_to_string(&case.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", case.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
+    let purrdf_shapes::text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        ..
+    } = purrdf_shapes::text_ingest::parse_turtle_document(
+        &shapes_text,
         Some(&file_iri(&case.shapes_path)),
     )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
-    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
+    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         &shapes_dataset,
+        None,
         &doc_prefixes,
         None,
         case.shapes_graph_iri.clone(),
+        &shacl_corpora::w3c_case_imports(&shapes_dataset),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
 
@@ -317,6 +382,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
         &shapes_ttl,
         None,
         Some(first_party_box_role_vocab()),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&data_nt)
@@ -478,7 +544,8 @@ fn product_corpus_equivalence() {
     for case in w3c_cases() {
         cases.push(Case {
             id: format!("w3c/{}", case.id),
-            refusal_is_declared: matches!(case.expected, Expected::Failure),
+            refusal_is_declared: matches!(case.expected, Expected::Failure)
+                || shacl_corpora::refused_import(&case.id).is_some(),
             loaded: load_w3c(&case),
         });
     }
@@ -487,6 +554,21 @@ fn product_corpus_equivalence() {
             id: format!("corpus/{}", case.name),
             refusal_is_declared: false,
             loaded: load_first_party(&case),
+        });
+    }
+    for case in shacl12_cases() {
+        let Body::Validate(case) = case.body else {
+            continue;
+        };
+        let id = format!("w3c12/{}", case.id);
+        cases.push(Case {
+            refusal_is_declared: matches!(case.expected, Expected::Failure)
+                || shacl_corpora::refused_import(&case.id).is_some()
+                || W3C12_REFUSED_AT_LOAD
+                    .iter()
+                    .any(|(ledgered, _)| *ledgered == id),
+            loaded: load_w3c(&case),
+            id,
         });
     }
     assert_eq!(
@@ -573,6 +655,15 @@ fn product_corpus_equivalence() {
             }
             Bucket::Agreed(outcome) => {
                 agreed += 1;
+                if W3C12_REFUSED_AT_LOAD
+                    .iter()
+                    .any(|(ledgered, _)| *ledgered == id)
+                {
+                    errors.push(format!(
+                        "XLOAD [{id}]: W3C12_REFUSED_AT_LOAD says this shapes graph is refused \
+                         at load, but it loads, packs and agrees now; remove the entry"
+                    ));
+                }
                 if let Ok((_, results)) = &outcome.answer {
                     agreed_on_report += 1;
                     if *results > 0 {

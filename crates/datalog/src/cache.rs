@@ -53,10 +53,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
+use crate::guard::{Guard, GuardReads};
 use crate::plan::Executable;
 use crate::resolve_fol::hex_lower;
+use crate::schedule::Schedule;
 use crate::seminaive::{
-    EvalError, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES, compile,
+    EvalError, EvalOptions, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES, compile,
 };
 
 /// Version of the planner and its executable-kernel shape.
@@ -75,6 +77,21 @@ pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v1";
 /// a constant one hash under different variant tags, where before every predicate was one
 /// length-prefixed string) and the graph position joined the encoding.
 const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v3";
+
+/// Domain-separation tag for [`canonical_rule_hash`] over a GUARDED program — one in
+/// which some clause carries a guard literal or a negated conjunction
+/// ([`crate::guard`]).
+///
+/// A guard-free program hashes under [`CLAUSE_IR_DIGEST_TAG`] exactly as it always has,
+/// so no existing digest moves; a guarded one hashes under this tag, and every clause's
+/// encoding is then followed by its guard section — a guard count, then per guard its
+/// name, inputs, outputs and read kind, then a negation count, then per negated
+/// conjunction its atoms and guards — framed unconditionally, so within this domain the
+/// encoding is injective too.
+const GUARDED_CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-guarded-dl-clause-ir-v1";
+
+/// Domain-separation tag for [`scheduled_contract_hash`].
+const SCHEDULED_CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-scheduled-contract-v1";
 
 /// Domain-separation tag for [`PlanIdentity`].
 const PLAN_IDENTITY_TAG: &str = "purrdf-datalog-plan-identity-v1";
@@ -171,8 +188,16 @@ fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
 /// Hashing any of the five order-insensitively would let two programs with different
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
+    let guarded = rules.iter().any(DlClause::is_guarded);
     let mut hasher = blake3::Hasher::new();
-    frame_str(&mut hasher, CLAUSE_IR_DIGEST_TAG);
+    frame_str(
+        &mut hasher,
+        if guarded {
+            GUARDED_CLAUSE_IR_DIGEST_TAG
+        } else {
+            CLAUSE_IR_DIGEST_TAG
+        },
+    );
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
         hasher.update(&(rule.body().len() as u64).to_le_bytes());
@@ -190,8 +215,39 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
                 hash_atom(&mut hasher, atom);
             }
         }
+        if guarded {
+            hash_guards(&mut hasher, rule.guards());
+            hasher.update(&(rule.negations().len() as u64).to_le_bytes());
+            for negation in rule.negations() {
+                hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
+                for atom in negation.atoms() {
+                    hash_atom(&mut hasher, atom);
+                }
+                hash_guards(&mut hasher, negation.guards());
+            }
+        }
     }
     *hasher.finalize().as_bytes()
+}
+
+/// Hash a guard list: its length, then per guard its name, inputs, outputs and read kind.
+fn hash_guards(hasher: &mut blake3::Hasher, guards: &[Guard]) {
+    hasher.update(&(guards.len() as u64).to_le_bytes());
+    for guard in guards {
+        frame_str(hasher, guard.name());
+        hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
+        for input in guard.inputs() {
+            frame_str(hasher, input);
+        }
+        hasher.update(&(guard.outputs().len() as u64).to_le_bytes());
+        for output in guard.outputs() {
+            frame_str(hasher, output);
+        }
+        hasher.update(&[match guard.reads() {
+            GuardReads::Bindings => 0,
+            GuardReads::Model => 1,
+        }]);
+    }
 }
 
 // ── The contract hash: which calculus produced this result ──────────────────────
@@ -300,14 +356,97 @@ impl fmt::Display for ContractHash {
 /// is this result from?", and the planner is not the calculus: the two join kernels are held
 /// to producing identical relations by a differential test, so which one ran is not
 /// something a result's identity should record.
+///
+/// # The caller's term-generating round limit
+///
+/// A GUARDED program's answer also depends on the term-generating round limit it runs
+/// under ([`EvalOptions`]): the same program refused under one limit completes under a
+/// larger one. That limit is a caller parameter, so it is folded in as one —
+/// [`contract_hash_with`] takes the options in force, and this function is that recipe
+/// under [`EvalOptions::default`]. A guard-free program cannot be bound by the limit
+/// (see [`TermGeneratingLimit`](crate::seminaive::TermGeneratingLimit)), so its contract
+/// hash leaves the limit out.
 pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
-    contract_digest(
+    contract_hash_with(rules, &EvalOptions::default())
+}
+
+/// [`contract_hash`] under the caller's `options`: the term-generating round limit in
+/// force is folded into a GUARDED program's hash; a guard-free program's hash is
+/// independent of `options`.
+pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> ContractHash {
+    let digest = contract_digest(
         rules,
         CALCULUS_VERSION,
         MAX_JOIN_STEPS,
         MAX_STORED_FACTS as u64,
         MAX_TERM_ARENA_BYTES as u64,
-    )
+    );
+    if !rules.iter().any(DlClause::is_guarded) {
+        return digest;
+    }
+    let mut hasher = blake3::Hasher::new();
+    frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
+    hasher.update(digest.digest());
+    fold_term_generating_limit(&mut hasher, options);
+    ContractHash {
+        digest: *hasher.finalize().as_bytes(),
+    }
+}
+
+/// Fold the term-generating limit in force: a tag byte, then the fixed limit, or the
+/// horizon's floor and per-input-term factor — the whole rule the horizon is derived by,
+/// so a change to either is a change of calculus.
+fn fold_term_generating_limit(hasher: &mut blake3::Hasher, options: &EvalOptions) {
+    match options.term_generating_limit() {
+        crate::seminaive::TermGeneratingLimit::Fixed(rounds) => {
+            hasher.update(&[0]);
+            hasher.update(&rounds.to_le_bytes());
+        }
+        crate::seminaive::TermGeneratingLimit::Horizon => {
+            hasher.update(&[1]);
+            hasher.update(&crate::seminaive::TERM_GENERATING_HORIZON_FLOOR.to_le_bytes());
+            hasher.update(&crate::seminaive::TERM_GENERATING_ROUNDS_PER_INPUT_TERM.to_le_bytes());
+        }
+    }
+}
+
+/// The identity of the calculus a program compiled for the ORDERED schedule
+/// ([`crate::schedule`]) is evaluated under.
+///
+/// Everything [`contract_hash_with`] covers, the caller's term-generating round limit
+/// included whether or not the program is guarded, and the SCHEDULE: the layers, and in each its run-once and
+/// iterating groups with their rule indices, in order. Two programs whose clauses agree
+/// but whose schedules differ can derive different facts — a negation decided before or
+/// after a rule ran — so they never share an identity. Domain-separated from
+/// [`contract_hash`], so a scheduled program and a stratified one never collide either.
+pub fn scheduled_contract_hash(
+    rules: &[DlClause],
+    schedule: &Schedule,
+    options: &EvalOptions,
+) -> ContractHash {
+    let mut hasher = blake3::Hasher::new();
+    frame_str(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG);
+    frame_str(&mut hasher, CALCULUS_VERSION);
+    hasher.update(&MAX_JOIN_STEPS.to_le_bytes());
+    hasher.update(&(MAX_STORED_FACTS as u64).to_le_bytes());
+    hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
+    fold_term_generating_limit(&mut hasher, options);
+    hasher.update(&canonical_rule_hash(rules));
+    hasher.update(&(schedule.layers().len() as u64).to_le_bytes());
+    for layer in schedule.layers() {
+        for groups in [layer.once(), layer.iterating()] {
+            hasher.update(&(groups.len() as u64).to_le_bytes());
+            for group in groups {
+                hasher.update(&(group.len() as u64).to_le_bytes());
+                for &rule in group {
+                    hasher.update(&(rule as u64).to_le_bytes());
+                }
+            }
+        }
+    }
+    ContractHash {
+        digest: *hasher.finalize().as_bytes(),
+    }
 }
 
 /// The digest recipe behind [`contract_hash`], with every input passed explicitly.

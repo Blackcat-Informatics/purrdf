@@ -128,12 +128,19 @@ fn same_document_blank_target_and_current_shape_keep_their_identity() {
     let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
     let node_shape = b.intern_iri("http://www.w3.org/ns/shacl#NodeShape");
     b.push_quad(shape, ty, node_shape, None);
-    let target = b.intern_iri("http://www.w3.org/ns/shacl#targetNode");
-    b.push_quad(shape, target, focus, None);
+    // The blank focus is reached through a subjects-of target: SHACL makes a
+    // blank sh:targetNode value a node expression (a blank node with no triples
+    // is the empty one, which targets nothing), so the blank node has to be
+    // selected by the data it carries.
+    let marker = b.intern_iri("https://example.org/marker");
+    let marked = b.intern_literal(RdfLiteral::simple("x"));
+    b.push_quad(focus, marker, marked, None);
+    let target = b.intern_iri("http://www.w3.org/ns/shacl#targetSubjectsOf");
+    b.push_quad(shape, target, marker, None);
     let sparql = b.intern_iri("http://www.w3.org/ns/shacl#sparql");
     b.push_quad(shape, sparql, constraint, None);
     let select = b.intern_iri("http://www.w3.org/ns/shacl#select");
-    let query = b.intern_literal(RdfLiteral::simple("SELECT $this WHERE { GRAPH $shapesGraph { $currentShape <http://www.w3.org/ns/shacl#targetNode> $this } }"));
+    let query = b.intern_literal(RdfLiteral::simple("SELECT $this WHERE { GRAPH $shapesGraph { $currentShape <http://www.w3.org/ns/shacl#targetSubjectsOf> ?p . $this ?p ?o } }"));
     b.push_quad(constraint, select, query, None);
     let source = b.freeze().expect("source");
     let shapes = Arc::new(purrdf_shapes::shapes::from_dataset(&source).expect("shapes"));

@@ -93,8 +93,8 @@ because a check that cannot withhold a green light is not a check.
 | --- | --- | --- | --- |
 | Rust | `entails(&p, &c, Regime::OwlRl, &imports)` | `verify(warrant, &p, &c)` | `certain_answers(&p, &bgp, Regime::OwlRl, &imports)` |
 | CLI | `purrdf entails --regime owl-rl --premise P --conclusion C` | `… --conclusion C --verify` | `… --pattern BGP` |
-| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports)` |
-| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
+| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports, premise_iris)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports, premise_iris)` |
+| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs, premiseIris)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
 | C | `purrdf_entail_graph_entails(...)` | `purrdf_entail_verify_entailment(...)` | `purrdf_entail_certain_answers(...)` |
 
 Two things differ from the materializing table above, and both are consequences of
@@ -109,8 +109,13 @@ the question rather than of any host:
   *is* the ontology, so a premise carrying an `owl:imports` the call was not handed
   is a different premise. PurRDF fetches nothing, so the closure arrives as
   caller-supplied configuration: an ordered list of `(ontology IRI, document)`
-  pairs, spelled `--import IRI=FILE` on the command line. An unresolved import is a
-  refusal naming the document, never a silently truncated premise.
+  pairs, spelled `--import IRI=FILE` on the command line. An import needs no pair
+  when it names the premise document itself — the CLI's `file://` retrieval IRI or
+  `--base`, and on the Python, WebAssembly and C hosts the `premise_iris` argument
+  (`premiseIris` in JavaScript), the IRIs the caller read the premise from, `[]` for
+  bare text — or an ontology the premise already holds (`<X> a owl:Ontology`, or an
+  `owl:versionIRI` naming it). Any other unresolved import is a refusal naming the document, never
+  a silently truncated premise.
 
 A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicate**
 included. RDF reserves that position for an IRI, so the boundary reaches it by
@@ -122,10 +127,17 @@ IRI rather than a term, and it is refused by name — the stand-in must never be
 sitting there, matching the boundary's own namespace instead of the caller's data.
 A predicate variable is projected
 like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
-whole predicate vocabulary, so it ranges over the schema predicates Theorem PR1's
-conclusion hypothesis excludes — the table claims no completeness for them, whether
-or not `scm-*` derives one — and over the constructs the mechanisms beyond the table
-decide, for which the closure the rows are drawn from holds nothing.
+whole predicate vocabulary, so it ranges over the schema predicates, which the
+theorem behind the rule table's completeness does not cover. That theorem is
+Theorem PR1 of
+[OWL 2 Profiles §4.3](https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules),
+and its hypothesis has two halves: the premise lies inside the OWL 2 RL syntax, and
+the conclusion is *assertional* — class assertions over class names, property
+assertions, `owl:sameAs` and `owl:differentFrom` over named individuals. Only when
+both hold is the rule table complete, so a schema conclusion is one the table claims
+no completeness for, whether or not `scm-*` derives it. The predicate variable also
+ranges over the constructs the mechanisms beyond the table decide, for which the
+closure the rows are drawn from holds nothing.
 
 Every answer arrives with the certificate of the run underneath it — the same
 `purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line

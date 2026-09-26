@@ -16,8 +16,9 @@
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
 //! [`ValidationReport`](purrdf_shapes::report::ValidationReport) to SARIF, this
-//! boundary applies every active `sh:rule` to a fixpoint (via
-//! [`engine::entail_graphs`]) and serializes the MATERIALIZED dataset — the base
+//! boundary runs the shapes graph's rules as SHACL 1.2 Inference Rules executes
+//! them — layer by layer, run-once rules once and iterating rules until an
+//! iteration infers nothing new (via [`engine::entail_graphs`]) — and serializes the MATERIALIZED dataset — the base
 //! graph plus every inferred triple — to a canonical, byte-deterministic
 //! N-Triples string. Hoisting the sequence here keeps each binding to its
 //! platform-specific wrapping (buffer, `JsValue`, `str`).
@@ -28,13 +29,18 @@
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
 use purrdf_shapes::engine;
+use purrdf_shapes::{ShapesError, ShapesImports};
+
+use crate::ShapesImportList;
 
 /// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle) and serialize the
 /// materialized dataset (base graph ⊎ every SHACL-AF rule inference) to a
 /// canonical N-Triples string.
 ///
 /// This is the single entry point every language binding shares: it parses the
-/// two graphs, applies every active `sh:rule` to a fixpoint, and renders the
+/// two graphs, runs the shapes graph's rules layer by layer as SHACL 1.2 Inference
+/// Rules executes them (run-once rules once, iterating rules until an iteration
+/// infers nothing new, in `sh:order` groups), and renders the
 /// resulting dataset via the native RDFC-1.0 flat serializer (deterministic,
 /// blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
@@ -56,11 +62,16 @@ use purrdf_shapes::engine;
 /// or search-budget refusal comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
 ///
+/// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]): an
+/// imported document's rules run as rules of the shapes graph.
+///
 /// # Errors
 ///
-/// Returns the SHACL engine's error string if either graph fails to parse or if
-/// rule application fails (an illegal head term, an unresolvable `sh:condition`,
-/// or a rule set that does not reach a fixpoint); or a diagnostic naming the
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
+/// hand or `imports` cannot be used. Otherwise [`ShapesError::Invalid`]: either graph
+/// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
+/// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
+/// term-generating round limit or another fixed ceiling); or a diagnostic naming the
 /// refusal if the materialized dataset carries a reserved-vocabulary IRI or
 /// exhausts the RDFC-1.0 n-degree search budget.
 ///
@@ -78,15 +89,21 @@ use purrdf_shapes::engine;
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, None, data).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data, &[]).expect("entailment produced");
 /// assert!(nt.contains("<http://example.org/adult>"));
 /// ```
 pub fn entail_to_ntriples_string(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-) -> Result<String, String> {
-    let dataset = engine::entail_graphs(data_nt, shapes_ttl, shapes_base)?;
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
+    let dataset = engine::entail_graphs(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        &ShapesImports::from_turtle(imports)?,
+    )?;
     // The materialized dataset is wholly caller-supplied (both `data_nt` and
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
@@ -96,9 +113,9 @@ pub fn entail_to_ntriples_string(
     match purrdf_core::try_canonicalize_flat_view(dataset.as_ref(), purrdf_core::CanonHash::Sha256)
     {
         Ok(canonicalized) => Ok(canonicalized.nquads),
-        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(format!(
+        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Invalid(format!(
             "SHACL-AF entailment: the materialized dataset was refused canonicalization: {err}"
-        )),
+        ))),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
             // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
             // frozen dataset never faults, so this arm is unreachable by construction
@@ -159,7 +176,7 @@ mod tests {
 
     #[test]
     fn entail_materializes_the_inferred_triple() {
-        let nt = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
+        let nt = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
         // The inferred head triple appears.
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> \
@@ -174,14 +191,14 @@ mod tests {
 
     #[test]
     fn entail_is_deterministic() {
-        let a = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
-        let b = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
+        let a = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
+        let b = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
         assert_eq!(a, b, "entailment serialization must be byte-stable");
     }
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA).is_err());
+        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA, &[]).is_err());
     }
 
     /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
@@ -194,10 +211,12 @@ mod tests {
     fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data).expect_err(
-            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[])
+            .expect_err(
+                "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
              as a value, not panic",
-        );
+            )
+            .to_string();
         assert!(error.contains("refused canonicalization"), "{error}");
     }
 
@@ -208,7 +227,7 @@ mod tests {
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <http://example.org/bad> .\n";
-        let nt = entail_to_ntriples_string(SHAPES, None, data)
+        let nt = entail_to_ntriples_string(SHAPES, None, data, &[])
             .expect("an ordinary dataset must still entail");
         assert!(nt.contains("http://example.org/bad"));
     }
@@ -228,6 +247,7 @@ mod tests {
             PYTHON_BINDING_GOLDEN_SHAPES,
             None,
             PYTHON_BINDING_GOLDEN_DATA,
+            &[],
         )
         .expect("entailment produced");
         assert_eq!(produced, PYTHON_BINDING_GOLDEN);

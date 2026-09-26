@@ -219,7 +219,7 @@ pub use comprehension::ComprehensionWarrant;
 pub use datarange::{DataRangeWarrant, RangeContainment};
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
-pub use imports::ImportMap;
+pub use imports::{ImportMap, rif_resolver};
 pub use negation::NegativeFact;
 pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
@@ -471,8 +471,9 @@ impl Prepared {
 /// MERGED premise — which still carries the `owl:imports` triples the merge resolved. So the
 /// chase raises [`Construct::UnresolvedOntologyImport`], which is the honest reading from
 /// where it stands and the wrong one from here: `imports::resolve` above refuses the whole
-/// call with [`EntailError::UnresolvedImport`] on any document its map does not resolve, so
-/// reaching this line at all proves every declared import was resolved and merged.
+/// call with [`EntailError::UnresolvedImport`] on any import its map does not resolve and
+/// the premise does not already contain, so reaching this line at all proves every declared
+/// import was resolved — merged, or found in place.
 ///
 /// This is therefore the one place both facts are in scope, and it is where the boundary is
 /// restated as [`Construct::ResolvedOntologyImport`] — on the closure's report and on the
@@ -485,15 +486,27 @@ fn prepare(
 ) -> Result<Prepared, EntailError> {
     let plan = plan_for(regime)?;
     let merged = imports::resolve(premise, imports)?;
-    // `resolve` answers `None` for a premise that names no document, and that premise's run
-    // has no import boundary to restate — so the correction is applied exactly when a merge
-    // actually happened.
+    // `resolve` answers `None` when there is no document to merge: either the premise names
+    // no document, and its run has no import boundary to restate, or every ontology it
+    // imports is already IN it — resolved without a merge, so the chase's unresolved-import
+    // boundary is restated exactly as it is after a merge.
     let Some(merged) = merged else {
-        let (closure, report) = materialize(premise, plan)?;
+        let resolved_in_place = !imports::imported_iris(premise).is_empty();
+        let (closure, report) = materialize(premise, plan).map_err(|error| {
+            if resolved_in_place {
+                resolved_imports_error(error)
+            } else {
+                error
+            }
+        })?;
         return Ok(Prepared {
             merged: None,
             closure: Closure::of(default_graph_triples(&closure)),
-            report,
+            report: if resolved_in_place {
+                report.with_resolved_imports()
+            } else {
+                report
+            },
         });
     };
     let (closure, report) = materialize(&merged, plan).map_err(resolved_imports_error)?;

@@ -42,7 +42,8 @@ print(results[0]["conformant"])
 ```
 
 SHACL result dicts keep the stable keys `focus`, `path`, `value`, `severity`,
-`component`, `source_shape`, and `message`. See [SHACL](../validation/shacl.md)
+`component`, `source_shape`, and `messages` (every `sh:resultMessage`, with its
+language tag and direction). See [SHACL](../validation/shacl.md)
 and [ShEx](../validation/shex.md) for what the engines cover.
 
 ## Entailment

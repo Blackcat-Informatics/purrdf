@@ -79,6 +79,8 @@ const PREFIXES: &str = r"
 const EX: &str = "http://example.org/ns#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+/// `sh:shape`, whose data-graph statements are explicit shape targets.
+const SH_SHAPE: &str = "http://www.w3.org/ns/shacl#shape";
 /// The RDF 1.2 reifier predicate. A row `(r, rdf:reifies, <<( s p o )>>)` is a
 /// REIFIER DECLARATION, not an ordinary quad: it lands in the statement side-table
 /// and reclassifies the rows about `r` in the graph that declared it.
@@ -529,6 +531,27 @@ ex:EmployerShape a sh:NodeShape ;
     naive_misses: true,
 };
 
+/// An explicit shape target: the change is a DATA-graph `sh:shape` statement, which
+/// makes its subject a focus node of the shape it names (SHACL 1.2 Core, "Explicit
+/// shape targets").
+const EXPLICIT_SHAPE_TARGET: Case = Case {
+    name: "sh:shape in the data graph",
+    shapes: r"
+ex:NamedShape a sh:NodeShape ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/ns/shacl#shape> <http://example.org/ns#NamedShape> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
+        "<http://example.org/ns#mallory> <http://example.org/ns#age> \"41\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("mallory", SH_SHAPE, Obj::Ex("NamedShape"))],
+    removals: &[],
+    untouched: "alice",
+    naive_misses: false,
+};
+
 /// `sh:targetClass` reached through the `rdf:type` edge.
 const TARGET_CLASS_TYPE_EDGE: Case = Case {
     name: "sh:targetClass through the rdf:type edge",
@@ -844,6 +867,92 @@ ex:ParentageShape a sh:NodeShape ;
     naive_misses: true,
 };
 
+// ── Cross-focus: sh:uniqueValuesFor ─────────────────────────────────────────────
+//
+// SHACL 1.2 Core §7.9.5 compares a value node with "another node in $targetNodes",
+// so a change at ONE target node moves the verdict of ANOTHER that no path joins
+// to it. Both cases defeat the subjects-of-delta expansion by construction: the
+// node whose verdict moves beside the changed one is never a changed subject.
+
+/// A shapes graph with a uniqueness constraint and an unrelated second shape
+/// whose target (`ex:zed`) is the untouched control.
+const UNIQUE_VALUES_FOR_SHAPES: &str = r"
+ex:RecordShape a sh:NodeShape ;
+    sh:targetClass ex:Record ;
+    sh:uniqueValuesFor ex:id .
+ex:OtherShape a sh:NodeShape ;
+    sh:targetNode ex:zed ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+";
+
+/// Changing ONE target node's value makes it collide with another target node:
+/// `ex:bob`'s id goes from "B" to "A", and `ex:alice` — whose own data did not
+/// change — gains a violation.
+const UNIQUE_VALUES_FOR_VALUE: Case = Case {
+    name: "sh:uniqueValuesFor, a listed property changed on one target node",
+    shapes: UNIQUE_VALUES_FOR_SHAPES,
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#id> \"B\" .\n",
+        "<http://example.org/ns#carl> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#carl> <http://example.org/ns#id> \"C\" .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#name> \"Zed\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("bob", "http://example.org/ns#id", Obj::Lit("A"))],
+    removals: &[("bob", "http://example.org/ns#id", Obj::Lit("B"))],
+    untouched: "zed",
+    naive_misses: true,
+};
+
+/// Changing the TARGET SET: `ex:dana` already carries id "A" but is not a
+/// `ex:Record`; typing her one makes `ex:alice` collide with her.
+const UNIQUE_VALUES_FOR_TARGET_SET: Case = Case {
+    name: "sh:uniqueValuesFor, a node joins the target set",
+    shapes: UNIQUE_VALUES_FOR_SHAPES,
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#id> \"B\" .\n",
+        "<http://example.org/ns#dana> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#name> \"Zed\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("dana", RDF_TYPE, Obj::Ex("Record"))],
+    removals: &[],
+    untouched: "zed",
+    naive_misses: true,
+};
+
+/// `sh:values` (SHACL 1.2 Core: "add the output nodes of evalExpr(e, data graph,
+/// focus node, {})"): the expression is evaluated at the FOCUS node, so what it
+/// reads is a read of the focus node's verdict. Removing `ex:bob`'s `ex:q` takes
+/// away `ex:alice`'s only computed value, and the naive expansion — `ex:bob`, who
+/// is no person — misses her.
+const COMPUTED_VALUES: Case = Case {
+    name: "sh:values over a sequence path",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:p ; sh:values [ sh:path ( ex:friend ex:q ) ] ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#friend> <http://example.org/ns#bob> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#q> \"x\" .\n",
+        "<http://example.org/ns#zed> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#p> \"z\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[],
+    removals: &[("bob", "http://example.org/ns#q", Obj::Lit("x"))],
+    untouched: "zed",
+    naive_misses: true,
+};
+
 /// Every case, so one failure names the form it belongs to.
 const CASES: &[&Case] = &[
     &FORWARD_PREDICATE,
@@ -856,10 +965,14 @@ const CASES: &[&Case] = &[
     &TARGET_OBJECTS_OF,
     &TARGET_CLASS_TYPE_EDGE,
     &TARGET_CLASS_SUBCLASS_EDGE,
+    &EXPLICIT_SHAPE_TARGET,
     &NODE_RECURSION,
     &PROPERTY_PAIR_COMPARAND,
     &CLASS_CONSTRAINT,
     &CLOSED_SHAPE,
+    &UNIQUE_VALUES_FOR_VALUE,
+    &UNIQUE_VALUES_FOR_TARGET_SET,
+    &COMPUTED_VALUES,
 ];
 
 #[test]
@@ -1168,6 +1281,88 @@ ex:PersonShape a sh:NodeShape ;
     assert!(
         reason.contains("query text"),
         "the reason must name the construct a caller has to change, got {reason:?}"
+    );
+}
+
+/// A where target and a node-expression `sh:targetNode` select their focus nodes
+/// by evaluating over the whole data graph, so no bounded superset can be derived
+/// from the shapes graph, and that is REPORTED. The control is the same shape with
+/// a class target, which stays bounded.
+#[test]
+fn evaluated_targets_report_an_unbounded_footprint_and_a_class_target_does_not() {
+    for target in [
+        "sh:targetWhere [ sh:class ex:Person ]",
+        "sh:targetNode [ sh:path ex:member ]",
+    ] {
+        let (snapshot, validator) = bound(
+            &format!(
+                "ex:PersonShape a sh:NodeShape ; {target} ;
+                    sh:property [ sh:path ex:name ; sh:minCount 1 ] ."
+            ),
+            TYPED_ALICE,
+            ("mallory", RDF_TYPE, Obj::Ex("Person")),
+        );
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion");
+        let reason = expansion
+            .reason()
+            .unwrap_or_else(|| panic!("{target}: an evaluated target must answer TOP"));
+        assert!(
+            reason.contains("sh:targetWhere"),
+            "{target}: the reason must name the construct, got {reason:?}"
+        );
+    }
+    let (snapshot, validator) = bound(
+        "ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
+            sh:property [ sh:path ex:name ; sh:minCount 1 ] .",
+        TYPED_ALICE,
+        ("mallory", RDF_TYPE, Obj::Ex("Person")),
+    );
+    assert!(
+        !validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion")
+            .is_everything()
+    );
+}
+
+/// A computed value node is an expression's OUTPUT, not a node a path from the
+/// focus node reaches, so a constraint that READS at the value nodes of a shape
+/// with `sh:values` (`sh:class` reads their types) cannot be bounded, and that is
+/// REPORTED. The two neighbours stay bounded: the same `sh:values` under a
+/// constraint that reads nothing at the value nodes (`sh:minCount`), and the same
+/// `sh:class` without `sh:values`.
+#[test]
+fn computed_value_nodes_bound_what_they_can_and_report_what_they_cannot() {
+    let expansion = |property: &str| {
+        let (snapshot, validator) = bound(
+            &format!(
+                "ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
+                    sh:property [ sh:path ex:name ; {property} ] ."
+            ),
+            TYPED_ALICE,
+            ("mallory", RDF_TYPE, Obj::Ex("Person")),
+        );
+        validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion")
+    };
+    let unbounded = expansion("sh:values [ sh:path ex:alias ] ; sh:class ex:Name");
+    let reason = unbounded
+        .reason()
+        .expect("a read at a computed value node cannot be bounded");
+    assert!(
+        reason.contains("cannot reach from the focus node"),
+        "the reason must name the construct, got {reason:?}"
+    );
+    assert!(
+        !expansion("sh:values [ sh:path ex:alias ] ; sh:minCount 1").is_everything(),
+        "a computed value set counted at the focus node reads nothing at the value nodes"
+    );
+    assert!(
+        !expansion("sh:class ex:Name").is_everything(),
+        "without sh:values the value nodes are the path's, which the walk can name"
     );
 }
 

@@ -37,8 +37,8 @@ quads = purrdf.parse(
 )
 ```
 
-`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, and HexTuples
-(`purrdf.RdfFormat`); JSON-LD and RDF/XML travel through the dedicated
+`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, HexTuples, and
+RDF/XML (`purrdf.RdfFormat`); JSON-LD and RDF/XML also have the dedicated
 `purrdf.from_json_ld` / `purrdf.to_json_ld` and `purrdf.from_rdf_xml` /
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.
@@ -168,9 +168,44 @@ report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 ```
 
-Complete SHACL Core, SHACL-SPARQL constraints/targets, and SHACL-AF `sh:rule`
+SHACL 1.2 Core, SPARQL Extensions and Node Expressions, and SHACL rules
 entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
-`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`.
+`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`. Each result dict carries
+`messages`: every `sh:resultMessage` as a dict with `text` and, when present,
+`language`, `direction` and `datatype`. `shapes.validate(...,
+conformance_disallows=[...])` sets the severity IRIs that make a report
+non-conforming (by default `sh:Violation`, `sh:Warning` and `sh:Info`), and
+the dict's `conformance_disallows` names the set the report was judged
+against.
+
+Three tools sit beside validation, each the same library call the CLI, WebAssembly
+and C surfaces make:
+
+```python
+# Run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set (srl=...),
+# and get the INFERENCE GRAPH: the inferred triples only, as N-Triples. With
+# explain=True, "proof" carries the proof of every inferred triple.
+out = shapes.apply_rules(my_data, my_shapes, explain=True)
+out["inferred"], out["proof"]
+
+# A rule set bounded by a constant past the default horizon (max(256, 4 x the
+# input's distinct terms) term-generating rounds) states its bound.
+shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=10_000)
+
+# Evaluate one node expression of a shapes graph against a focus node. The
+# expression is an IRI or "_:label"; the scope binds shnex:var names.
+shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
+                      "http://example.org/a", scope={"suffix": '"!"'})
+
+# Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
+# which implementation every function call binds to, and the validators a
+# vocabulary declares for built-in components (superseded, never run).
+lint = shapes.lint_shapes(my_shapes)
+lint["clean"], lint["findings"], lint["calls"], lint["alternatives"], lint["report"]
+```
+
+A malformed shapes graph is a `lint_shapes` report with findings, not an
+exception; only a document that is not Turtle raises `ValueError`.
 
 ## Validate with ShEx
 
@@ -341,9 +376,9 @@ table* whether a premise entails a conclusion *graph*.
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Certain answers | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
-| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
-| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+| Certain answers | `entail.certain_answers(regime, data, pattern, imports, premise_iris)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports, premise_iris)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports, premise_iris)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
 
 `pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
 node in it is a non-distinguished variable, constrained by the match and not projected,
@@ -397,6 +432,12 @@ same position on all four hosts, so one call shape works from Python, from JavaS
 from C and from Rust. Resolution is transitive to a fixpoint, so a supplied document's
 own `owl:imports` is followed too.
 
+`premise_iris` is the list of IRIs the premise document was read from — its URL, or the
+base you parsed it under, when you know one. An `owl:imports` of one of those names the
+premise itself and is resolved in place, with no `imports` entry; so is an import of an
+ontology the premise already declares. Text you were handed with no location has no such
+IRI, and `[]` is that ordinary case. Like `imports`, the argument is required.
+
 ```python
 from purrdf import entail
 
@@ -416,14 +457,14 @@ conclusion = (
 )
 
 answer, _ = entail.graph_entails(
-    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)], []
 )
 assert "entailment entailed" in answer
 
 # The same call with nothing supplied refuses BY NAME rather than reasoning over a
 # premise that is missing the axioms it told you about.
 try:
-    entail.graph_entails("owl-rl", premise, conclusion, [])
+    entail.graph_entails("owl-rl", premise, conclusion, [], [])
 except ValueError as refusal:
     assert "https://example.org/schema" in str(refusal)
 ```

@@ -44,14 +44,16 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{FastMap, FastSet, IdSet, TermId};
 
-use crate::data::resolve_id;
+use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
+use crate::report::ConformanceDisallows;
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
+    ClosedMode, ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
 use crate::term::{NamedNode, Term};
+use crate::unique_values::{UniqueGroups, UniqueSpec};
 
 // ── Slots ───────────────────────────────────────────────────────────────────────
 
@@ -64,6 +66,44 @@ pub(crate) type TermSlot = u32;
 
 /// The position of one id SET in a [`DatasetBinding`]'s set row.
 type SetSlot = u32;
+
+/// The lowering of one `sh:closed sh:ByTypes` constraint.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoweredByTypes {
+    /// The slot of `rdf:type`, whose quads name the value node's types.
+    rdf_type: TermSlot,
+    /// The position of the shapes graph's type index in
+    /// [`LoweredShapes::closed_types`].
+    index: u32,
+}
+
+/// The lowering of one `sh:class` value (SHACL 1.2 Core §4.1.1).
+///
+/// Two forms, because the overwhelmingly common value names ONE class and must
+/// cost what it cost before lists were admitted: a term slot resolves at bind to
+/// an `Option<TermId>` in the binding's existing term row, where a set slot
+/// builds one hash set per binding. A SHACL list of two or more classes takes the
+/// set; a one-member list means exactly what the single IRI means and takes the
+/// term slot.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoweredClasses {
+    /// One class: the slot of its dataset identity.
+    One(TermSlot),
+    /// Two or more classes, any of which a value node may be an instance of: the
+    /// slot of their identity set.
+    AnyOf(SetSlot),
+}
+
+/// A [`crate::shapes::ClosedTypeIndex`], lowered: each type's slot, and the
+/// [`LoweredShapes::terms`] range its collected properties occupy.
+#[derive(Debug)]
+struct LoweredTypeIndex {
+    entries: Box<[(TermSlot, std::ops::Range<u32>)]>,
+}
+
+/// The position of one `sh:uniqueValuesFor` constraint's [`UniqueSpec`] in a
+/// lowering, and of its grouping in a [`DatasetBinding`].
+pub(crate) type UniqueSlot = u32;
 
 // ── The class catalog ───────────────────────────────────────────────────────────
 
@@ -218,6 +258,13 @@ pub(crate) struct LoweredShapes {
     /// be a second transcription of that rule — the drift this module exists to
     /// prevent.
     footprint: Footprint,
+    /// Every `sh:uniqueValuesFor` constraint the walk reached, by [`UniqueSlot`]:
+    /// what the grouping of its shape's target set is built from.
+    unique_values: Box<[UniqueSpec]>,
+    /// Every `sh:closed sh:ByTypes` index the walk reached, by
+    /// [`LoweredByTypes::index`] — one per shared index, however many
+    /// constraints share it.
+    closed_types: Box<[LoweredTypeIndex]>,
 }
 
 impl LoweredShapes {
@@ -286,11 +333,42 @@ impl LoweredShapes {
                     .collect()
             })
             .collect();
+        // One EMPTY cell per `sh:uniqueValuesFor` constraint: a grouping is
+        // built on first use (see `crate::unique_values`), so the bind does no
+        // data-sized work for it and a shapes graph without one pays nothing.
+        let unique_values = self.unique_values.iter().map(|_| OnceLock::new()).collect();
+        // Each `sh:closed sh:ByTypes` index, keyed by the identity THIS data graph
+        // gives each type. A type the data graph does not intern is the `rdf:type`
+        // value of no quad in it, and a property it does not intern is the
+        // predicate of none, so dropping either loses nothing a probe could ask.
+        let closed_types = self
+            .closed_types
+            .iter()
+            .map(|index| {
+                index
+                    .entries
+                    .iter()
+                    .filter_map(|(ty, range)| {
+                        let ty = terms[*ty as usize]?;
+                        let properties: FastSet<TermId> = terms
+                            [range.start as usize..range.end as usize]
+                            .iter()
+                            .copied()
+                            .flatten()
+                            .collect();
+                        (!properties.is_empty()).then_some((ty, properties))
+                    })
+                    .collect()
+            })
+            .collect();
         DatasetBinding {
             terms,
             sets,
             class_ids,
             indexes,
+            unique_values,
+            closed_types,
+            conformance_disallows: ConformanceDisallows::default(),
         }
     }
 
@@ -371,6 +449,11 @@ pub(crate) struct LoweredShape {
 pub(crate) struct LoweredProperty {
     /// The lowered property path — every predicate step resolved to a slot.
     path: LoweredPath,
+    /// The lowered `sh:values` expression, exactly when the property shape has one.
+    values: Option<LoweredExpr>,
+    /// The lowered `sh:defaultValue` expression, exactly when the property shape
+    /// has one.
+    default_value: Option<LoweredExpr>,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[Self]>,
     reifiers: Box<[LoweredShape]>,
@@ -452,8 +535,12 @@ pub(crate) type BoundParse = Option<f64>;
 /// constraint it is evaluating.
 #[derive(Debug)]
 pub(crate) enum LoweredConstraint {
-    /// `sh:class` — the slot holding the class's dataset identity.
-    Class(TermSlot),
+    /// `sh:class` — where the dataset identities of the value's classes are
+    /// resolved: one term slot for a single class, one set slot for a list of them.
+    ///
+    /// A class this data graph does not intern resolves to no identity, and that
+    /// is not a loss: a term with no dataset identity has no instance.
+    Class(LoweredClasses),
     /// `sh:datatype` — compared as a datatype IRI string, never interned.
     Datatype,
     /// `sh:nodeKind` — a discriminant test on the value node.
@@ -490,7 +577,16 @@ pub(crate) enum LoweredConstraint {
     /// Dropping a permitted predicate this data graph does not intern is not a
     /// loss: an IRI with no dataset identity is the predicate of no quad in that
     /// dataset, so it can never be the predicate the probe is asking about.
-    Closed(SetSlot),
+    ///
+    /// Under `sh:closed sh:ByTypes` the set holds `sh:ignoredProperties` and
+    /// `rdf:type`, and `by_types` names the rest: the per-type property sets the
+    /// value node's `rdf:type` values select.
+    Closed {
+        /// The properties permitted whatever the value node's types.
+        permitted: SetSlot,
+        /// The `sh:closed sh:ByTypes` lowering; `None` for `sh:closed true`.
+        by_types: Option<LoweredByTypes>,
+    },
     /// `sh:minInclusive` — the bound, with its numeric parse already done.
     MinInclusive(BoundParse),
     /// `sh:maxInclusive` — the bound, with its numeric parse already done.
@@ -509,14 +605,16 @@ pub(crate) enum LoweredConstraint {
     Node(Box<LoweredShape>),
     /// `sh:sparql` — the query text is executed by the SPARQL engine.
     Sparql,
-    /// `sh:equals` — the slot holding the compared predicate's dataset identity.
-    Equals(TermSlot),
-    /// `sh:disjoint` — the slot holding the compared predicate's dataset identity.
-    Disjoint(TermSlot),
-    /// `sh:lessThan` — the slot holding the compared predicate's dataset identity.
-    LessThan(TermSlot),
-    /// `sh:lessThanOrEquals` — the slot holding the compared predicate's identity.
-    LessThanOrEquals(TermSlot),
+    /// `sh:equals` — the lowering of the compared path.
+    Equals(LoweredPath),
+    /// `sh:disjoint` — the lowering of the compared path.
+    Disjoint(LoweredPath),
+    /// `sh:subsetOf` — the lowering of the compared path.
+    SubsetOf(LoweredPath),
+    /// `sh:lessThan` — the lowering of the compared path.
+    LessThan(LoweredPath),
+    /// `sh:lessThanOrEquals` — the lowering of the compared path.
+    LessThanOrEquals(LoweredPath),
     /// `sh:qualifiedValueShape` — the lowered qualified shape and its siblings.
     QualifiedValueShape {
         /// The lowering of the qualified value shape.
@@ -533,6 +631,30 @@ pub(crate) enum LoweredConstraint {
         /// The position of the lowered shape index in [`LoweredShapes::indexes`].
         index: u32,
     },
+    /// `sh:minListLength` — a length of the value node's SHACL list.
+    MinListLength,
+    /// `sh:maxListLength` — a length of the value node's SHACL list.
+    MaxListLength,
+    /// `sh:uniqueMembers` — a comparison among the value node's list members.
+    UniqueMembers,
+    /// `sh:memberShape` — the lowering of the shape every list member must meet.
+    MemberShape(Box<LoweredShape>),
+    /// `sh:singleLine` — a scan of the value node's lexical form.
+    SingleLine,
+    /// `sh:rootClass` — the slot holding the dataset identities of the roots (one
+    /// for an IRI value, one per member for a SHACL list value).
+    ///
+    /// A root this data graph does not intern is absent from the resolved set,
+    /// and that is not a loss for the `rdfs:subClassOf+` half of the test: an IRI
+    /// with no dataset identity is the object of no `rdfs:subClassOf` edge. The
+    /// reflexive half compares against the declared IRIs themselves.
+    RootClass(SetSlot),
+    /// `sh:someValue` — the lowering of the shape one value node must meet.
+    SomeValue(Box<LoweredShape>),
+    /// `sh:uniqueValuesFor` — the position of its [`UniqueSpec`] in
+    /// [`LoweredShapes::unique_values`], which is also the position of the
+    /// grouping a binding builds for it.
+    UniqueValuesFor(UniqueSlot),
     /// A SHACL-SPARQL custom constraint component — the validator is a query.
     Component,
 }
@@ -549,7 +671,9 @@ pub(crate) enum LoweredConstraint {
 #[derive(Debug, Default)]
 pub(crate) struct LoweredExpr {
     /// The slot holding the dataset identity of the class this expression selects
-    /// the instances of (`shnex:instancesOf`); `None` for every other kind.
+    /// the instances of — a `shnex:instancesOf` whose operand is a constant IRI;
+    /// `None` for every other kind, and for a `shnex:instancesOf` whose classes are
+    /// computed at evaluation.
     class: Option<TermSlot>,
     /// The position of the shape index this expression resolves shape IRIs against
     /// (`shnex:conformsToShape` with a computed shape argument); `None` otherwise.
@@ -610,9 +734,36 @@ pub(crate) struct DatasetBinding {
     /// keyed by. Empty for a shapes graph that names no shape index, so the row
     /// costs a shapes graph without one nothing at all.
     indexes: Box<[FastMap<TermId, Term>]>,
+    /// The grouping of each `sh:uniqueValuesFor` constraint's target set, by
+    /// [`UniqueSlot`] — empty until first use, then built once for this binding.
+    unique_values: Box<[OnceLock<UniqueGroups>]>,
+    /// Each `sh:closed sh:ByTypes` index, by [`LoweredByTypes::index`]: the
+    /// identity of every type this data graph interns, with the identities of the
+    /// properties it permits.
+    closed_types: Box<[FastMap<TermId, FastSet<TermId>>]>,
+    /// The validation request's conformance-disallow set, which every
+    /// conformance check a plan over this binding performs — nested `sh:node`,
+    /// `sh:not`, `sh:and`, `sh:or`, `sh:xone`, `sh:qualifiedValueShape`,
+    /// `sh:someValue`, `sh:memberShape`, `sh:reifierShape`, `sh:filterShape` —
+    /// judges a result's severity against. The default set unless the binding was
+    /// made for a request that named another; it lives here, beside the
+    /// dataset's identities, because a binding is one request's view and every
+    /// plan descending from it reaches it with no argument to forget.
+    conformance_disallows: ConformanceDisallows,
 }
 
 impl DatasetBinding {
+    /// Judge conformance over this binding against `disallows`.
+    pub(crate) fn set_conformance_disallows(&mut self, disallows: &ConformanceDisallows) {
+        self.conformance_disallows.clone_from(disallows);
+    }
+
+    /// The conformance-disallow set this binding judges against.
+    #[inline]
+    pub(crate) fn conformance_disallows(&self) -> &ConformanceDisallows {
+        &self.conformance_disallows
+    }
+
     /// The dataset identity of a planned class, by IRI.
     ///
     /// The two negative answers are DIFFERENT conditions and are deliberately
@@ -666,6 +817,14 @@ impl DatasetBinding {
         self.sets
             .get(slot as usize)
             .ok_or_else(|| slot_defect("id-set", slot))
+    }
+
+    /// The `index`-th `sh:closed sh:ByTypes` index, by type identity.
+    #[inline]
+    fn closed_types(&self, index: u32) -> Result<&FastMap<TermId, FastSet<TermId>>, String> {
+        self.closed_types
+            .get(index as usize)
+            .ok_or_else(|| slot_defect("closed-type-index", index))
     }
 
     /// The shape node the `index`-th shape index holds under the dataset identity
@@ -761,6 +920,69 @@ impl<'a> ShapePlan<'a> {
         self.binding
     }
 
+    /// The grouping of the `slot`-th `sh:uniqueValuesFor` constraint's target
+    /// set in this binding, building it on first use.
+    ///
+    /// Built outside any lock and published with `OnceLock::set`, so a caller
+    /// that reaches a grouping while another is being built — including one
+    /// reached again from inside the build, through a target that evaluates —
+    /// builds its own and keeps whichever was published first; the two are the
+    /// same derivation over the same binding. The validation entry points warm
+    /// every grouping before fanning out ([`Self::warm_unique_values`]), so the
+    /// parallel path only ever reads.
+    ///
+    /// # Errors
+    /// Returns an error when the slot is not one the lowering allocated, or when
+    /// the shape's target set cannot be resolved.
+    pub(crate) fn unique_groups(
+        &self,
+        data: &ShaclData,
+        slot: UniqueSlot,
+    ) -> Result<&'a UniqueGroups, String> {
+        let cell = self
+            .binding
+            .unique_values
+            .get(slot as usize)
+            .ok_or_else(|| slot_defect("unique-values", slot))?;
+        if let Some(groups) = cell.get() {
+            return Ok(groups);
+        }
+        let spec = self
+            .graph
+            .unique_values
+            .get(slot as usize)
+            .ok_or_else(|| slot_defect("unique-values", slot))?;
+        let built = UniqueGroups::build(data, spec, self.binding, self.classes)?;
+        // A lost race publishes nothing and reads the winner's grouping.
+        let _ = cell.set(built);
+        cell.get().ok_or_else(|| slot_defect("unique-values", slot))
+    }
+
+    /// Whether the lowering this plan belongs to holds any `sh:uniqueValuesFor`
+    /// constraint.
+    #[inline]
+    pub(crate) fn has_unique_values(&self) -> bool {
+        !self.graph.unique_values.is_empty()
+    }
+
+    /// Build every `sh:uniqueValuesFor` grouping of the whole lowering this plan
+    /// belongs to, if it is not built yet.
+    ///
+    /// Called once per shape evaluation, on the orchestrating thread and before
+    /// focus nodes are handed to workers, so the workers find every grouping
+    /// built. A shapes graph without the component returns at once.
+    ///
+    /// # Errors
+    /// As [`Self::unique_groups`].
+    pub(crate) fn warm_unique_values(&self, data: &ShaclData) -> Result<(), String> {
+        for slot in 0..self.graph.unique_values.len() {
+            // Slots were handed out as `u32` at lowering time, so every position
+            // of this row fits one.
+            self.unique_groups(data, slot as UniqueSlot)?;
+        }
+        Ok(())
+    }
+
     /// This shape's node-level constraints, each paired with its lowering.
     ///
     /// # Errors
@@ -787,6 +1009,19 @@ impl<'a> ShapePlan<'a> {
             "shape",
         )?
         .map(move |(property, lowered)| (property, PropertyPlan { plan, lowered })))
+    }
+
+    /// The compared side of a property-pair constraint: an IRI path keeps the
+    /// one-hop read by its predicate's dataset identity, resolved here at bind,
+    /// and every other path is walked from the focus node by the path evaluator.
+    ///
+    /// # Errors
+    /// Returns an error when the lowering names a slot the walk never handed out.
+    fn pair_path(&self, lowered: &'a LoweredPath) -> Result<PairPath<'a>, String> {
+        Ok(match lowered {
+            LoweredPath::Predicate(slot) => PairPath::Predicate(self.binding.term(*slot)?),
+            path => PairPath::Path(path),
+        })
     }
 
     /// The plan for a shape reached through one of this shape's constraints.
@@ -854,6 +1089,47 @@ impl<'a> PropertyPlan<'a> {
     #[inline]
     pub(crate) fn path(&self) -> &'a LoweredPath {
         &self.lowered.path
+    }
+
+    /// The plan the property shape's own node expressions evaluate under: its
+    /// parent's, since `sh:values` and `sh:defaultValue` are evaluated at the
+    /// parent's focus node.
+    #[inline]
+    pub(crate) fn parent(&self) -> ShapePlan<'a> {
+        self.plan
+    }
+
+    /// The `sh:values` expression paired with its lowering, when the property
+    /// shape has one.
+    ///
+    /// # Errors
+    /// Returns an error when the property shape and its lowering disagree on
+    /// whether it has one.
+    pub(crate) fn values(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+        pair_optional(
+            property.values.as_ref(),
+            self.lowered.values.as_ref(),
+            "sh:values",
+        )
+    }
+
+    /// The `sh:defaultValue` expression paired with its lowering, when the
+    /// property shape has one.
+    ///
+    /// # Errors
+    /// As [`Self::values`].
+    pub(crate) fn default_value(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+        pair_optional(
+            property.default_value.as_ref(),
+            self.lowered.default_value.as_ref(),
+            "sh:defaultValue",
+        )
     }
 
     /// This property shape's constraints, each paired with its lowering.
@@ -933,6 +1209,16 @@ impl<'a> ShapeList<'a> {
     }
 }
 
+/// The `sh:closed sh:ByTypes` half of a planned `sh:closed`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ClosedByTypes<'a> {
+    /// The dataset identity of `rdf:type`; `None` when this data graph interns
+    /// no `rdf:type`, so no value node has a type.
+    pub(crate) rdf_type: Option<TermId>,
+    /// Each type's permitted properties, by the type's dataset identity.
+    pub(crate) types: &'a FastMap<TermId, FastSet<TermId>>,
+}
+
 /// One range-facet bound, paired with the numeric parse the lowering already did.
 ///
 /// `Copy` and borrowed: a facet compared against a million value nodes reads the
@@ -962,6 +1248,49 @@ impl<'a> RangeBound<'a> {
     }
 }
 
+/// The compared side of a property-pair constraint (SHACL 1.2 Core §7.6):
+/// "the set of nodes that can be reached from the focus node via $path".
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PairPath<'a> {
+    /// A predicate path: the IRI's dataset identity, resolved at bind. `None`
+    /// means this data graph interns no such IRI, so the path reaches nothing.
+    Predicate(Option<TermId>),
+    /// Any other well-formed SHACL property path, evaluated from the focus node.
+    Path(&'a LoweredPath),
+}
+
+/// The resolved classes of one `sh:class` value, in the form its lowering chose
+/// (see [`LoweredClasses`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PlannedClasses<'a> {
+    /// One class's dataset identity; `None` when this data graph does not intern it.
+    One(Option<TermId>),
+    /// The interned identities of two or more classes.
+    AnyOf(&'a FastSet<TermId>),
+}
+
+impl PlannedClasses<'_> {
+    /// Whether no class resolved to a dataset identity, so nothing is an instance
+    /// of any of them.
+    #[inline]
+    pub(crate) fn is_empty(self) -> bool {
+        match self {
+            Self::One(class) => class.is_none(),
+            Self::AnyOf(classes) => classes.is_empty(),
+        }
+    }
+
+    /// Whether `is_instance` holds for ANY resolved class — the disjunction SHACL
+    /// 1.2 Core §4.1.1 states over the members of the value.
+    #[inline]
+    pub(crate) fn any(self, mut is_instance: impl FnMut(TermId) -> bool) -> bool {
+        match self {
+            Self::One(class) => class.is_some_and(is_instance),
+            Self::AnyOf(classes) => classes.iter().any(|&class| is_instance(class)),
+        }
+    }
+}
+
 /// ONE constraint, with every derivation it needs that does not depend on the
 /// focus node already resolved.
 ///
@@ -973,16 +1302,17 @@ impl<'a> RangeBound<'a> {
 /// FROM.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PlannedConstraint<'a> {
-    /// `sh:class` — the class's dataset identity, resolved at bind.
+    /// `sh:class` — the dataset identities of the value's classes, resolved at
+    /// bind; a value node conforms when it is an instance of ANY of them.
     ///
-    /// `None` means this data graph interns no term for the class, so nothing can
-    /// be an instance of it and every value node violates. That is a verdict, not
-    /// a failure to compute one.
-    Class(Option<TermId>),
-    /// `sh:datatype` — the required datatype IRI.
-    Datatype(&'a NamedNode),
-    /// `sh:nodeKind` — the required node kind.
-    NodeKind(&'a NodeKindValue),
+    /// An EMPTY resolution means this data graph interns no term for any of the
+    /// classes, so nothing can be an instance of them and every value node
+    /// violates. That is a verdict, not a failure to compute one.
+    Class(PlannedClasses<'a>),
+    /// `sh:datatype` — the permitted datatype IRIs (any one matches).
+    Datatype(&'a [NamedNode]),
+    /// `sh:nodeKind` — the permitted node kinds (any one matches).
+    NodeKind(&'a [NodeKindValue]),
     /// `sh:minCount` — the minimum value-node count.
     MinCount(u64),
     /// `sh:maxCount` — the maximum value-node count.
@@ -1028,12 +1358,16 @@ pub(crate) enum PlannedConstraint<'a> {
     Not(ShapePlan<'a>),
     /// `sh:closed` — the identities of every predicate the shape permits.
     Closed {
-        /// The dataset identity of every permitted predicate: the shape's
-        /// simple-predicate property paths together with `sh:ignoredProperties`,
-        /// unioned at stage 0 and resolved at stage 1. Probed by the predicate id
-        /// of a focus node's outgoing quad, so nothing is materialized to decide
+        /// The dataset identity of every predicate permitted whatever the value
+        /// node's types: under `sh:closed true` the shape's simple-predicate
+        /// property paths together with `sh:ignoredProperties`, under
+        /// `sh:closed sh:ByTypes` `sh:ignoredProperties` and `rdf:type` — unioned
+        /// at stage 0 and resolved at stage 1. Probed by the predicate id of a
+        /// focus node's outgoing quad, so nothing is materialized to decide
         /// whether that quad is permitted.
         permitted: &'a FastSet<TermId>,
+        /// The `sh:closed sh:ByTypes` half; `None` under `sh:closed true`.
+        by_types: Option<ClosedByTypes<'a>>,
     },
     /// `sh:minInclusive` — the declared bound and its stage-0 numeric parse.
     MinInclusive(RangeBound<'a>),
@@ -1055,19 +1389,23 @@ pub(crate) enum PlannedConstraint<'a> {
     Sparql {
         /// The SPARQL SELECT query text.
         select: &'a str,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
+        /// The result annotations the constraint declares.
+        annotations: &'a [crate::shapes::ResultAnnotation],
     },
-    /// `sh:equals` — the compared predicate's dataset identity.
-    Equals(Option<TermId>),
-    /// `sh:disjoint` — the compared predicate's dataset identity.
-    Disjoint(Option<TermId>),
-    /// `sh:lessThan` — the compared predicate's dataset identity.
-    LessThan(Option<TermId>),
-    /// `sh:lessThanOrEquals` — the compared predicate's dataset identity.
-    LessThanOrEquals(Option<TermId>),
+    /// `sh:equals` — the compared path.
+    Equals(PairPath<'a>),
+    /// `sh:disjoint` — the compared path.
+    Disjoint(PairPath<'a>),
+    /// `sh:subsetOf` — the compared path.
+    SubsetOf(PairPath<'a>),
+    /// `sh:lessThan` — the compared path.
+    LessThan(PairPath<'a>),
+    /// `sh:lessThanOrEquals` — the compared path.
+    LessThanOrEquals(PairPath<'a>),
     /// `sh:qualifiedValueShape` — the qualified shape's plan and its counts.
     QualifiedValueShape {
         /// The plan of the qualified value shape.
@@ -1087,8 +1425,8 @@ pub(crate) enum PlannedConstraint<'a> {
         expr: &'a NodeExpr,
         /// Its lowering.
         lowered: &'a LoweredExpr,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
@@ -1102,11 +1440,35 @@ pub(crate) enum PlannedConstraint<'a> {
         shapes: &'a Arc<OnceLock<FastMap<Term, Shape>>>,
         /// The position of that index's lowering.
         index: u32,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
+    /// `sh:minListLength` — the minimum number of list members.
+    MinListLength(u64),
+    /// `sh:maxListLength` — the maximum number of list members.
+    MaxListLength(u64),
+    /// `sh:uniqueMembers` — whether list members must be pairwise distinct.
+    UniqueMembers(bool),
+    /// `sh:memberShape` — the plan of the shape every list member must meet.
+    MemberShape(ShapePlan<'a>),
+    /// `sh:singleLine` — whether literal value nodes must hold no line break.
+    SingleLine(bool),
+    /// `sh:rootClass` — the declared roots and their dataset identities,
+    /// resolved at bind; a value node conforms when it is an IRI that is a root
+    /// or reaches one through `rdfs:subClassOf+`.
+    RootClass {
+        /// The declared root class IRIs (the reflexive half of `rdfs:subClassOf*`).
+        roots: &'a [NamedNode],
+        /// The roots this data graph interns.
+        ids: &'a FastSet<TermId>,
+    },
+    /// `sh:someValue` — the plan of the shape at least one value node must meet.
+    SomeValue(ShapePlan<'a>),
+    /// `sh:uniqueValuesFor` — the slot of the grouping of its shape's target set,
+    /// which [`ShapePlan::unique_groups`] resolves against the bound dataset.
+    UniqueValuesFor(UniqueSlot),
     /// A SHACL-SPARQL custom constraint component usage.
     Component {
         /// The component IRI.
@@ -1117,10 +1479,12 @@ pub(crate) enum PlannedConstraint<'a> {
         bindings: &'a [(String, Term)],
         /// The selected validator.
         validator: &'a ComponentValidator,
-        /// The message override.
-        message: &'a Option<String>,
+        /// The message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The severity override.
         severity: &'a Option<crate::report::Severity>,
+        /// The result annotations the selected validator declares.
+        annotations: &'a [crate::shapes::ResultAnnotation],
     },
 }
 
@@ -1147,14 +1511,44 @@ impl<'a> ShapePlan<'a> {
         lowered: &'a LoweredConstraint,
     ) -> Result<PlannedConstraint<'a>, String> {
         Ok(match (constraint, lowered) {
-            (Constraint::Class(_), LoweredConstraint::Class(slot)) => {
-                PlannedConstraint::Class(self.binding.term(*slot)?)
+            (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
+                PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
             }
-            (Constraint::Datatype(datatype), LoweredConstraint::Datatype) => {
-                PlannedConstraint::Datatype(datatype)
+            (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::AnyOf(slot))) => {
+                PlannedConstraint::Class(PlannedClasses::AnyOf(self.binding.set(*slot)?))
             }
-            (Constraint::NodeKind(kind), LoweredConstraint::NodeKind) => {
-                PlannedConstraint::NodeKind(kind)
+            (Constraint::Datatype(datatypes), LoweredConstraint::Datatype) => {
+                PlannedConstraint::Datatype(datatypes)
+            }
+            (Constraint::NodeKind(kinds), LoweredConstraint::NodeKind) => {
+                PlannedConstraint::NodeKind(kinds)
+            }
+            (Constraint::MinListLength(n), LoweredConstraint::MinListLength) => {
+                PlannedConstraint::MinListLength(*n)
+            }
+            (Constraint::MaxListLength(n), LoweredConstraint::MaxListLength) => {
+                PlannedConstraint::MaxListLength(*n)
+            }
+            (Constraint::UniqueMembers(unique), LoweredConstraint::UniqueMembers) => {
+                PlannedConstraint::UniqueMembers(*unique)
+            }
+            (Constraint::MemberShape(shape), LoweredConstraint::MemberShape(lowered)) => {
+                PlannedConstraint::MemberShape(self.nested(shape, lowered))
+            }
+            (Constraint::SingleLine(flag), LoweredConstraint::SingleLine) => {
+                PlannedConstraint::SingleLine(*flag)
+            }
+            (Constraint::RootClass(roots), LoweredConstraint::RootClass(slot)) => {
+                PlannedConstraint::RootClass {
+                    roots,
+                    ids: self.binding.set(*slot)?,
+                }
+            }
+            (Constraint::SomeValue(shape), LoweredConstraint::SomeValue(lowered)) => {
+                PlannedConstraint::SomeValue(self.nested(shape, lowered))
+            }
+            (Constraint::UniqueValuesFor { .. }, LoweredConstraint::UniqueValuesFor(slot)) => {
+                PlannedConstraint::UniqueValuesFor(*slot)
             }
             (Constraint::MinCount(n), LoweredConstraint::MinCount) => {
                 PlannedConstraint::MinCount(*n)
@@ -1199,11 +1593,22 @@ impl<'a> ShapePlan<'a> {
             (Constraint::Not(shape), LoweredConstraint::Not(lowered)) => {
                 PlannedConstraint::Not(self.nested(shape, lowered))
             }
-            (Constraint::Closed { .. }, LoweredConstraint::Closed(slot)) => {
-                PlannedConstraint::Closed {
-                    permitted: self.binding.set(*slot)?,
-                }
-            }
+            (
+                Constraint::Closed { .. },
+                LoweredConstraint::Closed {
+                    permitted,
+                    by_types,
+                },
+            ) => PlannedConstraint::Closed {
+                permitted: self.binding.set(*permitted)?,
+                by_types: match by_types {
+                    None => None,
+                    Some(lowered) => Some(ClosedByTypes {
+                        rdf_type: self.binding.term(lowered.rdf_type)?,
+                        types: self.binding.closed_types(lowered.index)?,
+                    }),
+                },
+            },
             (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive(numeric)) => {
                 PlannedConstraint::MinInclusive(RangeBound {
                     term: bound,
@@ -1243,26 +1648,31 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::Sparql {
                     select,
-                    message,
+                    messages,
                     severity,
+                    annotations,
                 },
                 LoweredConstraint::Sparql,
             ) => PlannedConstraint::Sparql {
                 select,
-                message,
+                messages,
                 severity,
+                annotations,
             },
-            (Constraint::Equals(_), LoweredConstraint::Equals(slot)) => {
-                PlannedConstraint::Equals(self.binding.term(*slot)?)
+            (Constraint::Equals(_), LoweredConstraint::Equals(path)) => {
+                PlannedConstraint::Equals(self.pair_path(path)?)
             }
-            (Constraint::Disjoint(_), LoweredConstraint::Disjoint(slot)) => {
-                PlannedConstraint::Disjoint(self.binding.term(*slot)?)
+            (Constraint::Disjoint(_), LoweredConstraint::Disjoint(path)) => {
+                PlannedConstraint::Disjoint(self.pair_path(path)?)
             }
-            (Constraint::LessThan(_), LoweredConstraint::LessThan(slot)) => {
-                PlannedConstraint::LessThan(self.binding.term(*slot)?)
+            (Constraint::SubsetOf(_), LoweredConstraint::SubsetOf(path)) => {
+                PlannedConstraint::SubsetOf(self.pair_path(path)?)
             }
-            (Constraint::LessThanOrEquals(_), LoweredConstraint::LessThanOrEquals(slot)) => {
-                PlannedConstraint::LessThanOrEquals(self.binding.term(*slot)?)
+            (Constraint::LessThan(_), LoweredConstraint::LessThan(path)) => {
+                PlannedConstraint::LessThan(self.pair_path(path)?)
+            }
+            (Constraint::LessThanOrEquals(_), LoweredConstraint::LessThanOrEquals(path)) => {
+                PlannedConstraint::LessThanOrEquals(self.pair_path(path)?)
             }
             (
                 Constraint::QualifiedValueShape {
@@ -1286,21 +1696,21 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::Expression {
                     expr,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::Expression(lowered),
             ) => PlannedConstraint::Expression {
                 expr,
                 lowered,
-                message,
+                messages,
                 severity,
             },
             (
                 Constraint::NodeByExpression {
                     expr,
                     shapes,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::NodeByExpression {
@@ -1312,7 +1722,7 @@ impl<'a> ShapePlan<'a> {
                 lowered,
                 shapes,
                 index: *index,
-                message,
+                messages,
                 severity,
             },
             (
@@ -1321,8 +1731,9 @@ impl<'a> ShapePlan<'a> {
                     source_shape,
                     bindings,
                     validator,
-                    message,
+                    messages,
                     severity,
+                    annotations,
                 },
                 LoweredConstraint::Component,
             ) => PlannedConstraint::Component {
@@ -1330,8 +1741,9 @@ impl<'a> ShapePlan<'a> {
                 source_shape,
                 bindings,
                 validator,
-                message,
+                messages,
                 severity,
+                annotations,
             },
             (constraint, lowered) => {
                 return Err(lowering_defect(constraint_kind(constraint), lowered));
@@ -1388,11 +1800,20 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::Sparql { .. } => "sh:sparql",
         Constraint::Equals(_) => "sh:equals",
         Constraint::Disjoint(_) => "sh:disjoint",
+        Constraint::SubsetOf(_) => "sh:subsetOf",
         Constraint::LessThan(_) => "sh:lessThan",
         Constraint::LessThanOrEquals(_) => "sh:lessThanOrEquals",
         Constraint::QualifiedValueShape { .. } => "sh:qualifiedValueShape",
         Constraint::Expression { .. } => "sh:expression",
         Constraint::NodeByExpression { .. } => "sh:nodeByExpression",
+        Constraint::MinListLength(_) => "sh:minListLength",
+        Constraint::MaxListLength(_) => "sh:maxListLength",
+        Constraint::UniqueMembers(_) => "sh:uniqueMembers",
+        Constraint::MemberShape(_) => "sh:memberShape",
+        Constraint::SingleLine(_) => "sh:singleLine",
+        Constraint::RootClass(_) => "sh:rootClass",
+        Constraint::SomeValue(_) => "sh:someValue",
+        Constraint::UniqueValuesFor { .. } => "sh:uniqueValuesFor",
         Constraint::Component { .. } => "a SHACL-SPARQL constraint component",
     }
 }
@@ -1400,17 +1821,26 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
 // ── The lowered node expression, as the expression evaluator reads it ───────────
 
 impl LoweredExpr {
-    /// The slot holding the identity of the class this expression selects the
-    /// instances of.
+    /// Whether this lowering recorded a CONSTANT class — a `shnex:instancesOf`
+    /// whose operand is an IRI, resolved at bind — rather than one computed at
+    /// evaluation.
+    #[inline]
+    pub(crate) const fn has_constant_class(&self) -> bool {
+        self.class.is_some()
+    }
+
+    /// The identity of the constant class this lowering recorded, or `None` when
+    /// the data graph interns no such class (which has no instances).
     ///
     /// # Errors
-    /// Returns an error when the lowering beside a `shnex:instancesOf` expression
-    /// records no class, which is a defect in the walk.
+    /// Returns an error when this lowering recorded no constant class (see
+    /// [`Self::has_constant_class`]), or when its slot is not one the binding
+    /// holds — both defects in the walk.
     #[inline]
-    pub(crate) fn class_id(&self, plan: ShapePlan<'_>) -> Result<Option<TermId>, String> {
+    pub(crate) fn constant_class_id(&self, plan: ShapePlan<'_>) -> Result<Option<TermId>, String> {
         let slot = self.class.ok_or_else(|| {
-            "internal validation-plan defect: a shnex:instancesOf expression was evaluated \
-             against a lowering that records no class, so its class identity was never resolved"
+            "internal validation-plan defect: a constant shnex:instancesOf class was read from a \
+             lowering that records none"
                 .to_owned()
         })?;
         plan.binding.term(slot)
@@ -1529,15 +1959,44 @@ fn pair<'a, A, B>(
     Ok(ast.iter().zip(lowered.iter()))
 }
 
+/// Pair an optional AST node with its optional lowering, refusing when exactly one
+/// of the two is present — the single-item twin of [`pair`].
+fn pair_optional<'a, A, B>(
+    ast: Option<&'a A>,
+    lowered: Option<&'a B>,
+    what: &str,
+) -> Result<Option<(&'a A, &'a B)>, String> {
+    match (ast, lowered) {
+        (Some(ast), Some(lowered)) => Ok(Some((ast, lowered))),
+        (None, None) => Ok(None),
+        (ast, _) => Err(format!(
+            "internal validation-plan defect: a property shape {} {what} but its lowering {}, so \
+             the shape lowering and the shape it lowered have diverged",
+            if ast.is_some() {
+                "declares"
+            } else {
+                "declares no"
+            },
+            if ast.is_some() {
+                "holds none"
+            } else {
+                "holds one"
+            },
+        )),
+    }
+}
+
 // ── Prepared targets ────────────────────────────────────────────────────────────
 
 /// Dataset-bound target predicates used by a prepared validator.
 ///
 /// Core targets are retained as compact membership indexes instead of eagerly
 /// expanding every target node. A bounded request can therefore test only its
-/// supplied candidates. Explicit and SHACL-SPARQL target results are resolved
-/// once at preparation because they cannot be answered through a Core pattern
-/// lookup.
+/// supplied candidates. Explicit, SHACL-SPARQL, where (`sh:targetWhere`),
+/// node-expression (`sh:targetNode [ … ]`) and explicit-shape (`sh:shape` in the
+/// data graph) target results are resolved once at preparation, into
+/// `explicit_ids` / `explicit_foreign`, because none of them can be answered
+/// through a Core pattern lookup.
 #[derive(Debug, Default)]
 pub(crate) struct PreparedTargets {
     pub(crate) explicit_ids: IdSet,
@@ -1585,6 +2044,14 @@ struct ShapeWalk {
     /// recursion of its own: every visit below hands it what the lowering walk
     /// just reached, at the node the lowering walk is standing on.
     footprint: FootprintWalk,
+    /// Every `sh:uniqueValuesFor` constraint lowered so far, in slot order.
+    unique_values: Vec<UniqueSpec>,
+    /// Every `sh:closed sh:ByTypes` index lowered so far, in position order.
+    closed_types: Vec<LoweredTypeIndex>,
+    /// The position each shared `sh:closed sh:ByTypes` index was lowered at, by
+    /// the address of its `Arc` allocation — so a shapes graph's one index is
+    /// lowered once however many constraints share it.
+    closed_type_positions: FastMap<usize, u32>,
 }
 
 impl ShapeWalk {
@@ -1613,6 +2080,35 @@ impl ShapeWalk {
         slot as SetSlot
     }
 
+    /// Lower a `sh:closed sh:ByTypes` index — once per shared allocation — and
+    /// hand back its position.
+    fn closed_type_index(&mut self, index: &Arc<crate::shapes::ClosedTypeIndex>) -> u32 {
+        // The address is a stable identity only while the allocation lives, and
+        // it does: the walk borrows the shapes that hold every such `Arc`.
+        let address = Arc::as_ptr(index).addr();
+        if let Some(&position) = self.closed_type_positions.get(&address) {
+            return position;
+        }
+        let mut entries = Vec::with_capacity(index.entries().len());
+        for (ty, properties) in index.entries() {
+            let ty = self.slot(ty.clone());
+            let start = self.terms.len() as u32;
+            self.terms.extend(
+                properties
+                    .iter()
+                    .map(|property| Term::NamedNode(property.clone())),
+            );
+            let end = self.terms.len() as u32;
+            entries.push((ty, start..end));
+        }
+        let position = self.closed_types.len() as u32;
+        self.closed_types.push(LoweredTypeIndex {
+            entries: entries.into_boxed_slice(),
+        });
+        self.closed_type_positions.insert(address, position);
+        position
+    }
+
     /// Record `class` as a planned class AND hand back the slot its own dataset
     /// identity will occupy.
     ///
@@ -1624,6 +2120,22 @@ impl ShapeWalk {
     fn class_slot(&mut self, class: &NamedNode) -> TermSlot {
         self.classes.insert(class.clone());
         self.slot(Term::NamedNode(class.clone()))
+    }
+
+    /// Record every member of one `sh:class` value as a planned class AND hand
+    /// back where their identities resolve — [`Self::class_slot`] for a value
+    /// that names one class or a SHACL list of them: a term slot for one class,
+    /// the slot of their identity SET for two or more.
+    fn class_slots(&mut self, classes: &[NamedNode]) -> LoweredClasses {
+        if let [class] = classes {
+            return LoweredClasses::One(self.class_slot(class));
+        }
+        for class in classes {
+            self.classes.insert(class.clone());
+        }
+        LoweredClasses::AnyOf(
+            self.set_slot(classes.iter().map(|class| Term::NamedNode(class.clone()))),
+        )
     }
 
     /// Seal the walk into the lowering it produced.
@@ -1661,6 +2173,8 @@ impl ShapeWalk {
             bodies: self.bodies,
             no_targets: PreparedTargets::default(),
             footprint,
+            unique_values: self.unique_values.into_boxed_slice(),
+            closed_types: self.closed_types.into_boxed_slice(),
         }
     }
 
@@ -1714,7 +2228,15 @@ pub(crate) fn lower_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> L
     let mut walk = ShapeWalk::default();
     let lowered: Vec<LoweredShape> = shapes
         .into_iter()
-        .map(|shape| lower_shape(shape, &mut walk))
+        .enumerate()
+        .map(|(position, shape)| {
+            walk.footprint.enter_root(position);
+            // Recorded for every top-level shape, deactivated or not, exactly as
+            // its declared targets are: the walk describes the shapes graph, and
+            // validation decides which shapes run.
+            walk.footprint.record_declared_targets();
+            lower_shape(shape, &mut walk)
+        })
         .collect();
     walk.finish(lowered)
 }
@@ -1838,7 +2360,8 @@ fn standalone_root() -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: crate::report::Severity::Violation,
-        message: None,
+        messages: Vec::new(),
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -1855,11 +2378,16 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
             Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                 walk.classes.insert(class.clone());
             }
+            // A where target and a node-expression target are evaluated with a
+            // lowering of their own (see `crate::target_eval`), once per
+            // validation, so what they name is planned there rather than here.
             Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
             | Target::Node(_)
             | Target::ImplicitClass(_)
-            | Target::Sparql { .. } => {}
+            | Target::Sparql { .. }
+            | Target::Where(_)
+            | Target::NodeExpression(_) => {}
         }
     }
     let lowered = LoweredShape {
@@ -1882,10 +2410,29 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
 /// and its reifier shapes.
 fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProperty {
     let path = lower_path(&property.path, walk);
+    // `sh:values` and `sh:defaultValue` are evaluated at the FOCUS node — "the
+    // output nodes of evalExpr(e, data graph, focus node, {})" — so they are
+    // lowered here, before the walk moves to the value nodes, and their reads are
+    // recorded from the node the walk stands on.
+    let values = property
+        .values
+        .as_ref()
+        .map(|expr| lower_expression(expr, walk));
+    let default_value = property
+        .default_value
+        .as_ref()
+        .map(|expr| lower_expression(expr, walk));
     // Every step of the path is a read, and everything below applies to the nodes
     // the path arrives at — so the footprint moves to those value nodes here, while
     // remembering the declaring node the property-pair comparands are read from.
     let scope = walk.footprint.enter_values(&property.path);
+    // A computed value node is an expression's OUTPUT, not a node the path reaches,
+    // so with either expression present the value nodes are no longer all
+    // describable by a path from the focus node: what the constraints below read
+    // there is recorded unrooted, which turns the footprint TOP exactly when one of
+    // them actually reads a triple at a value node.
+    let computed =
+        (values.is_some() || default_value.is_some()).then(|| walk.footprint.enter_unrooted());
     let constraints = lower_constraints(&property.constraints, &property.property_shapes, walk);
     let properties: Box<[LoweredProperty]> = property
         .property_shapes
@@ -1913,9 +2460,14 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .map(|reifier| lower_shape(reifier, walk))
         .collect();
     walk.footprint.leave(reified);
+    if let Some(computed) = computed {
+        walk.footprint.leave(computed);
+    }
     walk.footprint.leave(scope);
     LoweredProperty {
         path,
+        values,
+        default_value,
         constraints,
         properties,
         reifiers,
@@ -1988,7 +2540,7 @@ fn lower_constraint(
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
     match constraint {
-        Constraint::Class(class) => LoweredConstraint::Class(walk.class_slot(class)),
+        Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
         Constraint::MinCount(_) => LoweredConstraint::MinCount,
@@ -2004,10 +2556,14 @@ fn lower_constraint(
         // The permitted-predicate set, unioned once here rather than rebuilt per
         // focus node. The membership rule is the evaluator's, restated nowhere: an
         // INVERSE path constrains incoming triples and therefore permits no
-        // outgoing predicate, and `rdf:type` is permitted only when a shape lists
-        // it in `sh:ignoredProperties` (W3C `core/node/closed-001` vs `-002`).
-        Constraint::Closed { ignored } => LoweredConstraint::Closed(
-            walk.set_slot(
+        // outgoing predicate, and under `sh:closed true` `rdf:type` is permitted
+        // only when a shape lists it in `sh:ignoredProperties` (W3C
+        // `core/node/closed-001` vs `-002`).
+        Constraint::Closed {
+            ignored,
+            mode: ClosedMode::Declared,
+        } => LoweredConstraint::Closed {
+            permitted: walk.set_slot(
                 siblings
                     .iter()
                     .filter_map(|sibling| match &sibling.path {
@@ -2025,7 +2581,33 @@ fn lower_constraint(
                             .map(|predicate| Term::NamedNode(predicate.clone())),
                     ),
             ),
-        ),
+            by_types: None,
+        },
+        // SHACL 1.2 Core §7.9.1: under `sh:ByTypes`, "P is the set of IRI
+        // properties that can be reached from the value node via the following
+        // algorithm, plus rdf:type" — and the shape's OWN `sh:property` paths are
+        // not in it unless that algorithm reaches the shape. `rdf:type` and
+        // `sh:ignoredProperties` form the type-independent set; the rest is the
+        // shared type index, lowered once however many constraints share it.
+        Constraint::Closed {
+            ignored,
+            mode: ClosedMode::ByTypes(index),
+        } => {
+            let rdf_type = Term::NamedNode(NamedNode::new_unchecked(crate::model::rdf::TYPE));
+            let permitted = walk.set_slot(
+                std::iter::once(rdf_type.clone()).chain(
+                    ignored
+                        .iter()
+                        .map(|predicate| Term::NamedNode(predicate.clone())),
+                ),
+            );
+            let rdf_type = walk.slot(rdf_type);
+            let index = walk.closed_type_index(index);
+            LoweredConstraint::Closed {
+                permitted,
+                by_types: Some(LoweredByTypes { rdf_type, index }),
+            }
+        }
         Constraint::MinInclusive(bound) => {
             LoweredConstraint::MinInclusive(crate::constraints::numeric_value(bound))
         }
@@ -2043,17 +2625,14 @@ fn lower_constraint(
         Constraint::Xone(shapes) => LoweredConstraint::Xone(lower_shape_list(shapes, walk)),
         Constraint::Node(shape) => LoweredConstraint::Node(Box::new(lower_shape(shape, walk))),
         Constraint::Sparql { .. } => LoweredConstraint::Sparql,
-        Constraint::Equals(predicate) => {
-            LoweredConstraint::Equals(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::Disjoint(predicate) => {
-            LoweredConstraint::Disjoint(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::LessThan(predicate) => {
-            LoweredConstraint::LessThan(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::LessThanOrEquals(predicate) => {
-            LoweredConstraint::LessThanOrEquals(walk.slot(Term::NamedNode(predicate.clone())))
+        // An IRI value lowers to `LoweredPath::Predicate` over one slot for the
+        // IRI — the one slot these constraints always took.
+        Constraint::Equals(path) => LoweredConstraint::Equals(lower_path(path, walk)),
+        Constraint::Disjoint(path) => LoweredConstraint::Disjoint(lower_path(path, walk)),
+        Constraint::SubsetOf(path) => LoweredConstraint::SubsetOf(lower_path(path, walk)),
+        Constraint::LessThan(path) => LoweredConstraint::LessThan(lower_path(path, walk)),
+        Constraint::LessThanOrEquals(path) => {
+            LoweredConstraint::LessThanOrEquals(lower_path(path, walk))
         }
         Constraint::QualifiedValueShape {
             shape, siblings, ..
@@ -2077,6 +2656,56 @@ fn lower_constraint(
                 expr,
                 index: walk.index_position(shapes),
             }
+        }
+        Constraint::MinListLength(_) => LoweredConstraint::MinListLength,
+        Constraint::MaxListLength(_) => LoweredConstraint::MaxListLength,
+        Constraint::UniqueMembers(_) => LoweredConstraint::UniqueMembers,
+        // The member shape judges each list MEMBER, so its reads are anchored at
+        // the nodes `rdf:rest*/rdf:first` reaches from the value node.
+        Constraint::MemberShape(shape) => {
+            let saved = walk
+                .footprint
+                .enter_values(&crate::footprint::list_member_path());
+            let lowered = lower_shape(shape, walk);
+            walk.footprint.leave(saved);
+            LoweredConstraint::MemberShape(Box::new(lowered))
+        }
+        Constraint::SingleLine(_) => LoweredConstraint::SingleLine,
+        // A plain id set, NOT `class_set_slot`: a root class is compared along
+        // `rdfs:subClassOf`, never used as an `rdf:type` object, so it is no
+        // planned class for target resolution or the class-membership catalog.
+        Constraint::RootClass(roots) => LoweredConstraint::RootClass(
+            walk.set_slot(roots.iter().map(|root| Term::NamedNode(root.clone()))),
+        ),
+        // The shape judges each value node itself, as `sh:node`'s does.
+        Constraint::SomeValue(shape) => {
+            LoweredConstraint::SomeValue(Box::new(lower_shape(shape, walk)))
+        }
+        // The grouping is built from the declaring shape's OWN target
+        // declarations, so their classes are planned exactly as a top-level
+        // shape's are: target resolution asks the catalog for them by IRI.
+        Constraint::UniqueValuesFor {
+            properties,
+            shape,
+            targets,
+        } => {
+            for target in targets {
+                if let Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) = target
+                {
+                    walk.classes.insert(class.clone());
+                }
+            }
+            let properties = properties
+                .iter()
+                .map(|property| walk.slot(Term::NamedNode(property.clone())))
+                .collect();
+            let slot = walk.unique_values.len();
+            walk.unique_values.push(UniqueSpec {
+                shape: shape.clone(),
+                targets: targets.clone().into_boxed_slice(),
+                properties,
+            });
+            LoweredConstraint::UniqueValuesFor(slot as UniqueSlot)
         }
         Constraint::Component { .. } => LoweredConstraint::Component,
     }
@@ -2161,11 +2790,16 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             ..LoweredExpr::default()
         },
         // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
-        // of a class, so that class must be resolved in the validation plan exactly
-        // like an `sh:class` constraint or the membership view answers "no
-        // instances" for it.
-        NodeExpr::InstancesOf(class) => LoweredExpr {
-            class: Some(walk.class_slot(class)),
+        // of the classes its operand produces. The authored constant form names
+        // its class outright, so that class is resolved in the validation plan
+        // exactly like an `sh:class` constraint; a computed operand is lowered like
+        // any other operand and resolves its classes at evaluation.
+        NodeExpr::InstancesOf(types) => LoweredExpr {
+            class: match types.as_ref() {
+                NodeExpr::Constant(Term::NamedNode(class)) => Some(walk.class_slot(class)),
+                _ => None,
+            },
+            operands: Box::new([lower_expression(types, walk)]),
             ..LoweredExpr::default()
         },
         NodeExpr::Filter { nodes, shape }
@@ -2575,6 +3209,9 @@ ex:FlagShape a sh:NodeShape ;
         property: &super::LoweredProperty,
         out: &mut Vec<&'a str>,
     ) {
+        for expr in property.values.iter().chain(&property.default_value) {
+            collect_expr_class_slots(lowered, expr, out);
+        }
         for constraint in &property.constraints {
             collect_constraint_class_slots(lowered, constraint, out);
         }
@@ -2597,13 +3234,22 @@ ex:FlagShape a sh:NodeShape ;
         out: &mut Vec<&'a str>,
     ) {
         match constraint {
-            LoweredConstraint::Class(slot) => {
-                let Term::NamedNode(class) = &lowered.terms[*slot as usize] else {
-                    panic!("an sh:class slot holds something other than an IRI");
+            LoweredConstraint::Class(classes) => {
+                let range = match *classes {
+                    super::LoweredClasses::One(slot) => slot..slot + 1,
+                    super::LoweredClasses::AnyOf(slot) => lowered.sets[slot as usize].clone(),
                 };
-                out.push(class.as_str());
+                for term in &lowered.terms[range.start as usize..range.end as usize] {
+                    let Term::NamedNode(class) = term else {
+                        panic!("an sh:class slot holds something other than an IRI");
+                    };
+                    out.push(class.as_str());
+                }
             }
-            LoweredConstraint::Not(shape) | LoweredConstraint::Node(shape) => {
+            LoweredConstraint::Not(shape)
+            | LoweredConstraint::Node(shape)
+            | LoweredConstraint::MemberShape(shape)
+            | LoweredConstraint::SomeValue(shape) => {
                 collect_shape_class_slots(lowered, shape, out);
             }
             LoweredConstraint::And(shapes)
@@ -2622,6 +3268,12 @@ ex:FlagShape a sh:NodeShape ;
             // Kinds that name neither a class nor a shape.
             LoweredConstraint::Datatype
             | LoweredConstraint::NodeKind
+            | LoweredConstraint::MinListLength
+            | LoweredConstraint::MaxListLength
+            | LoweredConstraint::UniqueMembers
+            | LoweredConstraint::SingleLine
+            | LoweredConstraint::RootClass(_)
+            | LoweredConstraint::UniqueValuesFor(_)
             | LoweredConstraint::MinCount
             | LoweredConstraint::MaxCount
             | LoweredConstraint::In(_)
@@ -2631,7 +3283,7 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::MaxLength
             | LoweredConstraint::UniqueLang
             | LoweredConstraint::LanguageIn
-            | LoweredConstraint::Closed(_)
+            | LoweredConstraint::Closed { .. }
             | LoweredConstraint::MinInclusive(_)
             | LoweredConstraint::MaxInclusive(_)
             | LoweredConstraint::MinExclusive(_)
@@ -2639,6 +3291,7 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::Sparql
             | LoweredConstraint::Equals(_)
             | LoweredConstraint::Disjoint(_)
+            | LoweredConstraint::SubsetOf(_)
             | LoweredConstraint::LessThan(_)
             | LoweredConstraint::LessThanOrEquals(_)
             | LoweredConstraint::Component => {}
@@ -2677,70 +3330,70 @@ ex:FlagShape a sh:NodeShape ;
         }
     }
 
-    /// A `shnex:instancesOf` the walk lowered really carries its class slot, and a
-    /// lowering that carries none refuses loudly rather than answering "no
-    /// instances".
+    /// A `shnex:instancesOf` over a CONSTANT class the walk lowered really carries
+    /// that class's slot, and one whose classes are COMPUTED carries none and
+    /// resolves them at evaluation instead.
     ///
-    /// The believed-INVALID direction of the refusal: a term the lowering never
-    /// recorded is a defect in this crate, and it is an `Err` rather than a `None`
-    /// because a silent `None` here would make a `shnex:instancesOf` expression
-    /// select nothing at all — a constraint that stopped constraining, with every
-    /// existing test still green.
+    /// The slot is the constant form's fast path, not its only path: a lowering
+    /// that records no class sends the evaluator through the operand, which for a
+    /// constant IRI yields the same class. So a missing slot costs a lookup, never
+    /// an answer — which is why the two readings are checked against each other
+    /// here rather than one of them being a refusal.
     #[test]
-    fn an_expression_lowering_without_its_class_is_refused_loudly() {
-        let lowering = lower_standalone_expression(&NodeExpr::InstancesOf(
-            NamedNode::new_unchecked("http://example.org/ns#Selected"),
-        ));
-        let shapes = every_route_shapes();
+    fn a_constant_instances_of_carries_its_class_and_a_computed_one_does_not() {
+        let constant =
+            lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(
+                Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#Selected")),
+            ))));
         let data = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
              <http://example.org/ns#Selected> .",
             None,
         )
         .expect("the fixture data parses");
-        let binding = lowering.bind(data.as_ref());
-        let plan = lowering.plan(&binding);
-
-        // The lowering the walk really made answers, and answers with an identity.
-        assert!(
-            lowering
-                .expr()
-                .class_id(plan)
-                .expect("a lowered shnex:instancesOf carries its class")
-                .is_some(),
-            "the fixture data interns the class, so the identity must be present"
-        );
-
-        // A DIFFERENT expression's lowering carries no class at all. Asking it for
-        // one is the defect, and it is loud.
-        let empty = lower_standalone_expression(&NodeExpr::This);
-        let empty_binding = empty.bind(data.as_ref());
-        let error = empty
+        let binding = constant.bind(data.as_ref());
+        assert!(constant.expr().has_constant_class());
+        let resolved = constant
             .expr()
-            .class_id(empty.plan(&empty_binding))
-            .expect_err("a lowering that records no class cannot answer for one");
+            .constant_class_id(constant.plan(&binding))
+            .expect("a lowered slot is one the binding holds");
         assert!(
-            error.contains("shnex:instancesOf") && error.contains("never resolved"),
-            "the refusal must name what was asked for and why it could not be answered, got: \
-             {error}"
+            resolved.is_some(),
+            "the fixture data interns the class, so the constant form carries its identity"
         );
 
-        // …and the neighbouring VALID case: the same lowered expression over a data
-        // graph that interns no such class is a soft `None`, never a refusal. A
-        // shapes graph is entitled to name a class its data lacks.
+        // A computed class operand records no constant slot; the class it will
+        // produce is not known until evaluation.
+        let computed = lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(
+            NodeExpr::Var("class".to_owned()),
+        )));
+        let computed_binding = computed.bind(data.as_ref());
+        assert!(
+            !computed.expr().has_constant_class(),
+            "a computed class operand has no bind-time identity"
+        );
+        let error = computed
+            .expr()
+            .constant_class_id(computed.plan(&computed_binding))
+            .expect_err("asking a computed lowering for a constant class is a defect");
+        assert!(error.contains("records none"), "got: {error}");
+
+        // …and the neighbouring case: the constant form over a data graph that
+        // interns no such class is a soft "no identity", never a refusal. A shapes
+        // graph is entitled to name a class its data lacks.
         let bare = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://example.org/ns#p> <http://example.org/ns#b> .",
             None,
         )
         .expect("the fixture data parses");
-        let bare_binding = lowering.bind(bare.as_ref());
+        let bare_binding = constant.bind(bare.as_ref());
         assert_eq!(
-            lowering.expr().class_id(lowering.plan(&bare_binding)),
+            constant
+                .expr()
+                .constant_class_id(constant.plan(&bare_binding)),
             Ok(None),
             "a class the data graph never names is 'nothing is an instance', not a refusal"
         );
-
-        let _ = &shapes;
     }
 
     /// A lowering that describes a DIFFERENT constraint kind from the one beside it
@@ -2862,7 +3515,7 @@ ex:Shape a sh:NodeShape ;
                 r"{PREFIXES}
 ex:Outer a sh:NodeShape ;
     sh:targetNode ex:a ;
-    sh:nodeByExpression [ shnex:constant ex:Inner ] .
+    sh:nodeByExpression ex:Inner .
 
 ex:Inner a sh:NodeShape ;
     sh:class ex:Indexed .
@@ -2969,11 +3622,20 @@ ex:Inner a sh:NodeShape ;
         PlannedConstraint::Sparql { .. } => "sparql",
         PlannedConstraint::Equals(_) => "equals",
         PlannedConstraint::Disjoint(_) => "disjoint",
+        PlannedConstraint::SubsetOf(_) => "subset_of",
         PlannedConstraint::LessThan(_) => "less_than",
         PlannedConstraint::LessThanOrEquals(_) => "less_than_or_equals",
         PlannedConstraint::QualifiedValueShape { .. } => "qualified_value_shape",
         PlannedConstraint::Expression { .. } => "expression",
         PlannedConstraint::NodeByExpression { .. } => "node_by_expression",
+        PlannedConstraint::MinListLength(_) => "min_list_length",
+        PlannedConstraint::MaxListLength(_) => "max_list_length",
+        PlannedConstraint::UniqueMembers(_) => "unique_members",
+        PlannedConstraint::MemberShape(_) => "member_shape",
+        PlannedConstraint::SingleLine(_) => "single_line",
+        PlannedConstraint::RootClass { .. } => "root_class",
+        PlannedConstraint::SomeValue(_) => "some_value",
+        PlannedConstraint::UniqueValuesFor(_) => "unique_values_for",
         PlannedConstraint::Component { .. } => "component",
     }
 
@@ -3005,10 +3667,13 @@ ex:Inner a sh:NodeShape ;
         "max_exclusive",
         "max_inclusive",
         "max_length",
+        "max_list_length",
+        "member_shape",
         "min_count",
         "min_exclusive",
         "min_inclusive",
         "min_length",
+        "min_list_length",
         "node",
         "node_by_expression",
         "node_kind",
@@ -3016,8 +3681,14 @@ ex:Inner a sh:NodeShape ;
         "or",
         "pattern",
         "qualified_value_shape",
+        "root_class",
+        "single_line",
+        "some_value",
         "sparql",
+        "subset_of",
         "unique_lang",
+        "unique_members",
+        "unique_values_for",
         "xone",
     ];
 

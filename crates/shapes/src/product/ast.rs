@@ -98,12 +98,13 @@
 //! | 1 | `fn_decls` | `seq<decl>` | the custom node-expression function declarations, **sorted by IRI** |
 //! | 2 | `fn_bodies` | `opt<node_expr>` × `fn_decls` count | each declaration's `sh:bodyExpression`, in the same order |
 //! | 3 | `node_shapes` | `seq<shape>` | the shapes graph's top-level node shapes |
-//! | 4 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
-//! | 5 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
-//! | 6 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
-//! | 7 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
+//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool` | the global rules, the rule sets, and whether `sh:RulesEntailment` is declared |
+//! | 5 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
+//! | 6 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
+//! | 7 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
+//! | 8 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
 //!
-//! Any byte after field 7 is [`Malformed`]: trailing bytes are a structure the
+//! Any byte after field 8 is [`Malformed`]: trailing bytes are a structure the
 //! writer did not produce, and skipping them is how a silent truncation passes
 //! for a successful load.
 //!
@@ -137,14 +138,14 @@
 //! | [`Path`] | `Predicate` `Inverse` `Sequence` `Alternative` `ZeroOrMore` `OneOrMore` `ZeroOrOne` |
 //! | [`Target`] | `Class` `SubjectsOf` `ObjectsOf` `Node` `ImplicitClass` `Sparql` |
 //! | [`ComponentValidator`] | `Ask` `Select` |
-//! | [`Constraint`] | 31 arms, `Class` … `Component` |
+//! | [`Constraint`] | 40 arms, `Class` … `Component` |
+//! | [`ClosedMode`] | `Declared` `ByTypes` |
 //! | [`NodeExpr`] | 32 arms, `Constant` … `Select` |
 //! | [`ShapeArg`] | `Named` `Computed` |
 //! | [`ArgKey`] | `Index` `Named` |
 //! | [`CustomFnKind`] | `ListParameter` `NamedParameter` |
 //! | [`FnCall`] | `Builtin` `UserDefined` `Sparql` |
 //! | [`RuleBody`] | `Triple` `Sparql` |
-//! | [`RuleSchedule`] | `Once` `General` |
 //! | `NodeExpr::Select::key` | `sh:select` `sh:sparqlExpr` |
 //! | `Literal::direction` | `Ltr` `Rtl` |
 //!
@@ -216,10 +217,11 @@ use crate::expression::{
 use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::plan::ClassCatalog;
 use crate::report::Severity;
-use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
+use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes,
-    SparqlTargetType, Target, TargetTypeParam,
+    AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
+    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
+    Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -304,17 +306,21 @@ const WRITE_BUFFER_HINT: usize = 4096;
 /// The number of [`Term`] tags.
 const TAGS_TERM: u8 = 4;
 /// The number of [`Severity`] tags.
-const TAGS_SEVERITY: u8 = 4;
+const TAGS_SEVERITY: u8 = 6;
+/// The number of [`AnnotatedConstraint`] tags.
+const TAGS_ANNOTATED_CONSTRAINT: u8 = 2;
 /// The number of [`NodeKindValue`] tags.
-const TAGS_NODE_KIND: u8 = 6;
+const TAGS_NODE_KIND: u8 = 7;
 /// The number of [`Path`] tags.
 const TAGS_PATH: u8 = 7;
 /// The number of [`Target`] tags.
-const TAGS_TARGET: u8 = 6;
+const TAGS_TARGET: u8 = 8;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 31;
+const TAGS_CONSTRAINT: u8 = 40;
+/// The number of [`ClosedMode`] tags.
+const TAGS_CLOSED_MODE: u8 = 2;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -327,8 +333,6 @@ const TAGS_CUSTOM_FN_KIND: u8 = 2;
 const TAGS_FN_CALL: u8 = 3;
 /// The number of [`RuleBody`] tags.
 const TAGS_RULE_BODY: u8 = 2;
-/// The number of [`RuleSchedule`] tags.
-const TAGS_RULE_SCHEDULE: u8 = 2;
 /// The number of `NodeExpr::Select::key` tags.
 const TAGS_SELECT_KEY: u8 = 2;
 /// The number of `Literal::direction` tags.
@@ -420,6 +424,8 @@ pub(crate) fn from_pack(error: PackBitsError) -> ShapesProductError {
 pub(crate) struct AstParts {
     /// The shapes graph's top-level node shapes, in their encoded order.
     pub(crate) node_shapes: Vec<Shape>,
+    /// The global rules, rule sets and rules entailment declaration.
+    pub(crate) rules: RuleGraph,
     /// The caller-supplied box-role vocabulary, or `None` when the feature was
     /// inactive at preparation.
     pub(crate) box_role_vocab: Option<BoxRoleVocab>,
@@ -568,6 +574,26 @@ impl AstWriter {
         self.term(&triple.object)
     }
 
+    /// Write a `sh:closed` mode: its tag, then — for `sh:ByTypes` — the type
+    /// index, already in the canonical order [`ClosedTypeIndex`] keeps.
+    fn closed_mode(&mut self, mode: &ClosedMode) -> Result<(), ShapesProductError> {
+        match mode {
+            ClosedMode::Declared => self.tag(0),
+            ClosedMode::ByTypes(index) => {
+                self.tag(1);
+                self.count(index.entries().len());
+                for (ty, properties) in index.entries() {
+                    self.term(ty)?;
+                    self.count(properties.len());
+                    for property in properties {
+                        self.named_node(property);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Write an RDF term.
     fn term(&mut self, term: &Term) -> Result<(), ShapesProductError> {
         self.enter()?;
@@ -601,10 +627,56 @@ impl AstWriter {
             Severity::Violation => self.tag(0),
             Severity::Warning => self.tag(1),
             Severity::Info => self.tag(2),
+            Severity::Debug => self.tag(3),
+            Severity::Trace => self.tag(4),
             Severity::Other(iri) => {
-                self.tag(3);
+                self.tag(5);
                 self.named_node(iri);
             }
+        }
+    }
+
+    /// Write a message set: its count, then each literal in the canonical order
+    /// [`crate::report::canonical_messages`] keeps.
+    fn messages(&mut self, messages: &[Literal]) {
+        self.count(messages.len());
+        for message in messages {
+            self.literal(message);
+        }
+    }
+
+    /// Write a SPARQL executable's result annotations, in the canonical order the
+    /// parser keeps them: each one's property, variable and default values.
+    fn result_annotations(
+        &mut self,
+        annotations: &[crate::shapes::ResultAnnotation],
+    ) -> Result<(), ShapesProductError> {
+        self.count(annotations.len());
+        for annotation in annotations {
+            self.named_node(&annotation.property);
+            self.opt_text(annotation.variable.as_deref());
+            self.count(annotation.default_values.len());
+            for value in &annotation.default_values {
+                self.term(value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Write a shape's per-constraint reifier annotations, in the canonical order
+    /// the parser keeps them (by constraint).
+    fn constraint_annotations(&mut self, annotations: &[ConstraintAnnotation]) {
+        self.count(annotations.len());
+        for annotation in annotations {
+            match annotation.constraint {
+                AnnotatedConstraint::Constraint(index) => {
+                    self.tag(0);
+                    self.count(index);
+                }
+                AnnotatedConstraint::Reifier => self.tag(1),
+            }
+            self.opt_severity(annotation.severity.as_ref());
+            self.messages(&annotation.messages);
         }
     }
 
@@ -628,6 +700,7 @@ impl AstWriter {
             NodeKindValue::BlankNodeOrIri => 3,
             NodeKindValue::BlankNodeOrLiteral => 4,
             NodeKindValue::IriOrLiteral => 5,
+            NodeKindValue::TripleTerm => 6,
         });
     }
 
@@ -708,6 +781,14 @@ impl AstWriter {
                     self.text(name);
                     self.term(value)?;
                 }
+            }
+            Target::NodeExpression(expr) => {
+                self.tag(6);
+                self.node_expr(expr)?;
+            }
+            Target::Where(shape) => {
+                self.tag(7);
+                self.shape(shape)?;
             }
         }
         Ok(())
@@ -811,6 +892,18 @@ impl AstWriter {
             }
         }
         self.leave();
+        Ok(())
+    }
+
+    /// Write an optional node expression.
+    fn opt_node_expr(&mut self, expr: Option<&NodeExpr>) -> Result<(), ShapesProductError> {
+        match expr {
+            None => self.flag(false),
+            Some(expr) => {
+                self.flag(true);
+                self.node_expr(expr)?;
+            }
+        }
         Ok(())
     }
 
@@ -966,9 +1059,9 @@ impl AstWriter {
                 self.node_expr(nodes)?;
                 self.shape(shape)?;
             }
-            NodeExpr::InstancesOf(class) => {
+            NodeExpr::InstancesOf(types) => {
                 self.tag(28);
-                self.named_node(class);
+                self.node_expr(types)?;
             }
             NodeExpr::NodesMatching(shape) => {
                 self.tag(29);
@@ -1009,17 +1102,26 @@ impl AstWriter {
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
-            Constraint::Class(class) => {
+            Constraint::Class(classes) => {
                 self.tag(0);
-                self.named_node(class);
+                self.count(classes.len());
+                for class in classes {
+                    self.named_node(class);
+                }
             }
-            Constraint::Datatype(datatype) => {
+            Constraint::Datatype(datatypes) => {
                 self.tag(1);
-                self.named_node(datatype);
+                self.count(datatypes.len());
+                for datatype in datatypes {
+                    self.named_node(datatype);
+                }
             }
-            Constraint::NodeKind(kind) => {
+            Constraint::NodeKind(kinds) => {
                 self.tag(2);
-                self.node_kind(kind);
+                self.count(kinds.len());
+                for kind in kinds {
+                    self.node_kind(kind);
+                }
             }
             Constraint::MinCount(count) => {
                 self.tag(3);
@@ -1073,12 +1175,13 @@ impl AstWriter {
                 self.tag(12);
                 self.shape(shape)?;
             }
-            Constraint::Closed { ignored } => {
+            Constraint::Closed { ignored, mode } => {
                 self.tag(13);
                 self.count(ignored.len());
                 for predicate in ignored {
                     self.named_node(predicate);
                 }
+                self.closed_mode(mode)?;
             }
             Constraint::MinInclusive(bound) => {
                 self.tag(14);
@@ -1114,29 +1217,31 @@ impl AstWriter {
             }
             Constraint::Sparql {
                 select,
-                message,
+                messages,
                 severity,
+                annotations,
             } => {
                 self.tag(22);
                 self.text(select);
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
+                self.result_annotations(annotations)?;
             }
-            Constraint::Equals(predicate) => {
+            Constraint::Equals(path) => {
                 self.tag(23);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::Disjoint(predicate) => {
+            Constraint::Disjoint(path) => {
                 self.tag(24);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::LessThan(predicate) => {
+            Constraint::LessThan(path) => {
                 self.tag(25);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::LessThanOrEquals(predicate) => {
+            Constraint::LessThanOrEquals(path) => {
                 self.tag(26);
-                self.named_node(predicate);
+                self.path(path)?;
             }
             Constraint::QualifiedValueShape {
                 shape,
@@ -1154,24 +1259,24 @@ impl AstWriter {
             }
             Constraint::Expression {
                 expr,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(28);
                 self.node_expr(expr)?;
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             // `shapes` is the SHARED index; see the coverage table.
             Constraint::NodeByExpression {
                 expr,
                 shapes: _,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(29);
                 self.node_expr(expr)?;
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             Constraint::Component {
@@ -1179,8 +1284,9 @@ impl AstWriter {
                 source_shape,
                 bindings,
                 validator,
-                message,
+                messages,
                 severity,
+                annotations,
             } => {
                 self.tag(30);
                 self.named_node(component);
@@ -1191,8 +1297,60 @@ impl AstWriter {
                     self.term(value)?;
                 }
                 self.component_validator(validator);
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
+                self.result_annotations(annotations)?;
+            }
+            Constraint::MinListLength(length) => {
+                self.tag(31);
+                self.uint(*length);
+            }
+            Constraint::MaxListLength(length) => {
+                self.tag(32);
+                self.uint(*length);
+            }
+            Constraint::UniqueMembers(unique) => {
+                self.tag(33);
+                self.flag(*unique);
+            }
+            Constraint::MemberShape(shape) => {
+                self.tag(34);
+                self.shape(shape)?;
+            }
+            Constraint::SingleLine(flag) => {
+                self.tag(35);
+                self.flag(*flag);
+            }
+            Constraint::RootClass(roots) => {
+                self.tag(36);
+                self.count(roots.len());
+                for root in roots {
+                    self.named_node(root);
+                }
+            }
+            Constraint::SomeValue(shape) => {
+                self.tag(37);
+                self.shape(shape)?;
+            }
+            Constraint::SubsetOf(path) => {
+                self.tag(38);
+                self.path(path)?;
+            }
+            Constraint::UniqueValuesFor {
+                properties,
+                shape,
+                targets,
+            } => {
+                self.tag(39);
+                self.count(properties.len());
+                for property in properties {
+                    self.named_node(property);
+                }
+                self.term(shape)?;
+                self.count(targets.len());
+                for target in targets {
+                    self.target(target)?;
+                }
             }
         }
         self.leave();
@@ -1204,6 +1362,8 @@ impl AstWriter {
         self.enter()?;
         self.term(&shape.id)?;
         self.path(&shape.path)?;
+        self.opt_node_expr(shape.values.as_ref())?;
+        self.opt_node_expr(shape.default_value.as_ref())?;
         self.count(shape.constraints.len());
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
@@ -1215,7 +1375,8 @@ impl AstWriter {
         self.shapes_seq(&shape.reifier_shapes)?;
         self.flag(shape.reification_required);
         self.severity(&shape.severity);
-        self.opt_text(shape.message.as_deref());
+        self.messages(&shape.messages);
+        self.constraint_annotations(&shape.constraint_annotations);
         self.flag(shape.deactivated);
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
@@ -1242,7 +1403,8 @@ impl AstWriter {
             self.property_shape(property)?;
         }
         self.severity(&shape.severity);
-        self.opt_text(shape.message.as_deref());
+        self.messages(&shape.messages);
+        self.constraint_annotations(&shape.constraint_annotations);
         self.flag(shape.deactivated);
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
@@ -1258,14 +1420,6 @@ impl AstWriter {
 
     // ── Rules ──────────────────────────────────────────────────────────────
 
-    /// Write a rule's stratification half.
-    fn rule_schedule(&mut self, schedule: RuleSchedule) {
-        self.tag(match schedule {
-            RuleSchedule::Once => 0,
-            RuleSchedule::General => 1,
-        });
-    }
-
     /// Write a rule head.
     fn rule_body(&mut self, body: &RuleBody) -> Result<(), ShapesProductError> {
         self.enter()?;
@@ -1276,20 +1430,42 @@ impl AstWriter {
                 object,
             } => {
                 self.tag(0);
-                self.node_expr(subject)?;
-                self.node_expr(predicate)?;
-                self.node_expr(object)?;
+                self.opt_node_expr(subject.as_ref())?;
+                self.opt_node_expr(predicate.as_ref())?;
+                self.opt_node_expr(object.as_ref())?;
             }
-            RuleBody::Sparql { construct } => {
+            RuleBody::Sparql {
+                construct,
+                parameters,
+            } => {
                 self.tag(1);
                 self.text(construct);
+                self.count(parameters.len());
+                for (name, value) in parameters {
+                    self.text(name);
+                    self.term(value)?;
+                }
             }
         }
         self.leave();
         Ok(())
     }
 
-    /// Write a `sh:order` key, canonically.
+    /// Write an optional `sh:layer` / `sh:order` key.
+    fn opt_order_key(&mut self, key: Option<OrderKey>) -> Result<(), ShapesProductError> {
+        match key {
+            None => {
+                self.flag(false);
+                Ok(())
+            }
+            Some(key) => {
+                self.flag(true);
+                self.order_key(key)
+            }
+        }
+    }
+
+    /// Write a `sh:layer` / `sh:order` key, canonically.
     fn order_key(&mut self, key: OrderKey) -> Result<(), ShapesProductError> {
         // `+ 0.0` is the same normalization `OrderKey::new` applies, repeated here
         // so the BYTES are canonical whatever produced the value: `-0.0` and
@@ -1313,16 +1489,45 @@ impl AstWriter {
         self.term(&rule.id)?;
         self.rule_body(&rule.body)?;
         self.shapes_seq(&rule.conditions)?;
-        match rule.order {
-            None => self.flag(false),
-            Some(key) => {
-                self.flag(true);
-                self.order_key(key)?;
+        self.opt_order_key(rule.layer)?;
+        self.opt_order_key(rule.order)?;
+        self.flag(rule.run_once);
+        self.flag(rule.deactivated);
+        self.count(rule.expected_predicates.len());
+        for predicate in &rule.expected_predicates {
+            self.named_node(predicate);
+        }
+        self.count(rule.processors.len());
+        for processor in &rule.processors {
+            self.term(processor)?;
+        }
+        self.leave();
+        Ok(())
+    }
+
+    /// Write the global rules, rule sets and rules entailment declaration.
+    fn rule_graph(&mut self, rules: &RuleGraph) -> Result<(), ShapesProductError> {
+        self.count(rules.global_rules.len());
+        for rule in &rules.global_rules {
+            self.rule(rule)?;
+        }
+        self.count(rules.rule_sets.len());
+        for set in &rules.rule_sets {
+            self.named_node(&set.id);
+            self.count(set.rules.len());
+            for rule in &set.rules {
+                self.term(rule)?;
+            }
+            self.count(set.includes.len());
+            for include in &set.includes {
+                self.named_node(include);
+            }
+            self.count(set.processors.len());
+            for processor in &set.processors {
+                self.term(processor)?;
             }
         }
-        self.flag(rule.deactivated);
-        self.rule_schedule(rule.schedule);
-        self.leave();
+        self.flag(rules.entailment);
         Ok(())
     }
 
@@ -1373,6 +1578,10 @@ struct AstReader<'a> {
     functions: Vec<Arc<CustomFunction>>,
     /// The ONE shape-index handle every decoded site is given a clone of.
     shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
+    /// The `sh:closed sh:ByTypes` index decoded first, which every later
+    /// constraint carrying an equal one shares — as the parse that wrote them
+    /// shared one.
+    closed_type_index: Option<Arc<ClosedTypeIndex>>,
 }
 
 impl<'a> AstReader<'a> {
@@ -1384,6 +1593,7 @@ impl<'a> AstReader<'a> {
             depth: 0,
             functions: Vec::new(),
             shape_index: Arc::new(OnceLock::new()),
+            closed_type_index: None,
         }
     }
 
@@ -1530,6 +1740,31 @@ impl<'a> AstReader<'a> {
         Ok(NamedNode::new_unchecked(self.text()?))
     }
 
+    /// Read a `sh:closed` mode, sharing an equal `sh:ByTypes` index with the
+    /// constraints decoded before it.
+    fn closed_mode(&mut self) -> Result<ClosedMode, ShapesProductError> {
+        if self.tag("ClosedMode", TAGS_CLOSED_MODE)? == 0 {
+            return Ok(ClosedMode::Declared);
+        }
+        let entries = self.seq(|reader| Ok((reader.term()?, reader.seq(Self::named_node)?)))?;
+        let index = ClosedTypeIndex::from_canonical_entries(entries).ok_or_else(|| {
+            malformed(
+                "a sh:closed sh:ByTypes index is not in canonical form (types in canonical \
+                 term order, each once, each with a non-empty IRI-sorted property list)"
+                    .to_owned(),
+            )
+        })?;
+        let shared = match &self.closed_type_index {
+            Some(shared) if **shared == index => Arc::clone(shared),
+            _ => {
+                let fresh = Arc::new(index);
+                self.closed_type_index = Some(Arc::clone(&fresh));
+                fresh
+            }
+        };
+        Ok(ClosedMode::ByTypes(shared))
+    }
+
     /// Read an RDF literal, rebuilding it through the constructor its recorded
     /// language and direction select.
     fn literal(&mut self) -> Result<Literal, ShapesProductError> {
@@ -1615,8 +1850,108 @@ impl<'a> AstReader<'a> {
             0 => Severity::Violation,
             1 => Severity::Warning,
             2 => Severity::Info,
+            3 => Severity::Debug,
+            4 => Severity::Trace,
             _ => Severity::Other(self.named_node()?),
         })
+    }
+
+    /// Read a message set, refusing one the parser could not have produced: out of
+    /// canonical order, repeating a literal, or holding a literal SHACL does not
+    /// permit as an `sh:message`.
+    fn messages(&mut self) -> Result<Vec<Literal>, ShapesProductError> {
+        let messages = self.seq(Self::literal)?;
+        let canonical = crate::report::canonical_messages(messages.clone());
+        let permitted = messages
+            .iter()
+            .all(|message| crate::shapes::parser_is_text_literal(&Term::Literal(message.clone())));
+        if canonical != messages || !permitted {
+            return Err(malformed(
+                "this product carries a message set the shapes parser could not have written \
+                 (out of canonical order, repeated, or not a message literal); re-prepare the \
+                 product from its shapes graph",
+            ));
+        }
+        Ok(messages)
+    }
+
+    /// Read a SPARQL executable's result annotations, refusing a list the parser
+    /// could not have produced: out of canonical order or repeated, a variable
+    /// that is not a SPARQL variable name, or default values out of canonical
+    /// order or repeated.
+    fn result_annotations(
+        &mut self,
+    ) -> Result<Vec<crate::shapes::ResultAnnotation>, ShapesProductError> {
+        let annotations = self.seq(|reader| {
+            Ok(crate::shapes::ResultAnnotation {
+                property: reader.named_node()?,
+                variable: reader.opt_text()?,
+                default_values: reader.seq(Self::term)?,
+            })
+        })?;
+        let values_canonical = annotations.iter().all(|annotation| {
+            annotation.default_values.windows(2).all(|pair| {
+                crate::term::canonical_cmp(&pair[0], &pair[1]) == std::cmp::Ordering::Less
+            })
+        });
+        let variables_legal = annotations.iter().all(|annotation| {
+            annotation
+                .variable
+                .as_deref()
+                .is_none_or(purrdf_sparql_algebra::lexer::is_varname)
+        });
+        let mut canonical = annotations.clone();
+        crate::result_annotations::sort(&mut canonical);
+        if canonical != annotations || !values_canonical || !variables_legal {
+            return Err(malformed(
+                "this product carries a result-annotation list the shapes parser could not have \
+                 written (out of canonical order, repeated, or naming no SPARQL variable); \
+                 re-prepare the product from its shapes graph",
+            ));
+        }
+        Ok(annotations)
+    }
+
+    /// Read a shape's per-constraint reifier annotations, refusing a list the
+    /// parser could not have produced: out of canonical order, naming a
+    /// constraint past the `constraints` the shape holds, naming the reifier
+    /// constraint on a node shape, or overriding nothing.
+    fn constraint_annotations(
+        &mut self,
+        constraints: usize,
+        property_shape: bool,
+    ) -> Result<Vec<ConstraintAnnotation>, ShapesProductError> {
+        let annotations = self.seq(|reader| {
+            let constraint = match reader.tag("AnnotatedConstraint", TAGS_ANNOTATED_CONSTRAINT)? {
+                0 => AnnotatedConstraint::Constraint(reader.count()?),
+                _ => AnnotatedConstraint::Reifier,
+            };
+            Ok(ConstraintAnnotation {
+                constraint,
+                severity: reader.opt_severity()?,
+                messages: reader.messages()?,
+            })
+        })?;
+        for (position, annotation) in annotations.iter().enumerate() {
+            let in_range = match annotation.constraint {
+                AnnotatedConstraint::Constraint(index) => index < constraints,
+                AnnotatedConstraint::Reifier => property_shape,
+            };
+            let ordered =
+                position == 0 || annotations[position - 1].constraint < annotation.constraint;
+            if !in_range
+                || !ordered
+                || (annotation.severity.is_none() && annotation.messages.is_empty())
+            {
+                return Err(malformed(format!(
+                    "this product carries a per-constraint annotation for {:?} that the shapes \
+                     parser could not have written (out of range, out of order, or overriding \
+                     nothing); re-prepare the product from its shapes graph",
+                    annotation.constraint
+                )));
+            }
+        }
+        Ok(annotations)
     }
 
     /// Read an optional severity override.
@@ -1636,7 +1971,8 @@ impl<'a> AstReader<'a> {
             2 => NodeKindValue::Literal,
             3 => NodeKindValue::BlankNodeOrIri,
             4 => NodeKindValue::BlankNodeOrLiteral,
-            _ => NodeKindValue::IriOrLiteral,
+            5 => NodeKindValue::IriOrLiteral,
+            _ => NodeKindValue::TripleTerm,
         })
     }
 
@@ -1664,7 +2000,7 @@ impl<'a> AstReader<'a> {
             2 => Target::ObjectsOf(self.named_node()?),
             3 => Target::Node(self.term()?),
             4 => Target::ImplicitClass(self.term()?),
-            _ => Target::Sparql {
+            5 => Target::Sparql {
                 select: self.text()?,
                 substitutions: self.seq(|reader| {
                     let name = reader.text()?;
@@ -1672,6 +2008,8 @@ impl<'a> AstReader<'a> {
                     Ok((name, value))
                 })?,
             },
+            6 => Target::NodeExpression(self.node_expr()?),
+            _ => Target::Where(Box::new(self.shape()?)),
         })
     }
 
@@ -1759,6 +2097,15 @@ impl<'a> AstReader<'a> {
         Ok(call)
     }
 
+    /// Read an optional node expression.
+    fn opt_node_expr(&mut self) -> Result<Option<NodeExpr>, ShapesProductError> {
+        if self.flag()? {
+            Ok(Some(self.node_expr()?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Read a node expression.
     fn node_expr(&mut self) -> Result<NodeExpr, ShapesProductError> {
         self.enter()?;
@@ -1835,7 +2182,7 @@ impl<'a> AstReader<'a> {
                 nodes: Box::new(self.node_expr()?),
                 shape: Box::new(self.shape()?),
             },
-            28 => NodeExpr::InstancesOf(self.named_node()?),
+            28 => NodeExpr::InstancesOf(Box::new(self.node_expr()?)),
             29 => NodeExpr::NodesMatching(Box::new(self.shape()?)),
             30 => NodeExpr::ConformsToShape {
                 node: Box::new(self.node_expr()?),
@@ -1882,9 +2229,9 @@ impl<'a> AstReader<'a> {
     fn constraint(&mut self) -> Result<Constraint, ShapesProductError> {
         self.enter()?;
         let constraint = match self.tag("Constraint", TAGS_CONSTRAINT)? {
-            0 => Constraint::Class(self.named_node()?),
-            1 => Constraint::Datatype(self.named_node()?),
-            2 => Constraint::NodeKind(self.node_kind()?),
+            0 => Constraint::Class(self.seq(Self::named_node)?),
+            1 => Constraint::Datatype(self.seq(Self::named_node)?),
+            2 => Constraint::NodeKind(self.seq(Self::node_kind)?),
             3 => Constraint::MinCount(self.uint()?),
             4 => Constraint::MaxCount(self.uint()?),
             5 => Constraint::In(self.seq(Self::term)?),
@@ -1901,6 +2248,7 @@ impl<'a> AstReader<'a> {
             12 => Constraint::Not(Box::new(self.shape()?)),
             13 => Constraint::Closed {
                 ignored: self.seq(Self::named_node)?,
+                mode: self.closed_mode()?,
             },
             14 => Constraint::MinInclusive(self.term()?),
             15 => Constraint::MaxInclusive(self.term()?),
@@ -1912,13 +2260,14 @@ impl<'a> AstReader<'a> {
             21 => Constraint::Node(Box::new(self.shape()?)),
             22 => Constraint::Sparql {
                 select: self.text()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
+                annotations: self.result_annotations()?,
             },
-            23 => Constraint::Equals(self.named_node()?),
-            24 => Constraint::Disjoint(self.named_node()?),
-            25 => Constraint::LessThan(self.named_node()?),
-            26 => Constraint::LessThanOrEquals(self.named_node()?),
+            23 => Constraint::Equals(self.path()?),
+            24 => Constraint::Disjoint(self.path()?),
+            25 => Constraint::LessThan(self.path()?),
+            26 => Constraint::LessThanOrEquals(self.path()?),
             27 => Constraint::QualifiedValueShape {
                 shape: Box::new(self.shape()?),
                 siblings: self.seq(Self::shape)?,
@@ -1928,16 +2277,16 @@ impl<'a> AstReader<'a> {
             },
             28 => Constraint::Expression {
                 expr: self.node_expr()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
             29 => Constraint::NodeByExpression {
                 expr: self.node_expr()?,
                 shapes: Arc::clone(&self.shape_index),
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
-            _ => Constraint::Component {
+            30 => Constraint::Component {
                 component: self.named_node()?,
                 source_shape: self.term()?,
                 bindings: self.seq(|reader| {
@@ -1946,8 +2295,22 @@ impl<'a> AstReader<'a> {
                     Ok((name, value))
                 })?,
                 validator: self.component_validator()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
+                annotations: self.result_annotations()?,
+            },
+            31 => Constraint::MinListLength(self.uint()?),
+            32 => Constraint::MaxListLength(self.uint()?),
+            33 => Constraint::UniqueMembers(self.flag()?),
+            34 => Constraint::MemberShape(Box::new(self.shape()?)),
+            35 => Constraint::SingleLine(self.flag()?),
+            36 => Constraint::RootClass(self.seq(Self::named_node)?),
+            37 => Constraint::SomeValue(Box::new(self.shape()?)),
+            38 => Constraint::SubsetOf(self.path()?),
+            _ => Constraint::UniqueValuesFor {
+                properties: self.seq(Self::named_node)?,
+                shape: self.term()?,
+                targets: self.seq(Self::target)?,
             },
         };
         self.leave();
@@ -1957,15 +2320,23 @@ impl<'a> AstReader<'a> {
     /// Read a property shape.
     fn property_shape(&mut self) -> Result<PropertyShape, ShapesProductError> {
         self.enter()?;
+        let id = self.term()?;
+        let path = self.path()?;
+        let values = self.opt_node_expr()?;
+        let default_value = self.opt_node_expr()?;
+        let constraints = self.seq(Self::constraint)?;
         let shape = PropertyShape {
-            id: self.term()?,
-            path: self.path()?,
-            constraints: self.seq(Self::constraint)?,
+            id,
+            path,
+            values,
+            default_value,
             property_shapes: self.seq(Self::property_shape)?,
             reifier_shapes: self.seq(Self::shape)?,
             reification_required: self.flag()?,
             severity: self.severity()?,
-            message: self.opt_text()?,
+            messages: self.messages()?,
+            constraint_annotations: self.constraint_annotations(constraints.len(), true)?,
+            constraints,
             deactivated: self.flag()?,
             box_roles: self.seq(Self::named_node)?,
         };
@@ -1976,13 +2347,17 @@ impl<'a> AstReader<'a> {
     /// Read a node shape.
     fn shape(&mut self) -> Result<Shape, ShapesProductError> {
         self.enter()?;
+        let id = self.term()?;
+        let targets = self.seq(Self::target)?;
+        let constraints = self.seq(Self::constraint)?;
         let shape = Shape {
-            id: self.term()?,
-            targets: self.seq(Self::target)?,
-            constraints: self.seq(Self::constraint)?,
+            id,
+            targets,
             property_shapes: self.seq(Self::property_shape)?,
             severity: self.severity()?,
-            message: self.opt_text()?,
+            messages: self.messages()?,
+            constraint_annotations: self.constraint_annotations(constraints.len(), false)?,
+            constraints,
             deactivated: self.flag()?,
             box_roles: self.seq(Self::named_node)?,
             rules: self.seq(Self::rule)?,
@@ -1993,25 +2368,18 @@ impl<'a> AstReader<'a> {
 
     // ── Rules ──────────────────────────────────────────────────────────────
 
-    /// Read a rule's stratification half.
-    fn rule_schedule(&mut self) -> Result<RuleSchedule, ShapesProductError> {
-        Ok(match self.tag("RuleSchedule", TAGS_RULE_SCHEDULE)? {
-            0 => RuleSchedule::Once,
-            _ => RuleSchedule::General,
-        })
-    }
-
     /// Read a rule head.
     fn rule_body(&mut self) -> Result<RuleBody, ShapesProductError> {
         self.enter()?;
         let body = match self.tag("RuleBody", TAGS_RULE_BODY)? {
             0 => RuleBody::Triple {
-                subject: self.node_expr()?,
-                predicate: self.node_expr()?,
-                object: self.node_expr()?,
+                subject: self.opt_node_expr()?,
+                predicate: self.opt_node_expr()?,
+                object: self.opt_node_expr()?,
             },
             _ => RuleBody::Sparql {
                 construct: self.text()?,
+                parameters: self.seq(|reader| Ok((reader.text()?, reader.term()?)))?,
             },
         };
         self.leave();
@@ -2050,16 +2418,42 @@ impl<'a> AstReader<'a> {
             id: self.term()?,
             body: self.rule_body()?,
             conditions: self.seq(Self::shape)?,
-            order: if self.flag()? {
-                Some(self.order_key()?)
-            } else {
-                None
-            },
+            layer: self.opt_order_key()?,
+            order: self.opt_order_key()?,
+            run_once: self.flag()?,
             deactivated: self.flag()?,
-            schedule: self.rule_schedule()?,
+            expected_predicates: self.seq(Self::named_node)?,
+            processors: self.seq(Self::term)?,
         };
         self.leave();
         Ok(rule)
+    }
+
+    /// Read an optional `sh:layer` / `sh:order` key.
+    fn opt_order_key(&mut self) -> Result<Option<OrderKey>, ShapesProductError> {
+        if self.flag()? {
+            Ok(Some(self.order_key()?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Read the global rules, rule sets and rules entailment declaration.
+    fn rule_graph(&mut self) -> Result<RuleGraph, ShapesProductError> {
+        let global_rules = self.seq(Self::rule)?;
+        let rule_sets = self.seq(|reader| {
+            Ok(RuleSetDeclaration {
+                id: reader.named_node()?,
+                rules: reader.seq(Self::term)?,
+                includes: reader.seq(Self::named_node)?,
+                processors: reader.seq(Self::term)?,
+            })
+        })?;
+        Ok(RuleGraph {
+            global_rules,
+            rule_sets,
+            entailment: self.flag()?,
+        })
     }
 
     // ── Shapes-level ───────────────────────────────────────────────────────
@@ -2136,6 +2530,9 @@ impl FnTable {
         for shape in &shapes.node_shapes {
             table.shape(shape)?;
         }
+        for rule in &shapes.rules.global_rules {
+            table.rule(rule)?;
+        }
         Ok(table.by_iri.into_values().collect())
     }
 
@@ -2176,9 +2573,29 @@ impl FnTable {
         Ok(())
     }
 
+    /// Walk the target declarations that can reach a node expression: a
+    /// structured `sh:targetNode` is one, and a `sh:targetWhere` shape can carry
+    /// one. Wildcard-free for the reason [`Self::constraint`] is.
+    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
+        for target in targets {
+            match target {
+                Target::Class(_)
+                | Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. } => {}
+                Target::NodeExpression(expr) => self.node_expr(expr)?,
+                Target::Where(shape) => self.shape(shape)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Walk a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -2186,29 +2603,41 @@ impl FnTable {
             self.property_shape(property)?;
         }
         for rule in &shape.rules {
-            match &rule.body {
-                RuleBody::Triple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    self.node_expr(subject)?;
-                    self.node_expr(predicate)?;
-                    self.node_expr(object)?;
-                }
-                RuleBody::Sparql { construct: _ } => {}
-            }
-            for condition in &rule.conditions {
-                self.shape(condition)?;
-            }
+            self.rule(rule)?;
         }
         self.leave();
+        Ok(())
+    }
+
+    /// Walk a rule: its node expressions and its condition shapes.
+    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
+        match &rule.body {
+            RuleBody::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                for expr in [subject, predicate, object].into_iter().flatten() {
+                    self.node_expr(expr)?;
+                }
+            }
+            RuleBody::Sparql {
+                construct: _,
+                parameters: _,
+            } => {}
+        }
+        for condition in &rule.conditions {
+            self.shape(condition)?;
+        }
         Ok(())
     }
 
     /// Walk a property shape.
     fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        for expr in shape.values.iter().chain(&shape.default_value) {
+            self.node_expr(expr)?;
+        }
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -2249,10 +2678,22 @@ impl FnTable {
             | Constraint::Sparql { .. }
             | Constraint::Equals(_)
             | Constraint::Disjoint(_)
+            | Constraint::SubsetOf(_)
             | Constraint::LessThan(_)
             | Constraint::LessThanOrEquals(_)
+            | Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::SingleLine(_)
+            | Constraint::RootClass(_)
             | Constraint::Component { .. } => {}
-            Constraint::Not(shape) | Constraint::Node(shape) => self.shape(shape)?,
+            Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
+            Constraint::Not(shape)
+            | Constraint::Node(shape)
+            | Constraint::MemberShape(shape)
+            | Constraint::SomeValue(shape) => {
+                self.shape(shape)?;
+            }
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                 for shape in shapes {
                     self.shape(shape)?;
@@ -2295,8 +2736,8 @@ impl FnTable {
             | NodeExpr::Empty
             | NodeExpr::Var(_)
             | NodeExpr::List(_)
-            | NodeExpr::InstancesOf(_)
             | NodeExpr::Select { .. } => {}
+            NodeExpr::InstancesOf(types) => self.node_expr(types)?,
             NodeExpr::Filter { nodes, shape }
             | NodeExpr::FindFirst { nodes, shape }
             | NodeExpr::MatchAll { nodes, shape } => {
@@ -2435,7 +2876,9 @@ pub(crate) fn encode_ast(
     for shape in &shapes.node_shapes {
         writer.shape(shape)?;
     }
-    // 4. The caller-supplied box-role vocabulary.
+    // 4. The global rules, rule sets and rules entailment declaration.
+    writer.rule_graph(&shapes.rules)?;
+    // 5. The caller-supplied box-role vocabulary.
     match &shapes.box_role_vocab {
         None => writer.flag(false),
         Some(vocab) => {
@@ -2443,16 +2886,16 @@ pub(crate) fn encode_ast(
             writer.box_role_vocab(vocab);
         }
     }
-    // 5. `sh:SPARQLTargetType` declarations, key-sorted (a `BTreeMap`'s own
+    // 6. `sh:SPARQLTargetType` declarations, key-sorted (a `BTreeMap`'s own
     //    order — no hash-ordered container is ever written).
     writer.count(shapes.target_types.len());
     for (iri, target_type) in &shapes.target_types {
         writer.text(iri);
         writer.sparql_target_type(target_type)?;
     }
-    // 6. The shapes-graph IRI.
+    // 7. The shapes-graph IRI.
     writer.opt_text(shapes.shapes_graph.as_deref());
-    // 7. The reusable class analysis.
+    // 8. The reusable class analysis.
     encode_classes(&mut writer, classes);
 
     Ok(writer.out)
@@ -2624,8 +3067,9 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
         }
     }
 
-    // 3..6. The shapes-level fields, in stream order.
+    // 3..7. The shapes-level fields, in stream order.
     let node_shapes = reader.seq(AstReader::shape)?;
+    let rules = reader.rule_graph()?;
     let box_role_vocab = if reader.flag()? {
         Some(reader.box_role_vocab()?)
     } else {
@@ -2646,7 +3090,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     }
     let shapes_graph = reader.opt_text()?;
 
-    // 7. The reusable class analysis, after the model it was derived from.
+    // 8. The reusable class analysis, after the model it was derived from.
     let classes = decode_classes(&mut reader)?;
 
     if reader.pos != bytes.len() {
@@ -2661,6 +3105,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
 
     Ok(AstParts {
         node_shapes,
+        rules,
         box_role_vocab,
         target_types,
         shapes_graph,

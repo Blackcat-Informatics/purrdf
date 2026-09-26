@@ -92,6 +92,10 @@ tempfile = { workspace = true }
 # every digest still checks out. Test-only: the CLI never links the SHACL
 # product codec directly, it calls through `purrdf-validate`.
 purrdf-shapes = { workspace = true }
+# The shared W3C SHACL 1.2 corpus reader (`crates/shapes/tests/shacl_corpora`), which
+# `w3c_node_expr_cli` includes to run every `sht:EvalNodeExpr` entry through the built
+# binary, reads `sht:ignoreOrder` as an `xsd:boolean` through it. Test-only.
+purrdf-xsd = { workspace = true }
 # Authors the `.gts` fixtures the GTS-ingestion integration tests feed to the binary.
 # Test-only: the CLI reads GTS through `purrdf_rdf::import_gts_events` and never links
 # the container engine itself.

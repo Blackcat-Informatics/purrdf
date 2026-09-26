@@ -41,13 +41,14 @@ committed block is stale).
 | SPARQL CDT (SEP-0009) | the vendored `awslabs/SPARQL-CDTs` corpus — read with the lexical-space divergence recorded in `docs/CONFORMANCE.md`, which no upstream vector can express |
 | SPARQL execution governors | a first-party frozen corpus of ceiling band cases and seam cases |
 | SHACL | W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus |
+| SHACL 1.2 | the whole vendored W3C `shacl12-test-suite`: validation, node expressions, inference rules and SPARQL 1.2 RL |
 | ShEx 2.1 | shexTest v2.1.0 (validation, schemas, negative syntax/structure) |
 | Entailment | the W3C SPARQL entailment-regime cases (via the SPARQL harness), the vendored W3C OWL 2 suite (DL consistency, ledgered), and W3C's own OWL 2 RL entailment tests (the independent oracle for the rule table, ledgered) |
 | GTS | frozen cross-language vectors — 38 of the 39 fold byte-exactly into their committed expectation, with the 39th a ledgered divergence from an upstream expectation this reader contradicts |
 | rdflib drop-in | rdflib 7.6's own vendored tests + first-party parity |
 
 At the time of writing every suite is green — for example 1,105/1,105
-attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec
+attempted shexTest validation cases, 128/129 W3C SHACL (1 refused: unresolvable import), 264/264 codec
 round-trips, 70/70 W3C SPARQL entailment-regime cases, and 258/262 agreeing
 verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
 non-passes strictly ledgered (five SPARQL fixtures with upstream-errata
@@ -86,6 +87,7 @@ A harness never skips silently. Four mechanisms keep the scoreboard honest:
 make conformance                                     # the single matrix
 cargo test -p purrdf-shex                            # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance   # W3C SHACL scoreboard
+cargo test -p purrdf-shapes --test w3c12_conformance # W3C SHACL 1.2 scoreboard
 cargo test -p purrdf-sparql-conformance              # W3C SPARQL
 cargo test -p purrdf-rdf                             # RDFC-1.0 + codec goldens
 make projection-oracles                             # W3C CSVW + independent CSVW/OBO checks

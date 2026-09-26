@@ -58,6 +58,16 @@ pub mod sh {
     /// `sh:Info` — the informational result severity.
     pub const INFO: &str = "http://www.w3.org/ns/shacl#Info";
 
+    /// `sh:Debug` — "a debug message that is not a constraint violation".
+    pub const DEBUG: &str = "http://www.w3.org/ns/shacl#Debug";
+
+    /// `sh:Trace` — "a trace message that is not a constraint violation".
+    pub const TRACE: &str = "http://www.w3.org/ns/shacl#Trace";
+
+    /// `sh:conformanceDisallows` — a severity level the validation report's
+    /// conformance-disallow set holds.
+    pub const CONFORMANCE_DISALLOWS: &str = "http://www.w3.org/ns/shacl#conformanceDisallows";
+
     // ── Shape type terms ───────────────────────────────────────────────────────
 
     /// `sh:NodeShape` — the class of node shapes.
@@ -65,6 +75,10 @@ pub mod sh {
 
     /// `sh:PropertyShape` — the class of property shapes.
     pub const PROPERTY_SHAPE: &str = "http://www.w3.org/ns/shacl#PropertyShape";
+
+    /// `sh:ShapeClass` — "an rdfs:subClassOf of both sh:NodeShape and rdfs:Class"
+    /// (SHACL 1.2 Core, "Implicit Class Targets and sh:ShapeClass").
+    pub const SHAPE_CLASS: &str = "http://www.w3.org/ns/shacl#ShapeClass";
 
     // ── Target predicates ──────────────────────────────────────────────────────
 
@@ -77,8 +91,17 @@ pub mod sh {
     /// `sh:targetObjectsOf` — targets all objects of triples with the given predicate.
     pub const TARGET_OBJECTS_OF: &str = "http://www.w3.org/ns/shacl#targetObjectsOf";
 
-    /// `sh:targetNode` — targets an explicitly named node.
+    /// `sh:targetNode` — targets the output nodes of a node expression: a
+    /// constant (IRI, literal, triple term) targets itself.
     pub const TARGET_NODE: &str = "http://www.w3.org/ns/shacl#targetNode";
+
+    /// `sh:targetWhere` — targets every node of the data graph that conforms to
+    /// the given shape.
+    pub const TARGET_WHERE: &str = "http://www.w3.org/ns/shacl#targetWhere";
+
+    /// `sh:shape` — a DATA-graph statement `n sh:shape s` makes `n` a target of
+    /// the shape `s` (SHACL 1.2 Core, "Explicit shape targets").
+    pub const SHAPE: &str = "http://www.w3.org/ns/shacl#shape";
 
     // ── Property shape plumbing ────────────────────────────────────────────────
 
@@ -207,6 +230,32 @@ pub mod sh {
     /// `sh:IRIOrLiteral` — node kind: IRIs or literals.
     pub const IRI_OR_LITERAL: &str = "http://www.w3.org/ns/shacl#IRIOrLiteral";
 
+    /// `sh:TripleTerm` — node kind: RDF 1.2 triple terms only (SHACL 1.2 Core
+    /// §4.1.3).
+    pub const TRIPLE_TERM: &str = "http://www.w3.org/ns/shacl#TripleTerm";
+
+    /// `sh:ByTypes` — the non-boolean value of `sh:closed` (SHACL 1.2 Core
+    /// §7.9.1).
+    pub const BY_TYPES: &str = "http://www.w3.org/ns/shacl#ByTypes";
+
+    /// `sh:detail` — the nested results of a validation result (SHACL 1.2 Core
+    /// §3.6.2.7).
+    pub const DETAIL: &str = "http://www.w3.org/ns/shacl#detail";
+
+    /// `sh:values` — the node expression computing a property shape's value
+    /// nodes (SHACL 1.2 Core §2.3).
+    pub const VALUES: &str = "http://www.w3.org/ns/shacl#values";
+
+    /// `sh:defaultValue` — the node expression computing a property shape's
+    /// value nodes when no other value exists (SHACL 1.2 Core §2.3), and a
+    /// parameter declaration's documented default.
+    pub const DEFAULT_VALUE: &str = "http://www.w3.org/ns/shacl#defaultValue";
+
+    /// `sh:expectedPredicate` — a predicate whose `sh:values` / `sh:defaultValue`
+    /// derived triples a rule expects to be present while it executes (SHACL 1.2
+    /// Inference Rules §3.8).
+    pub const EXPECTED_PREDICATE: &str = "http://www.w3.org/ns/shacl#expectedPredicate";
+
     // ── SHACL-AF and advanced constraint predicates ────────────────────────────
 
     /// `sh:sparql` — attaches a SPARQL constraint to a shape.
@@ -266,6 +315,30 @@ pub mod sh {
 
     /// `sh:ask` — the ASK query of a SHACL-SPARQL validator.
     pub const ASK: &str = "http://www.w3.org/ns/shacl#ask";
+
+    /// `sh:describe` — the DESCRIBE query of a `sh:SPARQLDescribeExecutable`.
+    pub const DESCRIBE: &str = "http://www.w3.org/ns/shacl#describe";
+
+    /// `sh:update` — the UPDATE request of a `sh:SPARQLUpdateExecutable`.
+    pub const UPDATE: &str = "http://www.w3.org/ns/shacl#update";
+
+    // ── SHACL-SPARQL result annotations ────────────────────────────────────────
+
+    /// `sh:resultAnnotation` — links a SPARQL-based constraint or validator to a
+    /// result annotation.
+    pub const RESULT_ANNOTATION: &str = "http://www.w3.org/ns/shacl#resultAnnotation";
+
+    /// `sh:ResultAnnotation` — the class of result annotations.
+    pub const RESULT_ANNOTATION_CLASS: &str = "http://www.w3.org/ns/shacl#ResultAnnotation";
+
+    /// `sh:annotationProperty` — the property a result annotation sets.
+    pub const ANNOTATION_PROPERTY: &str = "http://www.w3.org/ns/shacl#annotationProperty";
+
+    /// `sh:annotationVarName` — the SPARQL variable a result annotation reads.
+    pub const ANNOTATION_VAR_NAME: &str = "http://www.w3.org/ns/shacl#annotationVarName";
+
+    /// `sh:annotationValue` — a result annotation's default values.
+    pub const ANNOTATION_VALUE: &str = "http://www.w3.org/ns/shacl#annotationValue";
 
     /// `sh:sparqlExpr` — the SPARQL expression of a SPARQL expr expression
     /// (SHACL 1.2 SPARQL Extensions §6.2, function name `sh:SPARQLExprExpression`).
@@ -336,6 +409,11 @@ pub mod sh {
 
     /// `sh:distinct` — a distinct node expression (deduplicates its input).
     pub const DISTINCT: &str = "http://www.w3.org/ns/shacl#distinct";
+
+    /// `sh:minus` — the removed-nodes operand of a SHACL Advanced Features 1.1
+    /// minus expression, whose input is its `sh:nodes`; SHACL 1.2 Node Expressions
+    /// spells the same expression `shnex:remove`.
+    pub const MINUS: &str = "http://www.w3.org/ns/shacl#minus";
 
     /// `sh:min` — a minimum aggregation node expression.
     pub const MIN: &str = "http://www.w3.org/ns/shacl#min";
@@ -448,6 +526,45 @@ pub mod sh {
     /// `sh:condition` — a shape a focus node must conform to for a rule to fire.
     pub const CONDITION: &str = "http://www.w3.org/ns/shacl#condition";
 
+    /// `sh:Rule` — the class of SHACL rules.
+    pub const RULE_CLASS: &str = "http://www.w3.org/ns/shacl#Rule";
+
+    /// `sh:layer` — the numeric layer a rule executes in.
+    pub const LAYER: &str = "http://www.w3.org/ns/shacl#layer";
+
+    /// `sh:runOnce` — marks a rule executed once, before the layer's iterating rules.
+    pub const RUN_ONCE: &str = "http://www.w3.org/ns/shacl#runOnce";
+
+    /// `sh:ruleProcessor` — a non-standard processor a rule or rule set requires.
+    pub const RULE_PROCESSOR: &str = "http://www.w3.org/ns/shacl#ruleProcessor";
+
+    /// `sh:RuleSet` — the class of rule sets.
+    pub const RULE_SET: &str = "http://www.w3.org/ns/shacl#RuleSet";
+
+    /// `sh:hasRule` — a rule set's member rule.
+    pub const HAS_RULE: &str = "http://www.w3.org/ns/shacl#hasRule";
+
+    /// `sh:includesRuleSet` — a rule set a rule set includes.
+    pub const INCLUDES_RULE_SET: &str = "http://www.w3.org/ns/shacl#includesRuleSet";
+
+    /// `sh:SPARQLRuleTemplate` — the class of SPARQL rule templates.
+    pub const SPARQL_RULE_TEMPLATE: &str = "http://www.w3.org/ns/shacl#SPARQLRuleTemplate";
+
+    /// `sh:tempTriple` — marks, on a reifier, a temporary inferred triple.
+    pub const TEMP_TRIPLE: &str = "http://www.w3.org/ns/shacl#tempTriple";
+
+    /// `sh:sourceRule` — links, on a reifier, an inferred triple with its rule.
+    pub const SOURCE_RULE: &str = "http://www.w3.org/ns/shacl#sourceRule";
+
+    /// `sh:RulesGraph` — the class of rules graphs.
+    pub const RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
+
+    /// `sh:entailment` — an entailment regime a shapes graph requires.
+    pub const ENTAILMENT: &str = "http://www.w3.org/ns/shacl#entailment";
+
+    /// `sh:RulesEntailment` — the SHACL rules entailment regime.
+    pub const RULES_ENTAILMENT: &str = "http://www.w3.org/ns/shacl#RulesEntailment";
+
     // ── Custom constraint-component vocabulary ───────────────────────────────
 
     /// `sh:ConstraintComponent` — the class of constraint components.
@@ -476,6 +593,10 @@ pub mod sh {
 
     /// `sh:SPARQLSelectValidator` — the class of SELECT-query-based validators.
     pub const SPARQL_SELECT_VALIDATOR: &str = "http://www.w3.org/ns/shacl#SPARQLSelectValidator";
+
+    /// `sh:labelTemplate` — how a constraint of a component could be rendered to
+    /// humans (SHACL 1.2 SPARQL Extensions, "Label Templates").
+    pub const LABEL_TEMPLATE: &str = "http://www.w3.org/ns/shacl#labelTemplate";
 
     // ── Constraint component IRIs (sh:*ConstraintComponent) ──────────────────
 
@@ -590,6 +711,92 @@ pub mod sh {
     /// `sh:QualifiedMaxCountConstraintComponent` — the component reported for `sh:qualifiedMaxCount` violations.
     pub const QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#QualifiedMaxCountConstraintComponent";
+
+    /// `sh:PropertyConstraintComponent` — the component behind `sh:property`,
+    /// whose argument is carried as a property shape rather than a constraint.
+    pub const PROPERTY_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#PropertyConstraintComponent";
+
+    // ── SHACL 1.2 Core components declared by the vocabulary ──────────────────
+    // Declared in the W3C SHACL 1.2 vocabulary (`shacl.ttl`); the spec symbol
+    // table (`crate::spec`) records which of them this engine evaluates.
+
+    /// `sh:singleLine` — the parameter of `sh:SingleLineConstraintComponent`.
+    pub const SINGLE_LINE: &str = "http://www.w3.org/ns/shacl#singleLine";
+
+    /// `sh:SingleLineConstraintComponent`.
+    pub const SINGLE_LINE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SingleLineConstraintComponent";
+
+    /// `sh:minListLength` — the parameter of `sh:MinListLengthConstraintComponent`.
+    pub const MIN_LIST_LENGTH: &str = "http://www.w3.org/ns/shacl#minListLength";
+
+    /// `sh:MinListLengthConstraintComponent`.
+    pub const MIN_LIST_LENGTH_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent";
+
+    /// `sh:maxListLength` — the parameter of `sh:MaxListLengthConstraintComponent`.
+    pub const MAX_LIST_LENGTH: &str = "http://www.w3.org/ns/shacl#maxListLength";
+
+    /// `sh:MaxListLengthConstraintComponent`.
+    pub const MAX_LIST_LENGTH_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MaxListLengthConstraintComponent";
+
+    /// `sh:uniqueMembers` — the parameter of `sh:UniqueMembersConstraintComponent`.
+    pub const UNIQUE_MEMBERS: &str = "http://www.w3.org/ns/shacl#uniqueMembers";
+
+    /// `sh:UniqueMembersConstraintComponent`.
+    pub const UNIQUE_MEMBERS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#UniqueMembersConstraintComponent";
+
+    /// `sh:memberShape` — the parameter of `sh:MemberShapeConstraintComponent`.
+    pub const MEMBER_SHAPE: &str = "http://www.w3.org/ns/shacl#memberShape";
+
+    /// `sh:MemberShapeConstraintComponent`.
+    pub const MEMBER_SHAPE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MemberShapeConstraintComponent";
+
+    /// `sh:rootClass` — the parameter of `sh:RootClassConstraintComponent`.
+    pub const ROOT_CLASS: &str = "http://www.w3.org/ns/shacl#rootClass";
+
+    /// `sh:RootClassConstraintComponent`.
+    pub const ROOT_CLASS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#RootClassConstraintComponent";
+
+    /// `sh:someValue` — the parameter of `sh:SomeValueConstraintComponent`.
+    pub const SOME_VALUE: &str = "http://www.w3.org/ns/shacl#someValue";
+
+    /// `sh:SomeValueConstraintComponent`.
+    pub const SOME_VALUE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SomeValueConstraintComponent";
+
+    /// `sh:subsetOf` — the parameter of `sh:SubsetOfConstraintComponent`.
+    pub const SUBSET_OF: &str = "http://www.w3.org/ns/shacl#subsetOf";
+
+    /// `sh:SubsetOfConstraintComponent`.
+    pub const SUBSET_OF_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent";
+
+    /// `sh:uniqueValuesFor` — the parameter of `sh:UniqueValuesForConstraintComponent`.
+    pub const UNIQUE_VALUES_FOR: &str = "http://www.w3.org/ns/shacl#uniqueValuesFor";
+
+    /// `sh:UniqueValuesForConstraintComponent`.
+    pub const UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent";
+
+    // ── SHACL 1.2 function declarations ───────────────────────────────────────
+
+    /// `sh:NodeExpressionFunction` — the class of node-expression functions that
+    /// are neither list- nor named-parameter functions (`shnex:EmptyExpression`).
+    pub const NODE_EXPRESSION_FUNCTION: &str = "http://www.w3.org/ns/shacl#NodeExpressionFunction";
+
+    /// `sh:SelectExpression` — the built-in named-parameter function keyed by
+    /// `sh:select` (SHACL 1.2 SPARQL Extensions §6.1).
+    pub const SELECT_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SelectExpression";
+
+    /// `sh:SPARQLExprExpression` — the built-in named-parameter function keyed by
+    /// `sh:sparqlExpr` (SHACL 1.2 SPARQL Extensions §6.2).
+    pub const SPARQL_EXPR_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SPARQLExprExpression";
 }
 
 /// SHACL 1.2 node-expression namespace constants
@@ -825,4 +1032,10 @@ pub mod xsd {
 
     /// `xsd:integer` — the integer datatype IRI.
     pub const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    /// `xsd:decimal`.
+    pub const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+
+    /// `xsd:double`.
+    pub const DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 }

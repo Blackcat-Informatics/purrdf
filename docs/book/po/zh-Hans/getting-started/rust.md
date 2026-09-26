@@ -20,7 +20,7 @@ Rust 下游只需要一个依赖：门面 crate（umbrella crate）
 cargo add purrdf
 ```
 
-MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特性）。
+MSRV 为 Rust **1.98**，位于 stable 通道：按政策，代码不使用任何 nightly（不稳定）特性，因此 stable 1.98 即可构建。仓库自身的工具链浮动跟随 nightly，以获得更锐利的 lint；参见[版本管理与发布](../project/releases.md)。
 
 **译注：中国大陆镜像。**从中国大陆访问 crates.io 时常有延迟或间歇性不可达。常用的 crates.io
 镜像有清华大学 TUNA（`mirrors.tuna.tsinghua.edu.cn/crates.io-index`）、中国科学技术大学 USTC

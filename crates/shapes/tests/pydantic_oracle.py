@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 
 REPO = Path(__file__).resolve().parents[3]
-FLAT_BASELINE_SHA256 = "9277681d425755b085048a302ddd2fa530630a98154352eba8e6672e6a7dff70"
+FLAT_BASELINE_SHA256 = "2a4a0bb8eae019b6b410cb0ef39acc59226b6a3e4c6ae72ddb211418826d0e5e"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
     "properties",
@@ -344,6 +344,25 @@ def _assert_package_runtime(
     )
 
 
+def _assert_lists(lists: dict[str, Any]) -> None:
+    """Every SHACL probe of a fixture package agrees with its SHACL verdict."""
+    losses = lists["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("fixture package has an unregistered loss")
+    holder = _load_models(lists["model_paths"])["Holder"]
+    for probe in lists["probes"]:
+        try:
+            holder.model_validate(probe["value"])
+            valid = True
+        except ValidationError:
+            valid = False
+        if valid != probe["conforms"]:
+            raise AssertionError(
+                f"list-component probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"Pydantic={valid}"
+            )
+
+
 def _assert_strict_routed_types(root: Path) -> None:
     consumer = root / "routed_consumer.py"
     consumer.write_text(
@@ -419,9 +438,17 @@ def main() -> None:
             "<https://example.org/Person>",
         ],
     )
-    with tempfile.TemporaryDirectory(prefix="purrdf-pydantic-oracle-") as directory:
+    # The scratch lives beside the build output (see scripts/build-scratch.sh).
+    scratch = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "gate-scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="pydantic-oracle.", dir=scratch) as directory:
         root = Path(directory)
-        for artifacts in [payload["artifacts"], payload["routed"]["artifacts"]]:
+        for artifacts in [
+            payload["artifacts"],
+            payload["routed"]["artifacts"],
+            payload["lists"]["artifacts"],
+            payload["temporal"]["artifacts"],
+        ]:
             for relative, text in artifacts.items():
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -437,6 +464,16 @@ def main() -> None:
                 payload["routed"]["model_paths"],
                 payload["routed"]["metadata"],
             )
+            _assert_lists(payload["lists"])
+            # The temporal range bounds: each is a negation the generated
+            # runtime check evaluates, so no probe diverges and no negation
+            # loss remains.
+            _assert_lists(payload["temporal"])
+            if any(
+                entry["code"] == "negation-validation-dropped"
+                for entry in payload["temporal"]["losses"]["losses"]
+            ):
+                raise AssertionError("temporal package kept a negation loss")
             routed_root = importlib.import_module("routed_oracle_models")
             if routed_root.__version__ != payload["routed"]["version"]:
                 raise AssertionError("routed package version export drifted")
@@ -446,7 +483,9 @@ def main() -> None:
     print(
         f"Pydantic oracle: {len(payload['version_oracle'])} PEP 440 differential cases "
         "agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, "
-        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import"
+        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import; "
+        f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
+        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree"
     )
 
 

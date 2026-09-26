@@ -27,7 +27,7 @@ use std::fmt::{self, Write as _};
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -148,6 +148,22 @@ pub struct GraphqlEnumValueMap {
     pub graphql_name: String,
 }
 
+/// One alternative of a JSON Schema `anyOf` carried as a GraphQL `@oneOf`
+/// input field and an output union member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GraphqlUnionMemberMap {
+    /// Index of the alternative in the source `anyOf` array.
+    pub branch: usize,
+    /// Field of the generated `@oneOf` input object that carries it.
+    pub input_field: String,
+    /// Output union member type: the alternative's own object type, or the
+    /// wrapper object type whose `value` field carries it.
+    pub output_type: String,
+    /// Whether `output_type` is a wrapper whose `value` field carries the
+    /// alternative (every alternative that is not itself an object type).
+    pub wrapped: bool,
+}
+
 /// Typed, deterministic source-name/value → GraphQL-name map.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GraphqlNameMap {
@@ -161,6 +177,9 @@ pub struct GraphqlNameMap {
     pub fields: BTreeMap<String, BTreeMap<String, String>>,
     /// Finite-schema JSON Pointer → exact values and GraphQL enum symbols.
     pub enum_values: BTreeMap<String, Vec<GraphqlEnumValueMap>>,
+    /// Union-schema JSON Pointer → its alternatives' `@oneOf` input fields and
+    /// output union members.
+    pub unions: BTreeMap<String, Vec<GraphqlUnionMemberMap>>,
 }
 
 /// Deterministic generated GraphQL package and its projection losses.
@@ -179,6 +198,7 @@ pub struct GraphqlPackage {
     source_definitions: BTreeMap<String, Value>,
     representations: BTreeMap<String, Representation>,
     reference_targets: BTreeMap<String, String>,
+    unions: BTreeMap<String, Vec<UnionMember>>,
 }
 
 impl GraphqlPackage {
@@ -192,26 +212,67 @@ impl GraphqlPackage {
     /// Translate one source JSON value into the generated GraphQL input naming
     /// and finite-enum transport representation.
     ///
+    /// A value of an `anyOf` carried as a `@oneOf` input object is wrapped in
+    /// the one field of the alternative its JSON kind (or, among several object
+    /// alternatives, the required key only that alternative declares) selects.
+    /// A value that is not an object and whose JSON kind no alternative carries
+    /// is passed unchanged, and GraphQL input coercion rejects it: a `@oneOf`
+    /// input object accepts only an object.
+    ///
     /// # Errors
     ///
     /// Returns [`GraphqlError`] for an unknown definition, an unmapped field or
-    /// enum value, a structurally incompatible carrier, excessive nesting, or
-    /// a value beyond the fixed byte limit.
+    /// enum value, an object no union alternative (or more than one) carries, a
+    /// structurally incompatible carrier, excessive nesting, or a value beyond
+    /// the fixed byte limit.
     pub fn encode_input(&self, definition: &str, value: &Value) -> Result<Value, GraphqlError> {
         self.translate_definition(definition, value, CodecDirection::EncodeInput)
+    }
+
+    /// Translate one generated GraphQL input value (a coerced argument or
+    /// variable) back to source JSON field names and exact finite JSON values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphqlError`] for an unknown definition, field, or enum symbol,
+    /// a `@oneOf` value without exactly one non-null field, a structurally
+    /// incompatible carrier, excessive nesting, or a value beyond the fixed byte
+    /// limit.
+    pub fn decode_input(&self, definition: &str, value: &Value) -> Result<Value, GraphqlError> {
+        self.translate_definition(definition, value, CodecDirection::DecodeInput)
+    }
+
+    /// Translate one source JSON value into the generated GraphQL output
+    /// naming, finite-enum and union representation a resolver returns.
+    ///
+    /// A value of an `anyOf` carried as an output union is its alternative's
+    /// object with `__typename` naming the member type, or the member wrapper
+    /// `{"__typename": ..., "value": ...}` for an alternative that is not an
+    /// object type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphqlError`] for an unknown definition, an unmapped field or
+    /// enum value, a value no union alternative carries, a structurally
+    /// incompatible carrier, excessive nesting, or a value beyond the fixed
+    /// byte limit.
+    pub fn encode_output(&self, definition: &str, value: &Value) -> Result<Value, GraphqlError> {
+        self.translate_definition(definition, value, CodecDirection::EncodeOutput)
     }
 
     /// Translate one generated GraphQL output value back to source JSON field
     /// names and exact finite JSON values.
     ///
     /// GraphQL responses may contain a selected subset of output fields; this
-    /// method translates present fields and does not invent omitted values.
+    /// method translates present fields and does not invent omitted values. A
+    /// union value must select `__typename`, which names its member.
     ///
     /// # Errors
     ///
-    /// Returns [`GraphqlError`] for an unknown definition, field, or enum symbol,
-    /// a structurally incompatible carrier, excessive nesting, or a value beyond
-    /// the fixed byte limit.
+    /// Returns [`GraphqlError`] for an unknown definition, field, enum symbol or
+    /// union member, a union value without `__typename`, a structurally
+    /// incompatible carrier, excessive nesting, or a value beyond the fixed
+    /// byte limit.
     pub fn decode_output(&self, definition: &str, value: &Value) -> Result<Value, GraphqlError> {
         self.translate_definition(definition, value, CodecDirection::DecodeOutput)
     }
@@ -295,6 +356,7 @@ pub fn emit_graphql(
 
     let mut planner = Planner::new(definitions, config)?;
     planner.plan()?;
+    planner.plan_union_members()?;
     planner.audit()?;
     planner.relax_invalid_input_cycles()?;
     let definition_maps = planner.definition_maps()?;
@@ -310,6 +372,7 @@ pub fn emit_graphql(
         definitions: definition_maps,
         fields: planner.fields.clone(),
         enum_values: planner.enum_values.clone(),
+        unions: planner.union_maps(),
     };
     let mut name_map_json = serde_json::to_string_pretty(&names).map_err(|error| {
         GraphqlError::new(format!("cannot serialize GraphQL name map: {error}"))
@@ -337,6 +400,7 @@ pub fn emit_graphql(
             .collect(),
         representations: planner.representations,
         reference_targets: planner.reference_targets,
+        unions: planner.unions,
     })
 }
 
@@ -403,7 +467,63 @@ enum Representation {
     String,
     Boolean,
     Int,
+    /// An `anyOf` whose alternatives each value selects exactly one of: a
+    /// `@oneOf` input object and an output union.
+    Union,
     Fallback,
+}
+
+/// The JSON kinds a GraphQL union tells its alternatives apart by. JSON
+/// Schema's `integer` is a `number`, so both are one class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ValueClass {
+    Boolean,
+    Number,
+    String,
+    Array,
+    Object,
+}
+
+impl ValueClass {
+    fn of(value: &Value) -> Option<Self> {
+        match value {
+            Value::Null => None,
+            Value::Bool(_) => Some(Self::Boolean),
+            Value::Number(_) => Some(Self::Number),
+            Value::String(_) => Some(Self::String),
+            Value::Array(_) => Some(Self::Array),
+            Value::Object(_) => Some(Self::Object),
+        }
+    }
+
+    const fn of_kind(kind: JsonKind) -> Option<Self> {
+        match kind {
+            JsonKind::Null => None,
+            JsonKind::Boolean => Some(Self::Boolean),
+            JsonKind::Integer | JsonKind::Number => Some(Self::Number),
+            JsonKind::String => Some(Self::String),
+            JsonKind::Array => Some(Self::Array),
+            JsonKind::Object => Some(Self::Object),
+        }
+    }
+}
+
+/// One alternative of a [`Representation::Union`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnionMember {
+    /// Index in the source `anyOf`.
+    branch: usize,
+    /// The JSON kind of every value the alternative admits.
+    class: ValueClass,
+    /// Among several object alternatives, the required key no other object
+    /// alternative declares; `None` for the lone object alternative.
+    tag: Option<String>,
+    /// The `@oneOf` input field.
+    input_field: String,
+    /// The output union member type (planned after every object type).
+    output_type: String,
+    /// Whether `output_type` wraps the alternative in a `value` field.
+    wrapped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,7 +541,15 @@ enum TypePosition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodecDirection {
     EncodeInput,
+    DecodeInput,
+    EncodeOutput,
     DecodeOutput,
+}
+
+impl CodecDirection {
+    const fn encodes(self) -> bool {
+        matches!(self, Self::EncodeInput | Self::EncodeOutput)
+    }
 }
 
 struct Planner<'a> {
@@ -435,6 +563,8 @@ struct Planner<'a> {
     enum_values: BTreeMap<String, Vec<GraphqlEnumValueMap>>,
     used_type_names: BTreeMap<String, String>,
     reference_targets: BTreeMap<String, String>,
+    unions: BTreeMap<String, Vec<UnionMember>>,
+    union_names: BTreeMap<String, ObjectNames>,
     ledger: LossLedger,
     recorded_losses: BTreeSet<(String, String)>,
     relaxed_fields: BTreeSet<String>,
@@ -461,6 +591,8 @@ impl<'a> Planner<'a> {
             enum_values: BTreeMap::new(),
             used_type_names,
             reference_targets: BTreeMap::new(),
+            unions: BTreeMap::new(),
+            union_names: BTreeMap::new(),
             ledger: LossLedger::new(),
             recorded_losses: BTreeSet::new(),
             relaxed_fields: BTreeSet::new(),
@@ -526,7 +658,7 @@ impl<'a> Planner<'a> {
         if self.representations.contains_key(path) {
             return Ok(());
         }
-        let representation = classify_schema(schema, path)?;
+        let (representation, members) = classify_schema(schema, path, self.definitions)?;
         self.schemas.insert(path.to_owned(), schema.clone());
         self.representations
             .insert(path.to_owned(), representation.clone());
@@ -624,6 +756,30 @@ impl<'a> Planner<'a> {
                     self.plan_schema(items, &format!("{path}/items"), &child_base, depth + 1)?;
                 }
             }
+            Representation::Union => {
+                let output = base.to_owned();
+                let input = checked_graphql_name(&format!("{base}Input"), "generated input type")?;
+                self.reserve_type_name(&output, path)?;
+                self.reserve_type_name(&input, path)?;
+                self.union_names
+                    .insert(path.to_owned(), ObjectNames { output, input });
+                let branches = schema["anyOf"]
+                    .as_array()
+                    .expect("a union representation comes from an anyOf schema");
+                let mut members = members.expect("a union representation has planned members");
+                for member in &mut members {
+                    let child_base =
+                        graphql_type_name(&format!("{base} {}", member.input_field), "Alternative");
+                    self.plan_schema(
+                        &branches[member.branch],
+                        &format!("{path}/anyOf/{}", member.branch),
+                        &child_base,
+                        depth + 1,
+                    )?;
+                    member.output_type = child_base;
+                }
+                self.unions.insert(path.to_owned(), members);
+            }
             Representation::Reference(_)
             | Representation::String
             | Representation::Boolean
@@ -649,6 +805,65 @@ impl<'a> Planner<'a> {
             )));
         }
         Ok(())
+    }
+
+    /// Name each union member's output type: the alternative's own object
+    /// type, or a wrapper object type whose `value` field carries it (a union
+    /// member is always an object type).
+    fn plan_union_members(&mut self) -> Result<(), GraphqlError> {
+        let paths = self.unions.keys().cloned().collect::<Vec<_>>();
+        for path in paths {
+            let mut members = self.unions.remove(&path).unwrap_or_default();
+            for member in &mut members {
+                let branch_path = format!("{path}/anyOf/{}", member.branch);
+                if let Some(object_path) = self.resolve_object_path(&branch_path)? {
+                    member.output_type = self
+                        .objects
+                        .get(&object_path)
+                        .map(|names| names.output.clone())
+                        .ok_or_else(|| {
+                            GraphqlError::new(format!(
+                                "missing generated object names for {object_path}"
+                            ))
+                        })?;
+                    member.wrapped = false;
+                } else {
+                    self.reserve_type_name(&member.output_type, &branch_path)?;
+                    member.wrapped = true;
+                }
+            }
+            let mut output_types = BTreeSet::new();
+            for member in &members {
+                if !output_types.insert(member.output_type.clone()) {
+                    return Err(GraphqlError::new(format!(
+                        "{path}/anyOf alternatives share GraphQL union member {:?}",
+                        member.output_type
+                    )));
+                }
+            }
+            self.unions.insert(path, members);
+        }
+        Ok(())
+    }
+
+    fn union_maps(&self) -> BTreeMap<String, Vec<GraphqlUnionMemberMap>> {
+        self.unions
+            .iter()
+            .map(|(path, members)| {
+                (
+                    path.clone(),
+                    members
+                        .iter()
+                        .map(|member| GraphqlUnionMemberMap {
+                            branch: member.branch,
+                            input_field: member.input_field.clone(),
+                            output_type: member.output_type.clone(),
+                            wrapped: member.wrapped,
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     fn audit(&mut self) -> Result<(), GraphqlError> {
@@ -692,10 +907,17 @@ impl<'a> Planner<'a> {
             self.record(
                 "intersection-validation-delegated",
                 &format!("{path}/allOf"),
-                "GraphQL has no input intersection type",
+                if representation == Representation::Union {
+                    "GraphQL has no input intersection type; the @oneOf alternatives carry the \
+                     value while this conjunct is not checked"
+                } else {
+                    "GraphQL has no input intersection type"
+                },
             );
         }
-        if object.contains_key("anyOf") && representation != Representation::Enum {
+        if object.contains_key("anyOf")
+            && !matches!(representation, Representation::Enum | Representation::Union)
+        {
             self.record(
                 "union-validation-delegated",
                 &format!("{path}/anyOf"),
@@ -713,7 +935,12 @@ impl<'a> Planner<'a> {
             self.record(
                 "negation-validation-delegated",
                 &format!("{path}/not"),
-                "GraphQL has no input value-set complement",
+                if representation == Representation::Union {
+                    "GraphQL has no input value-set complement; the @oneOf alternatives carry \
+                     the value while this negation is not checked"
+                } else {
+                    "GraphQL has no input value-set complement"
+                },
             );
         }
         if object
@@ -728,9 +955,10 @@ impl<'a> Planner<'a> {
             );
         }
         let type_kinds = declared_types(object, path)?;
-        if type_kinds
-            .as_ref()
-            .is_some_and(|kinds| kinds.iter().filter(|kind| **kind != JsonKind::Null).count() > 1)
+        if representation != Representation::Union
+            && type_kinds.as_ref().is_some_and(|kinds| {
+                kinds.iter().filter(|kind| **kind != JsonKind::Null).count() > 1
+            })
         {
             self.record(
                 "union-validation-delegated",
@@ -739,7 +967,8 @@ impl<'a> Planner<'a> {
             );
         }
         if type_kinds.as_ref().is_some_and(|kinds| {
-            kinds.contains(&JsonKind::Integer) && representation != Representation::Int
+            kinds.contains(&JsonKind::Integer)
+                && !matches!(representation, Representation::Int | Representation::Union)
         }) {
             self.record(
                 "integer-domain-validation-delegated",
@@ -829,10 +1058,75 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
+            Representation::Union => self.audit_union(object, path, depth)?,
             Representation::Enum
             | Representation::Reference(_)
             | Representation::Boolean
             | Representation::Fallback => {}
+        }
+        Ok(())
+    }
+
+    /// A union's alternatives are audited where they stand; a keyword beside
+    /// `anyOf` that judges one JSON kind is recorded only when an alternative
+    /// admits that kind (otherwise no value it could judge passes `anyOf`).
+    fn audit_union(
+        &mut self,
+        object: &Map<String, Value>,
+        path: &str,
+        depth: usize,
+    ) -> Result<(), GraphqlError> {
+        let members = self.unions.get(path).cloned().unwrap_or_default();
+        let admits = |class: ValueClass| members.iter().any(|member| member.class == class);
+        for (keywords, class, code, note) in [
+            (
+                &NUMERIC_KEYWORDS[..],
+                ValueClass::Number,
+                "numeric-validation-dropped",
+                "GraphQL numeric carriers do not express this runtime numeric predicate",
+            ),
+            (
+                &STRING_KEYWORDS[..],
+                ValueClass::String,
+                "string-validation-dropped",
+                "GraphQL String does not express this runtime string predicate",
+            ),
+            (
+                &["minItems", "maxItems"][..],
+                ValueClass::Array,
+                "array-cardinality-validation-dropped",
+                "GraphQL list types cannot constrain list length",
+            ),
+            (
+                &["uniqueItems"][..],
+                ValueClass::Array,
+                "unique-items-validation-dropped",
+                "GraphQL list coercion cannot enforce pairwise-distinct values",
+            ),
+        ] {
+            if !admits(class) {
+                continue;
+            }
+            for keyword in keywords {
+                if keyword == &"uniqueItems" && object.get(*keyword) != Some(&Value::Bool(true)) {
+                    continue;
+                }
+                if object.contains_key(*keyword) {
+                    self.record(code, &format!("{path}/{keyword}"), note);
+                }
+            }
+        }
+        let branches = object
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for member in &members {
+            self.audit_schema(
+                &branches[member.branch],
+                &format!("{path}/anyOf/{}", member.branch),
+                depth + 1,
+            )?;
         }
         Ok(())
     }
@@ -1064,6 +1358,15 @@ impl<'a> Planner<'a> {
                 })?;
                 self.type_expression(target, &definition_path(endpoint), position)
             }
+            Representation::Union => {
+                let names = self.union_names.get(path).ok_or_else(|| {
+                    GraphqlError::new(format!("missing generated union names for {path}"))
+                })?;
+                Ok(match position {
+                    TypePosition::Output => names.output.clone(),
+                    TypePosition::Input => names.input.clone(),
+                })
+            }
             Representation::String => Ok("String".to_owned()),
             Representation::Boolean => Ok("Boolean".to_owned()),
             Representation::Int => Ok("Int".to_owned()),
@@ -1089,10 +1392,26 @@ impl<'a> Planner<'a> {
             declarations.push((names.output.clone(), DeclarationKind::Output, path.clone()));
             declarations.push((names.input.clone(), DeclarationKind::Input, path.clone()));
         }
+        for (path, names) in &self.union_names {
+            declarations.push((names.output.clone(), DeclarationKind::Union, path.clone()));
+            declarations.push((names.input.clone(), DeclarationKind::OneOf, path.clone()));
+            for member in self.unions.get(path).into_iter().flatten() {
+                if member.wrapped {
+                    declarations.push((
+                        member.output_type.clone(),
+                        DeclarationKind::Wrapper,
+                        format!("{path}/anyOf/{}", member.branch),
+                    ));
+                }
+            }
+        }
         declarations.sort();
         for (_, kind, path) in declarations {
             output.push('\n');
             match kind {
+                DeclarationKind::Union => self.render_union(&mut output, &path)?,
+                DeclarationKind::OneOf => self.render_one_of(&mut output, &path)?,
+                DeclarationKind::Wrapper => self.render_wrapper(&mut output, &path)?,
                 DeclarationKind::Enum => self.render_enum(&mut output, &path)?,
                 DeclarationKind::Output => {
                     self.render_object_type(&mut output, &path, TypePosition::Output)?;
@@ -1103,6 +1422,94 @@ impl<'a> Planner<'a> {
             }
         }
         Ok(finish_text(output))
+    }
+
+    fn render_union(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
+        let names = self
+            .union_names
+            .get(path)
+            .expect("rendered union has planned names");
+        if let Some(description) = schema_doc(
+            self.schemas
+                .get(path)
+                .expect("rendered union has a retained schema"),
+        )? {
+            writeln!(output, "{}", graphql_string(description))
+                .expect("writing GraphQL SDL to a String cannot fail");
+        }
+        let members = self
+            .unions
+            .get(path)
+            .expect("rendered union has planned members")
+            .iter()
+            .map(|member| member.output_type.as_str())
+            .collect::<Vec<_>>();
+        writeln!(output, "union {} = {}", names.output, members.join(" | "))
+            .expect("writing GraphQL SDL to a String cannot fail");
+        Ok(())
+    }
+
+    fn render_one_of(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
+        let names = self
+            .union_names
+            .get(path)
+            .expect("rendered union has planned names");
+        let schema = self
+            .schemas
+            .get(path)
+            .expect("rendered union has a retained schema");
+        if let Some(description) = schema_doc(schema)? {
+            writeln!(output, "{}", graphql_string(description))
+                .expect("writing GraphQL SDL to a String cannot fail");
+        }
+        writeln!(output, "input {} @oneOf {{", names.input)
+            .expect("writing GraphQL SDL to a String cannot fail");
+        let branches = schema["anyOf"]
+            .as_array()
+            .expect("a union representation comes from an anyOf schema");
+        let mut members = self
+            .unions
+            .get(path)
+            .expect("rendered union has planned members")
+            .iter()
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| left.input_field.cmp(&right.input_field));
+        for member in members {
+            let expression = self.type_expression(
+                &branches[member.branch],
+                &format!("{path}/anyOf/{}", member.branch),
+                TypePosition::Input,
+            )?;
+            writeln!(output, "  {}: {expression}", member.input_field)
+                .expect("writing GraphQL SDL to a String cannot fail");
+        }
+        writeln!(output, "}}").expect("writing GraphQL SDL to a String cannot fail");
+        Ok(())
+    }
+
+    fn render_wrapper(&self, output: &mut String, branch_path: &str) -> Result<(), GraphqlError> {
+        let (path, index) = branch_path
+            .rsplit_once("/anyOf/")
+            .expect("a wrapper path names its alternative");
+        let index = index
+            .parse::<usize>()
+            .expect("a wrapper path ends in its alternative index");
+        let member = self
+            .unions
+            .get(path)
+            .and_then(|members| members.iter().find(|member| member.branch == index))
+            .expect("a rendered wrapper has a planned member");
+        let branch = &self
+            .schemas
+            .get(path)
+            .expect("rendered union has a retained schema")["anyOf"][index];
+        let expression = self.type_expression(branch, branch_path, TypePosition::Output)?;
+        writeln!(output, "type {} {{", member.output_type)
+            .expect("writing GraphQL SDL to a String cannot fail");
+        writeln!(output, "  value: {expression}!")
+            .expect("writing GraphQL SDL to a String cannot fail");
+        writeln!(output, "}}").expect("writing GraphQL SDL to a String cannot fail");
+        Ok(())
     }
 
     fn render_enum(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
@@ -1271,6 +1678,9 @@ enum DeclarationKind {
     Enum,
     Output,
     Input,
+    Union,
+    OneOf,
+    Wrapper,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1374,7 +1784,163 @@ impl GraphqlPackage {
                     )))
                 }
             }
+            Representation::Union => self.translate_union(schema, path, value, direction, depth),
             Representation::Fallback => Ok(value.clone()),
+        }
+    }
+
+    /// The alternative of the union at `path` a source value selects: the one
+    /// of its JSON kind, and among several object alternatives the one whose
+    /// tag key it carries. `Ok(None)` for a value of a kind no alternative
+    /// admits.
+    fn select_member<'m>(
+        members: &'m [UnionMember],
+        path: &str,
+        value: &Value,
+    ) -> Result<Option<&'m UnionMember>, GraphqlError> {
+        let Some(class) = ValueClass::of(value) else {
+            return Ok(None);
+        };
+        let mut candidates = members.iter().filter(|member| member.class == class);
+        if class != ValueClass::Object {
+            return Ok(candidates.next());
+        }
+        let object = value
+            .as_object()
+            .expect("an object value has the object class");
+        let mut selected = None;
+        for member in candidates {
+            if member
+                .tag
+                .as_ref()
+                .is_none_or(|tag| object.contains_key(tag))
+            {
+                if selected.is_some() {
+                    return Err(GraphqlError::new(format!(
+                        "source object at {path} carries the required keys of several anyOf \
+                         alternatives; a GraphQL @oneOf input object carries one"
+                    )));
+                }
+                selected = Some(member);
+            }
+        }
+        if selected.is_none() {
+            return Err(GraphqlError::new(format!(
+                "source object at {path} carries no required key that selects an anyOf \
+                 alternative"
+            )));
+        }
+        Ok(selected)
+    }
+
+    fn translate_union(
+        &self,
+        schema: &Value,
+        path: &str,
+        value: &Value,
+        direction: CodecDirection,
+        depth: usize,
+    ) -> Result<Value, GraphqlError> {
+        let members = self
+            .unions
+            .get(path)
+            .ok_or_else(|| GraphqlError::new(format!("GraphQL union at {path} has no members")))?;
+        let branches = schema
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .ok_or_else(|| GraphqlError::new(format!("GraphQL union at {path} has no anyOf")))?;
+        let branch = |member: &UnionMember| {
+            (
+                &branches[member.branch],
+                format!("{path}/anyOf/{}", member.branch),
+            )
+        };
+        match direction {
+            CodecDirection::EncodeInput | CodecDirection::EncodeOutput => {
+                let Some(member) = Self::select_member(members, path, value)? else {
+                    if direction == CodecDirection::EncodeInput {
+                        // Not an object: GraphQL rejects it at a @oneOf input.
+                        return Ok(value.clone());
+                    }
+                    return Err(GraphqlError::new(format!(
+                        "source value at {path} has a JSON kind no anyOf alternative admits"
+                    )));
+                };
+                let (schema, branch_path) = branch(member);
+                let inner =
+                    self.translate_value(schema, &branch_path, value, direction, depth + 1)?;
+                let mut output = Map::new();
+                if direction == CodecDirection::EncodeInput {
+                    output.insert(member.input_field.clone(), inner);
+                } else if member.wrapped {
+                    output.insert("__typename".to_owned(), json!(member.output_type));
+                    output.insert("value".to_owned(), inner);
+                } else {
+                    let Value::Object(fields) = inner else {
+                        return Err(GraphqlError::new(format!(
+                            "GraphQL union member at {branch_path} must be an object"
+                        )));
+                    };
+                    output.insert("__typename".to_owned(), json!(member.output_type));
+                    output.extend(fields);
+                }
+                Ok(Value::Object(output))
+            }
+            CodecDirection::DecodeInput => {
+                let object = value.as_object().ok_or_else(|| {
+                    GraphqlError::new(format!("GraphQL @oneOf value at {path} must be an object"))
+                })?;
+                let mut present = object.iter().filter(|(_, inner)| !inner.is_null());
+                let (Some((field, inner)), None) = (present.next(), present.next()) else {
+                    return Err(GraphqlError::new(format!(
+                        "GraphQL @oneOf value at {path} must set exactly one non-null field"
+                    )));
+                };
+                let member = members
+                    .iter()
+                    .find(|member| member.input_field == *field)
+                    .ok_or_else(|| {
+                        GraphqlError::new(format!(
+                            "GraphQL @oneOf field {field:?} is not mapped at {path}"
+                        ))
+                    })?;
+                let (schema, branch_path) = branch(member);
+                self.translate_value(schema, &branch_path, inner, direction, depth + 1)
+            }
+            CodecDirection::DecodeOutput => {
+                let object = value.as_object().ok_or_else(|| {
+                    GraphqlError::new(format!("GraphQL union value at {path} must be an object"))
+                })?;
+                let typename = object
+                    .get("__typename")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        GraphqlError::new(format!(
+                            "GraphQL union value at {path} must select __typename"
+                        ))
+                    })?;
+                let member = members
+                    .iter()
+                    .find(|member| member.output_type == typename)
+                    .ok_or_else(|| {
+                        GraphqlError::new(format!(
+                            "GraphQL union member {typename:?} is not mapped at {path}"
+                        ))
+                    })?;
+                let (schema, branch_path) = branch(member);
+                let inner = if member.wrapped {
+                    object.get("value").cloned().ok_or_else(|| {
+                        GraphqlError::new(format!(
+                            "GraphQL union member {typename:?} at {path} must select value"
+                        ))
+                    })?
+                } else {
+                    let mut fields = object.clone();
+                    fields.remove("__typename");
+                    Value::Object(fields)
+                };
+                self.translate_value(schema, &branch_path, &inner, direction, depth + 1)
+            }
         }
     }
 
@@ -1388,8 +1954,8 @@ impl GraphqlPackage {
             self.names.enum_values.get(path).ok_or_else(|| {
                 GraphqlError::new(format!("GraphQL enum at {path} has no value map"))
             })?;
-        match direction {
-            CodecDirection::EncodeInput => mappings
+        if direction.encodes() {
+            mappings
                 .iter()
                 .find(|mapping| mapping.source_value == *value)
                 .map(|mapping| Value::String(mapping.graphql_name.clone()))
@@ -1397,23 +1963,22 @@ impl GraphqlPackage {
                     GraphqlError::new(format!(
                         "source value at {path} is not present in the generated GraphQL enum map"
                     ))
-                }),
-            CodecDirection::DecodeOutput => {
-                let symbol = value.as_str().ok_or_else(|| {
+                })
+        } else {
+            let symbol = value.as_str().ok_or_else(|| {
+                GraphqlError::new(format!(
+                    "GraphQL enum output at {path} must be a string symbol"
+                ))
+            })?;
+            mappings
+                .iter()
+                .find(|mapping| mapping.graphql_name == symbol)
+                .map(|mapping| mapping.source_value.clone())
+                .ok_or_else(|| {
                     GraphqlError::new(format!(
-                        "GraphQL enum output at {path} must be a string symbol"
+                        "GraphQL enum symbol {symbol:?} is not mapped at {path}"
                     ))
-                })?;
-                mappings
-                    .iter()
-                    .find(|mapping| mapping.graphql_name == symbol)
-                    .map(|mapping| mapping.source_value.clone())
-                    .ok_or_else(|| {
-                        GraphqlError::new(format!(
-                            "GraphQL enum symbol {symbol:?} is not mapped at {path}"
-                        ))
-                    })
-            }
+                })
         }
     }
 
@@ -1445,24 +2010,21 @@ impl GraphqlPackage {
             .collect::<BTreeMap<_, _>>();
         let mut output = Map::new();
         for (input_key, input_value) in value {
-            let (source_key, output_key) = match direction {
-                CodecDirection::EncodeInput => {
-                    let graphql = field_map.get(input_key).ok_or_else(|| {
-                        GraphqlError::new(format!(
-                            "source field {input_key:?} is not representable by GraphQL object \
+            let (source_key, output_key) = if direction.encodes() {
+                let graphql = field_map.get(input_key).ok_or_else(|| {
+                    GraphqlError::new(format!(
+                        "source field {input_key:?} is not representable by GraphQL object \
                              at {path}"
-                        ))
-                    })?;
-                    (input_key.as_str(), graphql.as_str())
-                }
-                CodecDirection::DecodeOutput => {
-                    let source = reverse.get(input_key.as_str()).ok_or_else(|| {
-                        GraphqlError::new(format!(
-                            "GraphQL field {input_key:?} is not mapped at {path}"
-                        ))
-                    })?;
-                    (*source, *source)
-                }
+                    ))
+                })?;
+                (input_key.as_str(), graphql.as_str())
+            } else {
+                let source = reverse.get(input_key.as_str()).ok_or_else(|| {
+                    GraphqlError::new(format!(
+                        "GraphQL field {input_key:?} is not mapped at {path}"
+                    ))
+                })?;
+                (*source, *source)
             };
             let child_path = format!("{path}/properties/{}", pointer_escape(source_key));
             let translated = if let Some(child) = properties.get(source_key) {
@@ -1491,19 +2053,33 @@ enum JsonKind {
     Object,
 }
 
-fn classify_schema(schema: &Value, path: &str) -> Result<Representation, GraphqlError> {
+fn classify_schema(
+    schema: &Value,
+    path: &str,
+    definitions: &Map<String, Value>,
+) -> Result<(Representation, Option<Vec<UnionMember>>), GraphqlError> {
     let Value::Object(object) = schema else {
-        return Ok(Representation::Fallback);
+        return Ok((Representation::Fallback, None));
     };
     if finite_values(schema, path)?.is_some() {
-        return Ok(Representation::Enum);
+        return Ok((Representation::Enum, None));
     }
     if let Some(reference) = pure_reference(object) {
         let key = reference_key(reference).ok_or_else(|| {
             GraphqlError::new(format!("{path}/$ref is not a direct #/$defs reference"))
         })?;
-        return Ok(Representation::Reference(key));
+        return Ok((Representation::Reference(key), None));
     }
+    if let Some(members) = union_members(object, path, definitions)? {
+        return Ok((Representation::Union, Some(members)));
+    }
+    Ok((classify_plain_schema(object, path)?, None))
+}
+
+fn classify_plain_schema(
+    object: &Map<String, Value>,
+    path: &str,
+) -> Result<Representation, GraphqlError> {
     if has_unknown_assertion(object)
         || object.contains_key("allOf")
         || object.contains_key("anyOf")
@@ -1540,6 +2116,230 @@ fn classify_schema(schema: &Value, path: &str) -> Result<Representation, Graphql
         JsonKind::Object if object_field_count(object, path)? > 0 => Representation::Object,
         JsonKind::Null | JsonKind::Array | JsonKind::Object => Representation::Fallback,
     })
+}
+
+/// Keywords beside `anyOf` a union carries: each either holds of every
+/// alternative (`type`, checked to admit every alternative), or judges only
+/// values of one JSON kind, or is audited as omitted (`not`, `allOf`).
+fn is_union_sibling(keyword: &str) -> bool {
+    is_annotation_keyword(keyword)
+        || NUMERIC_KEYWORDS.contains(&keyword)
+        || STRING_KEYWORDS.contains(&keyword)
+        || ARRAY_KEYWORDS.contains(&keyword)
+        || matches!(keyword, "anyOf" | "type" | "not" | "allOf")
+}
+
+/// Numeric assertions, which judge numbers only.
+const NUMERIC_KEYWORDS: [&str; 5] = [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+];
+
+/// String assertions, which judge strings only.
+const STRING_KEYWORDS: [&str; 4] = ["minLength", "maxLength", "pattern", "format"];
+
+/// Array assertions, which judge arrays only.
+const ARRAY_KEYWORDS: [&str; 3] = ["minItems", "maxItems", "uniqueItems"];
+
+/// One analysed `anyOf` alternative.
+struct Alternative {
+    class: ValueClass,
+    /// The declared JSON kinds, to name a number alternative.
+    integer_only: bool,
+    /// Whether the alternative is a plain object carrier (its own GraphQL
+    /// object type), with its declared and required property names.
+    plain_object: Option<(BTreeSet<String>, BTreeSet<String>)>,
+}
+
+/// The members of an `anyOf` every value selects at most one alternative of —
+/// by its JSON kind, or among several object alternatives by a required key
+/// only one of them declares — so a `@oneOf` input object carries it exactly:
+/// the value is valid under the `anyOf` exactly when it is valid under the
+/// alternative it selects. `None` when the alternatives overlap.
+fn union_members(
+    object: &Map<String, Value>,
+    path: &str,
+    definitions: &Map<String, Value>,
+) -> Result<Option<Vec<UnionMember>>, GraphqlError> {
+    let Some(branches) = object.get("anyOf").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    if object.keys().any(|key| !is_union_sibling(key)) {
+        return Ok(None);
+    }
+    let mut alternatives = Vec::with_capacity(branches.len());
+    for (index, branch) in branches.iter().enumerate() {
+        let Some(alternative) =
+            analyse_alternative(branch, &format!("{path}/anyOf/{index}"), definitions)?
+        else {
+            return Ok(None);
+        };
+        alternatives.push(alternative);
+    }
+    if let Some(kinds) = declared_types(object, path)? {
+        let admits = |alternative: &Alternative| match alternative.class {
+            ValueClass::Number => {
+                kinds.contains(&JsonKind::Number)
+                    || (alternative.integer_only && kinds.contains(&JsonKind::Integer))
+            }
+            class => kinds
+                .iter()
+                .any(|kind| ValueClass::of_kind(*kind) == Some(class)),
+        };
+        if !alternatives.iter().all(admits) {
+            return Ok(None);
+        }
+    }
+    let objects = alternatives
+        .iter()
+        .filter(|alternative| alternative.class == ValueClass::Object)
+        .count();
+    let mut classes = BTreeSet::new();
+    for alternative in &alternatives {
+        if alternative.class != ValueClass::Object && !classes.insert(alternative.class) {
+            return Ok(None);
+        }
+    }
+    let mut members = Vec::with_capacity(alternatives.len());
+    let mut used_fields = BTreeSet::new();
+    for (index, alternative) in alternatives.iter().enumerate() {
+        let tag = if alternative.class == ValueClass::Object && objects > 1 {
+            let Some((_, required)) = &alternative.plain_object else {
+                return Ok(None);
+            };
+            let tag = required.iter().find(|key| {
+                alternatives
+                    .iter()
+                    .enumerate()
+                    .filter(|(other, _)| *other != index)
+                    .all(|(_, other)| match (other.class, &other.plain_object) {
+                        (ValueClass::Object, Some((declared, _))) => !declared.contains(*key),
+                        (ValueClass::Object, None) => false,
+                        _ => true,
+                    })
+            });
+            let Some(tag) = tag else {
+                return Ok(None);
+            };
+            Some(tag.clone())
+        } else {
+            None
+        };
+        let label = match (&tag, alternative.class) {
+            (Some(tag), _) => tag.as_str(),
+            (None, ValueClass::Object) => "object",
+            (None, ValueClass::Boolean) => "boolean",
+            (None, ValueClass::Number) if alternative.integer_only => "integer",
+            (None, ValueClass::Number) => "number",
+            (None, ValueClass::String) => "string",
+            (None, ValueClass::Array) => "array",
+        };
+        let mut input_field = graphql_field_name(label, "alternative");
+        if !used_fields.insert(input_field.clone()) {
+            input_field = format!("{input_field}{index}");
+            if !used_fields.insert(input_field.clone()) {
+                return Err(GraphqlError::new(format!(
+                    "{path}/anyOf alternatives collide on GraphQL field name {input_field:?}"
+                )));
+            }
+        }
+        validate_graphql_name("generated field name", &input_field)?;
+        members.push(UnionMember {
+            branch: index,
+            class: alternative.class,
+            tag,
+            input_field,
+            output_type: String::new(),
+            wrapped: true,
+        });
+    }
+    Ok(Some(members))
+}
+
+/// The JSON kind every value an `anyOf` alternative admits has, following
+/// direct `$defs` references; `None` when the alternative admits `null`, more
+/// than one kind, or kinds it does not declare.
+fn analyse_alternative(
+    branch: &Value,
+    path: &str,
+    definitions: &Map<String, Value>,
+) -> Result<Option<Alternative>, GraphqlError> {
+    if schema_allows_null(branch, definitions, &mut BTreeSet::new())? {
+        return Ok(None);
+    }
+    let mut current = branch;
+    let mut seen = BTreeSet::new();
+    let object = loop {
+        let Value::Object(object) = current else {
+            return Ok(None);
+        };
+        let Some(reference) = pure_reference(object) else {
+            break object;
+        };
+        let Some(key) = reference_key(reference) else {
+            return Ok(None);
+        };
+        if !seen.insert(key.clone()) {
+            return Ok(None);
+        }
+        let Some(target) = definitions.get(&key) else {
+            return Ok(None);
+        };
+        current = target;
+    };
+    if let Some(values) = finite_values(current, path)? {
+        let classes = values
+            .iter()
+            .map(ValueClass::of)
+            .collect::<Option<BTreeSet<_>>>();
+        let integer_only = values.iter().all(|value| value.is_i64() || value.is_u64());
+        return Ok(match classes {
+            Some(classes) if classes.len() == 1 => {
+                let class = *classes.iter().next().expect("length checked");
+                (!matches!(class, ValueClass::Object | ValueClass::Array)).then_some(Alternative {
+                    class,
+                    integer_only,
+                    plain_object: None,
+                })
+            }
+            _ => None,
+        });
+    }
+    let Some(kinds) = declared_types(object, path)? else {
+        return Ok(None);
+    };
+    let classes = kinds
+        .iter()
+        .filter_map(|kind| ValueClass::of_kind(*kind))
+        .collect::<BTreeSet<_>>();
+    if classes.len() != 1 {
+        return Ok(None);
+    }
+    let class = *classes.iter().next().expect("length checked");
+    let plain_object = if class == ValueClass::Object
+        && classify_plain_schema(object, path)? == Representation::Object
+    {
+        let required = required_names(object, path)?;
+        let declared = object
+            .get("properties")
+            .and_then(Value::as_object)
+            .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default()
+            .union(&required)
+            .cloned()
+            .collect();
+        Some((declared, required))
+    } else {
+        None
+    };
+    Ok(Some(Alternative {
+        class,
+        integer_only: !kinds.contains(&JsonKind::Number),
+        plain_object,
+    }))
 }
 
 fn finite_values(schema: &Value, path: &str) -> Result<Option<Vec<Value>>, GraphqlError> {
@@ -1938,10 +2738,20 @@ fn schema_allows_null(
                     })?;
                     continue;
                 }
-                let Some(kinds) = declared_types(object, "nullable schema")? else {
-                    return Ok(true);
-                };
-                return Ok(kinds.contains(&JsonKind::Null));
+                if let Some(kinds) = declared_types(object, "nullable schema")? {
+                    return Ok(kinds.contains(&JsonKind::Null));
+                }
+                // `anyOf` admits null only through an alternative that does.
+                if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+                    for branch in branches {
+                        if schema_allows_null(branch, definitions, &mut active_references.clone())?
+                        {
+                            return Ok(true);
+                        }
+                    }
+                    return Ok(false);
+                }
+                return Ok(true);
             }
             _ => {
                 return Err(GraphqlError::new(
@@ -2583,7 +3393,9 @@ mod tests {
                     "prefixItems": [{ "type": "string" }, { "type": "boolean" }],
                     "items": false
                 },
-                "Union": { "anyOf": [{ "type": "string" }, { "type": "boolean" }] },
+                "Union": {
+                    "anyOf": [{ "type": "string", "minLength": 2 }, { "type": "string", "pattern": "^x" }]
+                },
                 "Unknown": { "type": "string", "unsupportedAssertion": true },
                 "A": {
                     "type": "object",
@@ -2757,6 +3569,294 @@ mod tests {
         assert!(source.contains("type BagExEntriesItem {"));
         assert!(source.contains("input BagExEntriesItemInput {"));
         assert!(source.contains("exEntries: [BagExEntriesItemInput!]!"));
+    }
+
+    /// The SHACL list-value shape: a node reference or a `@list` object whose
+    /// members are integers or typed literals, with a numeric bound beside the
+    /// member alternatives.
+    fn list_union_schema() -> Value {
+        json!({
+            "$defs": {
+                "Holder": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "ex:members": {
+                            "anyOf": [
+                                {
+                                    "type": "object",
+                                    "properties": { "@id": { "type": "string" } },
+                                    "required": ["@id"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "@list": {
+                                            "type": "array",
+                                            "items": {
+                                                "anyOf": [
+                                                    { "type": "integer" },
+                                                    {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "@type": { "const": "xsd:integer" },
+                                                            "@value": { "type": "string" }
+                                                        },
+                                                        "required": ["@value", "@type"]
+                                                    }
+                                                ],
+                                                "minimum": 0
+                                            }
+                                        }
+                                    },
+                                    "required": ["@list"]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn discriminated_any_of_is_a_one_of_input_and_an_output_union() {
+        let package =
+            emit_graphql(&compiled(&list_union_schema()), &config()).expect("union schema emits");
+        let source = sdl(&package);
+        assert!(
+            source.contains("union HolderExMembers = HolderExMembersId | HolderExMembersList\n"),
+            "{source}"
+        );
+        assert!(
+            source.contains(
+                "input HolderExMembersInput @oneOf {\n  id: HolderExMembersIdInput\n  \
+                 list: HolderExMembersListInput\n}\n"
+            ),
+            "{source}"
+        );
+        assert!(
+            source.contains(
+                "union HolderExMembersListListItem = HolderExMembersListListItemInteger | \
+                 HolderExMembersListListItemObject\n"
+            ),
+            "{source}"
+        );
+        assert!(
+            source.contains(
+                "input HolderExMembersListListItemInput @oneOf {\n  integer: JsonCarrier\n  \
+                 object: HolderExMembersListListItemObjectInput\n}\n"
+            ),
+            "{source}"
+        );
+        assert!(
+            source
+                .contains("type HolderExMembersListListItemInteger {\n  value: JsonCarrier!\n}\n"),
+            "{source}"
+        );
+        assert!(
+            source.contains("list: [HolderExMembersListListItemInput!]!"),
+            "{source}"
+        );
+        let items = "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items";
+        let located = package
+            .losses
+            .entries()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.code.to_string(),
+                    entry
+                        .location
+                        .as_ref()
+                        .and_then(|location| location.subject.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(located.contains(&(
+            "numeric-validation-dropped".to_owned(),
+            format!("{items}/minimum")
+        )));
+        assert!(located.contains(&(
+            "integer-domain-validation-delegated".to_owned(),
+            format!("{items}/anyOf/0/type")
+        )));
+        assert!(
+            located
+                .iter()
+                .all(|(code, _)| code != "union-validation-delegated"),
+            "{located:?}"
+        );
+        assert_eq!(
+            package.names.unions["#/$defs/Holder/properties/ex:members"],
+            vec![
+                GraphqlUnionMemberMap {
+                    branch: 0,
+                    input_field: "id".to_owned(),
+                    output_type: "HolderExMembersId".to_owned(),
+                    wrapped: false,
+                },
+                GraphqlUnionMemberMap {
+                    branch: 1,
+                    input_field: "list".to_owned(),
+                    output_type: "HolderExMembersList".to_owned(),
+                    wrapped: false,
+                },
+            ]
+        );
+
+        let value = json!({
+            "ex:members": {
+                "@list": [0, { "@value": "5", "@type": "xsd:integer" }]
+            }
+        });
+        let input = package
+            .encode_input("Holder", &value)
+            .expect("encodes input");
+        assert_eq!(
+            input,
+            json!({
+                "exMembers": {
+                    "list": {
+                        "list": [
+                            { "integer": 0 },
+                            { "object": { "type": "VALUE_0", "value": "5" } }
+                        ]
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            package.decode_input("Holder", &input).expect("decodes"),
+            value
+        );
+        let output = package
+            .encode_output("Holder", &value)
+            .expect("encodes output");
+        assert_eq!(
+            output,
+            json!({
+                "exMembers": {
+                    "__typename": "HolderExMembersList",
+                    "list": [
+                        { "__typename": "HolderExMembersListListItemInteger", "value": 0 },
+                        {
+                            "__typename": "HolderExMembersListListItemObject",
+                            "type": "VALUE_0",
+                            "value": "5"
+                        }
+                    ]
+                }
+            })
+        );
+        assert_eq!(
+            package.decode_output("Holder", &output).expect("decodes"),
+            value
+        );
+        let reference = json!({ "ex:members": { "@id": "https://example.org/list" } });
+        let input = package.encode_input("Holder", &reference).expect("encodes");
+        assert_eq!(
+            input,
+            json!({ "exMembers": { "id": { "id": "https://example.org/list" } } })
+        );
+        assert_eq!(
+            package.decode_input("Holder", &input).expect("decodes"),
+            reference
+        );
+
+        // A member of a kind no alternative admits reaches GraphQL unchanged,
+        // where a @oneOf input object rejects it.
+        let stray = json!({ "ex:members": { "@list": [0, "x"] } });
+        assert_eq!(
+            package.encode_input("Holder", &stray).expect("encodes"),
+            json!({ "exMembers": { "list": { "list": [{ "integer": 0 }, "x"] } } })
+        );
+        assert!(package.encode_output("Holder", &stray).is_err());
+        // An object carrying both alternatives' required keys, or neither, is
+        // carried by no single @oneOf field.
+        for object in [
+            json!({ "ex:members": { "@id": "x", "@list": [] } }),
+            json!({ "ex:members": { "other": 1 } }),
+        ] {
+            assert!(package.encode_input("Holder", &object).is_err(), "{object}");
+        }
+        for malformed in [
+            json!({ "exMembers": {} }),
+            json!({ "exMembers": { "id": { "id": "x" }, "list": { "list": [] } } }),
+            json!({ "exMembers": { "other": 1 } }),
+        ] {
+            assert!(
+                package.decode_input("Holder", &malformed).is_err(),
+                "{malformed}"
+            );
+        }
+        assert!(
+            package
+                .decode_output("Holder", &json!({ "exMembers": { "id": "x" } }))
+                .is_err(),
+            "a union output value names its member"
+        );
+
+        let imported = import_graphql_package(&package, &import_config())
+            .expect("the verified package imports");
+        assert!(!imported.shapes.node_shapes.is_empty());
+    }
+
+    #[test]
+    fn overlapping_any_of_alternatives_stay_delegated() {
+        for alternatives in [
+            json!([{ "type": "string" }, { "type": "string", "minLength": 1 }]),
+            json!([{ "type": "integer" }, { "type": "number" }]),
+            json!([{ "type": "string" }, { "type": ["string", "null"] }]),
+            json!([
+                { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"] },
+                { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"] }
+            ]),
+            json!([{ "type": "string" }, {}]),
+        ] {
+            let schema = json!({ "$defs": { "Choice": { "anyOf": alternatives } } });
+            let package = emit_graphql(&compiled(&schema), &config()).expect("schema emits");
+            assert_eq!(
+                package.names.definitions["Choice"].input_type,
+                "JsonCarrier"
+            );
+            assert!(package.names.unions.is_empty());
+            assert!(package.losses.entries().iter().any(|entry| {
+                entry.code == "union-validation-delegated"
+                    && entry
+                        .location
+                        .as_ref()
+                        .and_then(|location| location.subject.as_deref())
+                        == Some("#/$defs/Choice/anyOf")
+            }));
+        }
+        // Kinds a union admits beside a keyword judging another kind make the
+        // keyword vacuous: no loss is recorded for it.
+        let schema = json!({
+            "$defs": {
+                "Choice": {
+                    "anyOf": [{ "type": "string" }, { "type": "boolean" }],
+                    "minimum": 3
+                }
+            }
+        });
+        let package = emit_graphql(&compiled(&schema), &config()).expect("schema emits");
+        assert!(
+            package.losses.is_empty(),
+            "{}",
+            package.losses.render_json()
+        );
+        assert_eq!(
+            package.names.definitions["Choice"].input_type,
+            "ChoiceInput"
+        );
+        assert_eq!(
+            package
+                .encode_input("Choice", &json!(true))
+                .expect("encodes"),
+            json!({ "boolean": true })
+        );
     }
 
     #[test]

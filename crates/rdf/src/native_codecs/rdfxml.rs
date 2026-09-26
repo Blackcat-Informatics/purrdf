@@ -67,7 +67,7 @@ impl RdfCodec for RdfXmlCodec {
         base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        super::parse::parse_rdfxml_without_panicking(text, base)
+        super::parse::parse_rdfxml_without_panicking(text, base, None)
     }
 
     fn serialize_into(
@@ -186,9 +186,14 @@ struct XmlRow {
 /// return the scope holds the base in force at the end of the document. `xml:base` deeper
 /// in the tree is subtree-scoped and has popped by then, which is exactly right — a base
 /// that governed one element never governed the document.
-pub(super) fn parse_rdfxml_to_dataset(
+///
+/// The document's namespace declarations are also written into `namespaces` when it
+/// is `Some` (see [`declared_namespaces`]); `None` — the hot path — walks nothing
+/// extra.
+pub(super) fn parse_rdfxml_document(
     text: &str,
     base: &mut purrdf_iri::BaseScope,
+    namespaces: Option<&mut Vec<(String, String)>>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
     // nested document, so the nesting is measured on the SOURCE and refused here. This is
@@ -210,7 +215,58 @@ pub(super) fn parse_rdfxml_to_dataset(
         ..Default::default()
     };
     *base = parser.parse_document(document.root_element(), &context)?;
-    parser.freeze()
+    let dataset = parser.freeze()?;
+    if let Some(namespaces) = namespaces {
+        *namespaces = declared_namespaces(document.root_element());
+    }
+    Ok(dataset)
+}
+
+/// The `xmlns` declarations of an RDF/XML document, as the XML parser resolved them:
+/// one `(prefix, namespace)` pair per prefix, sorted by prefix, bound to the namespace
+/// of its LAST declaration in document order — the shape Turtle's `@prefix` map takes.
+///
+/// * **Declarations, not text.** Namespaces come from the XML parser's own scoping of
+///   each element, so `xmlns:evil="…"` inside element content or an attribute value
+///   is character data and never appears.
+/// * **Not the literal.** The content of an `rdf:parseType="Literal"` property is the
+///   literal's value, so declarations on the elements inside it are part of that
+///   value and are not reported; those on the property element itself are.
+/// * **A declaration is a change of scope.** An element declares a prefix when its
+///   in-scope namespace for it differs from its parent's (or the parent has none). An
+///   `xmlns:p` restating the binding already in scope changes nothing and is not
+///   counted, since the XML parser resolves it to the same scope as no declaration.
+/// * **The default namespace** (`xmlns="…"`) is reported under the empty prefix `""`,
+///   as Turtle reports `@prefix : <…>`. `xmlns=""` undeclares it, so a document whose
+///   last word on the default namespace is `xmlns=""` reports none.
+/// * The reserved `xml` prefix is predeclared by XML itself and is never reported.
+fn declared_namespaces(root: Node<'_, '_>) -> Vec<(String, String)> {
+    let mut last: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut pending: Vec<(Node<'_, '_>, Option<Node<'_, '_>>)> = vec![(root, None)];
+    // Document order: a stack popped depth-first, children pushed in reverse.
+    while let Some((element, parent)) = pending.pop() {
+        for namespace in element.namespaces() {
+            let uri = namespace.uri();
+            if namespace.name() == Some("xml") || uri == XML_NS {
+                continue;
+            }
+            let inherited = parent.and_then(|p| p.lookup_namespace_uri(namespace.name()));
+            if inherited == Some(uri) {
+                continue;
+            }
+            let prefix = namespace.name().unwrap_or_default().to_owned();
+            last.insert(prefix, (!uri.is_empty()).then(|| uri.to_owned()));
+        }
+        if attr_rdf(element, RDF_PARSE_TYPE) == Some("Literal") {
+            continue;
+        }
+        for child in element.children().filter(Node::is_element).rev() {
+            pending.push((child, Some(element)));
+        }
+    }
+    last.into_iter()
+        .filter_map(|(prefix, uri)| uri.map(|uri| (prefix, uri)))
+        .collect()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1830,7 +1886,7 @@ mod tests {
 
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
-        parse_rdfxml_to_dataset(text, &mut scope(base)).expect("parse rdf/xml")
+        parse_rdfxml_document(text, &mut scope(base), None).expect("parse rdf/xml")
     }
 
     /// An `xml:lang` document with `lang` on the literal-bearing property.
@@ -1882,7 +1938,7 @@ mod tests {
             ("x-purrdf-afri!", "x-purrdf-afrikaans"),
         ];
         for (refused, accepted) in pairs {
-            let error = parse_rdfxml_to_dataset(&lang_document(refused), &mut scope(None))
+            let error = parse_rdfxml_document(&lang_document(refused), &mut scope(None), None)
                 .expect_err(&format!("xml:lang={refused:?} must be refused"));
             assert!(
                 error.message.contains("invalid language tag"),
@@ -1895,7 +1951,7 @@ mod tests {
                 error.code
             );
             assert!(
-                parse_rdfxml_to_dataset(&lang_document(accepted), &mut scope(None)).is_ok(),
+                parse_rdfxml_document(&lang_document(accepted), &mut scope(None), None).is_ok(),
                 "xml:lang={accepted:?} must still be accepted"
             );
         }
@@ -1927,7 +1983,7 @@ mod tests {
             "en-x",
         ] {
             assert!(
-                parse_rdfxml_to_dataset(&lang_document(accepted), &mut scope(None)).is_ok(),
+                parse_rdfxml_document(&lang_document(accepted), &mut scope(None), None).is_ok(),
                 "xml:lang={accepted:?} must be accepted"
             );
         }
@@ -1965,7 +2021,7 @@ mod tests {
         );
 
         for (name, text) in [("node striping", &striped), ("XML literal", &xml_literal)] {
-            let error = parse_rdfxml_to_dataset(text, &mut scope(None))
+            let error = parse_rdfxml_document(text, &mut scope(None), None)
                 .err()
                 .unwrap_or_else(|| panic!("{name}: a 20 000-deep document must be refused"));
             assert!(
