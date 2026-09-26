@@ -837,8 +837,35 @@ Related crates:
 
 `Shapes` retains the frozen `Arc<RdfDataset>` it was parsed from, and
 `Shapes::dataset()` borrows it. A consumer that needs the RDF behind a shapes
-graph — to union it with an ontology, to fold `owl:imports`, to hand it to
-SPARQL — reads it from there instead of reparsing the source text.
+graph — to union it with an ontology, to hand it to SPARQL — reads it from there
+instead of reparsing the source text. It is the shapes graph's whole `owl:imports`
+closure, as the constructor resolved it.
+
+## A shapes graph is its `owl:imports` closure
+
+Every `Shapes` constructor resolves the shapes graph's `owl:imports` closure through
+`imports::resolve_shapes_imports` before it reads a shape: an import is resolved by a
+document in the caller's `ShapesImports` table, by the IRI the shapes document was read
+under, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology
+whose `owl:versionIRI` is `<X>`). The supplied documents are merged in, and an import
+nothing resolves — or a table entry nothing imports — is refused with the typed
+`ShapesError::Imports`. So a `Shapes` value is complete by construction, and every
+entry point built on one gives the same verdict on every host. PurRDF fetches nothing.
+
+```rust
+use purrdf_shapes::{ShapesImports, engine};
+
+let shapes_ttl = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+    <http://example.org/shapes> owl:imports <http://example.org/lib> .\n";
+let lib_ttl = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    <http://example.org/lib#S> a sh:NodeShape .\n";
+
+let imports = ShapesImports::from_turtle(&[("http://example.org/lib", lib_ttl)])
+    .expect("the imported document parses");
+let shapes = engine::parse_shapes_with_config(shapes_ttl, None, None, &imports)
+    .expect("every import resolves");
+assert_eq!(shapes.node_shapes.len(), 1);
+```
 
 The accessor returns a borrow rather than a clone so the caller decides whether
 to pay for retention; `Arc::clone(shapes.dataset())` keeps the dataset alive

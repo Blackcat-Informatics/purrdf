@@ -59,10 +59,19 @@ let data = r#"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-synta
 <http://example.org/alice> <http://example.org/age> "nope" .
 "#;
 
-let sarif = validate_to_sarif_string(shapes, data, &SarifOptions::default())
+// No shapes base, default options, and an empty `owl:imports` table.
+let sarif = validate_to_sarif_string(shapes, None, data, &SarifOptions::default(), &[])
     .expect("sarif produced");
 assert!(sarif.contains("\"version\": \"2.1.0\""));
 ```
+
+Every shapes-graph entry point here takes the shapes graph's `owl:imports` table:
+`(ontology IRI, Turtle document)` pairs, each document parsed under its IRI. A shapes
+graph that imports a document the table does not supply — and does not already
+declare (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) — is
+refused with the typed `ShapesError::Imports`, the same refusal the Python,
+WebAssembly and C hosts carry, rather than validated without it. PurRDF fetches
+nothing.
 
 Lower-level entry points build a `SarifLog` value instead of a string —
 `build_report_sarif` for an existing SHACL `ValidationReport`, and
