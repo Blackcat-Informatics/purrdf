@@ -75,7 +75,7 @@ delta-backed view whose pattern probe is type-erased:
 | surface | allocations per focus node, governed |
 |---|---:|
 | `sh:sparql` constraint, governed | 68 |
-| custom `sh:ask` component, governed | 138 |
+| custom `sh:ask` component, governed | 136 |
 | custom `sh:select` component, governed | 81 |
 | `sh:expression` function call, governed | 152 |
 
@@ -498,7 +498,10 @@ per-surface saving therefore follows the number of runs per focus node, and the
 `sh:expression` call — whose argument terms are node-expression outputs and never
 had an id — does not move at all, which is what says the drop is this change and
 not something beneath it: 51 / 114 / 64 / 127 ungoverned, 68 / 138 / 81 / 152
-governed, which is where both stand now.
+governed. The governed `sh:ask` figure has since dropped to 136 for a reason of
+its own: its validator's `&&` is one algebra node holding both operands in one
+vector, where the binary node boxed each, so the per-run copy of the substituted
+query allocates once less on each of the two value nodes.
 
 An id is meaningful only against the dataset that minted it, so the door makes a
 cross-dataset binding impossible rather than merely refused: the id and the view

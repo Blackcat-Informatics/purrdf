@@ -570,9 +570,8 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             expr: crate::stack::clone::expression(expr),
             inner: Box::new(sanitize_forwarded_body(inner)),
         },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(sanitize_forwarded_body(left)),
-            right: Box::new(sanitize_forwarded_body(right)),
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms.iter().map(sanitize_forwarded_body).collect(),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),

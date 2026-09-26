@@ -7,36 +7,38 @@ Select {
         inner: Extend {
             inner: LeftJoin {
                 left: Union {
-                    left: Bgp {
-                        patterns: [
-                            TriplePattern {
-                                subject: Variable(
-                                    ?a,
-                                ),
-                                predicate: NamedNode(
-                                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
-                                ),
-                                object: NamedNode(
-                                    <https://x/X>,
-                                ),
-                            },
-                        ],
-                    },
-                    right: Bgp {
-                        patterns: [
-                            TriplePattern {
-                                subject: Variable(
-                                    ?a,
-                                ),
-                                predicate: NamedNode(
-                                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
-                                ),
-                                object: NamedNode(
-                                    <https://x/Y>,
-                                ),
-                            },
-                        ],
-                    },
+                    arms: [
+                        Bgp {
+                            patterns: [
+                                TriplePattern {
+                                    subject: Variable(
+                                        ?a,
+                                    ),
+                                    predicate: NamedNode(
+                                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                                    ),
+                                    object: NamedNode(
+                                        <https://x/X>,
+                                    ),
+                                },
+                            ],
+                        },
+                        Bgp {
+                            patterns: [
+                                TriplePattern {
+                                    subject: Variable(
+                                        ?a,
+                                    ),
+                                    predicate: NamedNode(
+                                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                                    ),
+                                    object: NamedNode(
+                                        <https://x/Y>,
+                                    ),
+                                },
+                            ],
+                        },
+                    ],
                 },
                 right: Bgp {
                     patterns: [

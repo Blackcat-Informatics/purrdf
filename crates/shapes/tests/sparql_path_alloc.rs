@@ -559,7 +559,11 @@ const CASES: &[SparqlCase] = &[
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
         per_focus_node: 114,
-        governed_per_focus_node: 138,
+        // The validator's `&&` is one node holding its two operands in one vector,
+        // where the binary node boxed each: the governed lane's per-run copy of the
+        // substituted query allocates once less for it, on each of the two value
+        // nodes.
+        governed_per_focus_node: 136,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,

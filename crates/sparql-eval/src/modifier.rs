@@ -496,10 +496,9 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
             yields_nothing_without_rows_in_the_active_graph(left)
                 || yields_nothing_without_rows_in_the_active_graph(right)
         }
-        GraphPattern::Union { left, right } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-                && yields_nothing_without_rows_in_the_active_graph(right)
-        }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .all(yields_nothing_without_rows_in_the_active_graph),
         GraphPattern::LeftJoin {
             left,
             right: _,

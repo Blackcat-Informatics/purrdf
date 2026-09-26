@@ -30,7 +30,7 @@
 //!   bracketted — see `Level`), property paths do the same
 //!   ([`crate::algebra::PropertyPathExpression`]'s `Display`), a `UNION` chain
 //!   or a run of `OPTIONAL`/`MINUS`/`BIND` clauses is written as the one flat
-//!   sequence the parser nests itself, and a sub-`SELECT` is never braced
+//!   sequence the parser rebuilds itself, and a sub-`SELECT` is never braced
 //!   twice. Such a brace is one the source text needed too, so the text
 //!   forwarded for a body the parser admitted is admitted again — bracketing
 //!   every operator once turned a 440-operator `FILTER` into a refusal, which a
@@ -50,8 +50,8 @@
 use core::fmt::Write as _;
 
 use crate::algebra::{
-    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
-    PropertyFunctionCall,
+    AggregateExpression, AggregateFunction, ArithmeticOperator, Expression, Function, GraphPattern,
+    OrderExpression, PropertyFunctionCall,
 };
 use crate::ast::{
     BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
@@ -315,21 +315,7 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             fmt_expr(s, expr);
             s.push(')');
         }
-        GraphPattern::Union { left, right } => {
-            // `{ a } UNION { b } UNION { c }` is `Union(Union(a, b), c)`: the
-            // parser's arm loop nests to the left, so a left `Union` operand is
-            // written as the leading arms of one chain rather than as a braced
-            // arm of its own — which would cost a nesting level per arm. A
-            // right `Union` operand is a braced arm, as it must have been
-            // written.
-            if matches!(**left, GraphPattern::Union { .. }) {
-                fmt_group_body(s, left);
-            } else {
-                fmt_braced_group(s, left);
-            }
-            s.push_str(" UNION ");
-            fmt_braced_group(s, right);
-        }
+        GraphPattern::Union { arms } => fmt_union(s, arms),
         GraphPattern::Graph { name, inner } => {
             s.push_str("GRAPH ");
             fmt_named_node_pattern(s, name);
@@ -438,6 +424,35 @@ fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
     }
 }
 
+/// Emit a [`GraphPattern::Union`]'s arms as the one flat `{ a } UNION { b } UNION …`
+/// chain the parser reads back into one node with the same arms.
+///
+/// A leading arm that is itself a chain of two or more arms is written as the
+/// leading arms of this chain rather than as a braced arm of its own: the parser
+/// folds it into the same node, and bag union is associative, so the solutions
+/// are the same sequence either way. Every later arm is braced, as it must have
+/// been written. The two shapes the parser never builds keep their meaning: no
+/// arm is the empty sequence, written as an empty `VALUES` block, and one arm is
+/// that arm, written as a group.
+fn fmt_union(s: &mut String, arms: &[GraphPattern]) {
+    let Some((first, rest)) = arms.split_first() else {
+        fmt_values(s, &[], &[]);
+        return;
+    };
+    if rest.is_empty() {
+        fmt_braced_group(s, first);
+        return;
+    }
+    match first {
+        GraphPattern::Union { arms: leading } if leading.len() >= 2 => fmt_union(s, leading),
+        _ => fmt_braced_group(s, first),
+    }
+    for arm in rest {
+        s.push_str(" UNION ");
+        fmt_braced_group(s, arm);
+    }
+}
+
 /// Does this pattern contain a [`GraphPattern::PropertyFunction`] anywhere in the
 /// group structure it renders inline (it does not descend into `Expression`s,
 /// which are always emitted inside their own braces)?
@@ -446,11 +461,11 @@ fn contains_property_function(p: &GraphPattern) -> bool {
         GraphPattern::PropertyFunction(_) => true,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             contains_property_function(left) || contains_property_function(right)
         }
+        GraphPattern::Union { arms } => arms.iter().any(contains_property_function),
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
@@ -1150,16 +1165,22 @@ impl Level {
 /// aggregate call, a primary — the same level the bare variable has.
 fn expr_level(e: &Expression) -> Level {
     match e {
-        Expression::Or(..) => Level::Or,
-        Expression::And(..) => Level::And,
+        // An empty chain is its identity, the literal `false`/`true`.
+        Expression::Or(operands) | Expression::And(operands) if operands.is_empty() => {
+            Level::Primary
+        }
+        Expression::Or(_) => Level::Or,
+        Expression::And(_) => Level::And,
+        Expression::Arithmetic(first, steps) => match steps.last() {
+            None => expr_level(first),
+            Some((op, _)) => arithmetic_level(*op),
+        },
         Expression::Equal(..)
         | Expression::Greater(..)
         | Expression::GreaterOrEqual(..)
         | Expression::Less(..)
         | Expression::LessOrEqual(..)
         | Expression::In(..) => Level::Relational,
-        Expression::Add(..) | Expression::Subtract(..) => Level::Additive,
-        Expression::Multiply(..) | Expression::Divide(..) => Level::Multiplicative,
         Expression::Not(inner) => match **inner {
             Expression::Equal(..) | Expression::In(..) => Level::Relational,
             Expression::Exists(_) => Level::Primary,
@@ -1257,8 +1278,9 @@ fn fmt_expr_bare(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
         Expression::Bound(v) => {
             let _ = write!(s, "BOUND({})", VarRef(v));
         }
-        Expression::Or(a, b) => fmt_left_assoc(s, a, "||", b, Level::Or, group),
-        Expression::And(a, b) => fmt_left_assoc(s, a, "&&", b, Level::And, group),
+        Expression::Or(operands) => fmt_logical_chain(s, operands, "||", Level::Or, group),
+        Expression::And(operands) => fmt_logical_chain(s, operands, "&&", Level::And, group),
+        Expression::Arithmetic(first, steps) => fmt_arithmetic(s, first, steps, group),
         Expression::Equal(a, b) => fmt_relational(s, a, "=", b, group),
         Expression::SameTerm(a, b) => {
             s.push_str("sameTerm(");
@@ -1271,10 +1293,6 @@ fn fmt_expr_bare(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
         Expression::GreaterOrEqual(a, b) => fmt_relational(s, a, ">=", b, group),
         Expression::Less(a, b) => fmt_relational(s, a, "<", b, group),
         Expression::LessOrEqual(a, b) => fmt_relational(s, a, "<=", b, group),
-        Expression::Add(a, b) => fmt_left_assoc(s, a, "+", b, Level::Additive, group),
-        Expression::Subtract(a, b) => fmt_left_assoc(s, a, "-", b, Level::Additive, group),
-        Expression::Multiply(a, b) => fmt_left_assoc(s, a, "*", b, Level::Multiplicative, group),
-        Expression::Divide(a, b) => fmt_left_assoc(s, a, "/", b, Level::Multiplicative, group),
         Expression::UnaryPlus(a) => fmt_prefix(s, '+', a, group),
         Expression::UnaryMinus(a) => fmt_prefix(s, '-', a, group),
         Expression::Not(a) => match &**a {
@@ -1315,20 +1333,86 @@ fn fmt_expr_bare(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
     }
 }
 
-/// Emit `a OP b` for a left-associative operator at `level`: the left operand
-/// may be any expression of that level (the parser's loop re-nests it to the
-/// left), the right one must bind tighter.
-fn fmt_left_assoc(
+/// The level an arithmetic step's operator renders at.
+const fn arithmetic_level(op: ArithmeticOperator) -> Level {
+    if op.is_multiplicative() {
+        Level::Multiplicative
+    } else {
+        Level::Additive
+    }
+}
+
+/// Emit an [`Expression::Or`]/[`Expression::And`] chain as `a OP b OP c …`, the
+/// flat spelling the parser folds back into one node with the same operands.
+///
+/// The first operand may be any expression of the chain's level (a leading chain
+/// of the same operator is folded into this one on re-parse, which the
+/// three-valued fold makes the same value); every later operand must bind
+/// tighter. The shapes the parser never builds keep their meaning: an empty
+/// chain is its identity (`false` for `||`, `true` for `&&`), and a one-operand
+/// chain is that identity applied to the operand.
+fn fmt_logical_chain(
     s: &mut String,
-    a: &Expression,
+    operands: &[Expression],
     op: &str,
-    b: &Expression,
     level: Level,
     group: Option<GroupSpec<'_>>,
 ) {
-    fmt_expr_at(s, a, level, group);
-    let _ = write!(s, " {op} ");
-    fmt_expr_at(s, b, level.tighter(), group);
+    let identity = if level == Level::Or { "false" } else { "true" };
+    let Some((first, rest)) = operands.split_first() else {
+        s.push_str(identity);
+        return;
+    };
+    if rest.is_empty() {
+        let _ = write!(s, "{identity} {op} ");
+        fmt_expr_at(s, first, level.tighter(), group);
+        return;
+    }
+    fmt_expr_at(s, first, level, group);
+    for operand in rest {
+        let _ = write!(s, " {op} ");
+        fmt_expr_at(s, operand, level.tighter(), group);
+    }
+}
+
+/// Emit an [`Expression::Arithmetic`] chain, the left spine of a binary operator
+/// tree, as the text the parser folds back into the same chain.
+///
+/// Each step's operand must bind tighter than its operator, as the right operand
+/// of a left-associative operator does. The value before a step is written bare
+/// when its last operator binds at least as tightly as the step's, and bracketed
+/// otherwise: `a + b` followed by `* c` is `(a + b) * c`. All those brackets open
+/// at the start of the chain, one per additive-to-multiplicative change, and each
+/// closes before the step that needs it — the brackets the source text needed
+/// too, and no others, so a chain of any length the parser admitted renders into
+/// text it admits again.
+fn fmt_arithmetic(
+    s: &mut String,
+    first: &Expression,
+    steps: &[(ArithmeticOperator, Expression)],
+    group: Option<GroupSpec<'_>>,
+) {
+    let Some(((first_op, _), _)) = steps.split_first() else {
+        fmt_expr_bare(s, first, group);
+        return;
+    };
+    let brackets = steps
+        .windows(2)
+        .filter(|pair| !pair[0].0.is_multiplicative() && pair[1].0.is_multiplicative())
+        .count();
+    for _ in 0..brackets {
+        s.push('(');
+    }
+    fmt_expr_at(s, first, arithmetic_level(*first_op), group);
+    let mut previous: Option<ArithmeticOperator> = None;
+    for (op, operand) in steps {
+        if previous.is_some_and(|before| !before.is_multiplicative() && op.is_multiplicative()) {
+            s.push(')');
+        }
+        let _ = write!(s, " {} ", op.symbol());
+        fmt_expr_at(s, operand, arithmetic_level(*op).tighter(), group);
+        previous = Some(*op);
+    }
 }
 
 /// Emit `a OP b` for a relational operator: both operands are
@@ -2519,9 +2603,8 @@ mod tests {
                 expr: expr.clone(),
                 inner: Box::new(normalize(inner)),
             },
-            GraphPattern::Union { left, right } => GraphPattern::Union {
-                left: Box::new(normalize(left)),
-                right: Box::new(normalize(right)),
+            GraphPattern::Union { arms } => GraphPattern::Union {
+                arms: arms.iter().map(normalize).collect(),
             },
             GraphPattern::Graph { name, inner } => GraphPattern::Graph {
                 name: name.clone(),
@@ -2624,8 +2707,8 @@ mod tests {
             subject_args: vec![TermPattern::Variable(Variable::new("o"))],
             object_args: vec![TermPattern::Variable(Variable::new("z"))],
         };
-        let union = GraphPattern::Union {
-            left: Box::new(GraphPattern::Bgp {
+        let union = GraphPattern::union(
+            GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
@@ -2633,8 +2716,8 @@ mod tests {
                     )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
-            }),
-            right: Box::new(GraphPattern::Bgp {
+            },
+            GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
@@ -2642,8 +2725,8 @@ mod tests {
                     )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
-            }),
-        };
+            },
+        );
         let body = GraphPattern::Lateral {
             left: Box::new(union),
             right: Box::new(GraphPattern::PropertyFunction(call)),

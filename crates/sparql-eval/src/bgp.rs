@@ -1510,9 +1510,19 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 )?;
             }
         }
-        GraphPattern::Union { left, right }
-        | GraphPattern::LeftJoin { left, right, .. }
-        | GraphPattern::Minus { left, right } => {
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                survey_pattern_plans(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    arm,
+                    relations,
+                    survey,
+                )?;
+            }
+        }
+        GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
             survey_pattern_plans(
                 dataset,
                 active_dataset,

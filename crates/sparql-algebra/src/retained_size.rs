@@ -108,7 +108,8 @@ inline!(
     usize,
     u32,
     crate::algebra::PurrdfFn,
-    crate::algebra::CdtFn
+    crate::algebra::CdtFn,
+    crate::algebra::ArithmeticOperator
 );
 fields!(TriplePattern {
     subject,
@@ -238,8 +239,8 @@ impl HeapBytes for GraphPattern {
             ]),
             Self::Join { left, right }
             | Self::Lateral { left, right }
-            | Self::Union { left, right }
             | Self::Minus { left, right } => sum([left.heap_bytes(depth), right.heap_bytes(depth)]),
+            Self::Union { arms } => arms.heap_bytes(depth),
             Self::LeftJoin {
                 left,
                 right,
@@ -333,18 +334,16 @@ impl HeapBytes for Expression {
             Self::NamedNode(x) => x.heap_bytes(depth),
             Self::Literal(x) => x.heap_bytes(depth),
             Self::Variable(x) | Self::Bound(x) => x.heap_bytes(depth),
-            Self::Or(a, b)
-            | Self::And(a, b)
-            | Self::Equal(a, b)
+            Self::Or(operands) | Self::And(operands) => operands.heap_bytes(depth),
+            Self::Arithmetic(first, steps) => {
+                sum([first.heap_bytes(depth), steps.heap_bytes(depth)])
+            }
+            Self::Equal(a, b)
             | Self::SameTerm(a, b)
             | Self::Greater(a, b)
             | Self::GreaterOrEqual(a, b)
             | Self::Less(a, b)
-            | Self::LessOrEqual(a, b)
-            | Self::Add(a, b)
-            | Self::Subtract(a, b)
-            | Self::Multiply(a, b)
-            | Self::Divide(a, b) => sum([a.heap_bytes(depth), b.heap_bytes(depth)]),
+            | Self::LessOrEqual(a, b) => sum([a.heap_bytes(depth), b.heap_bytes(depth)]),
             Self::UnaryPlus(x) | Self::UnaryMinus(x) | Self::Not(x) => x.heap_bytes(depth),
             Self::In(x, values) => sum([x.heap_bytes(depth), values.heap_bytes(depth)]),
             Self::If(a, b, c) => sum([

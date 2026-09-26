@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::algebra::{
-    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
-    GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
+    AggregateExpression, AggregateFunction, ArithmeticOperator, Expression, Function, GraphPattern,
+    GraphTarget, GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
     PropertyPathExpression, Query, QueryDataset, SparqlVersion, Update, UsingClause,
 };
 use crate::ast::{
@@ -103,30 +103,35 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = MAX_NESTING_DEPTH;
 /// The tallest expression or property-path tree the parser builds, counted in levels
 /// from the outermost enclosing construct: four times [`MAX_NESTING_DEPTH`].
 ///
-/// Operator chains (`a || b || …`, `a + b - …`, `p1 / p2 | …`) are parsed by a loop, so
-/// [`MAX_NESTING_DEPTH`] never sees them, yet every operator makes the tree one level
-/// taller — and the tree's height is the recursion depth of every walk over it,
-/// including its own `Drop`. Unbounded, a 100 000-operator chain aborted a 2 MiB native
-/// stack. Each operator, relational wrapper, path modifier and `NOT EXISTS` is charged
-/// here instead, through [`Parser::charge_height`]. A chain costs no parser stack, only
-/// the walkers' much smaller frames (the parse of a 512-tall chain needs 48 KiB natively
-/// and 6 KiB on wasm32), so the budget is wider than the recursion budget. Evaluating
-/// the tallest chain it admits takes about 0.92 KiB of wasm32 shadow stack per operator,
-/// 479 KiB in all: half the synchronous lane's stack, and inside the smallest
-/// asynchronous region, which it answers on. It is the same number
-/// [`crate::Query::validate`] admits for expression, path and term nesting, and wide
-/// enough that a generated `?x = <a> || ?x = <b> || …` of several hundred alternatives
-/// still parses.
+/// Some levels are not recursion of the parser, so [`MAX_NESTING_DEPTH`] never sees
+/// them: a relational operator (`!=` and `NOT IN` are two levels), an operator
+/// chain, a path operator or modifier, and `NOT EXISTS`. Each is charged here instead,
+/// through [`Parser::charge_height`], because the tree's height is the recursion depth
+/// of every walk over it, including its own `Drop`. An expression operator chain
+/// (`a || b || …`, `a && b && …`, `a + b - …`, `a * b / …`) is ONE n-ary node, one
+/// level above its tallest operand however long it is, so a generated
+/// `?x = <a> || ?x = <b> || …` of ten thousand alternatives is two levels tall. A
+/// property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) is still a binary tree one level
+/// taller per operator; unbounded, a 100 000-operator path chain aborted a 2 MiB
+/// native stack. These levels cost no parser stack, only the walkers' much smaller
+/// frames (the parse of a 512-tall tree needs 48 KiB natively and 6 KiB on wasm32),
+/// so the budget is wider than the recursion budget. Evaluating the tallest tree it
+/// admits takes about 0.92 KiB of wasm32 shadow stack per level, 479 KiB in all: half
+/// the synchronous lane's stack, and inside the smallest asynchronous region, which it
+/// answers on. It is the same number [`crate::Query::validate`] admits for expression,
+/// path and term nesting.
 pub(crate) const MAX_EXPRESSION_HEIGHT: usize = 4 * MAX_NESTING_DEPTH;
 
 /// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
 /// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
-/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct.
+/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct
+/// along any one run of arms: the arms of one `UNION` are charged from the
+/// same count, and the chain keeps the largest arm's charge, not their sum.
 ///
 /// [`MAX_GRAPH_PATTERN_DEPTH`] bounds `{ … }` BRACE nesting only. It does
 /// nothing for a run of SIBLING operators at one brace depth — `OPTIONAL { }
-/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, a `UNION`-arm run at
-/// one `{ … }` boundary, or a run of non-BGP triples-block elements (e.g.
+/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, or a run of non-BGP
+/// triples-block elements (e.g.
 /// complex property-path triples, which `join` cannot flatten the way it
 /// flattens adjacent `Bgp`s) — each of which grows the algebra tree by one
 /// level PER SIBLING while `{ … }` nesting stays at 1. A query built from N
@@ -138,13 +143,16 @@ pub(crate) const MAX_EXPRESSION_HEIGHT: usize = 4 * MAX_NESTING_DEPTH;
 /// around the WHERE pattern, built by a loop with no brace at all.
 ///
 /// This limit closes that gap at its source: every site in this module that
-/// can grow the algebra tree by repetition — the group-parsing loop, its
-/// nested `UNION`-arm loop, a triples block's non-BGP (`Path`/property-function)
-/// elements, and the three projection/grouping/having list loops above —
-/// charges one unit against this budget per node it is about to build, and
-/// the parse hard-fails with a typed [`ParseError`] the instant the budget is
-/// exhausted, rather than building the (N+1)-th node. Because every node that
-/// could deepen the tree is charged, capping the TOTAL count also caps the
+/// can grow the algebra tree by repetition — the group-parsing loop, a
+/// triples block's non-BGP (`Path`/property-function) elements, and the three
+/// projection/grouping/having list loops above — charges one unit against
+/// this budget per node it is about to build, and the parse hard-fails with a
+/// typed [`ParseError`] the instant the budget is exhausted, rather than
+/// building the (N+1)-th node. A `UNION` chain is the exception that is not
+/// one: its arms are ONE `GraphPattern::Union` node, one level above them
+/// however many there are, so a run of arms is charged as its tallest arm and
+/// a generated chain of ten thousand branches parses. Because every node that
+/// could deepen the tree is charged, capping the count also caps the
 /// tree's maximum root-to-leaf HEIGHT by the same number — which is what
 /// actually matters: that height is the native-stack recursion depth of
 /// every downstream consumer that walks the parsed tree by ordinary
@@ -974,12 +982,14 @@ impl<'a> Parser<'a, '_> {
     /// depth) against [`MAX_EXPRESSION_HEIGHT`], refusing it with the same typed
     /// nesting error [`Self::nested`] raises.
     ///
-    /// Operator chains (`a || b || …`, `a + b - …`, `p1 / p2 / …`) are parsed by a
-    /// loop, not by recursion, so [`Self::nested`] never sees them — yet each operator
-    /// makes the tree one level taller, and a tree's height is the recursion depth of
+    /// Operators (`a = b`, `a || b || …`, `p1 / p2 / …`) are parsed by a loop, not by
+    /// recursion, so [`Self::nested`] never sees them — yet a node built above an
+    /// operand is a level of the tree, and a tree's height is the recursion depth of
     /// everything that walks it afterwards, its own `Drop` included. Every node the
     /// expression and property-path productions build above an operand they measured
-    /// is charged here before it is built.
+    /// is charged here before it is built: an n-ary expression chain as one level
+    /// above its tallest operand, a binary path operator as one level above both of
+    /// its operands.
     fn charge_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
         let reach = self.nesting_depth + height;
         if reach > MAX_EXPRESSION_HEIGHT {
@@ -2864,19 +2874,23 @@ impl<'a> Parser<'a, '_> {
             // about to fold in) exactly one more combinator node onto `g`.
             self.charge_pattern_nodes(1)?;
             if self.at(&Token::LBrace) {
+                // Every arm joins the ONE `Union` node this element builds
+                // (`GraphPattern::union`), so a chain of any length is one
+                // combinator one level above its arms, and the per-element
+                // charge above already paid for it. The arms are siblings, so
+                // the tree is only as tall as the tallest of them: each arm is
+                // charged from the same starting count, and the element keeps
+                // the largest arm's charge rather than their sum.
+                let before_arms = self.pattern_node_budget;
                 let mut node = self.parse_group_graph_pattern()?;
+                let mut tallest_arm = self.pattern_node_budget - before_arms;
                 while self.eat_kw("UNION") {
-                    // Each ADDITIONAL `UNION` arm is a hidden extra node the
-                    // outer per-element charge above does not see (they are
-                    // all consumed within this one loop iteration) — charged
-                    // here, one per arm past the first.
-                    self.charge_pattern_nodes(1)?;
+                    self.pattern_node_budget = before_arms;
                     let right = self.parse_group_graph_pattern()?;
-                    node = GraphPattern::Union {
-                        left: Box::new(node),
-                        right: Box::new(right),
-                    };
+                    tallest_arm = tallest_arm.max(self.pattern_node_budget - before_arms);
+                    node = GraphPattern::union(node, right);
                 }
+                self.pattern_node_budget = before_arms + tallest_arm;
                 // A bracketed sub-group (possibly a `{ SELECT ... }`, whose
                 // contribution is its OWN projection — `collect_vars`'s
                 // `Project` arm — not its inner WHERE pattern) or a chain of
@@ -4463,24 +4477,31 @@ impl<'a> Parser<'a, '_> {
         self.parse_or(aggregates)
     }
 
+    // An operator chain (`a || b || …`, `a && b && …`, `a + b - …`, `a * b / …`) is
+    // parsed by a loop into ONE n-ary node (`Expression::or`/`and`/`arithmetic`), so
+    // the node is one level above its tallest operand however many operators the
+    // chain has: its height is charged once per operand as `1 + max(operand
+    // heights)`, never once per operator. Only what the grammar nests — a bracket, a
+    // unary operator, an argument list — makes the tree taller.
+
     fn parse_or(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let (mut left, mut height) = self.measured(|p| p.parse_and(aggs))?;
+        let (mut left, mut operands_height) = self.measured(|p| p.parse_and(aggs))?;
         while self.eat(&Token::Or) {
             let (right, right_height) = self.measured(|p| p.parse_and(aggs))?;
-            height = 1 + height.max(right_height);
-            self.charge_height("expression", height)?;
-            left = Expression::Or(Box::new(left), Box::new(right));
+            operands_height = operands_height.max(right_height);
+            self.charge_height("expression", 1 + operands_height)?;
+            left = Expression::or(left, right);
         }
         Ok(left)
     }
 
     fn parse_and(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let (mut left, mut height) = self.measured(|p| p.parse_relational(aggs))?;
+        let (mut left, mut operands_height) = self.measured(|p| p.parse_relational(aggs))?;
         while self.eat(&Token::And) {
             let (right, right_height) = self.measured(|p| p.parse_relational(aggs))?;
-            height = 1 + height.max(right_height);
-            self.charge_height("expression", height)?;
-            left = Expression::And(Box::new(left), Box::new(right));
+            operands_height = operands_height.max(right_height);
+            self.charge_height("expression", 1 + operands_height)?;
+            left = Expression::and(left, right);
         }
         Ok(left)
     }
@@ -4537,24 +4558,19 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        let (mut left, mut height) = self.measured(|p| p.parse_multiplicative(aggs))?;
+        let (mut left, mut operands_height) = self.measured(|p| p.parse_multiplicative(aggs))?;
         loop {
-            let add = if self.eat(&Token::Plus) {
-                true
+            let op = if self.eat(&Token::Plus) {
+                ArithmeticOperator::Add
             } else if self.eat(&Token::Minus) {
-                false
+                ArithmeticOperator::Subtract
             } else {
                 break;
             };
             let (right, right_height) = self.measured(|p| p.parse_multiplicative(aggs))?;
-            height = 1 + height.max(right_height);
-            self.charge_height("expression", height)?;
-            let (l, r) = (Box::new(left), Box::new(right));
-            left = if add {
-                Expression::Add(l, r)
-            } else {
-                Expression::Subtract(l, r)
-            };
+            operands_height = operands_height.max(right_height);
+            self.charge_height("expression", 1 + operands_height)?;
+            left = Expression::arithmetic(left, op, right);
         }
         Ok(left)
     }
@@ -4563,24 +4579,19 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        let (mut left, mut height) = self.measured(|p| p.parse_unary(aggs))?;
+        let (mut left, mut operands_height) = self.measured(|p| p.parse_unary(aggs))?;
         loop {
-            let multiply = if self.eat(&Token::Star) {
-                true
+            let op = if self.eat(&Token::Star) {
+                ArithmeticOperator::Multiply
             } else if self.eat(&Token::Slash) {
-                false
+                ArithmeticOperator::Divide
             } else {
                 break;
             };
             let (right, right_height) = self.measured(|p| p.parse_unary(aggs))?;
-            height = 1 + height.max(right_height);
-            self.charge_height("expression", height)?;
-            let (l, r) = (Box::new(left), Box::new(right));
-            left = if multiply {
-                Expression::Multiply(l, r)
-            } else {
-                Expression::Divide(l, r)
-            };
+            operands_height = operands_height.max(right_height);
+            self.charge_height("expression", 1 + operands_height)?;
+            left = Expression::arithmetic(left, op, right);
         }
         Ok(left)
     }
@@ -5571,11 +5582,14 @@ fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
                 collect_term_vars(t, out);
             }
         }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Lateral { left, right } => {
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
             collect_vars(left, out);
             collect_vars(right, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_vars(arm, out);
+            }
         }
         // SPARQL §18.2.1: variables occurring only in the right operand of
         // MINUS are not in scope in the enclosing group graph pattern, so we
@@ -5954,11 +5968,11 @@ fn find_scope_conflict<'a>(
         // Binary nodes are transparent to scope: recurse both operands at the
         // SAME scope level (see the scope-level argument above).
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             find_scope_conflict(scope, left).or_else(|| find_scope_conflict(scope, right))
         }
+        GraphPattern::Union { arms } => arms.iter().find_map(|arm| find_scope_conflict(scope, arm)),
         // `MINUS` is the one binary node that is NOT scope-transparent on its
         // right operand: §18.2.1 puts a MINUS-right-only variable out of
         // scope, and §18.5's evaluation only ever uses the right side for the
@@ -7259,38 +7273,132 @@ mod tests {
         );
     }
 
-    /// An operator chain is parsed by a loop, not by recursion, but every operator makes
-    /// the tree one level taller: the tallest chain the height budget admits parses with
-    /// every operator present, one operator more is the typed refusal, and so is a chain
-    /// of a hundred thousand.
+    /// The `FILTER` expression of a parsed `SELECT * WHERE { FILTER(…) }`.
+    fn filter_expr(q: &str) -> Expression {
+        let GraphPattern::Filter { expr, .. } = unproject(select_pattern(q)) else {
+            panic!("expected Filter");
+        };
+        expr
+    }
+
+    /// An expression operator chain is ONE n-ary node however many operators it has:
+    /// a hundred thousand `||`, `&&`, `+`/`-` or `*`/`/` parse, with every operand
+    /// present, in source order, at a height of one level above the operands. A chain
+    /// is flat text, so charging a level per operator refused a generated
+    /// `?x = 1 || ?x = 2 || …` past 511 alternatives although it nests nothing.
     #[test]
-    fn operator_chains_are_bounded_by_the_expression_height_budget() {
-        /// The construct a refusal names, the request spelled `ops` operators long, and
-        /// the `Debug` marker each operator leaves in the algebra.
-        type Chain = (&'static str, fn(usize) -> String, &'static str);
-        let chains: [Chain; 6] = [
+    fn expression_operator_chains_of_any_length_are_one_node() {
+        const OPS: usize = 100_000;
+        let or = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER({}?y) }}",
+            "?x || ".repeat(OPS)
+        ));
+        let Expression::Or(operands) = &or else {
+            panic!("expected Or, got a different node");
+        };
+        assert_eq!(operands.len(), OPS + 1);
+        assert_eq!(operands[OPS], Expression::Variable(Variable::new("y")));
+        assert!(
+            operands[..OPS]
+                .iter()
+                .all(|e| *e == Expression::Variable(Variable::new("x")))
+        );
+
+        let and = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER({}?y) }}",
+            "?x && ".repeat(OPS)
+        ));
+        assert!(matches!(&and, Expression::And(operands) if operands.len() == OPS + 1));
+
+        // Additive and multiplicative operators alternate by precedence: `?x + 1 * 2`
+        // is `?x + (1 * 2)`, so each `* 2` is its own two-operand chain, a step
+        // operand of the one additive chain.
+        let mixed = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER(?x{} > 0) }}",
+            " + 1 * 2 - ?z / 3".repeat(OPS / 2)
+        ));
+        let Expression::Greater(chain, _) = &mixed else {
+            panic!("expected Greater");
+        };
+        let Expression::Arithmetic(first, steps) = &**chain else {
+            panic!("expected Arithmetic");
+        };
+        assert_eq!(**first, Expression::Variable(Variable::new("x")));
+        assert_eq!(steps.len(), OPS);
+        for (i, (op, operand)) in steps.iter().enumerate() {
+            let (expected_op, expected_inner) = if i % 2 == 0 {
+                (ArithmeticOperator::Add, ArithmeticOperator::Multiply)
+            } else {
+                (ArithmeticOperator::Subtract, ArithmeticOperator::Divide)
+            };
+            assert_eq!(*op, expected_op, "step {i}");
+            assert!(
+                matches!(operand, Expression::Arithmetic(_, inner)
+                    if matches!(inner.as_slice(), [(o, _)] if *o == expected_inner)),
+                "step {i}"
+            );
+        }
+    }
+
+    /// A left spine is one chain whatever its brackets say: `(a + b) * c` is the chain
+    /// `a`, `+ b`, `* c`, because the multiplication applies to the value of
+    /// everything before it — exactly the left fold the binary tree denotes. A bracket
+    /// on the right is a real level: `a - (b - c)` keeps its own chain as an operand.
+    #[test]
+    fn a_bracketed_left_operand_extends_the_chain_and_a_right_one_nests() {
+        let x = || Expression::Variable(Variable::new("x"));
+        let y = || Expression::Variable(Variable::new("y"));
+        let z = || Expression::Variable(Variable::new("z"));
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER((?x + ?y) * ?z > 0) }"),
+            Expression::Greater(
+                Box::new(Expression::Arithmetic(
+                    Box::new(x()),
+                    vec![
+                        (ArithmeticOperator::Add, y()),
+                        (ArithmeticOperator::Multiply, z())
+                    ],
+                )),
+                Box::new(Expression::Literal(Literal::new_typed(
+                    "0",
+                    NamedNode::new_unchecked(XSD_INTEGER)
+                ))),
+            )
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER(?x - (?y - ?z)) }"),
+            Expression::Arithmetic(
+                Box::new(x()),
+                vec![(
+                    ArithmeticOperator::Subtract,
+                    Expression::Arithmetic(
+                        Box::new(y()),
+                        vec![(ArithmeticOperator::Subtract, z())]
+                    )
+                )],
+            )
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER((?x || ?y) || ?z) }"),
+            Expression::Or(vec![x(), y(), z()])
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER(?x || (?y || ?z)) }"),
+            Expression::Or(vec![x(), Expression::Or(vec![y(), z()])])
+        );
+    }
+
+    /// A property-path operator chain (`p1 / p2 / …`, `p1 | p2 | …`) is still a binary
+    /// tree one level taller per operator: the tallest chain the height budget admits
+    /// parses with every operator present, and one operator more is the typed refusal,
+    /// as is a chain of a hundred thousand.
+    #[test]
+    fn property_path_chains_are_bounded_by_the_height_budget() {
+        /// The request spelled `ops` operators long, and the `Debug` marker each
+        /// operator leaves in the algebra.
+        type Chain = (fn(usize) -> String, &'static str);
+        let chains: [Chain; 2] = [
             (
-                "expression",
-                |ops| format!("SELECT * WHERE {{ FILTER({}1) }}", "?x + ".repeat(ops)),
-                "Add(",
-            ),
-            (
-                "expression",
-                |ops| format!("SELECT * WHERE {{ FILTER({}?y) }}", "?x || ".repeat(ops)),
-                "Or(",
-            ),
-            (
-                "expression",
-                |ops| format!("SELECT * WHERE {{ FILTER({}?y) }}", "?x && ".repeat(ops)),
-                "And(",
-            ),
-            (
-                "expression",
-                |ops| format!("SELECT * WHERE {{ FILTER({}2) }}", "?x * ".repeat(ops)),
-                "Multiply(",
-            ),
-            (
-                "property path",
                 |ops| {
                     format!(
                         "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
@@ -7300,7 +7408,6 @@ mod tests {
                 "Sequence(",
             ),
             (
-                "property path",
                 |ops| {
                     format!(
                         "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
@@ -7312,7 +7419,7 @@ mod tests {
         ];
         // The WHERE group is the first level; a chain of `ops` operators is `ops` tall.
         let max = MAX_EXPRESSION_HEIGHT - 1;
-        for (construct, text, marker) in chains {
+        for (text, marker) in chains {
             let parsed = SparqlParser::new()
                 .parse_query(&text(max))
                 .unwrap_or_else(|error| panic!("{marker}: a {max}-operator chain parses: {error}"));
@@ -7324,7 +7431,7 @@ mod tests {
                 assert!(
                     matches!(error, ParseError::Syntax { .. })
                         && error.to_string().contains(&format!(
-                            "{construct} nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
+                            "property path nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
                         )),
                     "{marker} x{ops}: {error}"
                 );
@@ -7332,33 +7439,44 @@ mod tests {
         }
     }
 
-    /// Chains nested inside brackets stack up: each bracket level's chain sits on top of
-    /// the one inside it, so the tree is as tall as all of them together — and that
-    /// total, not any single chain, is what is bounded. Forty levels of ten operators
-    /// (400 levels tall) parse; fifty (500 operators, over the budget once the brackets
-    /// are counted) are refused, although no single chain is longer than ten.
+    /// What an expression really nests is still bounded by its total height. Each
+    /// bracket level below spells `?x || ?x && ?x != ?x + ?x * ( … )` — six operator
+    /// levels (`!=` is two) under one bracket, seven levels a bracket — so the tree
+    /// outgrows the height budget long before the brackets reach the recursion
+    /// budget. Seventy levels (490 tall) parse; seventy-five (525) are the typed
+    /// refusal, with only 76 brackets open. A flat chain of the same operators beside
+    /// it, as long as all of them together, parses: a neighbour that differs only in
+    /// nesting nothing.
     #[test]
-    fn chains_nested_in_brackets_are_bounded_by_their_total_height() {
-        let stacked = |levels: usize| {
+    fn nested_chains_are_bounded_by_their_total_height() {
+        let nested = |levels: usize| {
             let mut expression = String::from("?x");
             for _ in 0..levels {
-                expression = format!("({expression}{})", " + ?x".repeat(10));
+                expression = format!("(?x || ?x && ?x != ?x + ?x * {expression})");
             }
-            format!("SELECT * WHERE {{ FILTER({expression} > 0) }}")
+            format!("SELECT * WHERE {{ FILTER({expression}) }}")
         };
-        let parsed = SparqlParser::new()
-            .parse_query(&stacked(40))
-            .expect("400 stacked operators parse");
-        assert_eq!(format!("{parsed:?}").matches("Add(").count(), 400);
+        SparqlParser::new()
+            .parse_query(&nested(70))
+            .expect("70 nested levels, 490 tall, parse");
         let error = SparqlParser::new()
-            .parse_query(&stacked(50))
-            .expect_err("stacked chains past the height budget are refused");
+            .parse_query(&nested(75))
+            .expect_err("nested levels past the height budget are refused");
         assert!(
-            error.to_string().contains(&format!(
-                "expression nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
-            )),
+            matches!(error, ParseError::Syntax { .. })
+                && error.to_string().contains(&format!(
+                    "expression nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
+                )),
             "{error}"
         );
+        let flat = format!(
+            "SELECT * WHERE {{ FILTER(?x{}) }}",
+            " || ?x && ?x != ?x + ?x * ?x".repeat(75)
+        );
+        let Expression::Or(operands) = filter_expr(&flat) else {
+            panic!("expected Or");
+        };
+        assert_eq!(operands.len(), 76);
     }
 
     /// Locate the EXACT repetition count at which a monotonic spine generator
@@ -7451,16 +7569,51 @@ mod tests {
         });
     }
 
-    /// A single bracketed group with a long run of `UNION` arms — hidden from
-    /// the group loop's own per-element charge because the whole chain is
-    /// consumed inside ONE loop iteration (the nested `while eat_kw("UNION")`
-    /// loop), so it is charged separately, one unit per arm past the first.
+    /// A run of `UNION` arms is ONE node, one level above its arms, so it is charged
+    /// as its tallest arm, not as the sum of them: twenty thousand arms parse into one
+    /// `Union` with every arm in source order.
     #[test]
-    fn union_arm_spine_length_is_bounded_by_a_typed_error() {
+    fn a_union_arm_run_of_any_length_is_one_node() {
+        const ARMS: usize = 20_000;
+        let body = (0..ARMS)
+            .map(|i| format!("{{ ?s <https://example.org/p> {i} }}"))
+            .collect::<Vec<_>>()
+            .join(" UNION ");
+        let GraphPattern::Union { arms } =
+            unproject(select_pattern(&format!("SELECT * WHERE {{ {body} }}")))
+        else {
+            panic!("expected one Union");
+        };
+        assert_eq!(arms.len(), ARMS);
+        for (i, arm) in arms.iter().enumerate() {
+            let GraphPattern::Bgp { patterns } = arm else {
+                panic!("arm {i} is a BGP");
+            };
+            assert_eq!(
+                patterns[0].object,
+                TermPattern::Literal(Literal::new_typed(
+                    i.to_string(),
+                    NamedNode::new_unchecked(XSD_INTEGER)
+                )),
+                "arm {i} in source order"
+            );
+        }
+    }
+
+    /// What a `UNION` arm builds inside itself still deepens the tree, and is still
+    /// charged: a sibling spine of `OPTIONAL`s in ONE arm of a hundred is bounded by
+    /// the same typed error as the spine alone, so the arms' charges are compared, not
+    /// discarded.
+    #[test]
+    fn a_union_arm_s_own_spine_is_bounded_by_a_typed_error() {
         assert_spine_bound(|n| {
             let mut body = String::from("SELECT * WHERE { { ?s <https://example.org/p> ?o }");
-            for _ in 0..n {
-                body.push_str(" UNION { ?s <https://example.org/p> ?o }");
+            for arm in 0..100 {
+                body.push_str(" UNION { ?s <https://example.org/p> ?o");
+                if arm == 50 {
+                    body.push_str(&" OPTIONAL { ?s <https://example.org/q> ?o }".repeat(n));
+                }
+                body.push_str(" }");
             }
             body.push('}');
             body
@@ -7469,7 +7622,7 @@ mod tests {
 
     /// A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection list lowers to a
     /// chain of `Extend` nodes with no brace involved at all — a THIRD shape
-    /// (alongside the group loop and its `UNION` arms) that
+    /// (alongside the group loop and a `UNION` arm's own spine) that
     /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, closed by the same budget.
     #[test]
     fn select_expression_list_length_is_bounded_by_a_typed_error() {
@@ -11469,7 +11622,11 @@ mod tests {
         // the `-` there follows `)`, not a word character.
         let sub = "SELECT ?h WHERE { ?s ?p ?o . BIND(STRLEN(SHA3-256(STR(?o))) - 4 AS ?h) }";
         assert!(
-            matches!(bound_expr(sub), Expression::Subtract(_, _)),
+            matches!(
+                bound_expr(sub),
+                Expression::Arithmetic(_, steps)
+                    if matches!(steps.as_slice(), [(ArithmeticOperator::Subtract, _)])
+            ),
             "an ordinary subtraction beside a SHA-3 call must stay a subtraction"
         );
     }
@@ -12021,10 +12178,14 @@ mod tests {
                 GraphPattern::PropertyFunction(c) => out.push(c),
                 GraphPattern::Join { left, right }
                 | GraphPattern::Lateral { left, right }
-                | GraphPattern::Union { left, right }
                 | GraphPattern::Minus { left, right } => {
                     walk(left, out);
                     walk(right, out);
+                }
+                GraphPattern::Union { arms } => {
+                    for arm in arms {
+                        walk(arm, out);
+                    }
                 }
                 GraphPattern::LeftJoin { left, right, .. } => {
                     walk(left, out);

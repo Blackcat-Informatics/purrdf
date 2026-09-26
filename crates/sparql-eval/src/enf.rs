@@ -365,18 +365,24 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
                 variables: variables.clone(),
             }),
         },
-        // Union: both branches are on the spine (empty iff BOTH are), so both get
-        // the same treatment; a branch that folds to empty drops out of the
-        // reconstructed Union entirely (Union(∅, R) ≡ R for emptiness purposes).
-        GraphPattern::Union { left, right } => match (normalize(left), normalize(right)) {
-            (Enf::FoldedEmpty, Enf::FoldedEmpty) => Enf::FoldedEmpty,
-            (Enf::FoldedEmpty, Enf::Pattern(r)) => Enf::Pattern(r),
-            (Enf::Pattern(l), Enf::FoldedEmpty) => Enf::Pattern(l),
-            (Enf::Pattern(l), Enf::Pattern(r)) => Enf::Pattern(GraphPattern::Union {
-                left: Box::new(l),
-                right: Box::new(r),
-            }),
-        },
+        // Union: every arm is on the spine (empty iff ALL are), so each gets the
+        // same treatment; an arm that folds to empty drops out of the reconstructed
+        // Union entirely (Union(∅, R) ≡ R for emptiness purposes), and a union left
+        // with one arm is that arm.
+        GraphPattern::Union { arms } => {
+            let mut kept: Vec<GraphPattern> = arms
+                .iter()
+                .filter_map(|arm| match normalize(arm) {
+                    Enf::FoldedEmpty => None,
+                    Enf::Pattern(p) => Some(p),
+                })
+                .collect();
+            match kept.len() {
+                0 => Enf::FoldedEmpty,
+                1 => Enf::Pattern(kept.remove(0)),
+                _ => Enf::Pattern(GraphPattern::Union { arms: kept }),
+            }
+        }
         // Every other variant consumes a row SET, not merely emptiness (Join/Filter/
         // Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
         // PropertyFunction/Service/Group/Lateral) — the spine stops here, unmodified.

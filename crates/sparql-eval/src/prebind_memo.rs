@@ -330,10 +330,14 @@ fn walk_pattern(pattern: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnM
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             walk_pattern(left, index, visit);
             walk_pattern(right, index, visit);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                walk_pattern(arm, index, visit);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -473,18 +477,23 @@ fn walk_expression(expr: &mut Expression, index: &mut u32, visit: &mut dyn FnMut
         | Expression::Bound(_)
         | Expression::NamedNode(_)
         | Expression::Literal(_) => {}
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands.iter_mut() {
+                walk_expression(operand, index, visit);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            walk_expression(first, index, visit);
+            for (_, operand) in steps.iter_mut() {
+                walk_expression(operand, index, visit);
+            }
+        }
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
+        | Expression::LessOrEqual(left, right) => {
             walk_expression(left, index, visit);
             walk_expression(right, index, visit);
         }

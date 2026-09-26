@@ -297,11 +297,11 @@ impl<'a> Node<'a> {
                     (Self::Term(object), depth),
                 ]);
             }
-            G::Join { left, right }
-            | G::Lateral { left, right }
-            | G::Union { left, right }
-            | G::Minus { left, right } => {
+            G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
                 stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
+            }
+            G::Union { arms } => {
+                stack.extend(arms.iter().map(|arm| (Self::Pattern(arm), depth)));
             }
             G::LeftJoin {
                 left,
@@ -414,18 +414,25 @@ impl<'a> Node<'a> {
             E::NamedNode(n) => iri(n.as_str())?,
             E::Literal(l) => literal(l)?,
             E::Variable(v) | E::Bound(v) => variable(v)?,
-            E::Or(a, b)
-            | E::And(a, b)
-            | E::Equal(a, b)
+            E::Or(operands) | E::And(operands) => {
+                stack.extend(operands.iter().map(|operand| (Self::Expr(operand), depth)));
+            }
+            E::Arithmetic(first, steps) => {
+                stack.push((Self::Expr(first), depth));
+                stack.extend(
+                    steps
+                        .iter()
+                        .map(|(_, operand)| (Self::Expr(operand), depth)),
+                );
+            }
+            E::Equal(a, b)
             | E::SameTerm(a, b)
             | E::Greater(a, b)
             | E::GreaterOrEqual(a, b)
             | E::Less(a, b)
-            | E::LessOrEqual(a, b)
-            | E::Add(a, b)
-            | E::Subtract(a, b)
-            | E::Multiply(a, b)
-            | E::Divide(a, b) => stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]),
+            | E::LessOrEqual(a, b) => {
+                stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]);
+            }
             E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => stack.push((Self::Expr(x), depth)),
             E::In(x, args) => {
                 stack.push((Self::Expr(x), depth));

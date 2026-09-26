@@ -279,22 +279,42 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
 
-  // Frames that never poll: expression evaluation recurses once per operator without
-  // polling, so an operator chain run beneath a few EXISTS levels (which poll) would go
-  // far past a 512 KiB region's base before the next poll. The request is the deepest the
-  // parser admits of its shape: sixteen EXISTS levels around a chain of 477 additions,
-  // one short of the expression-height budget. Measured on the shipped artifact by
-  // painting the region, it needs about 631 000 bytes below the region's top — about
-  // 107 000 past a 512 KiB region's base — while its deepest poll is about 271 000 bytes
-  // down, so the guard band never sees it. What stops it is the evaluator's own stack
-  // guard, which checks every operator against the stack left above the region's base
-  // (the job installs that base as its stack floor) and refuses with 64 KiB still to
-  // spare. The overrun zone beneath the base is therefore never touched: had any frame
-  // reached it, the run's zone inspection would have latched the region's exhaustion,
-  // which outranks every other error, so the evaluator's refusal arriving as the job's
-  // error is the proof. The synchronous lane runs the chain on its own 1 MiB stack (about
-  // 638 000 bytes deep), and a 4 MiB region answers it.
-  const deepChain = `SELECT ?s WHERE { ?s <${EX}p> ?o ${`FILTER EXISTS { ?s <${EX}p> ?o `.repeat(16)}BIND(1 AS ?one) FILTER(${"?one + ".repeat(477)}?one > 0)${" }".repeat(16)} }`;
+  // Frames that never poll: expression evaluation recurses once per level of the
+  // expression tree without polling, so an expression nested deeply enough beneath a few
+  // EXISTS levels (which poll) would go far past a 512 KiB region's base before the next
+  // poll. A flat operator chain is no such tree — its operands are one node, folded by a
+  // loop — so the depth is written as nesting: each bracket level spells
+  // `(?one = 2 || ?one = 1 && (…) != false)`, five tree levels (`||`, `&&`, and the two
+  // `!=` builds) above the bracket inside it. Every level passes its inner level's truth
+  // through (`false || (true && x != false)` is `x`), so the answer is decided by the
+  // innermost comparison: the whole tree is evaluated, and an innermost `?one = 2`
+  // answers no row. The request is the deepest the parser admits of its shape: sixteen
+  // EXISTS levels around 94 bracket levels, one short of the bracket-nesting budget, a
+  // tree 470 levels tall inside the expression-height budget. Measured on the shipped
+  // artifact: painting the synchronous lane's idle shadow stack shows it runs about
+  // 545 000 bytes deep, and searching the region size in 4 KiB steps, the smallest region
+  // that answers is 606 208 bytes (602 112 still refuses) — so the tree needs about
+  // 545 000 bytes below a region's top, about 21 000 past a 512 KiB region's base, while
+  // its deepest poll is about 253 500 bytes down, so the guard band never sees it. What
+  // stops it is the evaluator's own stack guard, which checks every expression level
+  // against the stack left above the region's base (the job installs that base as its
+  // stack floor) and refuses with 64 KiB still to spare. The overrun zone beneath the base
+  // is therefore never touched: had any frame reached it, the run's zone inspection would
+  // have latched the region's exhaustion, which outranks every other error, so the
+  // evaluator's refusal arriving as the job's error is the proof. The synchronous lane
+  // runs the tree on its own 1 MiB stack, and a 4 MiB region answers it.
+  const deepTree = (innermost) => {
+    let expression = innermost;
+    for (let level = 0; level < 94; level += 1) {
+      expression = `(?one = 2 || ?one = 1 && ${expression} != false)`;
+    }
+    return `SELECT ?s WHERE { ?s <${EX}p> ?o ${`FILTER EXISTS { ?s <${EX}p> ?o `.repeat(16)}BIND(1 AS ?one) FILTER(${expression})${" }".repeat(16)} }`;
+  };
+  const deepChain = deepTree("(?one = 1)");
+  // The neighbour that observes the evaluation: the same tree with a false innermost
+  // comparison answers nothing.
+  const deepFalse = deepTree("(?one = 2)");
+  assert.equal(new QueryEngine().select(chain, deepFalse).rowCount, 0, "the innermost comparison decides");
   // A separate engine answers it synchronously: the engine caches a parsed plan per
   // query text, and a cached plan would spare the asynchronous run its parse.
   assert.equal(new QueryEngine().select(chain, deepChain).rowCount, 200, "the synchronous lane answers it");
@@ -334,6 +354,11 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   });
   assert.equal(chainOnLargeRegion.isComplete, true, "the 4 MiB neighbour evaluates and answers it");
   assert.equal(chainOnLargeRegion.result.rowCount, 200);
+  const falseOnLargeRegion = await new QueryEngine().queryGovernedAsync(chain, deepFalse, {
+    stackBytes: 4 * 1024 * 1024,
+  });
+  assert.equal(falseOnLargeRegion.isComplete, true);
+  assert.equal(falseOnLargeRegion.result.rowCount, 0, "its false neighbour answers nothing there too");
 
   // The neighbour: the same query on a 4 MiB region answers — deeper than the small
   // region could ever have hosted.

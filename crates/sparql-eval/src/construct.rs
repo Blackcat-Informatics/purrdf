@@ -1028,10 +1028,14 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
         | GraphPattern::PropertyFunction(_) => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             collect_where_triples(left, out);
             collect_where_triples(right, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_where_triples(arm, out);
+            }
         }
         GraphPattern::LeftJoin { left, right, .. } => {
             collect_where_triples(left, out);

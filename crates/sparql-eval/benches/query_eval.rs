@@ -76,7 +76,7 @@
 //!   `Rc` instead of deep-cloning the set per frontier node).
 //! - `s_guarded_recursion` — the evaluator's stack guard (`crate::stack`) on the paths
 //!   that pass it most often per row: a 32-operator `FILTER` chain (one expression
-//!   check per operator per row) and a correlated `EXISTS` and `NOT EXISTS` (one
+//!   check per operand per row) and a correlated `EXISTS` and `NOT EXISTS` (one
 //!   `EXISTS` check each per row), over the 30k-row `age` relation. The guard's hot path is one thread-local load and one comparison per
 //!   recursive entry; this case is where that cost would show, and it is reported, not
 //!   asserted. The per-row correlated evaluation `LATERAL` guards is

@@ -682,12 +682,12 @@ mod tests {
         // that node to the root must land on the class the plan-level walk assigns it.
         let plan = GraphPattern::Slice {
             inner: boxed(GraphPattern::Minus {
-                left: boxed(GraphPattern::Union {
-                    left: boxed(bgp()),
-                    right: boxed(GraphPattern::Distinct {
+                left: boxed(GraphPattern::union(
+                    bgp(),
+                    GraphPattern::Distinct {
                         inner: boxed(bgp()),
-                    }),
-                }),
+                    },
+                )),
                 right: boxed(GraphPattern::OrderBy {
                     inner: boxed(bgp()),
                     expression: vec![purrdf_sparql_algebra::OrderExpression::Asc(
@@ -879,10 +879,7 @@ mod tests {
         // from the middle of the concatenation: a sound sub-bag, but not a prefix. A
         // restricting LIMIT above selects BY POSITION, so it can pick rows the true query
         // never returns — and nothing may cross.
-        let union = GraphPattern::Union {
-            left: boxed(bgp()),
-            right: boxed(bgp()),
-        };
+        let union = GraphPattern::union(bgp(), bgp());
         let sliced = GraphPattern::Slice {
             inner: boxed(union.clone()),
             start: 0,

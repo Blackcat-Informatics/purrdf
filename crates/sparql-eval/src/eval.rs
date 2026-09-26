@@ -2602,7 +2602,7 @@ fn eval_node<D: DatasetView + Sync>(
         )?)),
 
         GraphPattern::Join { left, right } => crate::binop::eval_join(pattern, left, right, ctx),
-        GraphPattern::Union { left, right } => crate::binop::eval_union(pattern, left, right, ctx),
+        GraphPattern::Union { arms } => crate::binop::eval_union(pattern, arms, ctx),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -2717,8 +2717,10 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 right,
                 expression: _,
             }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right } => derive(left).union(&derive(right)),
+            | GraphPattern::Lateral { left, right } => derive(left).union(&derive(right)),
+            GraphPattern::Union { arms } => arms
+                .iter()
+                .fold(VarSchema::new(), |schema, arm| schema.union(&derive(arm))),
             GraphPattern::Minus { left, right: _ } => derive(left),
             GraphPattern::Filter { expr: _, inner }
             | GraphPattern::OrderBy {
@@ -3794,7 +3796,7 @@ mod tests {
                 NamedNode::new_unchecked(XINT),
             ))),
         );
-        let cond = Expression::And(Box::new(regex), Box::new(numeric));
+        let cond = Expression::and(regex, numeric);
         let pattern = GraphPattern::Filter {
             expr: cond,
             inner: Box::new(join),

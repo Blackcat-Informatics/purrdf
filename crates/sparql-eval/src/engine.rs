@@ -4270,9 +4270,10 @@ mod tests {
             GraphPattern::Filter { inner, .. } | GraphPattern::Graph { inner, .. } => {
                 find_lateral(inner)
             }
-            GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+            GraphPattern::Join { left, right } => {
                 find_lateral(left).or_else(|| find_lateral(right))
             }
+            GraphPattern::Union { arms } => arms.iter().find_map(find_lateral),
             _ => None,
         }
     }

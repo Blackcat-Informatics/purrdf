@@ -563,12 +563,13 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   typed parse error groups already produced. The guarded productions are groups,
   `EXISTS` bodies, bracketed expressions, unary operators, function, built-in and
   aggregate calls, `IN` lists, triple terms, reifiers, annotations, path groups,
-  blank-node property lists and collections. Operator chains and path sequences are
-  parsed by loops, so no recursion guard saw them, yet a 100 000-operator chain
-  exhausted the stack walking its tree. Every node's height is now charged against
-  a bound of 512, the height validation already admitted. The parser also checks the
-  stack it has left and refuses with `ParseError::StackExhausted` rather than
-  overflowing.
+  blank-node property lists and collections. Property-path sequences and
+  alternatives are parsed by loops, so no recursion guard saw them, yet a
+  100 000-operator path exhausted the stack walking its tree. A path node's height
+  is now charged against a bound of 512, the height validation already admitted.
+  Expression operator chains and `UNION` chains are one node however long (see
+  Changed), so their length costs no height. The parser also checks the stack it
+  has left and refuses with `ParseError::StackExhausted` rather than overflowing.
 
 - **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
   On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
@@ -2218,6 +2219,26 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   parentheses. The same constructs nested further trapped the wasm build (about
   950 parentheses) or overflowed a native stack. Expression height stays bounded at
   512, the bound validation already applied.
+
+- **BREAKING** **sparql-algebra:** an operator chain is one n-ary algebra node.
+  `Expression::Or` and `Expression::And` hold their operands as a `Vec`.
+  `Expression::Add`, `Subtract`, `Multiply` and `Divide` are replaced by
+  `Expression::Arithmetic(first, steps)`, whose steps pair the new
+  `ArithmeticOperator` with an operand. `GraphPattern::Union` holds `arms` in place
+  of `left` and `right`. `Expression::or`, `Expression::and`,
+  `Expression::arithmetic` and `GraphPattern::union` extend a chain the way the
+  parser does. Each node is the left fold of the binary operator it replaces:
+  every operand is evaluated left to right, `||` and `&&` keep SPARQL's
+  three-valued errors, arithmetic keeps its type promotion, rounding and errors
+  step by step, and a union's rows and columns come in arm order. Charged one
+  level per operator, a generated `FILTER` of 513 `||` alternatives and a
+  600-term `+` chain were refused as nesting, and a 600-branch `UNION` was
+  refused by the evaluator's graph-pattern depth guard. A chain of any length now
+  parses and answers, and `MAX_GRAPH_PATTERN_NODES` charges a `UNION` as its
+  tallest arm. The serializer writes each chain flat, so a `SERVICE` body holding
+  one is forwarded as text that re-parses. A left operand in brackets extends the
+  chain: `(a + b) * c` is one node. A `UNION` of three or more arms is one plan
+  node, so the `EXPLAIN` ledger lists fewer nodes for it.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as

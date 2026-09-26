@@ -349,8 +349,8 @@ fn pattern_needs(pattern: &GraphPattern) -> bool {
         | GraphPattern::Service { .. } => false,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => pattern_needs(left) || pattern_needs(right),
+        GraphPattern::Union { arms } => arms.iter().any(pattern_needs),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -403,18 +403,18 @@ fn expression_needs(expr: &Expression) -> bool {
     }
     match expr {
         Expression::Exists(pattern) => pattern_needs(pattern),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            operands.iter().any(expression_needs)
+        }
+        Expression::Arithmetic(first, steps) => {
+            expression_needs(first) || steps.iter().any(|(_, operand)| expression_needs(operand))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => expression_needs(a) || expression_needs(b),
+        | Expression::LessOrEqual(a, b) => expression_needs(a) || expression_needs(b),
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             expression_needs(a)
         }
@@ -471,10 +471,14 @@ fn rewrite_pattern(pattern: &mut GraphPattern, next_spine: &mut usize) {
         | GraphPattern::Service { .. } => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             rewrite_pattern(left, next_spine);
             rewrite_pattern(right, next_spine);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                rewrite_pattern(arm, next_spine);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -565,18 +569,23 @@ fn rewrite_expression(expr: &mut Expression, next_spine: &mut usize) {
     }
     match expr {
         Expression::Exists(pattern) => rewrite_pattern(pattern, next_spine),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                rewrite_expression(operand, next_spine);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            rewrite_expression(first, next_spine);
+            for (_, operand) in steps {
+                rewrite_expression(operand, next_spine);
+            }
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             rewrite_expression(a, next_spine);
             rewrite_expression(b, next_spine);
         }

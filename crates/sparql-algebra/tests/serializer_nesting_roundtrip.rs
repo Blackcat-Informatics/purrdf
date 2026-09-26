@@ -18,9 +18,9 @@
 
 use proptest::prelude::*;
 use purrdf_sparql_algebra::{
-    Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern, NegatedPathElement,
-    PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern, Variable,
-    pattern_to_select_query,
+    ArithmeticOperator, Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern,
+    NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
+    Variable, pattern_to_select_query,
 };
 
 const EX: &str = "http://example.org/";
@@ -186,7 +186,17 @@ fn property_paths_bracket_only_where_the_grammar_needs_it() {
     );
 }
 
-// ── the height budget, at its boundary ──────────────────────────────────────
+#[test]
+fn a_left_spine_across_precedence_levels_brackets_only_what_the_source_did() {
+    assert_eq!(
+        rendered_filter("((?a + ?b) * ?c + ?a) * ?b"),
+        "((?a + ?b) * ?c + ?a) * ?b"
+    );
+    assert_eq!(rendered_filter("(?a * ?b) + ?c"), "?a * ?b + ?c");
+    assert_eq!(rendered_filter("((?a || ?b)) || ?c"), "?a || ?b || ?c");
+}
+
+// ── operator chains of any length ───────────────────────────────────────────
 
 /// `SELECT * WHERE { BIND(?a OP ?a OP … AS ?x) }` with `operators` operators.
 fn bind_chain(op: &str, operators: usize) -> String {
@@ -198,22 +208,99 @@ fn bind_chain(op: &str, operators: usize) -> String {
     format!("SELECT * WHERE {{ BIND({expr} AS ?x) }}")
 }
 
+/// A chain is one node however long, so a 10 000-operator chain — twenty times
+/// what the old per-operator height charge refused — forwards as the same flat
+/// text with no bracket but `BIND`'s own, and re-parses to the same node.
 #[test]
-fn a_511_operator_additive_chain_round_trips_at_the_height_boundary() {
-    // The neighbour one operator longer is refused, so 511 is the boundary itself.
-    assert!(try_select(&bind_chain(" + ", 512)).is_err());
-    let text = assert_query_roundtrip(&bind_chain(" + ", 511));
-    assert_eq!(
-        text.matches('(').count(),
-        1,
-        "a left-deep chain needs no bracket beyond BIND's own: {text}"
+fn a_ten_thousand_operator_chain_round_trips_flat() {
+    for op in [" + ", " - ", " * ", " / ", " || ", " && "] {
+        let text = assert_query_roundtrip(&bind_chain(op, 10_000));
+        assert_eq!(
+            text.matches('(').count(),
+            1,
+            "a chain needs no bracket beyond BIND's own: {op}"
+        );
+    }
+    // Alternating precedence levels: every `* ?a` is its own chain, one operand of
+    // the one additive chain, so the text stays flat too.
+    let mixed = format!(
+        "SELECT * WHERE {{ BIND(?a{} AS ?x) }}",
+        " + ?a * ?a - ?a / ?a".repeat(5_000)
     );
+    let text = assert_query_roundtrip(&mixed);
+    assert_eq!(text.matches('(').count(), 1);
 }
 
+/// A `UNION` chain is one node with one arm per branch, and forwards as the flat
+/// chain it was written as: a 10 000-arm chain re-parses to the same node.
 #[test]
-fn a_511_operator_or_chain_round_trips_at_the_height_boundary() {
-    assert!(try_select(&bind_chain(" || ", 512)).is_err());
-    assert_query_roundtrip(&bind_chain(" || ", 511));
+fn a_ten_thousand_arm_union_round_trips_flat() {
+    let arms = (0..10_000)
+        .map(|i| format!("{{ ?s <{EX}p> {i} }}"))
+        .collect::<Vec<_>>()
+        .join(" UNION ");
+    let body = unproject(
+        try_select(&format!("SELECT * WHERE {{ {arms} }}")).expect("a flat UNION chain parses"),
+    );
+    let GraphPattern::Union { arms: parsed } = &body else {
+        panic!("expected one Union node");
+    };
+    assert_eq!(parsed.len(), 10_000);
+    let text = assert_forwarded_roundtrip(&body);
+    assert_eq!(text.matches(" UNION ").count(), 9_999);
+}
+
+/// The shapes the parser never builds — a chain or union with fewer than two
+/// operands, an arithmetic chain with no step — forward as text that keeps their
+/// meaning (see the variants' docs): the identity of an empty chain, the identity
+/// applied to a lone operand, the lone operand of a stepless chain, and an empty
+/// `VALUES` block for an armless union.
+#[test]
+fn degenerate_constructed_chains_forward_their_meaning() {
+    let a = || Expression::Variable(Variable::new("a"));
+    let boolean = |value: &str| {
+        Expression::Literal(Literal::new_typed(
+            value,
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+        ))
+    };
+    let filter = |expr: Expression| GraphPattern::Filter {
+        expr,
+        inner: Box::new(exists_body()),
+    };
+    let reparse = |body: &GraphPattern| {
+        let text = pattern_to_select_query(body);
+        unproject(try_select(&text).unwrap_or_else(|e| panic!("{e}: {text}")))
+    };
+    let cases = [
+        (Expression::Or(vec![]), boolean("false")),
+        (Expression::And(vec![]), boolean("true")),
+        (
+            Expression::Or(vec![a()]),
+            Expression::Or(vec![boolean("false"), a()]),
+        ),
+        (
+            Expression::And(vec![a()]),
+            Expression::And(vec![boolean("true"), a()]),
+        ),
+        (Expression::Arithmetic(Box::new(a()), vec![]), a()),
+    ];
+    for (constructed, expected) in cases {
+        assert_eq!(reparse(&filter(constructed)), filter(expected));
+    }
+    assert_eq!(
+        reparse(&GraphPattern::Union {
+            arms: vec![exists_body()]
+        }),
+        exists_body()
+    );
+    assert_eq!(
+        reparse(&GraphPattern::Union { arms: vec![] }),
+        GraphPattern::Values {
+            variables: vec![],
+            bindings: vec![],
+        }
+    );
 }
 
 // ── every nesting and chaining family, at its deepest admitted SERVICE body ──
@@ -292,16 +379,6 @@ const TRIPLE: &str = "?s <http://example.org/p> ?o .";
 #[test]
 fn expression_families_forward_at_their_deepest_admitted_body() {
     let filter = |e: String| format!("{TRIPLE} FILTER({e})");
-    assert_family_forwards(
-        "left-deep + chain",
-        &|n| filter(chain(n, |_| "?o +".to_owned()) + " ?o"),
-        2048,
-    );
-    assert_family_forwards(
-        "left-deep || chain",
-        &|n| filter(chain(n, |_| "?o ||".to_owned()) + " ?o"),
-        2048,
-    );
     assert_family_forwards(
         "right-nested subtraction",
         &|n| filter(nest(n, "?o", |e| format!("?o - ({e})"))),
@@ -410,9 +487,17 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
 
 #[test]
 fn chained_clause_families_forward_at_their_deepest_admitted_body() {
+    // A `UNION` chain of any length is one node (see
+    // `a_ten_thousand_arm_union_round_trips_flat`); what bounds it is the spine
+    // inside its tallest arm.
     assert_family_forwards(
-        "UNION chain",
-        &|n| chain(n + 1, |_| format!("{{ {TRIPLE} }}")).replace("} {", "} UNION {"),
+        "UNION arm holding an OPTIONAL chain",
+        &|n| {
+            format!(
+                "{{ {TRIPLE} }} UNION {{ {TRIPLE} {} }} UNION {{ {TRIPLE} }}",
+                chain(n, |_| format!("OPTIONAL {{ {TRIPLE} }}"))
+            )
+        },
         4096,
     );
     assert_family_forwards(
@@ -519,21 +604,22 @@ fn exists_body() -> GraphPattern {
     }
 }
 
-/// A constructor of a two-operand expression node.
-type Binary = fn(Box<Expression>, Box<Expression>) -> Expression;
+/// A constructor of a two-operand expression node, built the way the parser builds
+/// it (a chain operator extends a chain on its left).
+type Binary = fn(Expression, Expression) -> Expression;
 
 fn expression_tree() -> impl Strategy<Value = Expression> {
     let binaries: Vec<Binary> = vec![
-        Expression::Or,
-        Expression::And,
-        Expression::Equal,
-        Expression::Less,
-        Expression::GreaterOrEqual,
-        Expression::Add,
-        Expression::Subtract,
-        Expression::Multiply,
-        Expression::Divide,
-        Expression::SameTerm,
+        Expression::or,
+        Expression::and,
+        |a, b| Expression::Equal(Box::new(a), Box::new(b)),
+        |a, b| Expression::Less(Box::new(a), Box::new(b)),
+        |a, b| Expression::GreaterOrEqual(Box::new(a), Box::new(b)),
+        |a, b| Expression::arithmetic(a, ArithmeticOperator::Add, b),
+        |a, b| Expression::arithmetic(a, ArithmeticOperator::Subtract, b),
+        |a, b| Expression::arithmetic(a, ArithmeticOperator::Multiply, b),
+        |a, b| Expression::arithmetic(a, ArithmeticOperator::Divide, b),
+        |a, b| Expression::SameTerm(Box::new(a), Box::new(b)),
     ];
     leaf_expression().prop_recursive(6, 64, 3, move |inner| {
         // Two-operand nodes carry most of the weight: operator precedence and
@@ -544,7 +630,7 @@ fn expression_tree() -> impl Strategy<Value = Expression> {
                 inner.clone(),
                 inner.clone()
             )
-                .prop_map(|(node, a, b)| node(Box::new(a), Box::new(b))),
+                .prop_map(|(node, a, b)| node(a, b)),
             1 => inner.clone().prop_map(|a| Expression::Not(Box::new(a))),
             1 => inner.clone().prop_map(|a| Expression::UnaryMinus(Box::new(a))),
             1 => inner.clone().prop_map(|a| Expression::UnaryPlus(Box::new(a))),
@@ -557,9 +643,9 @@ fn expression_tree() -> impl Strategy<Value = Expression> {
                 .prop_map(|(c, t, e)| Expression::If(Box::new(c), Box::new(t), Box::new(e))),
             1 => prop::collection::vec(inner.clone(), 1..3).prop_map(Expression::Coalesce),
             1 => Just(Expression::Exists(Box::new(exists_body()))),
-            1 => inner.prop_map(|a| Expression::And(
-                Box::new(a),
-                Box::new(Expression::Exists(Box::new(exists_body())))
+            1 => inner.prop_map(|a| Expression::and(
+                a,
+                Expression::Exists(Box::new(exists_body()))
             )),
         ]
     })

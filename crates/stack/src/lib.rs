@@ -124,8 +124,10 @@ mod platform;
 /// **The parser** checks at its one recursion guard, which every production that can
 /// reach itself again enters through, so what is left between two checks is one written
 /// level of one construct (at most a sub-`SELECT`'s 8.5 KiB), its leaves, and the walks
-/// over a finished operator chain — which a loop builds at no stack cost, but whose
-/// validation and drop recurse once per operator. Swept the same way — the margin
+/// over a finished property-path chain — which a loop builds at no stack cost, but whose
+/// validation and drop recurse once per operator (an expression operator chain is one
+/// n-ary node, so its walks recurse once whatever its length; the sweep below predates
+/// that and measured it as binary, the taller case). Swept the same way — the margin
 /// lowered, the stack left for a parse stepped by 2 KiB from 20 KiB, over the deepest
 /// form of every recursive production and 380- to 511-operator expression and path
 /// chains at the top and 120 levels down — a 48 KiB margin aborted on a 510-step

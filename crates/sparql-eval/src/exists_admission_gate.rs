@@ -437,10 +437,10 @@ mod tests {
         // `{ ?s :member ?m } UNION { ?s :nosuchpred ?never }` — the right branch never
         // matches anything, so the union's truth value tracks the left branch alone,
         // through `admissible_rec`'s dedicated `Union` arm (both branches admissible).
-        let inner = GraphPattern::Union {
-            left: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
-            right: bx(bgp1(tvar("s"), &format!("{EX}nosuchpred"), tvar("never"))),
-        };
+        let inner = GraphPattern::union(
+            bgp1(tvar("s"), &format!("{EX}member"), tvar("m")),
+            bgp1(tvar("s"), &format!("{EX}nosuchpred"), tvar("never")),
+        );
         assert_probe_and_definition_agree(&ds, &arm_outer(), &inner);
     }
 
@@ -2299,10 +2299,7 @@ mod tests {
                 left: bx(l.clone()),
                 right: bx(r.clone()),
             },
-            1 => GraphPattern::Union {
-                left: bx(l.clone()),
-                right: bx(r.clone()),
-            },
+            1 => GraphPattern::union(l.clone(), r.clone()),
             2 => GraphPattern::LeftJoin {
                 left: bx(l.clone()),
                 right: bx(r.clone()),

@@ -698,12 +698,23 @@ pub enum GraphPattern {
         /// The pattern being filtered.
         inner: Box<Self>,
     },
-    /// `UNION` of two patterns.
+    /// `UNION` of its arms, in source order: `{ a } UNION { b } UNION { c }` is one
+    /// node with three arms.
+    ///
+    /// The SPARQL algebra's `Union` is binary and a written chain nests to the left,
+    /// `Union(Union(a, b), c)`. Bag union is associative and a left-nested chain
+    /// concatenates its arms' solutions in source order, so one node over the arms
+    /// in that order denotes the same sequence of solutions — and a chain of any
+    /// length is one level of the tree rather than one level per arm. Arms are
+    /// evaluated left to right; the output schema is the arms' schemas merged in
+    /// that order, exactly as the nested binary unions merged them.
+    ///
+    /// The parser always builds two or more arms. A constructed node with one arm
+    /// denotes that arm, and one with none the empty sequence of solutions (the
+    /// identity of union). [`Self::union`] builds a chain the way the parser does.
     Union {
-        /// Left operand.
-        left: Box<Self>,
-        /// Right operand.
-        right: Box<Self>,
+        /// The arms, in source order.
+        arms: Vec<Self>,
     },
     /// `GRAPH name { ... }`.
     Graph {
@@ -1149,10 +1160,26 @@ pub enum Expression {
     Variable(Variable),
     /// `BOUND(?v)`.
     Bound(Variable),
-    /// Logical `||`.
-    Or(Box<Self>, Box<Self>),
-    /// Logical `&&`.
-    And(Box<Self>, Box<Self>),
+    /// Logical `||` over its operands, in source order: `a || b || c` is one node with
+    /// three operands.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left; this node
+    /// is that left fold. Every operand is evaluated, left to right, and the result is
+    /// `true` if any operand's effective boolean value is `true`, `false` if every
+    /// operand's is `false`, and an error otherwise — the value
+    /// `((a || b) || c)` has under SPARQL's three-valued logic (§17.2), whose
+    /// disjunction is associative. A chain of any length is one level of the tree.
+    ///
+    /// The parser always builds two or more operands. A constructed node with one
+    /// operand denotes `false || a`, and one with none `false` (the fold's identity).
+    /// [`Self::or`] builds a chain the way the parser does.
+    Or(Vec<Self>),
+    /// Logical `&&` over its operands, in source order: the left fold of the binary
+    /// operator, as [`Self::Or`] is of `||`. The result is `false` if any operand's
+    /// effective boolean value is `false`, `true` if every operand's is `true`, and an
+    /// error otherwise. A constructed node with one operand denotes `true && a`, and
+    /// one with none `true`. [`Self::and`] builds a chain the way the parser does.
+    And(Vec<Self>),
     /// `=`.
     Equal(Box<Self>, Box<Self>),
     /// `sameTerm(a, b)`.
@@ -1165,14 +1192,24 @@ pub enum Expression {
     Less(Box<Self>, Box<Self>),
     /// `<=`.
     LessOrEqual(Box<Self>, Box<Self>),
-    /// `+`.
-    Add(Box<Self>, Box<Self>),
-    /// `-` (binary).
-    Subtract(Box<Self>, Box<Self>),
-    /// `*`.
-    Multiply(Box<Self>, Box<Self>),
-    /// `/`.
-    Divide(Box<Self>, Box<Self>),
+    /// A chain of binary arithmetic operators, `first op₁ e₁ op₂ e₂ …`, folded
+    /// strictly left to right: `((first op₁ e₁) op₂ e₂) …`.
+    ///
+    /// Arithmetic is not reassociable — numeric type promotion, `xsd:decimal` and
+    /// floating-point rounding, and which operand raises an error all depend on the
+    /// order — so this node is exactly the left-nested tree of binary operators the
+    /// SPARQL grammar builds, stored as its left spine. Each step applies one binary
+    /// operator to the value the steps before it produced and the next operand, as
+    /// the node for that one operator would. Every operand is evaluated, left to
+    /// right, whether or not an earlier step raised an error. A chain of any length
+    /// is one level of the tree.
+    ///
+    /// A left spine is one node whatever the operators' precedence: `(a + b) * c`
+    /// is `a` followed by `+ b` and `* c`. The parser never builds a node whose first
+    /// operand is itself an `Arithmetic` node, and always builds at least one step; a
+    /// constructed node with no step denotes its first operand.
+    /// [`Self::arithmetic`] extends a chain the way the parser does.
+    Arithmetic(Box<Self>, Vec<(ArithmeticOperator, Self)>),
     /// Unary `+`.
     UnaryPlus(Box<Self>),
     /// Unary `-`.
@@ -1189,6 +1226,101 @@ pub enum Expression {
     FunctionCall(Function, Vec<Self>),
     /// `EXISTS { pattern }` (`NOT EXISTS` is `Not(Exists(...))`).
     Exists(Box<GraphPattern>),
+}
+
+/// One of the four binary arithmetic operators of an [`Expression::Arithmetic`] chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArithmeticOperator {
+    /// `+`.
+    Add,
+    /// `-` (binary).
+    Subtract,
+    /// `*`.
+    Multiply,
+    /// `/`.
+    Divide,
+}
+
+impl ArithmeticOperator {
+    /// The operator's surface spelling.
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Divide => "/",
+        }
+    }
+
+    /// Whether the operator is multiplicative (`*`, `/`), which binds tighter than
+    /// the additive ones (`+`, `-`).
+    #[must_use]
+    pub const fn is_multiplicative(self) -> bool {
+        matches!(self, Self::Multiply | Self::Divide)
+    }
+}
+
+impl Expression {
+    /// `left || right`, as the parser builds it: a `left` that is already an
+    /// [`Self::Or`] chain is extended by one operand, so a written chain of any
+    /// length is one node. A `right` that is an `Or` stays one operand, as the
+    /// bracketted `a || (b || c)` it came from.
+    #[must_use]
+    pub fn or(left: Self, right: Self) -> Self {
+        match left {
+            Self::Or(mut operands) => {
+                operands.push(right);
+                Self::Or(operands)
+            }
+            left => Self::Or(vec![left, right]),
+        }
+    }
+
+    /// `left && right`, as the parser builds it: see [`Self::or`].
+    #[must_use]
+    pub fn and(left: Self, right: Self) -> Self {
+        match left {
+            Self::And(mut operands) => {
+                operands.push(right);
+                Self::And(operands)
+            }
+            left => Self::And(vec![left, right]),
+        }
+    }
+
+    /// `left op right`, as the parser builds it: a `left` that is already an
+    /// [`Self::Arithmetic`] chain is extended by one step, whatever its operators'
+    /// precedence, because the chain is the left spine of the binary tree and
+    /// `op` applies to the value of everything before it.
+    #[must_use]
+    pub fn arithmetic(left: Self, op: ArithmeticOperator, right: Self) -> Self {
+        match left {
+            Self::Arithmetic(first, mut steps) => {
+                steps.push((op, right));
+                Self::Arithmetic(first, steps)
+            }
+            left => Self::Arithmetic(Box::new(left), vec![(op, right)]),
+        }
+    }
+}
+
+impl GraphPattern {
+    /// `{ left } UNION { right }`, as the parser builds it: a `left` that is already
+    /// a [`Self::Union`] gains one arm, so a written chain of any length is one node.
+    /// A `right` that is a `Union` stays one arm, as the braced group it came from.
+    #[must_use]
+    pub fn union(left: Self, right: Self) -> Self {
+        match left {
+            Self::Union { mut arms } => {
+                arms.push(right);
+                Self::Union { arms }
+            }
+            left => Self::Union {
+                arms: vec![left, right],
+            },
+        }
+    }
 }
 
 /// A SPARQL function: a built-in (`BuiltInCall`) or a custom IRI-named function.

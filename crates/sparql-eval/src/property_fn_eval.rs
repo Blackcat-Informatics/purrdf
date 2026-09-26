@@ -2077,11 +2077,19 @@ impl<'q> ShapeWalk<'q> {
                 }
                 (left_columns, Err(not_one_call("a Minus node")))
             }
-            GraphPattern::Union { left, right } => {
-                let (left_columns, _) = self.walk(left);
-                let (right_columns, _) = self.walk(right);
+            // The pairwise merge, folded over the arms in order — the merge the
+            // left-nested binary chain applied, the first arm's columns as they are.
+            GraphPattern::Union { arms } => {
+                let mut columns: Option<Vec<Provenance<'q>>> = None;
+                for arm in arms {
+                    let (arm_columns, _) = self.walk(arm);
+                    columns = Some(match columns {
+                        None => arm_columns,
+                        Some(before) => union(before, arm_columns),
+                    });
+                }
                 (
-                    union(left_columns, right_columns),
+                    columns.unwrap_or_default(),
                     Err(not_one_call("a Union node")),
                 )
             }

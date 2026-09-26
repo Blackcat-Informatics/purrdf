@@ -338,11 +338,11 @@ fn a_stack_refusal_inside_an_in_process_service_is_not_silenced() {
     // subject as though the service had imposed nothing.
     let body = format!(
         "?s <{EX}p> ?o {}",
-        format!("OPTIONAL {{ ?s <{EX}q> ?z }} ").repeat(60)
+        format!("OPTIONAL {{ ?s <{EX}q> ?z }} ").repeat(90)
     );
     let query = format!(
         "SELECT ?s WHERE {{ ?s <{EX}p> ?o {} SERVICE SILENT <{EX}svc> {{ {body} FILTER(?s = <{EX}s1>) }} }}",
-        format!("OPTIONAL {{ ?s <{EX}q> ?y }} ").repeat(40)
+        format!("OPTIONAL {{ ?s <{EX}q> ?y }} ").repeat(60)
     );
     let run = |bytes: usize| {
         let query = query.clone();

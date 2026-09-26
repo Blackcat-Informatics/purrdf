@@ -35,7 +35,9 @@ use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfTextDirection, TermRef, TermValue,
     ViewTermId,
 };
-use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
+use purrdf_sparql_algebra::{
+    ArithmeticOperator, Expression, Function, GraphPattern, PurrdfFn, Variable,
+};
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
     numeric_round, numeric_unary_plus, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div,
@@ -64,9 +66,9 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    // Every operator is one level of this recursion, and an operator chain's height is
-    // bounded by the parser's expression budget, not by the stack it takes: see
-    // `crate::stack`.
+    // Every node is one level of this recursion — an operator chain is one node, its
+    // operands folded by a loop — and the tree's height is bounded by the parser's
+    // expression budget, not by the stack it takes: see `crate::stack`.
     crate::stack::check("expression")?;
     match expr {
         // ---- atoms ---------------------------------------------------------
@@ -80,25 +82,24 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
         // ---- logical (Kleene three-valued) --------------------------------
-        Expression::Or(a, b) => {
-            let va = ebv_of(a, row, schema, ctx)?;
-            let vb = ebv_of(b, row, schema, ctx)?;
-            let r = match (va, vb) {
-                (Some(true), _) | (_, Some(true)) => Some(true),
-                (Some(false), Some(false)) => Some(false),
-                _ => None,
-            };
-            Ok(r.map(|b| bool_term(ctx, b)))
+        // A chain is the left fold of the binary operator, which evaluates both of
+        // its operands, left then right, before combining them: so every operand is
+        // evaluated, in order, a hard error stops the chain at the first operand that
+        // raises one, and the value is the fold of `kleene_or`/`kleene_and` from the
+        // operator's identity — the value the left-nested binary tree has.
+        Expression::Or(operands) => {
+            let mut value = Some(false);
+            for operand in operands {
+                value = kleene_or(value, ebv_of(operand, row, schema, ctx)?);
+            }
+            Ok(value.map(|b| bool_term(ctx, b)))
         }
-        Expression::And(a, b) => {
-            let va = ebv_of(a, row, schema, ctx)?;
-            let vb = ebv_of(b, row, schema, ctx)?;
-            let r = match (va, vb) {
-                (Some(false), _) | (_, Some(false)) => Some(false),
-                (Some(true), Some(true)) => Some(true),
-                _ => None,
-            };
-            Ok(r.map(|b| bool_term(ctx, b)))
+        Expression::And(operands) => {
+            let mut value = Some(true);
+            for operand in operands {
+                value = kleene_and(value, ebv_of(operand, row, schema, ctx)?);
+            }
+            Ok(value.map(|b| bool_term(ctx, b)))
         }
         Expression::Not(a) => {
             let v = ebv_of(a, row, schema, ctx)?;
@@ -185,10 +186,7 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         // operands, overflow, divide-by-zero, and the indeterminate-timezone
         // instant-difference case) → Ok(None), NOT Err. A hard EvalError would
         // propagate out of FILTER and break the query; Ok(None) just drops the row.
-        Expression::Add(a, b) => binary_value(a, b, row, schema, ctx, value_add),
-        Expression::Subtract(a, b) => binary_value(a, b, row, schema, ctx, value_sub),
-        Expression::Multiply(a, b) => binary_value(a, b, row, schema, ctx, value_mul),
-        Expression::Divide(a, b) => binary_value(a, b, row, schema, ctx, value_div),
+        Expression::Arithmetic(first, steps) => arithmetic_chain(first, steps, row, schema, ctx),
         Expression::UnaryPlus(a) => unary_numeric(a, row, schema, ctx, numeric_unary_plus),
         Expression::UnaryMinus(a) => unary_numeric(a, row, schema, ctx, value_unary_minus),
 
@@ -999,18 +997,23 @@ pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
             out.insert(v.clone());
         }
         Expression::NamedNode(_) | Expression::Literal(_) => {}
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                expr_vars(operand, out);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            expr_vars(first, out);
+            for (_, operand) in steps {
+                expr_vars(operand, out);
+            }
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             expr_vars(a, out);
             expr_vars(b, out);
         }
@@ -1142,11 +1145,15 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
             pattern_all_vars(inner, out);
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right } => {
             pattern_all_vars(left, out);
             pattern_all_vars(right, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                pattern_all_vars(arm, out);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -2251,17 +2258,22 @@ fn substitute_pattern_impl(
                 map,
             )
         }
-        GraphPattern::Union { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
-            boxed_and_mapped(
-                GraphPattern::Union {
-                    left: left_sub,
-                    right: right_sub,
-                },
-                pattern,
-                map,
-            )
+        GraphPattern::Union { arms } => {
+            // Each arm is built boxed and then moved into the arm vector, which is sized
+            // up front so no push reallocates it: an arm's root moves exactly once, and
+            // its tracked address moves with it before anything else can allocate at the
+            // address it left.
+            let mut arms_sub = Vec::with_capacity(arms.len());
+            for arm in arms {
+                let boxed = substitute_pattern_impl(arm, row, map);
+                let before = std::ptr::from_ref(boxed.as_ref()) as usize;
+                arms_sub.push(*boxed);
+                let after = arms_sub.last().map_or(before, |moved| {
+                    std::ptr::from_ref::<GraphPattern>(moved) as usize
+                });
+                remap_moved(map, before, after);
+            }
+            boxed_and_mapped(GraphPattern::Union { arms: arms_sub }, pattern, map)
         }
         // The optional inline filter evaluates against the (already merged) joined
         // row, so a term-only variable it needs is injected on `left`: an outer
@@ -2639,6 +2651,17 @@ fn boxed_and_mapped_as(
     boxed
 }
 
+/// Move the tracked entry of a node that moved from address `before` to `after` — an
+/// arm unboxed into a `UNION`'s arm vector — so the entry names the node where the copy
+/// finally holds it. A no-op when `map` is disengaged or the node was never mapped.
+fn remap_moved(map: &mut Option<&mut SubstitutionTracking<'_>>, before: usize, after: usize) {
+    if let Some(tracking) = map.as_deref_mut()
+        && let Some(entry) = tracking.map.remove(&before)
+    {
+        tracking.map.insert(after, entry);
+    }
+}
+
 /// Demote an already-mapped node (inserted `counts_rows: true` by [`boxed_and_mapped`]) to
 /// scaffolding, because a wrapper is being added over it: the wrapper's own narrowed output
 /// becomes `source`'s true output for this row, so the wrapped node underneath must stop
@@ -2951,13 +2974,24 @@ fn substitute_expr(
             expr.clone()
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
-        Expression::Or(a, b) => Expression::Or(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+        Expression::Or(operands) => Expression::Or(
+            operands
+                .iter()
+                .map(|operand| substitute_expr(operand, row, &mut *map))
+                .collect(),
         ),
-        Expression::And(a, b) => Expression::And(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+        Expression::And(operands) => Expression::And(
+            operands
+                .iter()
+                .map(|operand| substitute_expr(operand, row, &mut *map))
+                .collect(),
+        ),
+        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
+            Box::new(substitute_expr(first, row, map)),
+            steps
+                .iter()
+                .map(|(op, operand)| (*op, substitute_expr(operand, row, &mut *map)))
+                .collect(),
         ),
         Expression::Equal(a, b) => Expression::Equal(
             Box::new(substitute_expr(a, row, map)),
@@ -2980,22 +3014,6 @@ fn substitute_expr(
             Box::new(substitute_expr(b, row, map)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Add(a, b) => Expression::Add(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Subtract(a, b) => Expression::Subtract(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Multiply(a, b) => Expression::Multiply(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Divide(a, b) => Expression::Divide(
             Box::new(substitute_expr(a, row, map)),
             Box::new(substitute_expr(b, row, map)),
         ),
@@ -4717,27 +4735,79 @@ pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
 /// call `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
 /// error, overflow, divide-by-zero, indeterminate timezone mix — all SPARQL
 /// expression errors).
-fn binary_value<D: DatasetView + Sync>(
-    a: &Expression,
-    b: &Expression,
+/// SPARQL's three-valued `||` over two effective boolean values (`None` is an
+/// error): `true` if either is `true`, `false` if both are `false`, an error
+/// otherwise (§17.2).
+const fn kleene_or(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    match (a, b) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+/// SPARQL's three-valued `&&` over two effective boolean values (`None` is an
+/// error): `false` if either is `false`, `true` if both are `true`, an error
+/// otherwise (§17.2).
+const fn kleene_and(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    match (a, b) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+/// Evaluate an [`Expression::Arithmetic`] chain: the left fold of its binary
+/// operators, exactly as the left-nested tree of binary nodes evaluates.
+///
+/// The binary node evaluates its left operand, then its right, then applies the
+/// operator; in the tree, the left operand of every step is the value of the steps
+/// before it. So the fold evaluates the first operand, then each step's operand in
+/// turn — every operand, whether or not an earlier step raised an expression error,
+/// so a hard error (and anything an operand's evaluation does) happens in the same
+/// order — and applies each step with [`arithmetic_step`] to the value so far, which
+/// is the term the binary node would have produced for it. An expression error
+/// (`Ok(None)`) in any operand or step makes every later step, and the chain, an
+/// error.
+fn arithmetic_chain<D: DatasetView + Sync>(
+    first: &Expression,
+    steps: &[(ArithmeticOperator, Expression)],
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-    op: impl Fn(&XsdValue, &XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some(ta), Some(tb)) = (
-        eval_expr(a, row, schema, ctx)?,
-        eval_expr(b, row, schema, ctx)?,
-    ) else {
-        return Ok(None);
-    };
-    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) else {
-        return Ok(None); // operand with no XSD value
-    };
-    match op(&xa, &xb) {
-        Ok(result) => Ok(Some(xsd_to_term(ctx, &result))),
-        Err(_) => Ok(None), // overflow / div-by-zero / type-mismatch → expression error
+    let mut value = eval_expr(first, row, schema, ctx)?;
+    for (op, operand) in steps {
+        let right = eval_expr(operand, row, schema, ctx)?;
+        value = match (value, right) {
+            (Some(ta), Some(tb)) => arithmetic_step(ctx, *op, ta, tb),
+            _ => None,
+        };
     }
+    Ok(value)
+}
+
+/// Apply one binary arithmetic operator to two evaluated operand terms, as the
+/// binary node does: resolve both to XSD values and call the operator, returning
+/// `None` — SPARQL's expression error, NOT a hard error — for an operand with no
+/// XSD value and for overflow, division by zero or a type mismatch.
+fn arithmetic_step<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    op: ArithmeticOperator,
+    ta: SolutionTerm<D::Id>,
+    tb: SolutionTerm<D::Id>,
+) -> Option<SolutionTerm<D::Id>> {
+    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) else {
+        return None; // operand with no XSD value
+    };
+    let result = match op {
+        ArithmeticOperator::Add => value_add(&xa, &xb),
+        ArithmeticOperator::Subtract => value_sub(&xa, &xb),
+        ArithmeticOperator::Multiply => value_mul(&xa, &xb),
+        ArithmeticOperator::Divide => value_div(&xa, &xb),
+    };
+    // Overflow / div-by-zero / type-mismatch → expression error.
+    result.ok().map(|result| xsd_to_term(ctx, &result))
 }
 
 /// Evaluate a unary numeric expression (`+` / `-`): resolve the operand, call `op`,
@@ -5033,12 +5103,9 @@ mod tests {
         let ds = empty_ds();
         // (error || true) == true, even though the left operand errors.
         let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
-        let expr = Expression::Or(
-            Box::new(err),
-            Box::new(typed_lit(
-                "true",
-                "http://www.w3.org/2001/XMLSchema#boolean",
-            )),
+        let expr = Expression::or(
+            err,
+            typed_lit("true", "http://www.w3.org/2001/XMLSchema#boolean"),
         );
         assert_eq!(ebv(&ds, &expr), Some(true));
     }
@@ -5047,12 +5114,9 @@ mod tests {
     fn kleene_and_with_error_and_false_is_false() {
         let ds = empty_ds();
         let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
-        let expr = Expression::And(
-            Box::new(err),
-            Box::new(typed_lit(
-                "false",
-                "http://www.w3.org/2001/XMLSchema#boolean",
-            )),
+        let expr = Expression::and(
+            err,
+            typed_lit("false", "http://www.w3.org/2001/XMLSchema#boolean"),
         );
         assert_eq!(ebv(&ds, &expr), Some(false));
     }
@@ -5596,9 +5660,10 @@ mod tests {
     fn arithmetic_add_integers() {
         let ds = empty_ds();
         // 1 + 2 = 3
-        let expr = Expression::Add(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("2", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("1", XINT),
+            ArithmeticOperator::Add,
+            typed_lit("2", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
@@ -5607,9 +5672,10 @@ mod tests {
     fn arithmetic_subtract_integers() {
         let ds = empty_ds();
         // 7 - 3 = 4
-        let expr = Expression::Subtract(
-            Box::new(typed_lit("7", XINT)),
-            Box::new(typed_lit("3", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("7", XINT),
+            ArithmeticOperator::Subtract,
+            typed_lit("3", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("4".to_owned()));
     }
@@ -5618,9 +5684,10 @@ mod tests {
     fn arithmetic_multiply_integers() {
         let ds = empty_ds();
         // 3 * 4 = 12
-        let expr = Expression::Multiply(
-            Box::new(typed_lit("3", XINT)),
-            Box::new(typed_lit("4", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("3", XINT),
+            ArithmeticOperator::Multiply,
+            typed_lit("4", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("12".to_owned()));
     }
@@ -5629,9 +5696,10 @@ mod tests {
     fn arithmetic_divide_integer_returns_decimal() {
         let ds = empty_ds();
         // 1 / 2 = 0.5 (decimal, per XPath op:numeric-divide)
-        let expr = Expression::Divide(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("2", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("1", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("2", XINT),
         );
         // The result is a decimal; lexical "0.5" at scale 18 → canonical starts "0.5"
         let result = lex(&ds, &expr).expect("should produce a value");
@@ -5647,9 +5715,10 @@ mod tests {
     fn arithmetic_divide_10_4() {
         let ds = empty_ds();
         // 10 / 4 = 2.5
-        let expr = Expression::Divide(
-            Box::new(typed_lit("10", XINT)),
-            Box::new(typed_lit("4", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("10", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("4", XINT),
         );
         let result = lex(&ds, &expr).expect("should produce a value");
         assert!(
@@ -5664,7 +5733,7 @@ mod tests {
     fn arithmetic_type_error_is_ok_none() {
         let ds = empty_ds();
         // "a" + 1 → type error → Ok(None) (a FILTER drops the row; no hard Err).
-        let expr = Expression::Add(Box::new(lit("a")), Box::new(typed_lit("1", XINT)));
+        let expr = Expression::arithmetic(lit("a"), ArithmeticOperator::Add, typed_lit("1", XINT));
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
@@ -5678,9 +5747,10 @@ mod tests {
     fn arithmetic_divide_by_zero_is_ok_none() {
         let ds = empty_ds();
         // integer/0 → DivisionByZero → Ok(None)
-        let expr = Expression::Divide(
-            Box::new(typed_lit("5", XINT)),
-            Box::new(typed_lit("0", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("5", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("0", XINT),
         );
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
@@ -5743,9 +5813,10 @@ mod tests {
         // :a has age 30, so plus1 should be 31.
         // :b has age 17, so plus1 should be 18.
         let inner = bgp1("s", "http://ex/age", "n");
-        let expr = Expression::Add(
-            Box::new(Expression::Variable(Variable::new("n"))),
-            Box::new(typed_lit("1", XINT)),
+        let expr = Expression::arithmetic(
+            Expression::Variable(Variable::new("n")),
+            ArithmeticOperator::Add,
+            typed_lit("1", XINT),
         );
         let seq = eval(
             &GraphPattern::Extend {
@@ -6031,9 +6102,10 @@ mod tests {
         // difference is indeterminate (mixed timezone, not kept).
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             )),
             Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
@@ -6059,9 +6131,10 @@ mod tests {
         // is asserted in a single place.
         let ds = temporal_graph();
         let cond = Expression::Greater(
-            Box::new(Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             )),
             Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
@@ -6116,9 +6189,10 @@ mod tests {
         // is unambiguously later -> determinate `false`, excluded.
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::Add(
-                Box::new(Expression::Variable(Variable::new("start"))),
-                Box::new(typed_lit("P5D", XSD_DAYTIME_DURATION)),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("start")),
+                ArithmeticOperator::Add,
+                typed_lit("P5D", XSD_DAYTIME_DURATION),
             )),
             Box::new(Expression::Variable(Variable::new("end"))),
         );
@@ -6149,15 +6223,17 @@ mod tests {
         let bound = GraphPattern::Extend {
             inner: Box::new(inner),
             variable: Variable::new("len"),
-            expression: Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             ),
         };
         let cond = Expression::GreaterOrEqual(
-            Box::new(Expression::Divide(
-                Box::new(Expression::Variable(Variable::new("len"))),
-                Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("len")),
+                ArithmeticOperator::Divide,
+                typed_lit("P1D", XSD_DAYTIME_DURATION),
             )),
             Box::new(typed_lit("7", XINT)),
         );
@@ -6671,9 +6747,10 @@ mod tests {
         // 2024-01-31 + P1M must clamp to the TARGET month's last day AND land
         // on that month's leap day — "add 30 days" would give 2024-03-02,
         // which passes neither.
-        let e = Expression::Add(
-            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("2024-01-31T00:00:00", XSD_DATETIME),
+            ArithmeticOperator::Add,
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("dateTime + yearMonthDuration");
         assert_eq!(lex, "2024-02-29T00:00:00");
@@ -6685,8 +6762,8 @@ mod tests {
         let ds = empty_ds();
         let dt = typed_lit("2024-01-31T00:00:00", XSD_DATETIME);
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let forward = Expression::Add(Box::new(dt.clone()), Box::new(dur.clone()));
-        let commuted = Expression::Add(Box::new(dur), Box::new(dt));
+        let forward = Expression::arithmetic(dt.clone(), ArithmeticOperator::Add, dur.clone());
+        let commuted = Expression::arithmetic(dur, ArithmeticOperator::Add, dt);
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("dateTime + duration");
         let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("duration + dateTime");
         assert_eq!(flex, "2024-02-01T00:00:00");
@@ -6700,9 +6777,10 @@ mod tests {
         let ds = empty_ds();
         // `-` has no commuted row: `duration - instant` is meaningless, even
         // though `instant - duration` (not tested here) is well-defined.
-        let e = Expression::Subtract(
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Subtract,
+            typed_lit("2024-01-31T00:00:00", XSD_DATETIME),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6712,9 +6790,10 @@ mod tests {
         let ds = empty_ds();
         // earlier - later must be NEGATIVE; a `|a - b|` implementation would
         // pass an unsigned variant of this test but not this one.
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-10T10:00:00Z", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-10T10:00:00Z", XSD_DATETIME),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("instant difference");
         assert_eq!(lex, "-P9D");
@@ -6724,9 +6803,10 @@ mod tests {
     #[test]
     fn timezone_mix_is_indeterminate() {
         let ds = empty_ds();
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-01T10:00:00", XSD_DATETIME),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6737,9 +6817,10 @@ mod tests {
     #[test]
     fn two_untimezoned_instants_still_subtract() {
         let ds = empty_ds();
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-10T10:00:00", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-10T10:00:00", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-01T10:00:00", XSD_DATETIME),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("untimezoned difference");
         assert_eq!(lex, "P9D");
@@ -6751,9 +6832,10 @@ mod tests {
         let ds = empty_ds();
         // Dual discriminator A: a zero-valued yearMonthDuration result must
         // canonicalize as "P0M", not the general-duration "PT0S".
-        let e = Expression::Subtract(
-            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("P1Y", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Subtract,
+            typed_lit("P1Y", XSD_YEARMONTH_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("P1Y - P1Y");
         assert_eq!(lex, "P0M");
@@ -6766,9 +6848,10 @@ mod tests {
         // Dual discriminator B: the components alone look exactly like a
         // pure yearMonthDuration ("P1M"); only the declared tags differ, and
         // that must be enough to force the general xsd:duration result.
-        let e = Expression::Add(
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("PT0S", XSD_DAYTIME_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Add,
+            typed_lit("PT0S", XSD_DAYTIME_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("P1M + PT0S");
         assert_eq!(lex, "P1M");
@@ -6783,8 +6866,8 @@ mod tests {
         // form, not through a plain single-discriminant numeric dispatch.
         let n = typed_lit("3", XINT);
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let forward = Expression::Multiply(Box::new(n.clone()), Box::new(dur.clone()));
-        let commuted = Expression::Multiply(Box::new(dur), Box::new(n));
+        let forward = Expression::arithmetic(n.clone(), ArithmeticOperator::Multiply, dur.clone());
+        let commuted = Expression::arithmetic(dur, ArithmeticOperator::Multiply, n);
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("3 * P1D");
         let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("P1D * 3");
         assert_eq!(flex, "P3D");
@@ -6801,13 +6884,18 @@ mod tests {
         // duration without silent rounding, so this is a type error, not a
         // coerced multiplication.
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let by_double = Expression::Multiply(
-            Box::new(dur.clone()),
-            Box::new(typed_lit("1.5", XSD_DOUBLE)),
+        let by_double = Expression::arithmetic(
+            dur.clone(),
+            ArithmeticOperator::Multiply,
+            typed_lit("1.5", XSD_DOUBLE),
         );
         assert_eq!(lex(&ds, &by_double), None);
         // A NaN factor must stay a type error too, never coerce to zero.
-        let by_nan = Expression::Multiply(Box::new(dur), Box::new(typed_lit("NaN", XSD_DOUBLE)));
+        let by_nan = Expression::arithmetic(
+            dur,
+            ArithmeticOperator::Multiply,
+            typed_lit("NaN", XSD_DOUBLE),
+        );
         assert_eq!(lex(&ds, &by_nan), None);
     }
 
@@ -6816,9 +6904,10 @@ mod tests {
         let ds = empty_ds();
         // Unlike `*`, `/` is not symmetric: `Nx / DUR` has no valid row even
         // though `DUR / Nx` does.
-        let e = Expression::Divide(
-            Box::new(typed_lit("3", XINT)),
-            Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("3", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("P1D", XSD_DAYTIME_DURATION),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6860,17 +6949,19 @@ mod tests {
         // The only pin of `time`'s CyclicDay second-action through this
         // dispatch: crossing midnight in either direction must wrap, not
         // error or clamp.
-        let forward = Expression::Add(
-            Box::new(typed_lit("23:00:00", XSD_TIME)),
-            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        let forward = Expression::arithmetic(
+            typed_lit("23:00:00", XSD_TIME),
+            ArithmeticOperator::Add,
+            typed_lit("PT2H", XSD_DAYTIME_DURATION),
         );
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("23:00:00 + PT2H");
         assert_eq!(flex, "01:00:00");
         assert_eq!(fdt, XSD_TIME);
 
-        let backward = Expression::Subtract(
-            Box::new(typed_lit("01:00:00", XSD_TIME)),
-            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        let backward = Expression::arithmetic(
+            typed_lit("01:00:00", XSD_TIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("PT2H", XSD_DAYTIME_DURATION),
         );
         let (blex, bdt) = lex_and_dt(&ds, &backward).expect("01:00:00 - PT2H");
         assert_eq!(blex, "23:00:00");
@@ -8381,9 +8472,10 @@ mod tests {
         let bind_sum = GraphPattern::Extend {
             inner: Box::new(scan),
             variable: Variable::new("sum"),
-            expression: Expression::Add(
-                Box::new(Expression::Variable(Variable::new("o"))),
-                Box::new(typed_lit("5", XINT)),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("o")),
+                ArithmeticOperator::Add,
+                typed_lit("5", XINT),
             ),
         };
         let bind_label = GraphPattern::Extend {
@@ -9786,5 +9878,226 @@ mod tests {
                 "{literal:?}"
             );
         }
+    }
+
+    // ---- n-ary chains are the left fold of their binary operator ---------------
+
+    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+
+    /// A `true`, `false` or type-error operand, by its three-valued value.
+    fn truth(value: Option<bool>) -> Expression {
+        match value {
+            Some(true) => typed_lit("true", XBOOL),
+            Some(false) => typed_lit("false", XBOOL),
+            // `<a> < <b>`: IRIs do not order, a type error.
+            None => Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b"))),
+        }
+    }
+
+    /// Every sequence of `len` three-valued operands.
+    fn truth_sequences(len: u32) -> Vec<Vec<Option<bool>>> {
+        (0..3_usize.pow(len))
+            .map(|mut code| {
+                (0..len)
+                    .map(|_| {
+                        let value = [Some(true), Some(false), None][code % 3];
+                        code /= 3;
+                        value
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The binary-shaped left-nested tree `op(op(op(a, b), c), d)` of a chain: every
+    /// node two operands, exactly the tree the binary operator's grammar builds.
+    fn left_nested(
+        operands: Vec<Expression>,
+        node: fn(Vec<Expression>) -> Expression,
+    ) -> Expression {
+        let mut operands = operands.into_iter();
+        let first = operands.next().expect("at least one operand");
+        operands.fold(first, |left, right| node(vec![left, right]))
+    }
+
+    /// For every sequence of up to five `true`/`false`/error operands, the n-ary `||`
+    /// and `&&` evaluate to exactly what the left-nested binary tree does, and to the
+    /// three-valued value computed here from the truth table: `||` is `true` if any
+    /// operand is, `false` if all are, an error otherwise; `&&` dually.
+    #[test]
+    fn n_ary_logical_chains_are_the_left_fold_of_the_binary_operator() {
+        let ds = empty_ds();
+        for len in 1..=5 {
+            for values in truth_sequences(len) {
+                let operands: Vec<Expression> = values.iter().map(|v| truth(*v)).collect();
+                let or_expected = if values.contains(&Some(true)) {
+                    Some(true)
+                } else if values.iter().all(|v| *v == Some(false)) {
+                    Some(false)
+                } else {
+                    None
+                };
+                let and_expected = if values.contains(&Some(false)) {
+                    Some(false)
+                } else if values.iter().all(|v| *v == Some(true)) {
+                    Some(true)
+                } else {
+                    None
+                };
+                let flat_or = Expression::Or(operands.clone());
+                assert_eq!(ebv(&ds, &flat_or), or_expected, "|| {values:?}");
+                let flat_and = Expression::And(operands.clone());
+                assert_eq!(ebv(&ds, &flat_and), and_expected, "&& {values:?}");
+                if len >= 2 {
+                    let nested_or = left_nested(operands.clone(), Expression::Or);
+                    assert_eq!(ebv(&ds, &nested_or), or_expected, "nested || {values:?}");
+                    let nested_and = left_nested(operands, Expression::And);
+                    assert_eq!(ebv(&ds, &nested_and), and_expected, "nested && {values:?}");
+                }
+            }
+        }
+        // The constructed shapes the parser never builds: an empty chain is the
+        // operator's identity.
+        assert_eq!(ebv(&ds, &Expression::Or(vec![])), Some(false));
+        assert_eq!(ebv(&ds, &Expression::And(vec![])), Some(true));
+    }
+
+    /// An operand that raises a HARD error (an unregistered custom function) fails the
+    /// whole chain wherever it stands — after a `true` in `||` or a `false` in `&&`
+    /// too — because the binary operator evaluates both of its operands, so the tree
+    /// the chain stands for reaches every operand. Its neighbour without the hard
+    /// operand answers.
+    #[test]
+    fn a_hard_error_anywhere_in_a_logical_chain_fails_it() {
+        let ds = empty_ds();
+        let hard = || {
+            Expression::FunctionCall(
+                Function::Custom(NamedNode::new_unchecked(
+                    "https://example.org/fn/unregistered",
+                )),
+                vec![],
+            )
+        };
+        let run = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            eval_ebv(expr, &[], &VarSchema::new(), &mut ctx)
+        };
+        let or = Expression::Or(vec![truth(Some(true)), truth(None), hard()]);
+        assert!(run(&or).is_err());
+        let and = Expression::And(vec![truth(Some(false)), hard(), truth(Some(true))]);
+        assert!(run(&and).is_err());
+        let or = Expression::Or(vec![truth(Some(true)), truth(None), truth(Some(false))]);
+        assert_eq!(run(&or).expect("no hard error"), Some(true));
+    }
+
+    /// The terms an arithmetic chain is drawn from: integers, decimals, a float,
+    /// doubles on both sides of a rounding tie, `NaN`, zero (for division), and a
+    /// string, which is a type error.
+    fn arithmetic_operand(index: usize) -> Expression {
+        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+        match index % 11 {
+            0 => typed_lit("7", XINT),
+            1 => typed_lit("-3", XINT),
+            2 => typed_lit("0", XINT),
+            3 => typed_lit("2.5", XDEC),
+            4 => typed_lit("0.1", XDEC),
+            5 => typed_lit("1.5", XFLT),
+            6 => typed_lit("1.0E16", XDBL),
+            7 => typed_lit("1.0E0", XDBL),
+            8 => typed_lit("NaN", XDBL),
+            9 => typed_lit("3", XINT),
+            _ => lit("x"),
+        }
+    }
+
+    /// Four hundred deterministic chains of two to nine operands over every operator
+    /// and every operand type evaluate, as one n-ary node, to exactly the term —
+    /// lexical form and datatype, or the error — that the left-nested binary tree of
+    /// one-step nodes evaluates to. The binary tree is the grammar's own shape; the
+    /// chain is its left spine.
+    #[test]
+    fn arithmetic_chains_are_the_left_fold_of_the_binary_operators() {
+        let ds = empty_ds();
+        let ops = [
+            ArithmeticOperator::Add,
+            ArithmeticOperator::Subtract,
+            ArithmeticOperator::Multiply,
+            ArithmeticOperator::Divide,
+        ];
+        let term = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            let term = eval_expr(expr, &[], &VarSchema::new(), &mut ctx).expect("no hard error");
+            term.map(|t| value_of(&ctx, t))
+        };
+        // A fixed linear congruential sequence: the cases are the same on every run.
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(state >> 33).expect("31 bits fit") % bound
+        };
+        let mut values = 0;
+        for _ in 0..400 {
+            let len = 2 + next(8);
+            let first = arithmetic_operand(next(11));
+            let steps: Vec<(ArithmeticOperator, Expression)> = (1..len)
+                .map(|_| (ops[next(4)], arithmetic_operand(next(11))))
+                .collect();
+            let flat = Expression::Arithmetic(Box::new(first.clone()), steps.clone());
+            let nested = steps.iter().cloned().fold(first, |left, step| {
+                Expression::Arithmetic(Box::new(left), vec![step])
+            });
+            let expected = term(&nested);
+            values += usize::from(expected.is_some());
+            assert_eq!(term(&flat), expected, "{flat:?}");
+        }
+        // The cases are not all errors: most of them compare values.
+        assert!(values > 100, "{values} of 400 chains have a value");
+        // A chain with no step denotes its first operand.
+        assert_eq!(
+            term(&Expression::Arithmetic(
+                Box::new(typed_lit("7", XINT)),
+                vec![]
+            )),
+            term(&typed_lit("7", XINT))
+        );
+    }
+
+    /// Every operand of an arithmetic chain is evaluated, as the binary node evaluates
+    /// both of its operands: a hard error after a step that already raised a type
+    /// error still fails the chain, and its neighbour without the hard operand is the
+    /// ordinary type error.
+    #[test]
+    fn a_hard_error_after_a_type_error_in_an_arithmetic_chain_fails_it() {
+        let ds = empty_ds();
+        let run = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            eval_expr(expr, &[], &VarSchema::new(), &mut ctx).map(|term| term.is_some())
+        };
+        let hard = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(
+                "https://example.org/fn/unregistered",
+            )),
+            vec![],
+        );
+        let chain = Expression::Arithmetic(
+            Box::new(lit("x")),
+            vec![
+                (ArithmeticOperator::Add, typed_lit("1", XINT)),
+                (ArithmeticOperator::Multiply, hard),
+            ],
+        );
+        assert!(run(&chain).is_err());
+        let neighbour = Expression::Arithmetic(
+            Box::new(lit("x")),
+            vec![
+                (ArithmeticOperator::Add, typed_lit("1", XINT)),
+                (ArithmeticOperator::Multiply, typed_lit("2", XINT)),
+            ],
+        );
+        assert!(!run(&neighbour).expect("no hard error"));
     }
 }

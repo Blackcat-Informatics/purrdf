@@ -67,6 +67,9 @@ criterion = { workspace = true }
 # own parser. Dev-only: never a runtime or release dependency, so the wasm gate
 # is unaffected.
 regex = { workspace = true }
+# The counting allocator `tests/chain_parse_is_linear.rs` measures a chain's parse
+# with. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 name = "tokenize"

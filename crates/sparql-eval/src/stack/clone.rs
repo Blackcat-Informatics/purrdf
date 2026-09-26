@@ -8,7 +8,7 @@
 //! evaluator copies whole subtrees from wherever it happens to be: an `EXISTS` preparing
 //! its site copies the site's inner pattern, a correlated substitution copies a property
 //! path leaf, a `SERVICE` copies its body before serializing it, a user-defined function
-//! copies its body before rewriting it. An operator chain the parser admits is 511
+//! copies its body before rewriting it. The tree the parser admits is up to 512
 //! levels tall, and one level of the derived copy costs a few hundred bytes of native
 //! stack, so a copy made deep in an evaluation can need more stack than the guard's margin
 //! leaves.
@@ -132,9 +132,8 @@ pub(crate) fn pattern(node: &GraphPattern) -> GraphPattern {
             expr: expression(expr),
             inner: boxed(inner),
         },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: boxed(left),
-            right: boxed(right),
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms.iter().map(pattern).collect(),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
@@ -234,18 +233,21 @@ pub(crate) fn expression(node: &Expression) -> Expression {
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => node.clone(),
-        Expression::Or(a, b) => Expression::Or(boxed(a), boxed(b)),
-        Expression::And(a, b) => Expression::And(boxed(a), boxed(b)),
+        Expression::Or(operands) => Expression::Or(list(operands)),
+        Expression::And(operands) => Expression::And(list(operands)),
+        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
+            boxed(first),
+            steps
+                .iter()
+                .map(|(op, operand)| (*op, expression(operand)))
+                .collect(),
+        ),
         Expression::Equal(a, b) => Expression::Equal(boxed(a), boxed(b)),
         Expression::SameTerm(a, b) => Expression::SameTerm(boxed(a), boxed(b)),
         Expression::Greater(a, b) => Expression::Greater(boxed(a), boxed(b)),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(boxed(a), boxed(b)),
         Expression::Less(a, b) => Expression::Less(boxed(a), boxed(b)),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(boxed(a), boxed(b)),
-        Expression::Add(a, b) => Expression::Add(boxed(a), boxed(b)),
-        Expression::Subtract(a, b) => Expression::Subtract(boxed(a), boxed(b)),
-        Expression::Multiply(a, b) => Expression::Multiply(boxed(a), boxed(b)),
-        Expression::Divide(a, b) => Expression::Divide(boxed(a), boxed(b)),
         Expression::UnaryPlus(a) => Expression::UnaryPlus(boxed(a)),
         Expression::UnaryMinus(a) => Expression::UnaryMinus(boxed(a)),
         Expression::Not(a) => Expression::Not(boxed(a)),
@@ -328,8 +330,8 @@ mod tests {
         let text = "PREFIX ex: <http://example.org/>
             SELECT ?s (COUNT(DISTINCT ?o) AS ?n) (SAMPLE(?o) AS ?any) WHERE {
               { ?s ex:p ?o . ?s ex:q+/^ex:r|!(ex:a|^ex:b)?/ex:c* ?x }
-              UNION { GRAPH ?g { ?s ex:p ?o } }
-              OPTIONAL { ?s ex:q ?w FILTER(?w > 1 && !BOUND(?z)) }
+              UNION { GRAPH ?g { ?s ex:p ?o } } UNION { ?s ex:t ?o }
+              OPTIONAL { ?s ex:q ?w FILTER(?w > 1 && !BOUND(?z) && (?w + 2 * ?o - 1) / 3 < 9 || ?o) }
               MINUS { ?s ex:m ?o }
               BIND(IF(?o = 1, COALESCE(?w, 2), ?o IN (1, 2, 3)) AS ?b)
               FILTER NOT EXISTS { SELECT ?s WHERE { ?s ex:n ?v } ORDER BY DESC(?v) LIMIT 2 OFFSET 1 }
@@ -343,13 +345,17 @@ mod tests {
     /// Inside a scope, a copy that runs out of stack is the typed refusal.
     #[test]
     fn a_copy_that_runs_out_of_stack_is_refused() {
-        let chain = format!(
-            "SELECT * WHERE {{ BIND(1 AS ?x) FILTER({}1 > 0) }}",
-            "?x + ".repeat(500)
-        );
+        // An operator chain is one node however long, so the depth comes from real
+        // nesting: seventy bracket levels of seven operator levels each, 490 levels in
+        // all, inside both of the parser's budgets.
+        let mut nested = String::from("?x");
+        for _ in 0..70 {
+            nested = format!("(?x || ?x && ?x != ?x + ?x * {nested})");
+        }
+        let chain = format!("SELECT * WHERE {{ BIND(1 AS ?x) FILTER({nested}) }}");
         let parsed = SparqlParser::new().parse_query(&chain).expect("parses");
         // Eat into the thread's stack until a little more than the margin is left:
-        // the copy's 500 levels cannot fit in what remains above it. Measured, not
+        // the copy's 490 levels cannot fit in what remains above it. Measured, not
         // assumed from the requested size, which the C library may round up.
         fn descend(parsed: &Query) -> Result<Query, crate::EvalError> {
             if purrdf_stack::remaining() <= purrdf_stack::MARGIN_BYTES + 32 * 1024 {

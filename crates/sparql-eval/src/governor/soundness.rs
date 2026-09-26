@@ -490,13 +490,20 @@ where
             visit(PatternPart::Child(left, ChildEdge::MONOTONE))
                 || visit(PatternPart::Child(right, ChildEdge::MONOTONE_BAG))
         }
-        // `UNION` is a multiset concatenation, left rows then right rows: truncating the
-        // RIGHT side removes rows from the end, so that side is positional, while
-        // truncating the LEFT side removes rows from the middle of the concatenation.
-        GraphPattern::Union { left, right } => {
-            visit(PatternPart::Child(left, ChildEdge::MONOTONE_BAG))
-                || visit(PatternPart::Child(right, ChildEdge::MONOTONE))
-        }
+        // `UNION` is a multiset concatenation of its arms' rows in arm order: truncating
+        // the LAST arm removes rows from the end, so that arm is positional, while
+        // truncating any earlier arm removes rows from the middle of the concatenation.
+        // That is the edge each arm had in the left-nested binary chain the node stands
+        // for: the last arm was the outermost right operand, and every other arm reached
+        // the root through at least one left operand.
+        GraphPattern::Union { arms } => arms.iter().enumerate().any(|(i, arm)| {
+            let edge = if i + 1 == arms.len() {
+                ChildEdge::MONOTONE
+            } else {
+                ChildEdge::MONOTONE_BAG
+            };
+            visit(PatternPart::Child(arm, edge))
+        }),
         // `OPTIONAL` over a truncated optional side is an inner join, not a wider outer
         // join: `binop::left_join_lift` suppresses the left-alone padding exactly then,
         // because "no compatible right row exists" is a claim about the WHOLE right bag.
@@ -656,18 +663,19 @@ where
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => false,
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            operands.iter().any(|e| visit(ExpressionPart::Sub(e)))
+        }
+        Expression::Arithmetic(first, steps) => {
+            visit(ExpressionPart::Sub(first))
+                || steps.iter().any(|(_, e)| visit(ExpressionPart::Sub(e)))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             visit(ExpressionPart::Sub(a)) || visit(ExpressionPart::Sub(b))
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
@@ -967,7 +975,7 @@ pub(crate) const fn child_row_ceiling(
         // `DISTINCT`/`REDUCED` are the other trap — `k` distinct rows can take arbitrarily
         // many input rows to reach.
         GraphPattern::Join { left: _, right: _ }
-        | GraphPattern::Union { left: _, right: _ }
+        | GraphPattern::Union { arms: _ }
         | GraphPattern::LeftJoin {
             left: _,
             right: _,
@@ -1145,7 +1153,7 @@ const fn pattern_label_index(pattern: &GraphPattern) -> usize {
         } => 3,
         GraphPattern::Lateral { left: _, right: _ } => 4,
         GraphPattern::Filter { expr: _, inner: _ } => 5,
-        GraphPattern::Union { left: _, right: _ } => 6,
+        GraphPattern::Union { arms: _ } => 6,
         GraphPattern::Graph { name: _, inner: _ } => 7,
         GraphPattern::Extend {
             inner: _,
@@ -1613,10 +1621,13 @@ pub(crate) fn analyze_pattern(
                 can_hard_error: l.can_hard_error || r.can_hard_error,
             }
         }
-        GraphPattern::Union { left, right } => {
-            let l = analyze_pattern(left, table);
-            let r = analyze_pattern(right, table);
-            NodeAnalysis {
+        // Free variables are the arms' union and a certainly-bound variable is bound by
+        // every arm — the pairwise fold the left-nested binary chain computed. An armless
+        // union produces no solution and binds nothing.
+        GraphPattern::Union { arms } => {
+            let mut analyses = arms.iter().map(|arm| analyze_pattern(arm, table));
+            let first = analyses.next().unwrap_or_default();
+            analyses.fold(first, |l, r| NodeAnalysis {
                 free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                 certainly_bound: l
                     .certainly_bound
@@ -1625,7 +1636,7 @@ pub(crate) fn analyze_pattern(
                     .collect(),
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
                 can_hard_error: l.can_hard_error || r.can_hard_error,
-            }
+            })
         }
         GraphPattern::LeftJoin {
             left,
@@ -1860,18 +1871,32 @@ pub(crate) fn analyze_expr(
             out.insert(v.clone());
             (out, false, false)
         }
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            let (mut f, mut s, mut h) = (DetHashSet::default(), false, false);
+            for operand in operands {
+                let (fo, so, ho) = analyze_expr(operand, table);
+                f.extend(fo);
+                s |= so;
+                h |= ho;
+            }
+            (f, s, h)
+        }
+        Expression::Arithmetic(first, steps) => {
+            let (mut f, mut s, mut h) = analyze_expr(first, table);
+            for (_, operand) in steps {
+                let (fo, so, ho) = analyze_expr(operand, table);
+                f.extend(fo);
+                s |= so;
+                h |= ho;
+            }
+            (f, s, h)
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             let (mut fa, sa, ha) = analyze_expr(a, table);
             let (fb, sb, hb) = analyze_expr(b, table);
             fa.extend(fb);
@@ -2106,10 +2131,13 @@ fn admissible_rec(
         }
         GraphPattern::PropertyFunction(_) => false,
         GraphPattern::Graph { name: _, inner } => admissible_rec(inner, current_row_vars, table),
-        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+        GraphPattern::Join { left, right } => {
             admissible_rec(left, current_row_vars, table)
                 && admissible_rec(right, current_row_vars, table)
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .all(|arm| admissible_rec(arm, current_row_vars, table)),
         GraphPattern::Filter { expr, inner } => {
             // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
             // rather than read a synthesized empty `certainly_bound`.
@@ -2280,11 +2308,13 @@ pub(crate) fn exists_row_collision<'a>(
         | GraphPattern::Path { .. }
         | GraphPattern::PropertyFunction(_) => None,
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             exists_row_collision(left, row_scope).or_else(|| exists_row_collision(right, row_scope))
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .find_map(|arm| exists_row_collision(arm, row_scope)),
         GraphPattern::Minus { left, .. } => exists_row_collision(left, row_scope),
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
@@ -2404,12 +2434,14 @@ fn find_group_extend_row_collision<'a>(
             find_group_extend_row_collision(next, variables, row_scope)
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             find_group_extend_row_collision(left, variables, row_scope)
                 .or_else(|| find_group_extend_row_collision(right, variables, row_scope))
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .find_map(|arm| find_group_extend_row_collision(arm, variables, row_scope)),
         GraphPattern::Minus { left, .. } => {
             find_group_extend_row_collision(left, variables, row_scope)
         }
@@ -2467,18 +2499,21 @@ fn expr_probe_admissible(
         Expression::Variable(v) | Expression::Bound(v) => {
             !current_row_vars.contains(v) || inner_certainly_bound.contains(v)
         }
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => operands
+            .iter()
+            .all(|e| expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)),
+        Expression::Arithmetic(first, steps) => {
+            expr_probe_admissible(first, current_row_vars, inner_certainly_bound, table)
+                && steps.iter().all(|(_, e)| {
+                    expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)
+                })
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
                 && expr_probe_admissible(b, current_row_vars, inner_certainly_bound, table)
         }
@@ -3207,10 +3242,7 @@ mod tests {
         left: GraphPattern,
         right: GraphPattern,
     ) -> GraphPattern {
-        let union = GraphPattern::Union {
-            left: boxed(left),
-            right: boxed(right),
-        };
+        let union = GraphPattern::union(left, right);
         let project = GraphPattern::Project {
             inner: boxed(union),
             variables: vec![Variable::new("s")],
@@ -3261,7 +3293,10 @@ mod tests {
     fn union_arms(plan: &GraphPattern) -> (&GraphPattern, &GraphPattern) {
         let mut node = plan;
         loop {
-            if let GraphPattern::Union { left, right } = node {
+            if let GraphPattern::Union { arms } = node {
+                let [left, right] = arms.as_slice() else {
+                    panic!("the plan's Union has two arms");
+                };
                 return (left, right);
             }
             let mut child = None;
@@ -3462,10 +3497,7 @@ mod tests {
             right: boxed(other_bgp()),
             expression: Some(Expression::Bound(Variable::new("o"))),
         };
-        let united = GraphPattern::Union {
-            left: boxed(optional),
-            right: boxed(bgp()),
-        };
+        let united = GraphPattern::union(optional, bgp());
         let minus = GraphPattern::Minus {
             left: boxed(united),
             right: boxed(other_bgp()),
@@ -3617,10 +3649,7 @@ mod tests {
         // UNION emits left rows then right rows, so truncating the RIGHT arm removes
         // rows from the END (a genuine prefix) while truncating the LEFT arm removes
         // them from the middle of the concatenation.
-        let union = GraphPattern::Union {
-            left: boxed(bgp()),
-            right: boxed(other_bgp()),
-        };
+        let union = GraphPattern::union(bgp(), other_bgp());
         assert_eq!(context_at(&union, &[0]).order(), OrderCertainty::Unordered);
         assert_eq!(context_at(&union, &[1]).order(), OrderCertainty::Ordered);
 

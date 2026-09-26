@@ -1416,7 +1416,9 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
-    use purrdf_sparql_algebra::{Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern};
+    use purrdf_sparql_algebra::{
+        ArithmeticOperator, Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern,
+    };
 
     // ---- should_parallelize -------------------------------------------------
 
@@ -1500,9 +1502,10 @@ mod tests {
 
     #[test]
     fn plain_arithmetic_and_regex_are_safe() {
-        let arith = Expression::Add(
-            Box::new(Expression::Literal(Literal::new_simple("1"))),
-            Box::new(Expression::Literal(Literal::new_simple("2"))),
+        let arith = Expression::arithmetic(
+            Expression::Literal(Literal::new_simple("1")),
+            ArithmeticOperator::Add,
+            Expression::Literal(Literal::new_simple("2")),
         );
         assert!(is_parallel_safe(&arith, NONE));
 
@@ -1796,12 +1799,12 @@ mod tests {
         // The classification must survive being nested: a `UNION` arm containing the
         // call is unsafe, and so is an `EXISTS` whose inner pattern contains it.
         let volatile = registry_with(Volatility::Volatile);
-        let union = GraphPattern::Union {
-            left: Box::new(GraphPattern::Bgp {
+        let union = GraphPattern::union(
+            GraphPattern::Bgp {
                 patterns: Vec::new(),
-            }),
-            right: Box::new(property_function_call()),
-        };
+            },
+            property_function_call(),
+        );
         assert!(!is_parallel_safe_pattern(&union, relations(&volatile)));
 
         let exists = Expression::Exists(Box::new(property_function_call()));

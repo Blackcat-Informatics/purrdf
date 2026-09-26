@@ -805,12 +805,16 @@ fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
     match p {
         GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             collect_bgp(left, out);
             collect_bgp(right, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_bgp(arm, out);
+            }
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }

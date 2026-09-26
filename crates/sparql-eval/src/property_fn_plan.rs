@@ -910,9 +910,11 @@ fn map_children(
             right: recurse(right, outer, promise.beyond_pushdown())?,
         },
         // A `UNION` branch cannot rely on its sibling.
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: recurse(left, outer, here)?,
-            right: recurse(right, outer, here)?,
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms
+                .iter()
+                .map(|arm| recurse(arm, outer, here).map(|planned| *planned))
+                .collect::<Result<Vec<_>, PlanError>>()?,
         },
         // A `FILTER`'s expression is evaluated over the rows its inner pattern
         // produced, so an `EXISTS` inside it sees everything that pattern certainly
@@ -1173,18 +1175,34 @@ fn plan_expression(
             outer,
             promise.beyond_pushdown(),
         )?)),
-        Expression::Or(a, b) => Expression::Or(sub(a)?, sub(b)?),
-        Expression::And(a, b) => Expression::And(sub(a)?, sub(b)?),
+        Expression::Or(operands) => Expression::Or(
+            operands
+                .iter()
+                .map(|operand| plan_expression(operand, relations, agg_registry, outer, promise))
+                .collect::<Result<Vec<_>, PlanError>>()?,
+        ),
+        Expression::And(operands) => Expression::And(
+            operands
+                .iter()
+                .map(|operand| plan_expression(operand, relations, agg_registry, outer, promise))
+                .collect::<Result<Vec<_>, PlanError>>()?,
+        ),
+        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
+            sub(first)?,
+            steps
+                .iter()
+                .map(|(op, operand)| {
+                    plan_expression(operand, relations, agg_registry, outer, promise)
+                        .map(|planned| (*op, planned))
+                })
+                .collect::<Result<Vec<_>, PlanError>>()?,
+        ),
         Expression::Equal(a, b) => Expression::Equal(sub(a)?, sub(b)?),
         Expression::SameTerm(a, b) => Expression::SameTerm(sub(a)?, sub(b)?),
         Expression::Greater(a, b) => Expression::Greater(sub(a)?, sub(b)?),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(sub(a)?, sub(b)?),
         Expression::Less(a, b) => Expression::Less(sub(a)?, sub(b)?),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(sub(a)?, sub(b)?),
-        Expression::Add(a, b) => Expression::Add(sub(a)?, sub(b)?),
-        Expression::Subtract(a, b) => Expression::Subtract(sub(a)?, sub(b)?),
-        Expression::Multiply(a, b) => Expression::Multiply(sub(a)?, sub(b)?),
-        Expression::Divide(a, b) => Expression::Divide(sub(a)?, sub(b)?),
         Expression::UnaryPlus(a) => Expression::UnaryPlus(sub(a)?),
         Expression::UnaryMinus(a) => Expression::UnaryMinus(sub(a)?),
         Expression::Not(a) => Expression::Not(sub(a)?),
@@ -1586,13 +1604,18 @@ fn collect_bound(
         GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, right: _ } => {
             collect_bound(left, context, beneath, out);
         }
-        // Only what BOTH branches bind is bound in every row.
-        GraphPattern::Union { left, right } => {
-            let mut l = DetHashSet::default();
-            let mut r = DetHashSet::default();
-            collect_bound(left, context, beneath, &mut l);
-            collect_bound(right, context, beneath, &mut r);
-            out.extend(l.intersection(&r).cloned());
+        // Only what EVERY arm binds is bound in every row.
+        GraphPattern::Union { arms } => {
+            let mut common: Option<DetHashSet<Variable>> = None;
+            for arm in arms {
+                let mut bound = DetHashSet::default();
+                collect_bound(arm, context, beneath, &mut bound);
+                common = Some(match common {
+                    None => bound,
+                    Some(before) => before.intersection(&bound).cloned().collect(),
+                });
+            }
+            out.extend(common.unwrap_or_default());
         }
         // A `FILTER` passes only rows its condition is true on, and every variable the
         // condition requires bound for that is therefore bound in each row it passes —
@@ -1838,18 +1861,16 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
         | Expression::Bound(_)
         | Expression::Exists(_) => true,
         Expression::Variable(variable) => is_bound(variable),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => operands.iter().all(reads),
+        Expression::Arithmetic(first, steps) => {
+            reads(first) && steps.iter().all(|(_, operand)| reads(operand))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => reads(a) && reads(b),
+        | Expression::LessOrEqual(a, b) => reads(a) && reads(b),
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => reads(a),
         Expression::If(condition, then, otherwise) => {
             reads(condition) && reads(then) && reads(otherwise)
@@ -2071,8 +2092,14 @@ fn truth_requires(expr: &Expression) -> Requires {
         Expression::Literal(literal) => {
             (crate::expr::constant_ebv(literal) == Some(true)).then(DetHashSet::default)
         }
-        Expression::And(a, b) => all_of(truth_requires(a), truth_requires(b)),
-        Expression::Or(a, b) => one_of(truth_requires(a), truth_requires(b)),
+        // A chain is its binary operator folded from the operator's identity, whose
+        // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is never
+        // true.
+        Expression::And(operands) => operands
+            .iter()
+            .map(truth_requires)
+            .fold(needs_nothing(), all_of),
+        Expression::Or(operands) => operands.iter().map(truth_requires).fold(None, one_of),
         Expression::Not(a) => falsity_requires(a),
         Expression::FunctionCall(function, args) if is_type_test(function) => args
             .iter()
@@ -2111,8 +2138,11 @@ fn falsity_requires(expr: &Expression) -> Requires {
         }
         Expression::FunctionCall(function, _) if is_type_test(function) => needs_nothing(),
         Expression::Not(a) => truth_requires(a),
-        Expression::And(a, b) => one_of(falsity_requires(a), falsity_requires(b)),
-        Expression::Or(a, b) => all_of(falsity_requires(a), falsity_requires(b)),
+        Expression::And(operands) => operands.iter().map(falsity_requires).fold(None, one_of),
+        Expression::Or(operands) => operands
+            .iter()
+            .map(falsity_requires)
+            .fold(needs_nothing(), all_of),
         Expression::If(condition, then, otherwise) => all_of(
             value_requires(condition),
             one_of(
@@ -2151,19 +2181,23 @@ fn value_requires(expr: &Expression) -> Requires {
             .filter(|(position, _)| strict_in_argument(function, *position))
             .map(|(_, arg)| value_requires(arg))
             .fold(needs_nothing(), all_of),
-        Expression::And(a, b) | Expression::Or(a, b) => {
-            one_of(value_requires(a), value_requires(b))
-        }
+        // The pairwise `one_of`, folded; an empty chain is its identity constant, which
+        // has a value for any row.
+        Expression::And(operands) | Expression::Or(operands) => operands
+            .iter()
+            .map(value_requires)
+            .reduce(one_of)
+            .unwrap_or_else(needs_nothing),
+        Expression::Arithmetic(first, steps) => steps
+            .iter()
+            .map(|(_, operand)| value_requires(operand))
+            .fold(value_requires(first), all_of),
         Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => all_of(value_requires(a), value_requires(b)),
+        | Expression::LessOrEqual(a, b) => all_of(value_requires(a), value_requires(b)),
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             value_requires(a)
         }
@@ -3010,12 +3044,16 @@ mod pushdown_reach_tests {
         match pattern {
             GraphPattern::PropertyFunction(call) => out.push(call),
             GraphPattern::Join { left, right }
-            | GraphPattern::Union { left, right }
             | GraphPattern::Lateral { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 calls(left, out);
                 calls(right, out);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    calls(arm, out);
+                }
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Graph { inner, .. }
@@ -3063,10 +3101,10 @@ mod pushdown_reach_tests {
             }
             match pattern {
                 GraphPattern::Join { left, right }
-                | GraphPattern::Union { left, right }
                 | GraphPattern::Lateral { left, right }
                 | GraphPattern::LeftJoin { left, right, .. }
                 | GraphPattern::Minus { left, right } => strip(left) + strip(right),
+                GraphPattern::Union { arms } => arms.iter_mut().map(strip).sum(),
                 GraphPattern::Filter { inner, .. }
                 | GraphPattern::Graph { inner, .. }
                 | GraphPattern::Extend { inner, .. }
