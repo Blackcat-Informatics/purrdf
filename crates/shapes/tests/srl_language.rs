@@ -68,19 +68,53 @@ fn multi_character_terminals_must_be_contiguous() {
     );
 }
 
-/// Production [2] read as written: after a declaration that follows a rule or data
-/// block, one rule or data block may follow before the next declaration.
+/// Production [2]'s intended reading: after the initial prologue, declarations and
+/// rule or data blocks interleave freely. Two rule blocks and a data block after a
+/// declaration that follows a rule all parse, and every rule runs — each one's own
+/// inferred triple appears, over the base data and over the data block's triple.
 #[test]
-fn rule_or_data_block_production_is_read_as_written() {
+fn declarations_and_rule_blocks_interleave_freely() {
+    let inferred = infer(
+        "RULE { ?x :r1 :yes } WHERE { ?x :p ?y }
+         PREFIX a: <http://example.org/a#>
+         RULE { ?x a:r2 :yes } WHERE { ?x :p ?y }
+         RULE { ?x :r3 :yes } WHERE { ?x :p ?y }
+         DATA { :d :p :e }",
+        ":s :p :o .",
+    )
+    .expect("RULE PREFIX RULE RULE DATA parses, checks and runs");
+    let yes = iri("yes");
+    let r2 = Term::NamedNode(NamedNode::from("http://example.org/a#r2"));
+    for subject in ["s", "d"] {
+        for predicate in [iri("r1"), r2.clone(), iri("r3")] {
+            let triple = [iri(subject), predicate, yes.clone()];
+            assert!(
+                inferred.contains(&triple),
+                "{triple:?} missing from {inferred:?}"
+            );
+        }
+    }
+    // The literal reading's own shape still parses.
     srl::parse(
         &rules("RULE {} WHERE {} RULE {} WHERE {} PREFIX a: <http://example.org/a#> RULE {} WHERE {} PREFIX b: <http://example.org/b#> DATA {}"),
         None,
     )
     .expect("RuleOrData+ ( Prologue1 RuleOrData? )* parses");
+}
+
+/// The neighbours the interleaving does not admit: a declaration is not a rule
+/// element, and a rule needs its `WHERE` body.
+#[test]
+fn a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused() {
+    let message =
+        syntax_error("RULE { ?x :r :yes } WHERE { PREFIX a: <http://example.org/a#> ?x :p ?y }");
+    assert!(message.contains("found `PREFIX`"), "{message}");
     let message = syntax_error(
-        "RULE {} WHERE {} PREFIX a: <http://example.org/a#> RULE {} WHERE {} RULE {} WHERE {}",
+        "RULE { ?x :r :yes } PREFIX a: <http://example.org/a#> RULE { ?x :r :yes } WHERE { ?x :p ?y }",
     );
-    assert!(message.contains("[2]"), "{message}");
+    assert!(message.contains("WHERE"), "{message}");
+    let message = syntax_error("RULE { ?x :r :yes }");
+    assert!(message.contains("WHERE"), "{message}");
 }
 
 /// SRL's `BuiltInCall` is its own list: SPARQL-only built-ins are refused, their SRL
