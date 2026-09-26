@@ -114,11 +114,10 @@ fn evaluate(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(relations.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(relations.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"))
 }

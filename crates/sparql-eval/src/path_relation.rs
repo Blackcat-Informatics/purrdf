@@ -202,7 +202,7 @@
 //! let result = engine.query_with_options_view(
 //!     &*dataset,
 //!     SparqlRequest { query: &query, base_iri: None, substitutions: &[] },
-//!     QueryOptions { env: &env, ..QueryOptions::EMPTY },
+//!     QueryOptions::new().with_env(&env),
 //! )?;
 //!
 //! // Propagated, not `unreachable!`. This example is meant to be copied, and a host that

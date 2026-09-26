@@ -16,7 +16,6 @@
 
 use std::collections::HashMap;
 
-use purrdf::ir::MutableDataset;
 use purrdf::{DatasetSink, RdfTerm, RdfTextDirection};
 use purrdf_events::{
     EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId, TextDirection,
@@ -193,9 +192,7 @@ impl Sink {
         let dataset = sink
             .into_dataset()
             .ok_or_else(|| JsError::new("the sink produced no dataset"))?;
-        Ok(Dataset {
-            inner: MutableDataset::new(dataset),
-        })
+        Ok(Dataset::from_frozen(dataset))
     }
 }
 

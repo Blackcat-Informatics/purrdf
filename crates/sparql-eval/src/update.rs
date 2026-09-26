@@ -36,8 +36,9 @@
 //!   operation is a distinct blank from the same label in another operation
 //!   (SPARQL 1.1 Update §4.1.1 / §19.6).
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
-//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset; with no
-//!   resolver, `LOAD` hard-fails unless `SILENT`.
+//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset — the
+//!   request's own ([`QueryOptions::load`]) when it names one, otherwise the engine's;
+//!   with no resolver, `LOAD` hard-fails unless `SILENT`.
 //!
 //! # Governors: what an UPDATE is charged for, and why a trip applies nothing
 //!
@@ -163,7 +164,9 @@ pub(crate) struct UpdateEvalConfig<'e> {
     /// The registries this request's `WHERE` clauses run under: the property-function
     /// registry (read at admission and applied to the `WHERE` [`EvalCtx`] through the
     /// same seam a governed query applies it — see [`apply_query_options`]), the
-    /// SHACL-AF function registry, and the blank-mint prefix. An UPDATE `WHERE` is a
+    /// SHACL-AF function registry, the blank-mint prefix, and the `SERVICE` source a
+    /// federated `WHERE` resolves through ([`QueryOptions::remote`]; `None` leaves a
+    /// `SERVICE` with no source, exactly as before the field existed). An UPDATE `WHERE` is a
     /// triple-pattern context exactly like a query's, so it takes the identical
     /// [`QueryOptions`] a query takes — [`QueryOptions::EMPTY`] is "configure nothing",
     /// what every UPDATE ran under before this seam existed.
@@ -253,6 +256,11 @@ fn charge_mutations(
         .map_err(UpdateAbort::Tripped)
 }
 
+/// The diagnostic code a [`GraphResolver`] reports when the host's policy refuses a `LOAD`
+/// source. It is the one resolver failure `LOAD SILENT` does not swallow — see
+/// [`GraphResolver`].
+pub const LOAD_DENIED: &str = "native-sparql-load-denied";
+
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
 pub struct GraphResolveRequest<'a> {
@@ -281,6 +289,13 @@ impl core::fmt::Debug for GraphResolveRequest<'_> {
 /// HTTP/parse stack). A host that wants `LOAD` to dereference real documents injects
 /// a resolver: it is responsible for fetching the IRI and parsing the response into
 /// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails (unless `SILENT`).
+///
+/// A resolver that refuses a source **by policy** — the host's catalog does not admit it —
+/// reports a diagnostic whose code is [`LOAD_DENIED`]. `LOAD SILENT` licenses the query
+/// author to ignore an unreachable source; it does not license bypassing the host's own
+/// policy, so a denial fails the request even under `SILENT`, exactly as a denied
+/// `SERVICE` does. Every other resolver failure is an unreachable source and `SILENT`
+/// swallows it.
 pub trait GraphResolver {
     /// Resolve `request.iri` to a frozen dataset, or a diagnostic on fetch/parse failure.
     fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
@@ -292,7 +307,7 @@ pub trait GraphResolver {
 /// [`RdfDiagnostic`] code on the boundary conditions (an unrecognized `VERSION`, `LOAD`
 /// with no resolver, a bad re-key destination, an internal eval error), or the
 /// [`TrippedGovernor`] that stopped the request. `resolver` supplies the `LOAD` host seam
-/// (see [`GraphResolver`]); pass `None` to make any non-`SILENT` `LOAD` a hard error.
+/// (see [`GraphResolver`]); pass `None` to make any `LOAD` a hard error, `SILENT` or not.
 ///
 /// On **either** abort, `m` is left in whatever state the operations reached and is
 /// expected to be dropped rather than frozen — that discard is the request's rollback, and
@@ -424,6 +439,19 @@ fn apply_operation(
     }
 }
 
+/// Instantiate one template quad inside a [`crate::stack::walk`] scope: a template term
+/// recurses through its nested triple terms, and an update may be applied from a stack
+/// that is already deep, so every level may refuse — the placeholder it leaves is
+/// discarded here and the refusal becomes the operation's typed failure.
+fn template_walk<T>(instantiate: impl FnOnce() -> T) -> Result<T, UpdateAbort> {
+    crate::stack::walk(instantiate).map_err(|e| {
+        UpdateAbort::Failed(RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+            e.to_string(),
+        ))
+    })
+}
+
 // ── INSERT DATA / DELETE DATA ────────────────────────────────────────────────
 
 /// `INSERT DATA`: instantiate each quad (variable-free by parser invariant) with ONE
@@ -441,7 +469,7 @@ fn insert_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = template_walk(|| instantiate_ground_quad(qp, &mut blanks, counter))? {
             // Charged per quad rather than per operation because an ill-formed template
             // quad is skipped rather than inserted (§16.2), and fuel counts what the store
             // actually did.
@@ -462,7 +490,7 @@ fn delete_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+        if let Some(q) = template_walk(|| instantiate_ground_quad(qp, &mut blanks, counter))? {
             charge_mutations(governors, 1)?;
             m.remove(&q);
         }
@@ -522,13 +550,33 @@ fn delete_insert(
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
+    // The `WHERE` is held to the stack it is evaluated on, as a query's pattern is, and
+    // the walks over its triple terms and the templates' — instantiated once per row —
+    // are reserved for the whole operation.
+    let reserved =
+        crate::governor::soundness::validate_graph_pattern_depth(pattern).and_then(|terms| {
+            crate::stack::reserve_terms(
+                terms
+                    .max(crate::stack::template_nesting(delete))
+                    .max(crate::stack::template_nesting(insert)),
+            )
+        });
+    let _terms = reserved.map_err(|e| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+            e.to_string(),
+        )
+    })?;
+
     let ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
-    // The property-function registry, the SHACL-AF function registry and the
-    // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
-    // applies them — see `crate::engine::apply_query_options`. This is what lets a
-    // call node reach evaluation at all: without it `ctx` carries no registry and
-    // every call in this `WHERE` hard-errors "no property function is registered",
-    // regardless of whether one was configured for the request.
+    // The property-function registry, the SHACL-AF function registry, the
+    // blank-mint prefix and the `SERVICE` source, applied through the SAME seam a
+    // governed/ungoverned query applies them — see `crate::engine::apply_query_options`.
+    // This is what lets a call node reach evaluation at all: without it `ctx` carries no
+    // registry and every call in this `WHERE` hard-errors "no property function is
+    // registered", regardless of whether one was configured for the request. The same
+    // holds for a `SERVICE` in this `WHERE`: it federates through the request's source
+    // or, with none, fails exactly as a source-less query's does.
     let mut ctx = apply_query_options(ctx, cfg.options)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
@@ -607,14 +655,16 @@ fn delete_insert(
     for row in &seq.rows {
         del_blanks.clear();
         for (qp, ordinal) in delete.iter().zip(&delete_ordinals) {
-            if let Some(q) = instantiate_quad_with_default(
-                qp,
-                ordinal,
-                row,
-                &mut del_blanks,
-                &mut ctx,
-                with_value.as_ref(),
-            ) {
+            if let Some(q) = template_walk(|| {
+                instantiate_quad_with_default(
+                    qp,
+                    ordinal,
+                    row,
+                    &mut del_blanks,
+                    &mut ctx,
+                    with_value.as_ref(),
+                )
+            })? {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),
@@ -624,14 +674,16 @@ fn delete_insert(
         }
         ins_blanks.clear();
         for (qp, ordinal) in insert.iter().zip(&insert_ordinals) {
-            if let Some(q) = instantiate_quad_with_default(
-                qp,
-                ordinal,
-                row,
-                &mut ins_blanks,
-                &mut ctx,
-                with_value.as_ref(),
-            ) {
+            if let Some(q) = template_walk(|| {
+                instantiate_quad_with_default(
+                    qp,
+                    ordinal,
+                    row,
+                    &mut ins_blanks,
+                    &mut ctx,
+                    with_value.as_ref(),
+                )
+            })? {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),
@@ -782,13 +834,21 @@ fn load(
     resolver: Option<&dyn GraphResolver>,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
+    // No resolver: the engine was given nowhere to fetch from. That is how it was
+    // configured, not a source that failed, so it is refused under `SILENT` too — a no-op
+    // success would claim the document had been sought and not found.
     let Some(resolver) = resolver else {
+        let mut message =
+            format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
         if silent {
-            return Ok(());
+            message.push_str(
+                "; SILENT does not apply: it tolerates a source that fails, and no source \
+                 was reached — configure a GraphResolver",
+            );
         }
         return Err(UpdateAbort::Failed(RdfDiagnostic::error(
             "native-sparql-load-no-resolver",
-            format!("LOAD <{source}> needs a GraphResolver host seam, none was provided"),
+            message,
         )));
     };
     check_stop(governors)?;
@@ -804,7 +864,7 @@ fn load(
             ds
         }
         Err(e) => {
-            if silent {
+            if silent && e.code != LOAD_DENIED {
                 if let Some(tripped) = post_return_trip {
                     return Err(tripped);
                 }
@@ -1733,11 +1793,63 @@ mod tests {
     }
 
     #[test]
-    fn load_silent_without_resolver_is_a_noop_ok() {
+    fn load_silent_without_resolver_is_a_hard_error_too() {
+        // SILENT tolerates a source that fails; with no resolver none was reached. The
+        // valid neighbour, a resolver that cannot reach the source under SILENT, is
+        // `load_silent_swallows_an_unreachable_source`.
         let mut m = mut_with(&[("a", "p", "b")]);
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
+        let code = failure_code(
+            eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-load-no-resolver");
+    }
+
+    /// A resolver that refuses every source with the diagnostic code it is given.
+    struct FailingResolver(&'static str);
+    impl GraphResolver for FailingResolver {
+        fn resolve(
+            &self,
+            request: GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+            Err(RdfDiagnostic::error(
+                self.0,
+                format!("LOAD <{}>: refused", request.iri),
+            ))
+        }
+    }
+
+    #[test]
+    fn load_silent_does_not_swallow_a_policy_denial() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let cache = BoundedOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let err = eval_update(
+            &parse("LOAD SILENT ex:doc"),
+            &mut m,
+            Some(&FailingResolver(LOAD_DENIED)),
+            &cfg,
+        )
+        .expect_err("a denial fails even under SILENT");
+        match err {
+            UpdateAbort::Failed(diagnostic) => assert_eq!(diagnostic.code, LOAD_DENIED),
+            UpdateAbort::Tripped(other) => panic!("expected the denial, got a trip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_silent_swallows_an_unreachable_source() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let cache = BoundedOrderCache::default();
+        let cfg = ungoverned(&cache);
+        eval_update(
+            &parse("LOAD SILENT ex:doc"),
+            &mut m,
+            Some(&FailingResolver("native-sparql-load-failed")),
+            &cfg,
+        )
+        .expect("an unreachable source is what SILENT licenses");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
     }
 

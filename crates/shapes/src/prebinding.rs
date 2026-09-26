@@ -164,9 +164,8 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
             check_pattern(left, prebound)?;
             check_pattern(right, prebound)
         }
-        GraphPattern::Union { left, right } => {
-            check_pattern(left, prebound)?;
-            check_pattern(right, prebound)
+        GraphPattern::Union { arms } => {
+            arms.iter().try_for_each(|arm| check_pattern(arm, prebound))
         }
         GraphPattern::LeftJoin {
             left,
@@ -276,18 +275,21 @@ fn check_expression(expr: &Expression, prebound: &[&str]) -> Result<(), String> 
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => Ok(()),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => operands
+            .iter()
+            .try_for_each(|operand| check_expression(operand, prebound)),
+        Expression::Arithmetic(first, steps) => {
+            check_expression(first, prebound)?;
+            steps
+                .iter()
+                .try_for_each(|(_, operand)| check_expression(operand, prebound))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             check_expression(a, prebound)?;
             check_expression(b, prebound)
         }

@@ -29,6 +29,17 @@ use crate::service::{ServiceCapabilities, ServiceCapability, ServiceCatalog, Ser
 /// The default per-request timeout for a federated `SERVICE` call.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The default User-Agent a federated `SERVICE` request identifies itself with.
+///
+/// Built from the crate's own version at compile time, so it names the release that
+/// actually sent the request rather than a literal that went stale the first time the
+/// version moved.
+const DEFAULT_USER_AGENT: &str = concat!(
+    "purrdf-sparql-eval/",
+    env!("CARGO_PKG_VERSION"),
+    " (SERVICE federation)"
+);
+
 /// Request data handed to an injected HTTP transport.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpRequest<'a> {
@@ -153,7 +164,7 @@ impl<T> HttpRemoteQuerySource<T> {
         Self {
             transport,
             timeout: DEFAULT_TIMEOUT,
-            user_agent: "purrdf-sparql-eval/0.1 (SERVICE federation)".to_owned(),
+            user_agent: DEFAULT_USER_AGENT.to_owned(),
             catalog: None,
         }
     }
@@ -268,5 +279,48 @@ where
             rows: parsed.rows,
             cell_limit_exceeded_at,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// The default User-Agent is the one the transport is actually handed, and it names
+    /// this crate's own version — observed on the wire rather than read off the constant,
+    /// so a constructor that stopped using the constant would fail here too.
+    #[test]
+    fn default_user_agent_names_the_crate_version() {
+        let seen: Mutex<Option<String>> = Mutex::new(None);
+        let transport = |request: HttpRequest<'_>| -> Result<Vec<u8>, RemoteError> {
+            *seen.lock().expect("lock") = Some(request.user_agent.to_owned());
+            Ok(br#"{"head":{"vars":[]},"results":{"bindings":[]}}"#.to_vec())
+        };
+        let source = HttpRemoteQuerySource::new(transport);
+        source
+            .resolve(ServiceRequest::new(
+                "http://example.org/sparql",
+                "SELECT * WHERE { ?s ?p ?o }",
+            ))
+            .expect("the transport answers an empty result");
+        let agent = seen
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("the transport was called");
+        assert!(
+            agent.contains(env!("CARGO_PKG_VERSION")),
+            "the default User-Agent {agent:?} does not name version {}",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(
+            agent,
+            format!(
+                "purrdf-sparql-eval/{} (SERVICE federation)",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 }

@@ -48,6 +48,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-iri
   purrdf-xsd
   purrdf-cdt
+  purrdf-stack
   purrdf-gts
   purrdf-core
   purrdf-columnar
@@ -93,6 +94,7 @@ PURRDF_RELEASE_CRATES=(
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
+  purrdf-stack
   purrdf-hnsw
   purrdf-retrieval
 )

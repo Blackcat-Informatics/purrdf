@@ -490,13 +490,20 @@ where
             visit(PatternPart::Child(left, ChildEdge::MONOTONE))
                 || visit(PatternPart::Child(right, ChildEdge::MONOTONE_BAG))
         }
-        // `UNION` is a multiset concatenation, left rows then right rows: truncating the
-        // RIGHT side removes rows from the end, so that side is positional, while
-        // truncating the LEFT side removes rows from the middle of the concatenation.
-        GraphPattern::Union { left, right } => {
-            visit(PatternPart::Child(left, ChildEdge::MONOTONE_BAG))
-                || visit(PatternPart::Child(right, ChildEdge::MONOTONE))
-        }
+        // `UNION` is a multiset concatenation of its arms' rows in arm order: truncating
+        // the LAST arm removes rows from the end, so that arm is positional, while
+        // truncating any earlier arm removes rows from the middle of the concatenation.
+        // That is the edge each arm had in the left-nested binary chain the node stands
+        // for: the last arm was the outermost right operand, and every other arm reached
+        // the root through at least one left operand.
+        GraphPattern::Union { arms } => arms.iter().enumerate().any(|(i, arm)| {
+            let edge = if i + 1 == arms.len() {
+                ChildEdge::MONOTONE
+            } else {
+                ChildEdge::MONOTONE_BAG
+            };
+            visit(PatternPart::Child(arm, edge))
+        }),
         // `OPTIONAL` over a truncated optional side is an inner join, not a wider outer
         // join: `binop::left_join_lift` suppresses the left-alone padding exactly then,
         // because "no compatible right row exists" is a claim about the WHOLE right bag.
@@ -656,18 +663,19 @@ where
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => false,
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            operands.iter().any(|e| visit(ExpressionPart::Sub(e)))
+        }
+        Expression::Arithmetic(first, steps) => {
+            visit(ExpressionPart::Sub(first))
+                || steps.iter().any(|(_, e)| visit(ExpressionPart::Sub(e)))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             visit(ExpressionPart::Sub(a)) || visit(ExpressionPart::Sub(b))
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
@@ -804,30 +812,44 @@ where
     }
 }
 
-/// Refuse a manually constructed algebra whose nesting exceeds the parser's bound.
+/// Refuse an algebra too tall for the walks over it to fit the stack left here.
 ///
-/// Parsed queries have already passed the same limit. This iterative validation keeps
-/// the `eval(&GraphPattern, ..)` surface safe when a caller constructs algebra
-/// directly via [`crate::engine::PreparedQuery::rewritten`] instead of using
-/// [`purrdf_sparql_algebra::SparqlParser`].
-pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
-    let mut stack = vec![(root, 1_usize)];
-    while let Some((node, depth)) = stack.pop() {
-        if depth > purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH {
-            return Err(crate::EvalError::unsupported_deferred(
-                crate::error::UnsupportedKind::GraphPatternDepthExceeded,
-                format!(
-                    "graph pattern nesting exceeds the safety limit of {}",
-                    purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH
-                ),
-            ));
+/// Every recursive step of the evaluation measures the stack it has left and refuses,
+/// typed, when it runs low; what this guards is the rest — the walks with no stack check
+/// that run once over the whole plan before its first operator (planning, blank-node
+/// scoping, the endpoint and parallel analyses), and the derived copies, comparisons and
+/// drops of the tree. So the whole tree is measured, iteratively, against the stack the
+/// evaluation starts on ([`GraphPattern::validate_height`], the parser's own per-level
+/// charge): a parsed query, a prepared one run on another thread and a pattern built
+/// through [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
+/// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
+/// where it does not.
+///
+/// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
+/// evaluation's recursion too, so graph patterns nested deeper than
+/// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
+/// [`crate::EvalError::HostStackExhausted`].
+///
+/// Returns how deeply the pattern's triple terms nest, for the reserve walks over them
+/// take ([`crate::stack::reserve_terms`]).
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize, crate::EvalError> {
+    let terms = root.validate_height().map_err(crate::EvalError::from)?;
+    if cfg!(target_arch = "wasm32") {
+        let limit = purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH;
+        let mut stack = vec![(root, 1_usize)];
+        while let Some((node, depth)) = stack.pop() {
+            if depth > limit {
+                return Err(crate::EvalError::HostStackExhausted {
+                    construct: "graph pattern",
+                });
+            }
+            visit_classified_children(node, &mut |child, _edge| {
+                stack.push((child, depth + 1));
+                false
+            });
         }
-        visit_classified_children(node, &mut |child, _edge| {
-            stack.push((child, depth + 1));
-            false
-        });
     }
-    Ok(())
+    Ok(terms)
 }
 
 // ---------------------------------------------------------------------------
@@ -967,7 +989,7 @@ pub(crate) const fn child_row_ceiling(
         // `DISTINCT`/`REDUCED` are the other trap — `k` distinct rows can take arbitrarily
         // many input rows to reach.
         GraphPattern::Join { left: _, right: _ }
-        | GraphPattern::Union { left: _, right: _ }
+        | GraphPattern::Union { arms: _ }
         | GraphPattern::LeftJoin {
             left: _,
             right: _,
@@ -1145,7 +1167,7 @@ const fn pattern_label_index(pattern: &GraphPattern) -> usize {
         } => 3,
         GraphPattern::Lateral { left: _, right: _ } => 4,
         GraphPattern::Filter { expr: _, inner: _ } => 5,
-        GraphPattern::Union { left: _, right: _ } => 6,
+        GraphPattern::Union { arms: _ } => 6,
         GraphPattern::Graph { name: _, inner: _ } => 7,
         GraphPattern::Extend {
             inner: _,
@@ -1516,6 +1538,14 @@ pub(crate) fn analyze_pattern(
     pattern: &GraphPattern,
     table: &mut NodeAnalysisTable,
 ) -> NodeAnalysis {
+    // A walk over a whole subtree, run at evaluation time from a caller that may already
+    // be deep (an `EXISTS` preparing its site): see `crate::stack::walk`, whose scope
+    // discards this placeholder with the table it was written into.
+    if crate::stack::walk_is_low("EXISTS analysis") {
+        return NodeAnalysis::default();
+    }
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Analyzed);
     let addr = std::ptr::from_ref(pattern) as usize;
     if let Some(existing) = table.get(&addr) {
         return existing.clone();
@@ -1607,10 +1637,13 @@ pub(crate) fn analyze_pattern(
                 can_hard_error: l.can_hard_error || r.can_hard_error,
             }
         }
-        GraphPattern::Union { left, right } => {
-            let l = analyze_pattern(left, table);
-            let r = analyze_pattern(right, table);
-            NodeAnalysis {
+        // Free variables are the arms' union and a certainly-bound variable is bound by
+        // every arm — the pairwise fold the left-nested binary chain computed. An armless
+        // union produces no solution and binds nothing.
+        GraphPattern::Union { arms } => {
+            let mut analyses = arms.iter().map(|arm| analyze_pattern(arm, table));
+            let first = analyses.next().unwrap_or_default();
+            analyses.fold(first, |l, r| NodeAnalysis {
                 free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                 certainly_bound: l
                     .certainly_bound
@@ -1619,7 +1652,7 @@ pub(crate) fn analyze_pattern(
                     .collect(),
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
                 can_hard_error: l.can_hard_error || r.can_hard_error,
-            }
+            })
         }
         GraphPattern::LeftJoin {
             left,
@@ -1843,6 +1876,10 @@ pub(crate) fn analyze_expr(
     expr: &Expression,
     table: &mut NodeAnalysisTable,
 ) -> (DetHashSet<Variable>, bool, bool) {
+    // See `analyze_pattern`: the same walk, one expression level at a time.
+    if crate::stack::walk_is_low("EXISTS analysis") {
+        return (DetHashSet::default(), false, false);
+    }
     match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false, false),
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -1850,18 +1887,32 @@ pub(crate) fn analyze_expr(
             out.insert(v.clone());
             (out, false, false)
         }
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            let (mut f, mut s, mut h) = (DetHashSet::default(), false, false);
+            for operand in operands {
+                let (fo, so, ho) = analyze_expr(operand, table);
+                f.extend(fo);
+                s |= so;
+                h |= ho;
+            }
+            (f, s, h)
+        }
+        Expression::Arithmetic(first, steps) => {
+            let (mut f, mut s, mut h) = analyze_expr(first, table);
+            for (_, operand) in steps {
+                let (fo, so, ho) = analyze_expr(operand, table);
+                f.extend(fo);
+                s |= so;
+                h |= ho;
+            }
+            (f, s, h)
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             let (mut fa, sa, ha) = analyze_expr(a, table);
             let (fb, sb, hb) = analyze_expr(b, table);
             fa.extend(fb);
@@ -2083,6 +2134,12 @@ fn admissible_rec(
     current_row_vars: &DetHashSet<Variable>,
     table: &NodeAnalysisTable,
 ) -> bool {
+    // Out of stack for the walk (see `crate::stack`): "not admissible" is the
+    // conservative side — the per-row definition path is always correct, and the
+    // evaluation it runs refuses at its own next check.
+    if crate::stack::is_low() {
+        return false;
+    }
     match pattern {
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => true,
         GraphPattern::Values { variables, .. } => {
@@ -2090,10 +2147,13 @@ fn admissible_rec(
         }
         GraphPattern::PropertyFunction(_) => false,
         GraphPattern::Graph { name: _, inner } => admissible_rec(inner, current_row_vars, table),
-        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+        GraphPattern::Join { left, right } => {
             admissible_rec(left, current_row_vars, table)
                 && admissible_rec(right, current_row_vars, table)
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .all(|arm| admissible_rec(arm, current_row_vars, table)),
         GraphPattern::Filter { expr, inner } => {
             // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
             // rather than read a synthesized empty `certainly_bound`.
@@ -2254,16 +2314,23 @@ pub(crate) fn exists_row_collision<'a>(
     pattern: &'a GraphPattern,
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
+    // Neither answer is conservative here, so the walk runs in its caller's
+    // `crate::stack::walk` scope, which discards this placeholder.
+    if crate::stack::walk_is_low("EXISTS scope check") {
+        return None;
+    }
     match pattern {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::PropertyFunction(_) => None,
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             exists_row_collision(left, row_scope).or_else(|| exists_row_collision(right, row_scope))
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .find_map(|arm| exists_row_collision(arm, row_scope)),
         GraphPattern::Minus { left, .. } => exists_row_collision(left, row_scope),
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
@@ -2367,6 +2434,10 @@ fn find_group_extend_row_collision<'a>(
     variables: &[Variable],
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
+    // See `exists_row_collision`.
+    if crate::stack::walk_is_low("EXISTS scope check") {
+        return None;
+    }
     match inner {
         GraphPattern::Extend {
             inner: next,
@@ -2379,12 +2450,14 @@ fn find_group_extend_row_collision<'a>(
             find_group_extend_row_collision(next, variables, row_scope)
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             find_group_extend_row_collision(left, variables, row_scope)
                 .or_else(|| find_group_extend_row_collision(right, variables, row_scope))
         }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .find_map(|arm| find_group_extend_row_collision(arm, variables, row_scope)),
         GraphPattern::Minus { left, .. } => {
             find_group_extend_row_collision(left, variables, row_scope)
         }
@@ -2433,23 +2506,30 @@ fn expr_probe_admissible(
     inner_certainly_bound: &DetHashSet<Variable>,
     table: &NodeAnalysisTable,
 ) -> bool {
+    // See `admissible_rec`: out of stack, "not admissible" is the conservative side.
+    if crate::stack::is_low() {
+        return false;
+    }
     match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => true,
         Expression::Variable(v) | Expression::Bound(v) => {
             !current_row_vars.contains(v) || inner_certainly_bound.contains(v)
         }
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => operands
+            .iter()
+            .all(|e| expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)),
+        Expression::Arithmetic(first, steps) => {
+            expr_probe_admissible(first, current_row_vars, inner_certainly_bound, table)
+                && steps.iter().all(|(_, e)| {
+                    expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)
+                })
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
                 && expr_probe_admissible(b, current_row_vars, inner_certainly_bound, table)
         }
@@ -2550,8 +2630,11 @@ mod tests {
         context
     }
 
+    /// Directly constructed algebra is held to the stack it would be walked on, not to a
+    /// count: a thousand nested nodes are admitted with room for them, and the same tree
+    /// is the typed stack refusal where the stack left cannot hold its walks.
     #[test]
-    fn directly_constructed_algebra_uses_the_parser_nesting_bound() {
+    fn directly_constructed_algebra_is_bounded_by_the_stack() {
         fn nested(depth: usize) -> GraphPattern {
             let mut pattern = bgp();
             for _ in 1..depth {
@@ -2562,14 +2645,40 @@ mod tests {
             }
             pattern
         }
+        fn on_thread<T: Send + 'static>(
+            bytes: usize,
+            body: impl FnOnce() -> T + Send + 'static,
+        ) -> T {
+            std::thread::Builder::new()
+                .stack_size(bytes)
+                .spawn(body)
+                .expect("spawn")
+                .join()
+                .expect("the thread returned")
+        }
 
-        validate_graph_pattern_depth(&nested(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH))
-            .expect("the documented maximum is admitted");
-        let error = validate_graph_pattern_depth(&nested(
-            purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH + 1,
-        ))
-        .expect_err("direct algebra cannot bypass the nesting limit");
-        assert!(matches!(error, crate::EvalError::Unsupported { .. }));
+        on_thread(64 * 1024 * 1024, || {
+            validate_graph_pattern_depth(&nested(1_000))
+                .expect("a thousand levels are admitted where the stack holds their walks");
+            // A hundred thousand levels need 51 MB of walks at the parser's 512-byte
+            // charge: more than any thread the C library hands a 256 KiB request, so
+            // the same tree, borrowed there, is refused typed. It is built and dropped
+            // here, where its own drop fits.
+            let tall = nested(100_000);
+            let error = std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .stack_size(256 * 1024)
+                    .spawn_scoped(scope, || validate_graph_pattern_depth(&tall))
+                    .expect("spawn")
+                    .join()
+                    .expect("the small thread returned")
+            })
+            .expect_err("direct algebra too tall for the stack is refused");
+            assert!(
+                matches!(error, crate::EvalError::StackExhausted { .. }),
+                "{error:?}"
+            );
+        });
     }
 
     // ---- prefix-monotone operators certify --------------------------------
@@ -3178,10 +3287,7 @@ mod tests {
         left: GraphPattern,
         right: GraphPattern,
     ) -> GraphPattern {
-        let union = GraphPattern::Union {
-            left: boxed(left),
-            right: boxed(right),
-        };
+        let union = GraphPattern::union(left, right);
         let project = GraphPattern::Project {
             inner: boxed(union),
             variables: vec![Variable::new("s")],
@@ -3232,7 +3338,10 @@ mod tests {
     fn union_arms(plan: &GraphPattern) -> (&GraphPattern, &GraphPattern) {
         let mut node = plan;
         loop {
-            if let GraphPattern::Union { left, right } = node {
+            if let GraphPattern::Union { arms } = node {
+                let [left, right] = arms.as_slice() else {
+                    panic!("the plan's Union has two arms");
+                };
                 return (left, right);
             }
             let mut child = None;
@@ -3433,10 +3542,7 @@ mod tests {
             right: boxed(other_bgp()),
             expression: Some(Expression::Bound(Variable::new("o"))),
         };
-        let united = GraphPattern::Union {
-            left: boxed(optional),
-            right: boxed(bgp()),
-        };
+        let united = GraphPattern::union(optional, bgp());
         let minus = GraphPattern::Minus {
             left: boxed(united),
             right: boxed(other_bgp()),
@@ -3588,10 +3694,7 @@ mod tests {
         // UNION emits left rows then right rows, so truncating the RIGHT arm removes
         // rows from the END (a genuine prefix) while truncating the LEFT arm removes
         // them from the middle of the concatenation.
-        let union = GraphPattern::Union {
-            left: boxed(bgp()),
-            right: boxed(other_bgp()),
-        };
+        let union = GraphPattern::union(bgp(), other_bgp());
         assert_eq!(context_at(&union, &[0]).order(), OrderCertainty::Unordered);
         assert_eq!(context_at(&union, &[1]).order(), OrderCertainty::Ordered);
 

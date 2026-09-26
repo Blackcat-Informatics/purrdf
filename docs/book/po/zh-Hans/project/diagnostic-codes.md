@@ -143,9 +143,14 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-sparql-custom-function` | 某函数或聚合 IRI 未解析到任何已注册的自定义函数、原生函数或 XSD 构造器。 | 在该 IRI 下注册函数，或使用原生函数。 |
 | `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点匹配其组成部分。 |
 | `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的立场谓词（standpoint predicate）配置。 | 使用 `heldIn` 之前先配置立场谓词。 |
-| `native-sparql-graph-pattern-depth-exceeded` | 手工构造的图模式嵌套深度超过了解析器的安全上限。 | 展平该模式。 |
+| `native-sparql-evaluation-stack-exhausted` | 请求的嵌套深度超出了求值它的线程栈所能容纳的范围：求值器在每一个递归步骤都测量剩余的栈空间，并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请求，在更大的栈上同一请求可以得到应答。 | 在栈更大的线程上求值（原生平台上以更大的栈创建线程；异步 wasm 作业则使用更大的 `stackBytes`），或减少请求的嵌套深度。 |
+| `native-sparql-host-stack-exhausted` | 仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。PurRDF 为每个请求保留该栈中固定的一份预算（例如 637 层嵌套圆括号或 283 层嵌套图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相同，调大 `stackBytes` 也无法提高它。 | 减少请求的嵌套深度。 |
 | `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
 | `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。 | 注入一个解析器，或去掉 `LOAD`。 |
+| `native-sparql-load-denied` | 某个 `GraphResolver` 依据宿主策略拒绝了该 `LOAD` 来源——例如某个 JavaScript `resolveLoad` 应答了 `{ kind: "denied" }`；当 Cloudflare 适配器的 `ServiceCatalog` 没有授予该来源 `network` 能力时，适配器的处理函数就会这样应答。即使在 `LOAD SILENT` 下它也会让请求失败，与被拒绝的 `SERVICE` 一致。 | 在宿主策略中授予该来源，或去掉 `LOAD`。 |
+| `native-sparql-load-failed` | wasm 包的异步 `resolveLoad` 应答了 `{ kind: "transport" }`：文档无法获取或读取。`LOAD SILENT` 会吞掉它。 | 让该来源可达，或写作 `LOAD SILENT`。 |
+| `native-sparql-load-stopped` | 在等待 `LOAD` 期间，异步作业的停止信号（取消或截止时间）被触发。请求报告的是 governor 触发，而不是这个代码。 | 放宽截止时间，或不要取消该作业。 |
+| `native-sparql-load-fault` | 异步 `resolveLoad` 什么也没有应答，或应答了不属于 `LOAD` 应答的内容。该故障即使在 `LOAD SILENT` 下也会让作业失败。 | 返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset` 或一个带类型的失败——绝不要抛出异常。 |
 | `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；目标必须是 `DEFAULT` 或单个命名 `GRAPH`。 | 指名单个目标图。 |
 | `native-sparql-subst-iri` | 某代换值不是合法的 IRI。 | 提供合法的 IRI。 |
 | `native-sparql-subst-triple-predicate` | 某代换进来的引用三元组的谓词不是 IRI。 | 使用 IRI 谓词。 |

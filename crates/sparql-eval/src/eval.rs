@@ -243,13 +243,20 @@ pub(crate) enum PreparedExists {
         /// [`crate::enf::ledger_source_map`]. [`crate::binop::eval_correlated`]'s `EXISTS`
         /// caller pushes this onto [`EvalCtx::correlated_node_maps`] for the span of the
         /// per-row evaluation, which is what makes the inner's charges land on real ledger
-        /// ordinals instead of the enclosing `FILTER`/`BIND`, and lets
-        /// [`EvalCtx::prepared_exists`] resolve a doubly-nested `EXISTS` site's cache key
-        /// back to a stable address instead of rebuilding every outer row. Empty whenever
+        /// ordinals instead of the enclosing `FILTER`/`BIND`; a nested `EXISTS` site read
+        /// from this preparation carries it one hop further, to the plan
+        /// ([`crate::deferred_exists::ExistsSite::plan_map`]). Empty whenever
         /// `ledger_source_map` declined to track this site's top-level shape (see its doc)
         /// — tracking then simply does not engage, exactly the behavior before this field
         /// existed.
         ledger_source: Arc<crate::expr::SubstitutionSourceMap>,
+        /// The sites of the `EXISTS` bodies nested in [`Self::Pattern::witness_wrapped`],
+        /// prepared by its first per-row substitution and kept here, with the tree they
+        /// are read from, for every later one (see [`crate::deferred_exists`]).
+        witness_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
+        /// The same for [`Self::Pattern::normalized`], which is substituted when the
+        /// first-witness wrap is suppressed or the probe is forced (both test-only seams).
+        normalized_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
     },
 }
 
@@ -270,7 +277,26 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+/// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
+/// judged by the body it stands for; `None` for a body to be walked as written.
+fn placeholder_unsafe(
+    deferred: &crate::deferred_exists::DeferredMap,
+    body: &GraphPattern,
+) -> Option<bool> {
+    deferred
+        .get(&(std::ptr::from_ref(body) as usize))
+        .map(|slot| slot.site.parallel_unsafe)
+}
+
 impl PreparedExists {
+    /// [`Self::build`] inside a [`crate::stack::walk`] scope: preparing a site walks its
+    /// whole inner pattern (normalization, the source map, the structural analysis), and
+    /// the site may be reached deep in the evaluation, so every level of those walks may
+    /// refuse and the half-built preparation is discarded.
+    pub(crate) fn build_guarded(pattern: &GraphPattern) -> Result<Self, EvalError> {
+        crate::stack::walk(|| Self::build(pattern))
+    }
+
     /// Build a [`PreparedExists`] for `pattern` — the walk `crate::expr::exists` calls
     /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
     /// per-evaluation cache and the substituted-temporary ABA guard).
@@ -300,7 +326,7 @@ impl PreparedExists {
                 // location, and `witness_inner` is boxed BEFORE its address is taken, so
                 // both walks key every entry by the address the node actually ends up at.
                 let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
-                let witness_inner = Box::new((*normalized).clone());
+                let witness_inner = Box::new(crate::stack::clone::pattern(&normalized));
                 let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
                 let root_source = ledger_source
                     .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
@@ -338,6 +364,8 @@ impl PreparedExists {
                     free_vars: Arc::new(root.free_vars),
                     stateful: root.has_stateful_builtin,
                     ledger_source: Arc::new(ledger_source),
+                    witness_sites: std::sync::OnceLock::new(),
+                    normalized_sites: std::sync::OnceLock::new(),
                 }
             }
         }
@@ -473,13 +501,11 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// form, and the fourth structural analysis table), keyed by the `EXISTS`/`NOT EXISTS`
     /// AST node's immutable address. Populated lazily, once per distinct site — see
     /// [`Self::prepared_exists`], the sole accessor, for the substituted-temporary ABA
-    /// guard this cache observes. UNLIKE [`Self::exists_inner_cache`] and
-    /// [`Self::const_atom_cache`], that guard is not a blanket bypass: a nested `EXISTS`
-    /// reached through a per-row substituted copy first tries to resolve back to a
-    /// stable address via [`Self::correlated_node_maps`] and, on success, still reads
-    /// and writes this cache under that resolved address — see
-    /// [`Self::in_substituted_exists`]'s doc for why this one member can do that and the
-    /// other two cannot.
+    /// guard this cache observes: like [`Self::exists_inner_cache`] and
+    /// [`Self::const_atom_cache`], it is neither read nor written inside a substituted
+    /// window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
+    /// placeholder whose body was prepared once, from the written body, and kept by the
+    /// preparation (or plan node) the body was read from (see [`crate::deferred_exists`]).
     pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
     /// The `EXISTS` definition path's μ-restriction memo: `key = μ` restricted to the
     /// inner's own correlated-variable set (from [`PreparedExists::free_vars`]), `value =
@@ -582,21 +608,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`] — none of them
     /// deleted, disabled, or replaced by this flag; each one stays exactly as lazy,
     /// address-keyed, and per-evaluation as its own doc describes. What this flag
-    /// changes is narrower than "bypass the cache class": [`Self::const_atom_cache`],
-    /// [`Self::exists_inner_cache`], and [`Self::exists_definition_memo`] have no way to
-    /// tell a per-row temporary's address from a real one, so all three skip both the
-    /// read and the write, unconditionally, whenever this flag is set — a fresh,
-    /// unshared answer every reach, same as before this field existed.
-    /// [`Self::exists_prepared_cache`] is the one exception: [`Self::prepared_exists`]
-    /// first tries to resolve the reached node's address one hop through
-    /// [`Self::correlated_node_maps`] (the SAME tracked-window resolution
-    /// [`Self::resolve_ledger_ordinal`] uses for the charge ledger) to the STABLE,
-    /// un-substituted AST address a nested `EXISTS` site's copy is standing in for —
-    /// when that resolves, the cache is read and written keyed by the stable address,
-    /// same as an ordinary (non-substituted) reach; only when it does NOT resolve (a
-    /// node the substitution walk genuinely synthesized, with no AST identity of its
-    /// own) does it fall back to the unshared, build-fresh behavior the other three
-    /// caches always take here.
+    /// changes is narrower than "bypass the cache class": none of the four can tell a
+    /// per-row temporary's address from a real one, so all four skip both the read and
+    /// the write, unconditionally, whenever this flag is set — a fresh, unshared answer
+    /// every reach, same as before this field existed. The nested `EXISTS` sites a copy
+    /// defers are kept elsewhere: on the preparation whose tree holds them, or on
+    /// [`Self::plan_exists_sites`] for a plan node — never under a copy's address.
     pub(crate) in_substituted_exists: bool,
     /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
     /// last — see [`crate::expr::SubstitutionSourceMap`].
@@ -616,6 +633,27 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// single slot merged in place, because both the outer and the inner window's map are
     /// simultaneously live for the whole time the inner one is being evaluated.
     pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
+    /// The placeholders of the per-row substituted copy being evaluated — each a nested
+    /// `EXISTS` body the substitution walk left for its own evaluation to substitute (see
+    /// [`crate::deferred_exists`]) — keyed by the placeholder's address. `None` outside a
+    /// substituted window, and inside one whose copy holds no `EXISTS`. Set and restored
+    /// by [`Self::enter_substituted_exists`], so it always names the innermost window: a
+    /// copy's placeholders are reachable only while that copy is the one being evaluated.
+    pub(crate) deferred_exists: Option<Arc<crate::deferred_exists::DeferredMap>>,
+    /// The sites of the nested `EXISTS` bodies of every plan node a `LATERAL` substitutes
+    /// (a preparation keeps its own), so each is prepared once per evaluation however many
+    /// left rows substitute the node. SHARED with every forked worker (see
+    /// [`crate::deferred_exists::PlanSites`]). Created by the first `LATERAL` that needs it,
+    /// so an evaluation without one allocates nothing for it.
+    pub(crate) plan_exists_sites: Option<Arc<crate::deferred_exists::PlanSites>>,
+    /// The endpoints enclosing group joins, `OPTIONAL`s and `MINUS`es list for the
+    /// variable-endpoint `SERVICE` clauses in their right operands, innermost last — see
+    /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
+    /// a query without a variable endpoint.
+    pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
+    /// Whether the query being evaluated has a variable-endpoint `SERVICE` at all, so a
+    /// query without one never analyses a join operand for one.
+    pub(crate) endpoint_scan: crate::service_endpoints::EndpointScan,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -817,6 +855,7 @@ pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
     ctx: &'ctx mut EvalCtx<'d, D>,
     prev: bool,
     pushed_map: bool,
+    prev_deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
 }
 
 impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
@@ -835,6 +874,7 @@ impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '
 impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
     fn drop(&mut self) {
         self.ctx.in_substituted_exists = self.prev;
+        self.ctx.deferred_exists = self.prev_deferred.take();
         if self.pushed_map {
             self.ctx.correlated_node_maps.pop();
         }
@@ -897,6 +937,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             constructed: Vec::new(),
             in_substituted_exists: false,
             correlated_node_maps: Vec::new(),
+            deferred_exists: None,
+            plan_exists_sites: None,
+            endpoint_frames: Vec::new(),
+            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -936,12 +980,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// and popped on drop, same RAII discipline as the flag — see that field's doc for why
     /// a nested correlated evaluation needs BOTH this window's map and every enclosing
     /// one's still live at once.
+    ///
+    /// `deferred` is the copy's own placeholders ([`Self::deferred_exists`]), installed for
+    /// the guard's lifetime in place of the enclosing window's and restored on drop.
     pub(crate) fn enter_substituted_exists(
         &mut self,
         ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+        deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
     ) -> SubstitutedExistsGuard<'_, 'd, D> {
         let prev = self.in_substituted_exists;
         self.in_substituted_exists = true;
+        let prev_deferred = std::mem::replace(&mut self.deferred_exists, deferred);
         let pushed_map = ledger_map.is_some();
         if let Some(map) = ledger_map {
             self.correlated_node_maps.push(Arc::new(map));
@@ -950,6 +999,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ctx: self,
             prev,
             pushed_map,
+            prev_deferred,
         }
     }
 
@@ -1399,11 +1449,37 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Asked here rather than at the four fork sites (`FILTER`, `BIND`, `OPTIONAL`'s
     /// inline condition, and the per-group aggregate compute) so the rule is stated once
     /// and a new fork site cannot inherit half of it.
+    ///
+    /// Inside a substituted window, a nested `EXISTS` the substitution left as a
+    /// placeholder is judged by its site ([`crate::deferred_exists::ExistsSite::parallel_unsafe`]),
+    /// the body the placeholder stands for, rather than by the placeholder.
     pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
-        if !crate::parallel::is_parallel_safe(expr, self.safety_registries()) {
+        let safe = match &self.deferred_exists {
+            None => crate::parallel::is_parallel_safe(expr, self.safety_registries()),
+            Some(deferred) => {
+                crate::parallel::is_parallel_safe_with(expr, self.safety_registries(), &|body| {
+                    placeholder_unsafe(deferred, body)
+                })
+            }
+        };
+        if !safe {
             return false;
         }
         !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+    }
+
+    /// Whether `pattern` may be evaluated from a forked worker: the pattern-level twin of
+    /// [`Self::may_fork_row_loop`]'s first condition, with the same reading of a
+    /// placeholder.
+    pub(crate) fn pattern_is_parallel_safe(&self, pattern: &GraphPattern) -> bool {
+        match &self.deferred_exists {
+            None => crate::parallel::is_parallel_safe_pattern(pattern, self.safety_registries()),
+            Some(deferred) => crate::parallel::is_parallel_safe_pattern_with(
+                pattern,
+                self.safety_registries(),
+                &|body| placeholder_unsafe(deferred, body),
+            ),
+        }
     }
 
     /// Whether one `GROUP BY` group's aggregate compute may be forked across
@@ -1960,6 +2036,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // parent would — dropping the stack here would silently reproduce the false-zero
             // attribution this field exists to fix, just scoped to the parallel path.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // SHARED for the same reason as `in_substituted_exists`: a worker evaluating
+            // part of the window's copy reaches the same placeholders its parent would. The
+            // plan-node site cache is shared outright (one `Arc`), so a site a worker
+            // prepares is not dropped with the worker — see
+            // `crate::deferred_exists::PlanSites`.
+            deferred_exists: self.deferred_exists.clone(),
+            plan_exists_sites: self.plan_exists_sites.clone(),
+            // Carried, not reset: a worker evaluating part of a join's right operand (a
+            // `UNION` arm) must answer a variable-endpoint `SERVICE` over the same
+            // endpoints its parent would. The terms are the parent's, and a worker's
+            // scratch is a clone of the parent's, so they read back the same.
+            endpoint_frames: self.endpoint_frames.clone(),
+            endpoint_scan: self.endpoint_scan,
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -2164,6 +2253,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // still see the enclosing window's map for any of ITS OWN charges that legitimately
             // resolve through it.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // A function body is its own query: no placeholder of the caller's copy is in
+            // it, and its own `EXISTS` bodies are its own.
+            deferred_exists: None,
+            plan_exists_sites: None,
+            // A function body is its own query: no join of the caller's encloses its
+            // clauses, so no endpoint list of the caller's applies to them.
+            endpoint_frames: Vec::new(),
+            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2225,46 +2322,35 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// it fresh on the first reach and reusing it for every later reach of the SAME AST
     /// node within this evaluation (`crate::enf`'s module doc, "Prepare-seam choice").
     ///
-    /// While [`Self::in_substituted_exists`] is set, `pattern`'s OWN address is a per-row
+    /// While [`Self::in_substituted_exists`] is set, `pattern`'s address may be a per-row
     /// heap temporary that can alias a dropped-and-reused allocation from an earlier outer
     /// row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
-    /// already guard against — so it can never be used as the cache key directly. This is
-    /// reached for exactly one shape: a nested `EXISTS` inside an enclosing correlated
-    /// `EXISTS`/`LATERAL` window's per-row substituted copy (`crate::binop::eval_correlated`
-    /// via [`crate::expr::substitute_pattern_tracked`]'s tracked `Expression::Exists` arm).
-    /// That nested site's OWN AST node, unlike the per-row copy, is perfectly stable across
-    /// every outer row — so [`Self::resolve_ledger_ordinal`]'s own one-hop-per-window chase
-    /// (through [`Self::correlated_node_maps`]) is tried FIRST: when `pattern`'s address
-    /// resolves to a stable one, the cache is keyed by THAT address instead, turning what
-    /// would otherwise be a fresh [`PreparedExists::build`] (ENF-normalize, clone, full
-    /// structural analysis) on every single outer row into one build per site, exactly like
-    /// the un-substituted fast path below. Only when no window's map covers `pattern` at
-    /// all — a node the substitution walk genuinely synthesized, with no AST identity of
-    /// its own — does this fall back to the old build-fresh-and-discard behavior.
-    pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
-        let key = std::ptr::from_ref(pattern) as usize;
+    /// guard against — so it is never a cache key there, and the preparation is built fresh
+    /// and returned uncached. A nested `EXISTS` inside a substituted copy does not come
+    /// here at all: the substitution left it as a placeholder whose site was prepared once,
+    /// from the written body (see [`crate::deferred_exists`]). What does come here inside a
+    /// window is a body the window evaluates as it is written, or one substituted in full
+    /// (a `SERVICE` body, or layers that disagree) — the second of which is exactly the
+    /// case a cached preparation would answer with an earlier row's substitution.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::StackExhausted`] when the walks that prepare the site ran out of stack
+    /// (see [`crate::stack::walk`]); nothing is cached then.
+    pub(crate) fn prepared_exists(
+        &mut self,
+        pattern: &GraphPattern,
+    ) -> Result<Arc<PreparedExists>, EvalError> {
         if self.in_substituted_exists {
-            let Some(resolved) = self
-                .correlated_node_maps
-                .last()
-                .and_then(|map| map.get(&key))
-                .map(|entry| entry.source)
-            else {
-                return Arc::new(PreparedExists::build(pattern));
-            };
-            if let Some(existing) = self.exists_prepared_cache.get(&resolved) {
-                return existing.clone();
-            }
-            let built = Arc::new(PreparedExists::build(pattern));
-            self.exists_prepared_cache.insert(resolved, built.clone());
-            return built;
+            return Ok(Arc::new(PreparedExists::build_guarded(pattern)?));
         }
+        let key = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
-            return existing.clone();
+            return Ok(existing.clone());
         }
-        let built = Arc::new(PreparedExists::build(pattern));
+        let built = Arc::new(PreparedExists::build_guarded(pattern)?);
         self.exists_prepared_cache.insert(key, built.clone());
-        built
+        Ok(built)
     }
 }
 
@@ -2285,6 +2371,14 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // Every algebra node is one level of this recursion, and the stack that parsed a
+    // request bounds how many levels it has, not how much stack evaluating them takes:
+    // see `crate::stack`. The construct is named only on the refusal.
+    if crate::stack::is_low() {
+        return Err(EvalError::StackExhausted {
+            construct: pattern_construct(pattern),
+        });
+    }
     // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
     // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
     // all and two independent subquery slices do not overwrite one another.
@@ -2294,6 +2388,33 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
         ctx.cap_pushdown = None;
     }
     evaluated
+}
+
+/// The name a stack refusal at `pattern` reports: the construct a request writes to get
+/// this algebra node.
+const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
+    match pattern {
+        GraphPattern::Bgp { .. } => "basic graph pattern",
+        GraphPattern::Path { .. } => "property path",
+        GraphPattern::Join { .. } => "group graph pattern",
+        GraphPattern::LeftJoin { .. } => "OPTIONAL",
+        GraphPattern::Lateral { .. } => "LATERAL",
+        GraphPattern::Filter { .. } => "FILTER",
+        GraphPattern::Union { .. } => "UNION",
+        GraphPattern::Graph { .. } => "GRAPH",
+        GraphPattern::Extend { .. } => "BIND",
+        GraphPattern::Unfold { .. } => "UNFOLD",
+        GraphPattern::Minus { .. } => "MINUS",
+        GraphPattern::Values { .. } => "VALUES",
+        GraphPattern::OrderBy { .. } => "ORDER BY",
+        GraphPattern::Project { .. } => "SELECT",
+        GraphPattern::Distinct { .. } => "DISTINCT",
+        GraphPattern::Reduced { .. } => "REDUCED",
+        GraphPattern::Slice { .. } => "LIMIT/OFFSET",
+        GraphPattern::Group { .. } => "GROUP BY",
+        GraphPattern::Service { .. } => "SERVICE",
+        GraphPattern::PropertyFunction(_) => "property function",
+    }
 }
 
 /// The evaluator recursion after any local semantic-Slice ceiling has been installed.
@@ -2551,7 +2672,7 @@ fn eval_node<D: DatasetView + Sync>(
         )?)),
 
         GraphPattern::Join { left, right } => crate::binop::eval_join(pattern, left, right, ctx),
-        GraphPattern::Union { left, right } => crate::binop::eval_union(pattern, left, right, ctx),
+        GraphPattern::Union { arms } => crate::binop::eval_union(pattern, arms, ctx),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -2666,8 +2787,10 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 right,
                 expression: _,
             }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right } => derive(left).union(&derive(right)),
+            | GraphPattern::Lateral { left, right } => derive(left).union(&derive(right)),
+            GraphPattern::Union { arms } => arms
+                .iter()
+                .fold(VarSchema::new(), |schema, arm| schema.union(&derive(arm))),
             GraphPattern::Minus { left, right: _ } => derive(left),
             GraphPattern::Filter { expr: _, inner }
             | GraphPattern::OrderBy {
@@ -2780,13 +2903,15 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    let terms = crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    let _terms = crate::stack::reserve_terms(terms)?;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
     // that is done here, and the renamed column is dropped from the bag handed back.
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
+    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -3012,19 +3137,27 @@ pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalErro
 }
 
 /// Shared admission and dataset/base setup for all graph publication forms.
+///
+/// Returns the stack reserved for walks over the query's triple terms
+/// ([`crate::stack::reserve_terms`]), which the caller holds for as long as it evaluates.
 pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<(), EvalError> {
+) -> Result<purrdf_stack::Reserve, EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    let mut terms = crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    if let Query::Construct { template, .. } = query {
+        terms = terms.max(crate::stack::template_nesting(template));
+    }
+    let reserve = crate::stack::reserve_terms(terms)?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
+    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
     install_answer_cap_pushdown(query, ctx);
-    Ok(())
+    Ok(reserve)
 }
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
@@ -3051,7 +3184,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
         .options
         .force_sequential
         .then(crate::parallel::force_sequential_operation);
-    prepare_query_context(query, ctx)?;
+    let _terms = prepare_query_context(query, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column
@@ -3743,7 +3876,7 @@ mod tests {
                 NamedNode::new_unchecked(XINT),
             ))),
         );
-        let cond = Expression::And(Box::new(regex), Box::new(numeric));
+        let cond = Expression::and(regex, numeric);
         let pattern = GraphPattern::Filter {
             expr: cond,
             inner: Box::new(join),

@@ -10,13 +10,17 @@
 //! `add`/`delete`/`has`/`match`/`quads` are the RDF/JS `DatasetCore` mutation + query
 //! surface over the COW delta.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    CanonHash, JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
-    SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify, datasets_isomorphic,
-    parse_dataset, serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_to_writer_with, serialize_dataset_with, try_canonicalize_flat_view,
+    CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
+    SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
+    datasets_isomorphic, parse_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
+    serialize_dataset_with, try_canonicalize_flat_view,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -225,11 +229,34 @@ pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
     JsError::new(&format!("{}: {err}", err.diagnostic_code()))
 }
 
+/// The source of every [`Dataset`]'s identity. Starts at 1 so no dataset is ever `0`.
+///
+/// An atomic rather than a thread-local cell only because it is the plainest shared
+/// monotone counter the language has; a wasm instance has one thread, so nothing ever
+/// contends for it.
+static NEXT_DATASET_ID: AtomicU64 = AtomicU64::new(1);
+
 /// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
+///
+/// # Identity and generation
+///
+/// Every dataset carries an `id`, unique within the wasm instance and fixed for its
+/// lifetime, and a `generation` that advances on every mutation of its content. An
+/// asynchronous UPDATE evaluates against a snapshot and commits later; the pair is how
+/// that commit proves it is landing on the dataset it read, in the state it read it,
+/// rather than overwriting a mutation made while it was in flight. The quads are
+/// therefore private to this module, and `Dataset::mutate` is the one door every writer
+/// in the crate goes through — a writer that bypassed it would be a mutation no commit
+/// could detect.
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct Dataset {
-    pub(crate) inner: MutableDataset,
+    /// The quads. Private: see the type-level note on identity and generation.
+    inner: MutableDataset,
+    /// Unique within the instance; never reused.
+    id: u64,
+    /// Advances by one on every mutation of `inner`.
+    generation: u64,
 }
 
 impl Dataset {
@@ -240,6 +267,59 @@ impl Dataset {
             .map_err(|e| diag_to_err(&e))?;
         Ok(MutableDataset::new(base))
     }
+
+    /// A new dataset over `inner`, with a fresh identity at generation zero.
+    pub(crate) fn from_mutable(inner: MutableDataset) -> Self {
+        Self {
+            inner,
+            id: NEXT_DATASET_ID.fetch_add(1, Ordering::Relaxed),
+            generation: 0,
+        }
+    }
+
+    /// A new dataset over a frozen base, with a fresh identity at generation zero.
+    pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Self {
+        Self::from_mutable(MutableDataset::new(frozen))
+    }
+
+    /// Read access to the quads. Reading never advances the generation.
+    pub(crate) const fn view(&self) -> &MutableDataset {
+        &self.inner
+    }
+
+    /// The one write door: run `write` against the quads, and advance the generation
+    /// when it reports that the effective set changed.
+    ///
+    /// `write` returns its own result beside that flag rather than this method
+    /// inferring a change, because only the writer knows: an `add` of a quad already
+    /// present changes nothing and must not make an in-flight asynchronous UPDATE's
+    /// commit refuse, while an UPDATE that installs a new base always counts.
+    pub(crate) fn mutate<R>(&mut self, write: impl FnOnce(&mut MutableDataset) -> (R, bool)) -> R {
+        let (result, changed) = write(&mut self.inner);
+        if changed {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        result
+    }
+
+    /// Replace the whole content with `frozen` — the commit of an UPDATE. Always a
+    /// mutation, whether or not the new base happens to equal the old one.
+    pub(crate) fn replace(&mut self, frozen: Arc<RdfDataset>) {
+        self.mutate(|inner| {
+            *inner = MutableDataset::new(frozen);
+            ((), true)
+        });
+    }
+
+    /// This dataset's identity, as the asynchronous commit compares it.
+    pub(crate) const fn identity(&self) -> u64 {
+        self.id
+    }
+
+    /// This dataset's generation, as the asynchronous commit compares it.
+    pub(crate) const fn current_generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 #[wasm_bindgen]
@@ -247,9 +327,7 @@ impl Dataset {
     /// An empty dataset.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Result<Self, JsError> {
-        Ok(Self {
-            inner: Self::empty_base()?,
-        })
+        Ok(Self::from_mutable(Self::empty_base()?))
     }
 
     /// `parse(input, format, base?)` → a dataset of the parsed quads.
@@ -263,9 +341,7 @@ impl Dataset {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
-        Ok(Self {
-            inner: MutableDataset::new(dataset),
-        })
+        Ok(Self::from_frozen(dataset))
     }
 
     /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
@@ -506,6 +582,25 @@ impl Dataset {
         self.inner.effective_count()
     }
 
+    /// `id` — this dataset's identity, unique within the wasm instance and never reused.
+    ///
+    /// A `number`: identities are minted one at a time from 1, so they stay exact far
+    /// beyond any count of datasets an instance can hold.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> f64 {
+        self.id as f64
+    }
+
+    /// `generation` — how many mutations this dataset's content has seen.
+    ///
+    /// Advances on every `add` or `delete` that changed the effective set and on every
+    /// applied UPDATE; reading, querying and serializing never move it. An asynchronous
+    /// UPDATE captures it when it starts and refuses to commit if it has moved since.
+    #[wasm_bindgen(getter)]
+    pub fn generation(&self) -> f64 {
+        self.generation as f64
+    }
+
     /// `add(quad)` → insert a quad. Returns `true` if the effective set changed.
     ///
     /// Throws if the quad carries a relative IRI in any position: this surface is
@@ -515,14 +610,20 @@ impl Dataset {
     #[wasm_bindgen(js_name = add)]
     pub fn add(&mut self, quad: &Quad) -> Result<bool, JsError> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
-        self.inner.insert(values).map_err(|e| iri_to_err(&e))
+        self.mutate(|inner| match inner.insert(values) {
+            Ok(changed) => (Ok(changed), changed),
+            Err(error) => (Err(iri_to_err(&error)), false),
+        })
     }
 
     /// `delete(quad)` → remove a quad. Returns `true` if the effective set changed.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&mut self, quad: &Quad) -> Result<bool, JsError> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
-        Ok(self.inner.remove(&values))
+        Ok(self.mutate(|inner| {
+            let changed = inner.remove(&values);
+            (changed, changed)
+        }))
     }
 
     /// `has(quad)` → whether the quad is in the dataset.
@@ -619,7 +720,7 @@ impl Dataset {
             // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
             out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
         }
-        Ok(Self { inner: out })
+        Ok(Self::from_mutable(out))
     }
 }
 
@@ -700,14 +801,25 @@ impl Dataset {
         base: Option<&str>,
     ) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
-        let native = classify(format).map_err(|error| diag_to_err(&error))?;
-        let outcome =
-            serialize_dataset_to_format_with_jsonld_options(&frozen, native, base, options)
-                .map_err(|error| diag_to_err(&error))?;
-        String::from_utf8(outcome.bytes).map_err(|error| {
-            JsError::new(&format!("serialization produced non-UTF-8 bytes: {error}"))
-        })
+        serialize_frozen_with_options(&frozen, format, options, base)
+            .map_err(|message| JsError::new(&message))
     }
+}
+
+/// [`Dataset::serialize_with_options`] over an already-frozen dataset, with a plain
+/// `String` error — the shape the asynchronous lane records on a job rather than
+/// throwing across a suspended frame. The words are the synchronous method's.
+pub(crate) fn serialize_frozen_with_options(
+    frozen: &Arc<RdfDataset>,
+    format: &str,
+    options: &JsonLdSerializeOptions,
+    base: Option<&str>,
+) -> Result<String, String> {
+    let native = classify(format).map_err(|error| error.to_string())?;
+    let outcome = serialize_dataset_to_format_with_jsonld_options(frozen, native, base, options)
+        .map_err(|error| error.to_string())?;
+    String::from_utf8(outcome.bytes)
+        .map_err(|error| format!("serialization produced non-UTF-8 bytes: {error}"))
 }
 
 #[cfg(test)]
@@ -729,6 +841,87 @@ mod tests {
             named(o),
             Term::from_inner(TermInner::DefaultGraph),
         )
+    }
+
+    /// Identity is unique per dataset and fixed; the generation moves exactly when the
+    /// effective set does. The no-op rows are the valid neighbours: an `add` of a quad
+    /// already present and a `delete` of an absent one change nothing, so they must not
+    /// advance the generation an asynchronous commit compares against.
+    #[test]
+    fn generation_advances_on_every_change_and_only_on_a_change() {
+        let mut dataset = Dataset::new().expect("empty dataset");
+        let other = Dataset::new().expect("empty dataset");
+        assert_ne!(
+            dataset.identity(),
+            other.identity(),
+            "identities are unique"
+        );
+        assert!(dataset.identity() > 0 && other.identity() > 0);
+        assert_eq!(dataset.id(), dataset.identity() as f64);
+        let id = dataset.identity();
+        assert_eq!(dataset.current_generation(), 0);
+
+        let quad = triple(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        assert!(dataset.add(&quad).expect("add"));
+        assert_eq!(
+            dataset.current_generation(),
+            1,
+            "an add that changed the set"
+        );
+        assert!(!dataset.add(&quad).expect("re-add"));
+        assert_eq!(dataset.current_generation(), 1, "a re-add changed nothing");
+
+        let absent = triple(
+            "http://example.org/x",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        assert!(!dataset.delete(&absent).expect("delete absent"));
+        assert_eq!(
+            dataset.current_generation(),
+            1,
+            "deleting an absent quad changed nothing"
+        );
+        assert!(dataset.delete(&quad).expect("delete"));
+        assert_eq!(
+            dataset.current_generation(),
+            2,
+            "a delete that changed the set"
+        );
+
+        let frozen = dataset.view().freeze().expect("freeze");
+        dataset.replace(frozen);
+        assert_eq!(
+            dataset.current_generation(),
+            3,
+            "installing a base always counts"
+        );
+        assert_eq!(dataset.generation(), 3.0);
+        assert_eq!(dataset.identity(), id, "mutation never changes identity");
+
+        // Reads never move it.
+        let _ = dataset.size();
+        let _ = dataset.serialize("nquads", None).expect("serialize");
+        assert_eq!(dataset.current_generation(), 3);
+    }
+
+    /// The synchronous UPDATE goes through the same door.
+    #[test]
+    fn a_synchronous_update_advances_the_generation() {
+        let mut dataset = Dataset::new().expect("empty dataset");
+        crate::query::QueryEngine::new()
+            .update(
+                &mut dataset,
+                "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
+                None,
+            )
+            .expect("update applies");
+        assert_eq!(dataset.size(), 1);
+        assert_eq!(dataset.current_generation(), 1);
     }
 
     #[test]

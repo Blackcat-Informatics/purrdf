@@ -76,8 +76,8 @@ reimplemented per language.
   path witnesses that bind a traversal hop by hop), governed execution with
   per-node explain receipts, and a `SERVICE` seam — a host-injected resolver
   carrying per-service context; no HTTP client and no resolver ship, so
-  `SERVICE` and `LOAD` fail by name on every shipped surface unless written
-  `SILENT` — gated by the W3C conformance suites.
+  `SERVICE` and `LOAD` fail by name on every shipped surface, `SILENT` or
+  not — gated by the W3C conformance suites.
   See [SPARQL](sparql/querying.md).
 - **SPARQL extensions outside `purrdf-core`** — deterministic full-text search with
   exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact and

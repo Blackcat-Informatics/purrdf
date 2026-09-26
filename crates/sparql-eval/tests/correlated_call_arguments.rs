@@ -286,10 +286,7 @@ fn run(variant: Variant, body: &str) -> Outcome {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {
@@ -616,10 +613,7 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(REL.to_owned(), Arc::new(relation));
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let engine = NativeSparqlEngine::new();
     let data = dataset();
 

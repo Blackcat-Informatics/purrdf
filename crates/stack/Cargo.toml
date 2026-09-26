@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-stack"
+description = "How much stack the running thread has left — natively from the operating system's thread limit, on wasm32 from the shadow stack against an installable floor — and the margin the SPARQL parser and evaluator refuse at instead of overflowing"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-stack"
+rust-version.workspace = true
+keywords = ["stack", "recursion", "wasm", "sparql", "rdf"]
+categories = ["memory-management", "wasm"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only leaf: the one place the workspace measures the stack. The SPARQL
+# parser (`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) refuse
+# against it, and the wasm package installs the floors of the stacks it switches
+# onto through it, so all three read one floor per thread and one margin.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_stack"
+
+[target.'cfg(unix)'.dependencies]
+# Raw `pthread_*` declarations this crate's `platform` module calls directly to
+# read the thread's stack bounds. Declarations only, resolved against the
+# target's own libc at link time: no bundled C source and no build-time C
+# toolchain, so a cross build never needs `<target>-gcc` on its `PATH`.
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Raw Win32 declarations for `GetCurrentThreadStackLimits`. Declarations only,
+# resolved against the platform SDK at link time: no bundled C source and no
+# build-time C toolchain.
+windows-sys = { workspace = true }

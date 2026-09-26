@@ -208,9 +208,30 @@ pub(crate) fn force_sequential_operation() -> SequentialOperationGuard {
     SequentialOperationGuard { previous }
 }
 
-/// Whether the current operation requires deterministic sequential evaluation.
+/// Whether the current operation requires sequential evaluation on this thread: a caller
+/// forced it ([`force_sequential_operation`]), or the evaluation holds triple terms
+/// deeper than the stack margin covers.
+///
+/// Those terms are covered only on the thread that measured them: the running
+/// evaluation kept stack for walks over them ([`crate::stack::admit_term`], the request's
+/// own reserve), and a fork-join worker — which clones the scratch interner holding them
+/// and walks them on a stack of its own — has kept none. So an evaluation with anything
+/// reserved stays on its thread. A worker that builds such a term itself is refused
+/// ([`crate::stack::UNSCOPED_TRIPLE_TERM`]), and the fork-join primitives run their work
+/// sequentially on the evaluating thread instead ([`is_unscoped_refusal`]).
 pub(crate) fn sequential_operation_required() -> bool {
-    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get)
+    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get) || purrdf_stack::reserved() > 0
+}
+
+/// Whether `result` is a worker's refusal of a triple term deeper than a thread with no
+/// evaluation scope can hold: work the fork-join primitives redo sequentially, on the
+/// evaluating thread, where the term is measured and kept like any other.
+pub(crate) fn is_unscoped_refusal<T>(result: &Result<T, EvalError>) -> bool {
+    matches!(
+        result,
+        Err(EvalError::StackExhausted { construct })
+            if *construct == crate::stack::UNSCOPED_TRIPLE_TERM
+    )
 }
 
 /// RAII restoration for [`force_sequential_operation`].
@@ -367,7 +388,23 @@ pub(crate) fn should_parallelize(work_items: usize) -> bool {
 /// [`Function::Custom`] call ([`function_is_unsafe`]) or, inside an `EXISTS` pattern, a
 /// property-function node ([`property_function_is_unsafe`]).
 pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
-    !expr_reaches_unsafe_builtin(expr, registries)
+    !expr_reaches_unsafe_builtin(expr, registries, &|_| None)
+}
+
+/// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
+/// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
+/// [`is_parallel_safe_with`].
+pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
+
+/// [`is_parallel_safe`], with every `EXISTS` body first offered to `verdict`: a
+/// substituted copy's placeholder stands for a body the walk cannot see, and `verdict`
+/// answers for it (`crate::eval::EvalCtx::may_fork_row_loop`).
+pub(crate) fn is_parallel_safe_with(
+    expr: &Expression,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    !expr_reaches_unsafe_builtin(expr, registries, verdict)
 }
 
 /// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
@@ -405,6 +442,12 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'
 /// parallelism (it charges nothing from a worker), and the narrow remainder runs
 /// sequentially — where the charge order is the row order by construction.
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    // Out of stack for the walk (see `crate::stack`): answer "re-enters", the
+    // conservative side — the row loop then runs sequentially, which is always correct,
+    // and the evaluation that follows refuses at its own next check.
+    if crate::stack::is_low() {
+        return true;
+    }
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
@@ -427,7 +470,16 @@ pub(crate) fn is_parallel_safe_pattern(
     pattern: &GraphPattern,
     registries: SafetyRegistries<'_>,
 ) -> bool {
-    !pattern_reaches_unsafe_builtin(pattern, registries)
+    !pattern_reaches_unsafe_builtin(pattern, registries, &|_| None)
+}
+
+/// [`is_parallel_safe_pattern`] with [`is_parallel_safe_with`]'s `verdict`.
+pub(crate) fn is_parallel_safe_pattern_with(
+    pattern: &GraphPattern,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    !pattern_reaches_unsafe_builtin(pattern, registries, verdict)
 }
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
@@ -442,13 +494,24 @@ pub(crate) fn is_parallel_safe_pattern(
 /// the moment this closure returns `true` — so the answer is identical to the
 /// `||` chain this replaces, including for expressions whose later arms would
 /// have been skipped.
-fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
+fn expr_reaches_unsafe_builtin(
+    expr: &Expression,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    // Out of stack for the walk (see `crate::stack`): answer "unsafe", the conservative
+    // side — a sequential fallback is always correct, and the evaluation that follows
+    // refuses at its own next check.
+    if crate::stack::is_low() {
+        return true;
+    }
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
-            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries),
+            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries, verdict),
             ExpressionPart::Call(f) => function_is_unsafe(f, registries.functions),
-            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registries),
+            ExpressionPart::Exists(pattern) => verdict(pattern)
+                .unwrap_or_else(|| pattern_reaches_unsafe_builtin(pattern, registries, verdict)),
         };
         found
     });
@@ -650,6 +713,7 @@ fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
     registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
 ) -> bool {
     // A property-function node is a LEAF for the shared decomposition — it has neither
     // a child pattern nor an attached expression — so the visitor yields nothing for
@@ -659,11 +723,17 @@ fn pattern_reaches_unsafe_builtin(
     if let GraphPattern::PropertyFunction(call) = pattern {
         return property_function_is_unsafe(&call.iri, registries.relations);
     }
+    // See `expr_reaches_unsafe_builtin`: out of stack, "unsafe" is the conservative side.
+    if crate::stack::is_low() {
+        return true;
+    }
     let mut found = false;
     visit_pattern_parts(pattern, &mut |part| {
         found |= match part {
-            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registries),
-            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries),
+            PatternPart::Child(child, _edge) => {
+                pattern_reaches_unsafe_builtin(child, registries, verdict)
+            }
+            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries, verdict),
         };
         found
     });
@@ -1088,14 +1158,17 @@ where
     R: Send,
     H: Send,
 {
-    if !should_parallelize(items.len()) {
+    let sequential = || {
         let mut state = init();
         let mut out = Vec::new();
         for item in items {
             push(&mut state, &mut out, item)?;
         }
         let harvested = harvest(&mut state);
-        return Ok((out, smallvec::smallvec![harvested]));
+        Ok((out, smallvec::smallvec![harvested]))
+    };
+    if !should_parallelize(items.len()) {
+        return sequential();
     }
 
     use rayon::prelude::*;
@@ -1113,6 +1186,11 @@ where
             Ok((acc, harvested))
         })
         .collect();
+    if per_chunk.iter().any(is_unscoped_refusal) {
+        drop(per_chunk);
+        let _sequential = force_sequential_operation();
+        return sequential();
+    }
 
     let mut out = Vec::with_capacity(
         per_chunk
@@ -1200,12 +1278,15 @@ where
     T: Sync,
     S: Send,
 {
-    if !should_parallelize(items.len()) {
+    let sequential = || {
         let mut state = init()?;
         for item in items {
             step(&mut state, item)?;
         }
-        return Ok(state);
+        Ok(state)
+    };
+    if !should_parallelize(items.len()) {
+        return sequential();
     }
 
     use rayon::prelude::*;
@@ -1221,6 +1302,11 @@ where
             Ok(state)
         })
         .collect();
+    if per_chunk.iter().any(is_unscoped_refusal) {
+        drop(per_chunk);
+        let _sequential = force_sequential_operation();
+        return sequential();
+    }
 
     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
     // wins (via `?` on the sequential `for` below), regardless of which worker
@@ -1332,7 +1418,19 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
             // function of the value, so this call cannot refuse what the child
             // accepted. Propagating the `Option` rather than asserting keeps the
             // cell shape honest if that ever stops being true.
-            Some(PortableTerm::Fresh(value)) => main.intern_checked(dataset, value),
+            //
+            // Nor can it refuse the value's depth: a worker holds no triple term deeper
+            // than the margin covers (it refuses one, and the primitive reruns the work
+            // on the evaluating thread — see `sequential_operation_required`), so the
+            // value is within what every thread covers, and admitting it changes
+            // nothing.
+            Some(PortableTerm::Fresh(value)) => {
+                debug_assert!(
+                    crate::stack::term_nesting(&value) <= crate::stack::MARGIN_TERM_LEVELS
+                        || purrdf_stack::reserved() > 0
+                );
+                main.intern_checked(dataset, value)
+            }
         })
         .collect()
 }
@@ -1400,7 +1498,9 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
-    use purrdf_sparql_algebra::{Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern};
+    use purrdf_sparql_algebra::{
+        ArithmeticOperator, Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern,
+    };
 
     // ---- should_parallelize -------------------------------------------------
 
@@ -1484,9 +1584,10 @@ mod tests {
 
     #[test]
     fn plain_arithmetic_and_regex_are_safe() {
-        let arith = Expression::Add(
-            Box::new(Expression::Literal(Literal::new_simple("1"))),
-            Box::new(Expression::Literal(Literal::new_simple("2"))),
+        let arith = Expression::arithmetic(
+            Expression::Literal(Literal::new_simple("1")),
+            ArithmeticOperator::Add,
+            Expression::Literal(Literal::new_simple("2")),
         );
         assert!(is_parallel_safe(&arith, NONE));
 
@@ -1780,12 +1881,12 @@ mod tests {
         // The classification must survive being nested: a `UNION` arm containing the
         // call is unsafe, and so is an `EXISTS` whose inner pattern contains it.
         let volatile = registry_with(Volatility::Volatile);
-        let union = GraphPattern::Union {
-            left: Box::new(GraphPattern::Bgp {
+        let union = GraphPattern::union(
+            GraphPattern::Bgp {
                 patterns: Vec::new(),
-            }),
-            right: Box::new(property_function_call()),
-        };
+            },
+            property_function_call(),
+        );
         assert!(!is_parallel_safe_pattern(&union, relations(&volatile)));
 
         let exists = Expression::Exists(Box::new(property_function_call()));

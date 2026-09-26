@@ -968,10 +968,7 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             }
         };
         bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let options = QueryOptions {
-            env: &self.env,
-            ..QueryOptions::EMPTY
-        };
+        let options = QueryOptions::new().with_env(&self.env);
         // Ungoverned, and the governed ranking read's reasoning is why that is no
         // loss: that lane declines every caller-settable ceiling and is taken for
         // its receipt. A lookup's receipt is two facts — its row count, which the
@@ -1587,10 +1584,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
             reason: e.to_string(),
         }
     })?);
-    let options = || QueryOptions {
-        env: env.as_ref(),
-        ..QueryOptions::EMPTY
-    };
+    let options = || QueryOptions::new().with_env(env.as_ref());
 
     for unit in &compiled.units {
         // There is no empty-text arm here, and there is nothing left for one to catch.

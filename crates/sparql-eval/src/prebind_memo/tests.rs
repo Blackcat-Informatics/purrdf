@@ -234,11 +234,11 @@ fn call_carries(pattern: &GraphPattern, constant: &TermPattern) -> bool {
             GraphPattern::Join { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right }
             | GraphPattern::Minus { left, right } => {
                 stack.push(left);
                 stack.push(right);
             }
+            GraphPattern::Union { arms } => stack.extend(arms),
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Graph { inner, .. }
             | GraphPattern::Extend { inner, .. }

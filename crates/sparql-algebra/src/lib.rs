@@ -86,18 +86,23 @@ mod validate;
 
 pub use algebra::{
     AggregateArityError, AggregateExpression, AggregateExpressionError, AggregateFunction,
-    AggregateOrderByError, AggregateParts, AggregateScalarvalError, CdtArity, CdtCall, CdtFn,
-    Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation, NegatedPathElement,
-    OrderExpression, PropertyFunctionCall, PropertyPathExpression, PurrdfCall, PurrdfFn, Query,
-    QueryDataset, SparqlVersion, Update, UsingClause,
+    AggregateOrderByError, AggregateParts, AggregateScalarvalError, ArithmeticOperator, CdtArity,
+    CdtCall, CdtFn, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
+    NegatedPathElement, OrderExpression, PropertyFunctionCall, PropertyPathExpression, PurrdfCall,
+    PurrdfFn, Query, QueryDataset, SparqlVersion, Update, UsingClause,
 };
 pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
     QuadPattern, TermPattern, TriplePattern, Variable,
 };
 pub use error::{ParseError, Result};
+#[allow(
+    deprecated,
+    reason = "the deprecated limits stay exported so code naming them still compiles"
+)]
+pub use parser::{MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES};
 pub use parser::{
-    MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES, ParserOptions, QuerySplit, SparqlParser,
-    builtin_function_keyword,
+    ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
+    WASM_GRAPH_PATTERN_DEPTH, WASM_HOST_STACK_BUDGET, builtin_function_keyword,
 };
 pub use serialize::pattern_to_select_query;

@@ -32,6 +32,7 @@
 //! Folding the pull into the core would force one of those two shapes onto the other.
 //! The core is the **admission** step; the producers keep their own loops.
 
+use crate::error::EvalError;
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
 
 use crate::eval::EvalCtx;
@@ -150,7 +151,7 @@ impl GovernedRowIngest {
         &self,
         ctx: &mut EvalCtx<'_, D>,
         cells: impl IntoIterator<Item = Option<TermValue>>,
-    ) -> Solution<D::Id> {
+    ) -> Result<Solution<D::Id>, EvalError> {
         let mut row: Solution<D::Id> = smallvec::smallvec![None; self.width];
         for (i, cell) in cells.into_iter().enumerate().take(self.width) {
             if let Some(value) = cell {
@@ -160,9 +161,9 @@ impl GovernedRowIngest {
                 // tag the grammar refuses, and this
                 // function's contract already is that "missing cells stay
                 // unbound": a cell no writer could spell is exactly such a cell.
-                row[i] = ctx.scratch.intern_checked(ctx.dataset, value);
+                row[i] = ctx.scratch.try_intern_checked(ctx.dataset, value)?;
             }
         }
-        row
+        Ok(row)
     }
 }

@@ -173,9 +173,10 @@ fn record_path(path: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut P
         P::Reverse(inner) | P::ZeroOrMore(inner) | P::OneOrMore(inner) | P::ZeroOrOne(inner) => {
             record_path(inner, out);
         }
-        P::Sequence(left, right) | P::Alternative(left, right) => {
-            record_path(left, out);
-            record_path(right, out);
+        P::Sequence(elements) | P::Alternative(elements) => {
+            for element in elements {
+                record_path(element, out);
+            }
         }
         // A negated set names the predicates it EXCLUDES. They are still predicate
         // IRIs the query mentions and still not calls, so they are reported as data —

@@ -368,11 +368,7 @@ fn request(
     query: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<Vec<Vec<Option<TermValue>>>, String> {
-    let options = QueryOptions {
-        env,
-        prebinding: lane,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(env).with_prebinding(lane);
     let owned = SparqlRequest {
         query,
         base_iri: None,
@@ -433,11 +429,7 @@ fn prepared(
     query: &str,
     value: &TermValue,
 ) -> Result<Vec<Vec<Option<TermValue>>>, String> {
-    let options = QueryOptions {
-        env,
-        prebinding: lane,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(env).with_prebinding(lane);
     let mut execution = engine
         .prepare_execution(query, None, &["q"], options)
         .map_err(|diagnostic| diagnostic.message)?;

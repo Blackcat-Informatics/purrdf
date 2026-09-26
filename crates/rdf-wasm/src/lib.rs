@@ -15,13 +15,16 @@
 //!   compile to wasm and are deliberately excluded — this is the
 //!   value-interned IR + the COW [`MutableDataset`](purrdf::ir::MutableDataset),
 //!   not a persistent quad store.
-//! - **Offline SPARQL.** The native, oxigraph-free multiset evaluator
+//! - **Two SPARQL lanes.** The native, oxigraph-free multiset evaluator
 //!   ([`purrdf_sparql_eval`]) binds to the wasm [`Dataset`] (see the `query` module),
-//!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. Only the
-//!   host can provide SERVICE federation; this default browser surface installs no
-//!   remote source, so `SERVICE` / `LOAD` hard-fails here rather than silently
-//!   returning a partial answer — except for the `SILENT` forms, which SPARQL 1.1
-//!   requires to succeed with nothing fetched (see the `query` module).
+//!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. The
+//!   synchronous lane is offline: it installs no remote source, so `SERVICE` / `LOAD`
+//!   hard-fails there rather than silently returning a partial answer — except for the
+//!   `SILENT` forms, which SPARQL 1.1 requires to succeed with nothing fetched. The
+//!   asynchronous lane (the `async_query` module) runs the same evaluator as a job that
+//!   suspends through JSPI on host-resolved `SERVICE` and `LOAD` effects and yields to
+//!   the event loop, so the host owns the I/O and its policy while PurRDF keeps the
+//!   parsing, evaluation, joins, `SILENT` semantics and result encoding.
 //! - **Separate from the C-ABI (P8).** WASM has its own ownership model,
 //!   packaging, and async I/O; it is not a C-ABI consumer and does not depend on the
 //!   `no_std` track.
@@ -69,30 +72,122 @@ use wasm_bindgen::prelude::*;
 //   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
 //                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
+//   * `async_query` — the asynchronous operation runtime: every evaluating `query`
+//                 and SHACL surface as a job that suspends on host-resolved SERVICE /
+//                 LOAD effects and yields to the event loop, through JSPI
+//   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
+//                 an HTTP request read into an operation, its dataset parameters
+//                 applied, its response format negotiated
+//   * `panic_poison` — the panic hook that poisons the instance before a panic's trap
+//                 unwinds, so no later call runs on the state the panic left behind
+mod async_query;
 mod codec;
 mod convert;
 mod dataset;
 pub mod entail;
 mod factory;
 mod jsonld;
+mod panic_poison;
 mod projection;
+mod protocol;
 mod query;
 pub mod shacl;
 mod stream;
 mod term;
 
+#[cfg(target_arch = "wasm32")]
+pub use async_query::purrdf_jspi_run;
+pub use async_query::{
+    AsyncEffect, AsyncEffectKind, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind,
+    LoadAuthorization, ServiceCatalog, ShaclAsyncOperation,
+};
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
 pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
+pub use protocol::SparqlProtocolRequest;
 pub use query::{
-    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, PartialAnswers, ProvenanceInfo,
-    QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow, TrippedGovernor,
-    UpdateOutcome, governor_dimensions, provenance_from_json, provenance_from_xml,
+    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, NegotiatedOutcome, PartialAnswers,
+    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow,
+    TrippedGovernor, UpdateOutcome, governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;
 pub use term::{Quad, Term};
+
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    /// The low end of this module's shadow stack, where `wasm-ld` placed it. Only its
+    /// address is ever taken; the byte is never read.
+    safe static __stack_low: u8;
+}
+
+/// Runs once, when the instance starts: installs the synchronous shadow stack's floor
+/// in [`purrdf_stack`], the measurement the SPARQL parser's and evaluator's stack guards
+/// refuse against, and the panic hook that poisons the instance (the `panic_poison` module).
+///
+/// The floor's default is address 0, the floor rustc's `--stack-first` layout gives the
+/// stack; this reads the linker's own record of it instead, so the guards measure against
+/// wherever the stack really ends however this module was linked. The
+/// asynchronous lane switches away from this floor onto each job's region and back
+/// (`async_query`), and puts this value back whenever a job suspends or returns.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn install_stack_floor() {
+    // `black_box`: the low end may be address 0, and nothing may be inferred from an
+    // address the compiler assumes is not null.
+    let low = core::hint::black_box(&raw const __stack_low) as usize;
+    purrdf_stack::replace_floor(low);
+    panic_poison::install();
+}
+
+/// Test-only: panics when the host has armed it, so the Node lane can prove that a panic
+/// out of a synchronous call poisons the instance. Returns 0, doing nothing, otherwise.
+///
+/// Every PurRDF entry point is written not to panic, so no input reaches one; this is
+/// the one way a test can raise a genuine Rust panic through a synchronous export. It is
+/// a raw export, not a `#[wasm_bindgen]` one: the glue generates no wrapper for it and
+/// the package root does not export it, so it is reachable only through the instance's
+/// raw exports. And it is inert unless the JavaScript global
+/// `__purrdfArmTestPanic` is `true` when it is called — a flag only the test fixture that
+/// exercises it sets.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __purrdf_test_panic() -> u32 {
+    let armed = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str(panic_poison::TEST_PANIC_FLAG),
+    )
+    .is_ok_and(|flag| flag.as_bool() == Some(true));
+    assert!(!armed, "the armed test panic fired");
+    0
+}
+
+/// Test-only: executes `unreachable` when the host has armed it, so the Node lane can prove
+/// that a trap which is not a panic, out of a synchronous call, poisons the instance.
+/// Returns 0, doing nothing, otherwise.
+///
+/// No PurRDF entry point traps on any input, and a panic goes through the panic hook
+/// (see [`__purrdf_test_panic`]); this raises the trap directly, with no hook running
+/// first, exactly as allocation failure or a stray `unreachable` would. The trap is the
+/// only thing it does: the JavaScript side has to recognize it from the error alone. Like
+/// the panic export it is a raw export the package root never exports, inert unless the
+/// JavaScript global `__purrdfArmTestTrap` is `true` when it is called.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __purrdf_test_trap() -> u32 {
+    let armed = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str(panic_poison::TEST_TRAP_FLAG),
+    )
+    .is_ok_and(|flag| flag.as_bool() == Some(true));
+    if armed {
+        core::arch::wasm32::unreachable();
+    }
+    0
+}
 
 /// The purrdf engine version (the crate's SemVer), exposed to JS as `version()`.
 ///

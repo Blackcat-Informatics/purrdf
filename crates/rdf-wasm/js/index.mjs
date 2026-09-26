@@ -4,8 +4,9 @@
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
-// RegimeClosure, ReasoningAnswer, SerializeLoss, ShaclProductRefusal) and the free
-// functions (version,
+// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclProductRefusal,
+// SparqlProtocolRequest)
+// and the free functions (version,
 // shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
 // shaclPackProduct, shaclProductExplain,
 // shaclProductCertify, shaclProductValidateToSarif,
@@ -34,6 +35,16 @@
 //     wasm-owned objects whose fields have to be MOVED out one at a time; the wrappers
 //     below drain them into ordinary JS objects and free the handles, exactly as
 //     `queryResultToObject` already does for an ungoverned result.
+//   * the asynchronous twins (`queryAsync`, `selectAsync`, …, `updateGovernedAsync`,
+//     `explainQueryAsync`, `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`, and the
+//     SHACL twins `shaclValidateToSarifAsync`, …, `shaclEntailAsync`) — each
+//     begins a job in Rust (`QueryEngine.beginAsync`, `AsyncJob.beginShacl`), hands it
+//     to the scheduler in
+//     `./pkg/purrdf_jspi.mjs` with the host's `SERVICE` and `LOAD` handlers and its
+//     `AbortSignal`, and drains the finished job into the very shape its synchronous
+//     twin returns (the negotiated twin, which has no synchronous twin, into a governed
+//     outcome carrying a document). The scheduler is the same module instance the wasm
+//     glue imports its suspending function from.
 //
 // What this module deliberately does NOT do is decide anything about governors. It sets
 // no default ceiling, applies no fallback, and never converts a trip into a throw: the
@@ -44,6 +55,9 @@
 // those `bigint` — a shape change, not a decision.
 
 import init, {
+  AsyncJob,
+  AsyncJobOptions,
+  AsyncOperationKind,
   CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
@@ -82,11 +96,13 @@ import init, {
   ReasoningAnswer,
   RegimeClosure,
   SerializeLoss,
+  ServiceCatalog,
   ShaclChangeValidation,
   shaclEntail,
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
+  ShaclAsyncOperation,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,
@@ -95,9 +111,20 @@ import init, {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,
+  SparqlProtocolRequest,
   Term,
   version,
 } from "./pkg/purrdf_wasm.js";
+import {
+  assertAsyncQueries,
+  assertNotPoisoned,
+  asyncYieldPrimitive as jspiAsyncYieldPrimitive,
+  configureAsync as jspiConfigureAsync,
+  hasAsyncQueries as jspiHasAsyncQueries,
+  installAsync,
+  runJob,
+  withDatasetUpdateLock,
+} from "./pkg/purrdf_jspi.mjs";
 
 let _ready = false;
 
@@ -487,6 +514,60 @@ function queryOutcomeToObject(raw) {
   }
 }
 
+function negotiatedOutcomeToObject(raw) {
+  let partialRaw;
+  let trippedRaw;
+  let evidenceRaw;
+  try {
+    const isComplete = raw.isComplete;
+    const format = raw.format;
+    const mediaType = raw.mediaType;
+    const bytes = raw.takeBody();
+    partialRaw = raw.takePartial();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("negotiated query outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+    if (isComplete) {
+      if (bytes === undefined) {
+        throw new Error("complete negotiated query outcome omitted its body");
+      }
+      return {
+        isComplete,
+        body: { bytes, format, mediaType },
+        partial: undefined,
+        tripped,
+        evidence,
+      };
+    }
+    if (partialRaw === undefined) {
+      throw new Error("exhausted negotiated query outcome omitted its partial certificate");
+    }
+    const partialHandle = partialRaw;
+    partialRaw = undefined;
+    return {
+      isComplete,
+      body: undefined,
+      partial: partialAnswersToObject(partialHandle),
+      tripped,
+      evidence,
+    };
+  } finally {
+    partialRaw?.free?.();
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
+    raw.free?.();
+  }
+}
+
 function entailmentQueryOutcomeToObject(raw) {
   let outcomeRaw;
   let trippedRaw;
@@ -558,25 +639,582 @@ function updateOutcomeToObject(raw) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The asynchronous twins
+// ---------------------------------------------------------------------------
+//
+// Every twin runs the same Rust operation its synchronous twin runs, as a job the
+// scheduler drives (see `./pkg/purrdf_jspi.mjs` and the Rust `async_query` module). This
+// layer only translates: an options object into an `AsyncJobOptions`, the host's
+// handlers and signal into the scheduler's `host`, and a finished job into the result
+// shape the synchronous twin returns. Every option a twin would ignore is refused by
+// name, exactly as the synchronous normalizers refuse a governor on an ungoverned call.
+
+// The keys every asynchronous twin accepts beside its operation's own.
+const ASYNC_HOST_OPTION_KEYS = [
+  "resolveService",
+  "resolveLoad",
+  "signal",
+  "yieldEveryPolls",
+  "stackBytes",
+  "catalog",
+  "localServices",
+];
+
+const GOVERNOR_CEILING_KEYS = GOVERNOR_OPTION_KEYS.filter((key) => key !== "cancel");
+
+const GOVERNED_ASYNC_KEYS = ["base", "aggregateNamespace", ...GOVERNOR_CEILING_KEYS];
+
+// The operation keys each kind of twin accepts. `maxAnswers` stays on `updateGoverned`:
+// it is forwarded so Rust refuses it by name, exactly as the synchronous twin does.
+const ASYNC_OPERATION_KEYS = {
+  query: { keys: ["base"], governed: false },
+  raw: { keys: ["base", "format", "provenanceNamespace", "optionsJson"], governed: false },
+  rawWithContext: { keys: ["base", "yamlSchemaUrl"], governed: false },
+  governed: { keys: GOVERNED_ASYNC_KEYS, governed: true },
+  entailmentGoverned: { keys: [...GOVERNED_ASYNC_KEYS, "program"], governed: true },
+  update: { keys: ["base"], governed: false },
+  updateGoverned: { keys: GOVERNED_ASYNC_KEYS, governed: true },
+  negotiated: { keys: [...GOVERNED_ASYNC_KEYS, "accept"], governed: true },
+  // EXPLAIN measures a run that is metered and never bounded, so it takes no ceiling:
+  // exactly `explainQuery`'s options.
+  explain: { keys: ["base"], governed: false },
+  // The SHACL twins take their synchronous twin's arguments positionally — `shapesBase`
+  // among them — and no ceiling, since no synchronous SHACL entry takes one: only the
+  // host options.
+  shacl: { keys: [], governed: false },
+};
+
+function isPresent(value) {
+  return value !== undefined && value !== null;
+}
+
+function optionalString(value, name) {
+  if (!isPresent(value)) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError(`query option ${name} must be a string when supplied`);
+  }
+  return value;
+}
+
+function optionalNumber(value, name) {
+  if (!isPresent(value)) return undefined;
+  if (typeof value !== "number") {
+    throw new TypeError(`query option ${name} must be a number when supplied`);
+  }
+  // The range (and integrality) is Rust's to refuse, with the one message it owns.
+  return value;
+}
+
+function optionalHandler(value, name) {
+  if (!isPresent(value)) return undefined;
+  if (typeof value !== "function") {
+    throw new TypeError(`query option ${name} must be a function when supplied`);
+  }
+  return value;
+}
+
+function optionalSignal(value) {
+  if (!isPresent(value)) return undefined;
+  if (
+    typeof value !== "object" ||
+    typeof value.aborted !== "boolean" ||
+    typeof value.addEventListener !== "function" ||
+    typeof value.removeEventListener !== "function"
+  ) {
+    throw new TypeError("query option signal must be an AbortSignal when supplied");
+  }
+  return value;
+}
+
+function optionalCatalog(value) {
+  if (!isPresent(value)) return undefined;
+  if (!(value instanceof ServiceCatalog)) {
+    throw new TypeError("query option catalog must be a ServiceCatalog when supplied");
+  }
+  return value;
+}
+
+function optionalLocalServices(value) {
+  if (!isPresent(value)) return [];
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(
+      "query option localServices must be an object mapping endpoint IRIs to Datasets",
+    );
+  }
+  const services = [];
+  for (const [endpoint, dataset] of Object.entries(value)) {
+    if (!(dataset instanceof Dataset)) {
+      throw new TypeError(
+        `query option localServices must map every endpoint to a Dataset; ` +
+          `${JSON.stringify(endpoint)} does not`,
+      );
+    }
+    services.push([endpoint, dataset]);
+  }
+  return services;
+}
+
+/**
+ * Validate an asynchronous twin's options for operation `kind` (a key of
+ * `ASYNC_OPERATION_KEYS`) and return them normalized. Pure JavaScript: nothing here
+ * touches wasm, so a refused option never leaves a half-built job behind.
+ */
+function normalizeAsyncOptions(options, kind) {
+  const operation = ASYNC_OPERATION_KEYS[kind];
+  const source = options ?? {};
+  if (typeof source !== "object" || Array.isArray(source)) {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  if (isPresent(source.cancel)) {
+    throw new TypeError(
+      "query option cancel is not accepted by an asynchronous call; pass an AbortSignal " +
+        "as signal instead",
+    );
+  }
+  const accepted = new Set([...operation.keys, ...ASYNC_HOST_OPTION_KEYS]);
+  for (const key of Object.keys(source)) {
+    if (accepted.has(key) || !isPresent(source[key])) continue;
+    if (!operation.governed && GOVERNOR_CEILING_KEYS.includes(key)) {
+      throw new TypeError(
+        `query option ${key} is an execution governor and is enforced only by ` +
+          `queryGovernedAsync/queryEntailmentGovernedAsync/updateGovernedAsync; this ` +
+          `call would ignore it entirely`,
+      );
+    }
+    if (!operation.governed && key === "aggregateNamespace") {
+      throw new TypeError(
+        "query option aggregateNamespace registers the statistical-aggregate registry " +
+          "and is honored only by queryGovernedAsync/queryEntailmentGovernedAsync/" +
+          "updateGovernedAsync; this call would ignore it entirely",
+      );
+    }
+    throw new TypeError(
+      `unknown query option ${JSON.stringify(key)} (this call accepts ` +
+        `${[...accepted].join(", ")})`,
+    );
+  }
+  const governed = operation.governed ? normalizeGovernedOptions(source) : undefined;
+  const { prefix: provenancePrefix, iri: provenanceIri } = normalizeProvenanceNamespace(
+    source.provenanceNamespace,
+  );
+  const resolveService = optionalHandler(source.resolveService, "resolveService");
+  const resolveLoad = optionalHandler(source.resolveLoad, "resolveLoad");
+  const signal = optionalSignal(source.signal);
+  const deadlineMs = governed?.deadlineMs;
+  return {
+    base: optionalString(source.base, "base"),
+    format: optionalString(source.format, "format"),
+    accept: optionalString(source.accept, "accept"),
+    optionsJson: optionalString(source.optionsJson, "optionsJson"),
+    yamlSchemaUrl: optionalString(source.yamlSchemaUrl, "yamlSchemaUrl"),
+    // Positional on `queryEntailmentGovernedAsync`, set there.
+    regime: undefined,
+    program: optionalString(source.program, "program"),
+    provenancePrefix,
+    provenanceIri,
+    governed,
+    yieldEveryPolls: optionalNumber(source.yieldEveryPolls, "yieldEveryPolls"),
+    stackBytes: optionalNumber(source.stackBytes, "stackBytes"),
+    catalog: optionalCatalog(source.catalog),
+    localServices: optionalLocalServices(source.localServices),
+    signal,
+    host: {
+      resolveService,
+      resolveLoad,
+      signal,
+      // The scheduler's deadline timer abandons an awaited effect when it passes; the
+      // job reports the trip itself, as a deadline.
+      deadlineMs,
+    },
+  };
+}
+
+/** Build the `AsyncJobOptions` a normalized options record describes. */
+function buildJobOptions(normalized) {
+  const jobOptions = new AsyncJobOptions();
+  try {
+    jobOptions.setBase(normalized.base);
+    jobOptions.setFormat(normalized.format);
+    jobOptions.setAccept(normalized.accept);
+    jobOptions.setOptionsJson(normalized.optionsJson);
+    jobOptions.setProvenancePrefix(normalized.provenancePrefix);
+    jobOptions.setProvenanceIri(normalized.provenanceIri);
+    jobOptions.setRegime(normalized.regime);
+    jobOptions.setProgram(normalized.program);
+    const governed = normalized.governed;
+    if (governed !== undefined) {
+      jobOptions.setAggregateNamespace(governed.aggregateNamespace);
+      jobOptions.setFuel(governed.fuel);
+      jobOptions.setDeadlineMs(governed.deadlineMs);
+      jobOptions.setMaxAnswers(governed.maxAnswers);
+      jobOptions.setMaxIntermediateCells(governed.maxIntermediateCells);
+      jobOptions.setMaxScratchBytes(governed.maxScratchBytes);
+      jobOptions.setMaxRemoteRequests(governed.maxRemoteRequests);
+    }
+    jobOptions.setYieldEveryPolls(normalized.yieldEveryPolls);
+    jobOptions.setStackBytes(normalized.stackBytes);
+    if (normalized.catalog !== undefined) jobOptions.setCatalog(normalized.catalog);
+    for (const [endpoint, dataset] of normalized.localServices) {
+      jobOptions.addLocalService(endpoint, dataset);
+    }
+    jobOptions.setHandlers(
+      typeof normalized.host.resolveService === "function",
+      typeof normalized.host.resolveLoad === "function",
+    );
+    return jobOptions;
+  } catch (error) {
+    jobOptions.free();
+    throw error;
+  }
+}
+
+function asyncEvidenceToObject(raw) {
+  try {
+    return {
+      polls: raw.polls,
+      yields: raw.yields,
+      serviceEffects: raw.serviceEffects,
+      loadEffects: raw.loadEffects,
+      stackHighWaterBytes: raw.stackHighWaterBytes,
+      serviceWaitMs: raw.serviceWaitMs,
+      loadWaitMs: raw.loadWaitMs,
+      yieldWaitMs: raw.yieldWaitMs,
+      freezeMs: raw.freezeMs,
+      evaluateMs: raw.evaluateMs,
+      serializeMs: raw.serializeMs,
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function namedError(message, name) {
+  const error = new Error(message);
+  if (name !== "Error") error.name = name;
+  return error;
+}
+
+/** What a twin rejects with when its signal was already aborted, or aborted the job. */
+function abortRejection(signal, message) {
+  if (signal !== undefined && signal.aborted && signal.reason !== undefined) {
+    return signal.reason;
+  }
+  return namedError(message, "AbortError");
+}
+
+/**
+ * The rejection for a job whose run stored an error: the synchronous twin's words for an
+ * ordinary failure, the signal's reason (or an `AbortError`) for a cancellation, a
+ * `TimeoutError` for a deadline, and the fault's own text for a fault. Every error this
+ * builds carries the job's evidence as `error.evidence.async`.
+ */
+function jobFailure(job, signal) {
+  const kind = job.errorKind;
+  const message = job.takeError() ?? `the asynchronous operation failed (${kind})`;
+  const evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
+  let error;
+  switch (kind) {
+    case "cancelled":
+      error = abortRejection(signal, message);
+      if (signal !== undefined && error === signal.reason) return error;
+      break;
+    case "deadline":
+      error = namedError(message, "TimeoutError");
+      break;
+    case "not-acceptable":
+      error = namedError(message, "NotAcceptableError");
+      break;
+    default:
+      error = namedError(message, "Error");
+      break;
+  }
+  error.evidence = evidence;
+  return error;
+}
+
+/**
+ * Begin a job with `begin(jobOptions)`, run it to completion and settle it with
+ * `settle(job)`. The job is always finished and freed, whatever happens.
+ */
+async function driveAsyncJob(normalized, begin, settle, fail = jobFailure) {
+  const { signal } = normalized;
+  if (signal !== undefined && signal.aborted) {
+    throw abortRejection(signal, "the asynchronous operation was cancelled");
+  }
+  const jobOptions = buildJobOptions(normalized);
+  let job;
+  try {
+    job = begin(jobOptions);
+  } finally {
+    jobOptions.free();
+  }
+  try {
+    const status = await runJob(job, normalized.host);
+    if (status === 0) return settle(job);
+    if (status === 1) throw fail(job, signal);
+    throw new Error(
+      `asynchronous job ${job.id} could not run (scheduler status ${status})`,
+    );
+  } finally {
+    job.finish();
+    job.free();
+  }
+}
+
+/** Run an update job on `dataset` behind the dataset's asynchronous-update queue. */
+function driveAsyncUpdate(dataset, normalized, begin, settle) {
+  const { signal } = normalized;
+  if (signal !== undefined && signal.aborted) {
+    return Promise.reject(
+      abortRejection(signal, "the asynchronous operation was cancelled"),
+    );
+  }
+  return withDatasetUpdateLock(dataset.id, () => driveAsyncJob(normalized, begin, settle));
+}
+
+function takeAsk(job) {
+  const raw = job.takeQueryResult("ask");
+  try {
+    return raw.boolean;
+  } finally {
+    raw.free?.();
+  }
+}
+
+function takeGraph(job, expect) {
+  const raw = job.takeQueryResult(expect);
+  try {
+    const dataset = raw.takeDataset();
+    if (dataset === undefined) throw new Error("graph result was already consumed");
+    return dataset;
+  } finally {
+    raw.free?.();
+  }
+}
+
+const utf8 = new TextDecoder();
+
+// ---------------------------------------------------------------------------
+// The asynchronous SHACL twins
+// ---------------------------------------------------------------------------
+//
+// Each runs its synchronous twin's own Rust body as a job (`AsyncJob.beginShacl`) under
+// the job's signal and SERVICE/LOAD sources, and settles into exactly what the
+// synchronous twin returns: the same SARIF text, the same `ShaclChangeValidation`, the
+// same N-Triples, and — for the product twins — a rejection with the same
+// `ShaclProductRefusal` the synchronous twin throws.
+
+/**
+ * Begin and drive a SHACL job for `operation`: `args` are the synchronous twin's
+ * arguments by name, `options` the host options (`resolveService`, `resolveLoad`,
+ * `signal`, `yieldEveryPolls`, `stackBytes`, `catalog`, `localServices`).
+ */
+async function driveShaclJob(operation, args, options, settle, fail) {
+  assertAsyncQueries();
+  const o = normalizeAsyncOptions(options, "shacl");
+  return driveAsyncJob(
+    o,
+    (jobOptions) =>
+      AsyncJob.beginShacl(
+        operation,
+        jobOptions,
+        args.dataNt,
+        args.shapesTtl,
+        args.shapesBase ?? undefined,
+        args.addedNt ?? undefined,
+        args.removedNt ?? undefined,
+        args.product,
+        args.expectIdentity,
+      ),
+    settle,
+    fail,
+  );
+}
+
+const takeText = (job) => utf8.decode(job.takeRawBytes());
+
+/**
+ * A product job's rejection: the `ShaclProductRefusal` its synchronous twin throws when
+ * the job was refused (carrying the job's evidence, as every asynchronous rejection
+ * does), and the ordinary asynchronous rejection otherwise — a cancellation, a deadline,
+ * a fault.
+ */
+function shaclRefusalFailure(job, signal) {
+  if (job.errorKind === "error") {
+    const refusal = job.takeShaclRefusal();
+    if (refusal !== undefined) {
+      job.takeError();
+      refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
+      return refusal;
+    }
+  }
+  return jobFailure(job, signal);
+}
+
+/**
+ * The twin of `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)`: resolves to the
+ * same SARIF 2.1.0 JSON string.
+ */
+export async function shaclValidateToSarifAsync(shapesTtl, dataNt, shapesBase, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ValidateToSarif,
+    { shapesTtl, dataNt, shapesBase },
+    options,
+    takeText,
+  );
+}
+
+/**
+ * The twin of `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?,
+ * shapesBase?)`: resolves to the same `ShaclChangeValidation` (call `.free()` on it).
+ */
+export async function shaclValidateChangesToSarifAsync(
+  shapesTtl,
+  dataNt,
+  addedNt,
+  removedNt,
+  shapesBase,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ValidateChangesToSarif,
+    { shapesTtl, dataNt, addedNt, removedNt, shapesBase },
+    options,
+    (job) => job.takeShaclChangeValidation(),
+  );
+}
+
+/**
+ * The twin of `shaclEntail(shapesTtl, dataNt, shapesBase?)`: resolves to the same
+ * N-Triples.
+ */
+export async function shaclEntailAsync(shapesTtl, dataNt, shapesBase, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.Entail,
+    { shapesTtl, dataNt, shapesBase },
+    options,
+    takeText,
+  );
+}
+
+/**
+ * The twin of `shaclProductValidateToSarif(product, dataNt)`: resolves to the same SARIF
+ * string, or rejects with the same `ShaclProductRefusal`.
+ */
+export async function shaclProductValidateToSarifAsync(product, dataNt, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarif,
+    { product, dataNt },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/** The twin of `shaclProductValidateToSarifRebuild(product, dataNt)`. */
+export async function shaclProductValidateToSarifRebuildAsync(product, dataNt, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifRebuild,
+    { product, dataNt },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/** The twin of `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)`. */
+export async function shaclProductValidateToSarifExpectingAsync(
+  product,
+  dataNt,
+  expectIdentity,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifExpecting,
+    { product, dataNt, expectIdentity },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/**
+ * The twin of `shaclProductValidateToSarifRebuildExpecting(product, dataNt,
+ * expectIdentity)`.
+ */
+export async function shaclProductValidateToSarifRebuildExpectingAsync(
+  product,
+  dataNt,
+  expectIdentity,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifRebuildExpecting,
+    { product, dataNt, expectIdentity },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/**
+ * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and a macrotask primitive to
+ * yield through. Where it is `false`, every asynchronous twin rejects with the reason
+ * before touching wasm, and the synchronous API is unaffected.
+ */
+export function hasAsyncQueries() {
+  assertNotPoisoned();
+  return jspiHasAsyncQueries();
+}
+
+/**
+ * The macrotask primitive asynchronous jobs yield to the event loop through —
+ * `"scheduler.yield"`, `"setImmediate"` or `"MessageChannel"` — or `undefined` when the
+ * environment has none.
+ */
+export function asyncYieldPrimitive() {
+  assertNotPoisoned();
+  return jspiAsyncYieldPrimitive();
+}
+
+/**
+ * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)
+ * bounds how many asynchronous jobs may be in flight at once; a twin started beyond it
+ * rejects. Unknown keys are refused.
+ */
+export function configureAsync(options) {
+  assertNotPoisoned();
+  jspiConfigureAsync(options);
+}
+
 /**
  * Instantiate the wasm module. Idempotent. In Node the wasm bytes are read from the
  * colocated file; in a browser, pass the bytes/URL (or omit to fetch the colocated
- * `.wasm`). Must be awaited once before any other API is used.
+ * `.wasm`); in a Worker, pass the compiled `WebAssembly.Module` its bundler imports from
+ * `@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm`. Must be awaited once before any
+ * other API is used. There is one instance per JavaScript realm: once a trap has poisoned
+ * it, this rejects with the poison error like every other entry point, and only a fresh
+ * realm (a new page, Worker isolate or process) can load the package again.
  */
 export async function ready(wasmBytesOrUrl) {
+  assertNotPoisoned();
   if (_ready) return;
+  let exports;
   if (wasmBytesOrUrl !== undefined) {
-    await init({ module_or_path: wasmBytesOrUrl });
+    exports = await init({ module_or_path: wasmBytesOrUrl });
   } else if (typeof process !== "undefined" && process.versions?.node) {
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const wasmPath = fileURLToPath(
       new URL("./pkg/purrdf_wasm_bg.wasm", import.meta.url),
     );
-    await init({ module_or_path: await readFile(wasmPath) });
+    exports = await init({ module_or_path: await readFile(wasmPath) });
   } else {
-    await init();
+    exports = await init();
   }
+  installAsync(exports);
 
   // RDF/JS DatasetCore is iterable over its quads.
   if (!Dataset.prototype[Symbol.iterator]) {
@@ -792,6 +1430,233 @@ export async function ready(wasmBytesOrUrl) {
     QueryEngine.prototype.__purrdfPackageRootApi = true;
   }
 
+  // The asynchronous twins. Each checks that asynchronous jobs can run here before it
+  // touches wasm, and settles into exactly the shape its synchronous twin returns.
+  if (!QueryEngine.prototype.__purrdfAsyncApi) {
+    const wasmBeginAsync = QueryEngine.prototype.beginAsync;
+    const wasmBeginAsyncWithContext = QueryEngine.prototype.beginAsyncWithContext;
+    const beginWith = (engine, dataset, kind, sparql) => (jobOptions) =>
+      wasmBeginAsync.call(engine, dataset, kind, sparql, jobOptions);
+
+    QueryEngine.prototype.queryAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => queryResultToObject(job.takeQueryResult(undefined)),
+      );
+    };
+    QueryEngine.prototype.selectAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => queryResultToObject(job.takeQueryResult("select")),
+      );
+    };
+    QueryEngine.prototype.askAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        takeAsk,
+      );
+    };
+    QueryEngine.prototype.constructAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => takeGraph(job, "construct"),
+      );
+    };
+    QueryEngine.prototype.describeAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => takeGraph(job, "describe"),
+      );
+    };
+    QueryEngine.prototype.queryRawBytesAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "raw");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
+        (job) => job.takeRawBytes(),
+      );
+    };
+    QueryEngine.prototype.queryRawAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "raw");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    QueryEngine.prototype.queryRawWithContextAsync = async function (
+      dataset,
+      sparql,
+      format,
+      context,
+      options,
+    ) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "rawWithContext");
+      if (typeof format !== "string") {
+        throw new TypeError("queryRawWithContextAsync expects a format string");
+      }
+      if (!(context instanceof CompiledJsonLdContext)) {
+        throw new TypeError("queryRawWithContextAsync expects a CompiledJsonLdContext");
+      }
+      o.format = format;
+      return driveAsyncJob(
+        o,
+        (jobOptions) =>
+          wasmBeginAsyncWithContext.call(
+            this,
+            dataset,
+            AsyncOperationKind.RawWithContext,
+            sparql,
+            jobOptions,
+            context,
+            o.yamlSchemaUrl,
+          ),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    QueryEngine.prototype.queryGovernedAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "governed");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Governed, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = queryOutcomeToObject(job.takeQueryOutcome());
+          outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.queryGovernedNegotiatedAsync = async function (
+      dataset,
+      sparql,
+      options,
+    ) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "negotiated");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Negotiated, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = negotiatedOutcomeToObject(job.takeNegotiatedOutcome());
+          outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.queryEntailmentGovernedAsync = async function (
+      dataset,
+      sparql,
+      entailment,
+      options,
+    ) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "entailmentGoverned");
+      if (typeof entailment !== "string") {
+        throw new TypeError(
+          "queryEntailmentGovernedAsync expects an entailment regime string",
+        );
+      }
+      o.regime = entailment;
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.EntailmentGoverned, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = entailmentQueryOutcomeToObject(job.takeEntailmentOutcome());
+          // The job's evidence covers both phases, so it sits on the two-phase outcome;
+          // an answered query outcome carries the same record, as `queryGovernedAsync`'s
+          // does.
+          outcome.evidence = { async: evidence };
+          if (outcome.outcome !== undefined) outcome.outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.explainQueryAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "explain");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Explain, sparql),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    QueryEngine.prototype.updateAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "update");
+      return driveAsyncUpdate(
+        dataset,
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Update, sparql),
+        (job) => {
+          job.commitUpdate(dataset);
+          return dataset;
+        },
+      );
+    };
+    QueryEngine.prototype.updateGovernedAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      // `maxAnswers` is forwarded rather than dropped, exactly as on `updateGoverned`:
+      // Rust refuses it by name.
+      const o = normalizeAsyncOptions(options, "updateGoverned");
+      return driveAsyncUpdate(
+        dataset,
+        o,
+        beginWith(this, dataset, AsyncOperationKind.UpdateGoverned, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = updateOutcomeToObject(job.takeUpdateOutcome());
+          outcome.evidence.async = evidence;
+          // A tripped request applied nothing and offers nothing to commit.
+          if (outcome.isApplied) job.commitUpdate(dataset);
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.__purrdfAsyncApi = true;
+  }
+
+  if (!Dataset.prototype.queryAsync) {
+    // The twin of `Dataset#query`: SPARQL Results JSON for SELECT/ASK, Turtle (TriG for
+    // a result carrying a named graph) for CONSTRUCT/DESCRIBE.
+    Dataset.prototype.queryAsync = async function (sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "query");
+      const engine = new QueryEngine();
+      try {
+        return await driveAsyncJob(
+          o,
+          (jobOptions) =>
+            engine.beginAsync(this, AsyncOperationKind.Raw, sparql, jobOptions),
+          (job) => utf8.decode(job.takeRawBytes()),
+        );
+      } finally {
+        engine.free();
+      }
+    };
+  }
+
   _ready = true;
 }
 
@@ -800,6 +1665,7 @@ export async function ready(wasmBytesOrUrl) {
  * synchronous; the async wrapper is the RDF/JS Stream contract.)
  */
 export function datasetToStream(dataset) {
+  assertNotPoisoned();
   const quads = dataset.quads();
   return (async function* () {
     for (const quad of quads) yield quad;
@@ -811,6 +1677,7 @@ export function datasetToStream(dataset) {
  * Sink (the purrdf-events ingestion protocol + its finish() resolution).
  */
 export async function streamToDataset(quadStream) {
+  assertNotPoisoned();
   const sink = new Sink();
   for await (const quad of quadStream) sink.push(quad);
   return sink.finish();
@@ -855,6 +1722,7 @@ export {
   ReasoningAnswer,
   RegimeClosure,
   SerializeLoss,
+  ServiceCatalog,
   ShaclChangeValidation,
   shaclEntail,
   shaclPackProduct,
@@ -868,6 +1736,7 @@ export {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,
+  SparqlProtocolRequest,
   Term,
   version,
 };

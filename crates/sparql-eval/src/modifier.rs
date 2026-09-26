@@ -177,7 +177,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
                 // being put back. See `ScratchInterner::intern`.
                 row[i] = Some(
                     ctx.scratch
-                        .intern(ctx.dataset, ground_term_to_value(ground)),
+                        .try_intern(ctx.dataset, ground_term_to_value(ground))?,
                 );
             }
         }
@@ -195,7 +195,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
+    let Some(seq) = lift.absorb(0, evaluated) else {
         let schema = VarSchema::interned(variables);
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
@@ -412,6 +413,12 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// this predicate declines to answer — it reports only what it can prove, and an
 /// unproven path is simply evaluated.
 fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
+    // Out of stack for the walk (see `crate::stack`): "not proven" is the conservative
+    // answer — every combinator below is monotone in it — and the evaluation that then
+    // runs refuses at its own next check.
+    if crate::stack::is_low() {
+        return false;
+    }
     match path {
         // One hop over a named predicate, over ANY predicate, or over any predicate
         // outside a named set: each reads exactly one row.
@@ -422,14 +429,11 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
         PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
             path_needs_an_edge(inner)
         }
-        // A sequence traverses BOTH sides, so one edge-requiring side suffices.
-        PropertyPathExpression::Sequence(left, right) => {
-            path_needs_an_edge(left) || path_needs_an_edge(right)
-        }
-        // An alternative traverses EITHER side, so both sides must require an edge.
-        PropertyPathExpression::Alternative(left, right) => {
-            path_needs_an_edge(left) && path_needs_an_edge(right)
-        }
+        // A sequence traverses EVERY element, so one edge-requiring element suffices.
+        PropertyPathExpression::Sequence(elements) => elements.iter().any(path_needs_an_edge),
+        // An alternative traverses ANY one element, so every element must require an
+        // edge (an alternative of none relates nothing, so it needs one vacuously).
+        PropertyPathExpression::Alternative(elements) => elements.iter().all(path_needs_an_edge),
         // A bounded repetition needs an edge only when it forbids zero repetitions.
         PropertyPathExpression::Range { inner, min, max: _ } => {
             *min >= 1 && path_needs_an_edge(inner)
@@ -475,6 +479,10 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
 /// * `Values` carries its rows inline and `PropertyFunction` invokes a registered
 ///   relation, neither of which touches the active graph's rows at all.
 fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bool {
+    // See `path_needs_an_edge`: out of stack, "not proven" is the conservative answer.
+    if crate::stack::is_low() {
+        return false;
+    }
     match pattern {
         GraphPattern::Bgp { patterns } => !patterns.is_empty(),
         GraphPattern::Path {
@@ -486,10 +494,9 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
             yields_nothing_without_rows_in_the_active_graph(left)
                 || yields_nothing_without_rows_in_the_active_graph(right)
         }
-        GraphPattern::Union { left, right } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-                && yields_nothing_without_rows_in_the_active_graph(right)
-        }
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .all(yields_nothing_without_rows_in_the_active_graph),
         GraphPattern::LeftJoin {
             left,
             right: _,
@@ -1414,7 +1421,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
         )?;
-        return Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)));
+        return value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v));
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -1543,7 +1550,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ));
         }
     };
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v))
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1765,7 +1772,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // this is where that value would otherwise become a solution term. `and_then`
     // routes a refused tag onto the same unbound answer an accumulator that
     // returned `None` gets — see `ScratchInterner::intern_checked`.
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v))
 }
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /

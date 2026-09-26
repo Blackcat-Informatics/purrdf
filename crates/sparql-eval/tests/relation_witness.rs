@@ -197,10 +197,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 }
 
 fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// Drive `query` through the governed entry `query_prepared_governed_view` under

@@ -31,9 +31,9 @@ test("version() returns the crate semver", () => {
 
 test("DataFactory builds RDF/JS terms", () => {
   const f = new DataFactory();
-  const n = f.namedNode("https://e/s");
+  const n = f.namedNode("https://example.org/s");
   assert.equal(n.termType, "NamedNode");
-  assert.equal(n.value, "https://e/s");
+  assert.equal(n.value, "https://example.org/s");
 
   const plain = f.literal("hi");
   assert.equal(plain.termType, "Literal");
@@ -71,7 +71,7 @@ test("polymorphic literal(value, datatype) dispatches to a typed literal", () =>
 });
 
 test("parse → serialize → reparse round-trips N-Triples", () => {
-  const input = "<https://e/s> <https://e/p> <https://e/o> .\n";
+  const input = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n";
   const ds = Dataset.parse(input, "ntriples");
   assert.equal(ds.size, 1);
   const out = ds.serialize("ntriples");
@@ -113,14 +113,14 @@ test("expanded JSON-LD and YAML-LD wasm bytes are frozen", () => {
 test("DatasetCore add/has/delete/match/iterate", () => {
   const f = new DataFactory();
   const q1 = f.quad(
-    f.namedNode("https://e/s1"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o1"),
+    f.namedNode("https://example.org/s1"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o1"),
   );
   const q2 = f.quad(
-    f.namedNode("https://e/s2"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o2"),
+    f.namedNode("https://example.org/s2"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o2"),
   );
   const ds = new Dataset();
   // RDF/JS add/delete return the dataset instance for chaining; the "changed?" bit is
@@ -133,12 +133,12 @@ test("DatasetCore add/has/delete/match/iterate", () => {
   assert.equal(ds.size, 2);
   assert.equal(ds.has(q1), true);
 
-  const matched = ds.match(f.namedNode("https://e/s1"));
+  const matched = ds.match(f.namedNode("https://example.org/s1"));
   assert.equal(matched.size, 1);
 
   // Iterable (the wrapper's Symbol.iterator over quads()).
   const subjects = [...ds].map((q) => q.subject.value).sort();
-  assert.deepEqual(subjects, ["https://e/s1", "https://e/s2"]);
+  assert.deepEqual(subjects, ["https://example.org/s1", "https://example.org/s2"]);
 
   assert.equal(ds.delete(q1), ds, "delete returns the dataset instance (RDF/JS)");
   assert.equal(ds.size, 1);
@@ -147,14 +147,14 @@ test("DatasetCore add/has/delete/match/iterate", () => {
 test("DatasetCore.add/delete chain (RDF/JS return-this)", () => {
   const f = new DataFactory();
   const q1 = f.quad(
-    f.namedNode("https://e/s1"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o1"),
+    f.namedNode("https://example.org/s1"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o1"),
   );
   const q2 = f.quad(
-    f.namedNode("https://e/s2"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o2"),
+    f.namedNode("https://example.org/s2"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o2"),
   );
   const ds = new Dataset();
   // The spec's headline use case: chained mutation.
@@ -167,14 +167,14 @@ test("DatasetCore.add/delete chain (RDF/JS return-this)", () => {
 test("DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom)", () => {
   const f = new DataFactory();
   const q1 = f.quad(
-    f.namedNode("https://e/s1"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o1"),
+    f.namedNode("https://example.org/s1"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o1"),
   );
   const q2 = f.quad(
-    f.namedNode("https://e/s2"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o2"),
+    f.namedNode("https://example.org/s2"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o2"),
   );
   const ds = new Dataset();
   ds.add(q1);
@@ -194,7 +194,7 @@ test("DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom)", () => {
   // with a concrete predicate constraint.
   const byPredicate = ds.match(
     f.variable("s"),
-    f.namedNode("https://e/p"),
+    f.namedNode("https://example.org/p"),
     undefined,
     f.variable("g"),
   );
@@ -206,7 +206,7 @@ test("RDF-1.2 wedge — directional literal round-trips through N-Quads", () => 
   const dir = f.directionalLiteral("مرحبا", "ar", "rtl");
   assert.equal(dir.direction, "rtl");
   const ds = new Dataset();
-  ds.add(f.quad(f.namedNode("https://e/s"), f.namedNode("https://e/p"), dir));
+  ds.add(f.quad(f.namedNode("https://example.org/s"), f.namedNode("https://example.org/p"), dir));
   const out = ds.serialize("nquads");
   const reparsed = Dataset.parse(out, "nquads");
   assert.equal(reparsed.size, 1);
@@ -219,14 +219,14 @@ test("RDF-1.2 wedge — directional literal round-trips through N-Quads", () => 
 test("RDF-1.2 wedge — quoted-triple term round-trips through N-Quads", () => {
   const f = new DataFactory();
   const quoted = f.quotedTriple(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   assert.equal(quoted.termType, "Quad");
   const ds = new Dataset();
   ds.add(
-    f.quad(f.namedNode("https://e/stmt"), f.namedNode("https://e/asserts"), quoted),
+    f.quad(f.namedNode("https://example.org/stmt"), f.namedNode("https://example.org/asserts"), quoted),
   );
   const out = ds.serialize("nquads");
   const reparsed = Dataset.parse(out, "nquads");
@@ -238,7 +238,7 @@ test("Sink streams quads into a dataset", () => {
   const f = new DataFactory();
   const sink = new Sink();
   sink.push(
-    f.quad(f.namedNode("https://e/s"), f.namedNode("https://e/p"), f.namedNode("https://e/o")),
+    f.quad(f.namedNode("https://example.org/s"), f.namedNode("https://example.org/p"), f.namedNode("https://example.org/o")),
   );
   const ds = sink.finish();
   assert.equal(ds.size, 1);
@@ -247,7 +247,7 @@ test("Sink streams quads into a dataset", () => {
 test("datasetToStream → streamToDataset round-trips via the Sink", async () => {
   const f = new DataFactory();
   const ds = new Dataset();
-  ds.add(f.quad(f.namedNode("https://e/s"), f.namedNode("https://e/p"), f.namedNode("https://e/o")));
+  ds.add(f.quad(f.namedNode("https://example.org/s"), f.namedNode("https://example.org/p"), f.namedNode("https://example.org/o")));
   const rebuilt = await streamToDataset(datasetToStream(ds));
   assert.equal(rebuilt.size, 1);
 });
@@ -278,8 +278,8 @@ test("RDF-1.2 — directional literal: .datatype.value derives rdf:dirLangString
 
 test("RDF-1.2 — directional literal: in-memory add/has without serialize round-trip", () => {
   const f = new DataFactory();
-  const s = f.namedNode("https://e/s");
-  const p = f.namedNode("https://e/p");
+  const s = f.namedNode("https://example.org/s");
+  const p = f.namedNode("https://example.org/p");
   // Build the directional literal twice, independently: if the lookup key (the stored
   // RdfLiteral fed into the value→id lookup) diverges between two factory calls, the
   // TermValues mismatch and has() returns false.
@@ -313,13 +313,13 @@ test("RDF-1.2 — directional literal: in-memory add/has without serialize round
 // by has(). If canonicalize_literal were to stamp rdf:dirLangString into the lookup key,
 // this MISSES (datatype-string mismatch against the parse-interned langString).
 test("RDF-1.2 — directional literal: parse then factory-built has() (cross-path)", () => {
-  const input = '<https://e/s> <https://e/p> "مرحبا"@ar--rtl .\n';
+  const input = '<https://example.org/s> <https://example.org/p> "مرحبا"@ar--rtl .\n';
   const ds = Dataset.parse(input, "nquads");
   assert.equal(ds.size, 1);
 
   const f = new DataFactory();
   const dir = f.directionalLiteral("مرحبا", "ar", "rtl");
-  const query = f.quad(f.namedNode("https://e/s"), f.namedNode("https://e/p"), dir);
+  const query = f.quad(f.namedNode("https://example.org/s"), f.namedNode("https://example.org/p"), dir);
   assert.equal(
     ds.has(query),
     true,
@@ -333,7 +333,7 @@ test("RDF-1.2 — directional literal: parse then factory-built has() (cross-pat
   // RDF-1.2 inequality: a plain (non-directional) langString literal of the same text
   // and language must NOT be has()-equal to the directional one.
   const plain = f.literal("مرحبا", "ar");
-  const plainQuery = f.quad(f.namedNode("https://e/s"), f.namedNode("https://e/p"), plain);
+  const plainQuery = f.quad(f.namedNode("https://example.org/s"), f.namedNode("https://example.org/p"), plain);
   assert.equal(
     ds.has(plainQuery),
     false,
@@ -345,21 +345,21 @@ test("RDF-1.2 — directional literal: parse then factory-built has() (cross-pat
 
 test("Term.equals(null) returns false (RDF/JS spec)", () => {
   const f = new DataFactory();
-  const n = f.namedNode("https://e/s");
+  const n = f.namedNode("https://example.org/s");
   assert.equal(n.equals(null), false, "Term.equals(null) must return false");
 });
 
 test("Term.equals(undefined) returns false (RDF/JS spec)", () => {
   const f = new DataFactory();
-  const n = f.namedNode("https://e/s");
+  const n = f.namedNode("https://example.org/s");
   assert.equal(n.equals(undefined), false, "Term.equals(undefined) must return false");
 });
 
 test("Term.equals sanity: same term is true, different term is false", () => {
   const f = new DataFactory();
-  const a = f.namedNode("https://e/x");
-  const b = f.namedNode("https://e/x");
-  const c = f.namedNode("https://e/y");
+  const a = f.namedNode("https://example.org/x");
+  const b = f.namedNode("https://example.org/x");
+  const c = f.namedNode("https://example.org/y");
   assert.equal(a.equals(b), true, "Term.equals(sameTerm) must be true");
   assert.equal(a.equals(c), false, "Term.equals(differentTerm) must be false");
 });
@@ -367,9 +367,9 @@ test("Term.equals sanity: same term is true, different term is false", () => {
 test("Quad.equals(null) returns false (RDF/JS spec)", () => {
   const f = new DataFactory();
   const q = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   assert.equal(q.equals(null), false, "Quad.equals(null) must return false");
 });
@@ -377,9 +377,9 @@ test("Quad.equals(null) returns false (RDF/JS spec)", () => {
 test("Quad.equals(undefined) returns false (RDF/JS spec)", () => {
   const f = new DataFactory();
   const q = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   assert.equal(q.equals(undefined), false, "Quad.equals(undefined) must return false");
 });
@@ -387,19 +387,19 @@ test("Quad.equals(undefined) returns false (RDF/JS spec)", () => {
 test("Quad.equals sanity: same quad is true, different quad is false", () => {
   const f = new DataFactory();
   const q1 = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   const q2 = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   const q3 = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/DIFFERENT"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/DIFFERENT"),
   );
   assert.equal(q1.equals(q2), true, "Quad.equals(sameQuad) must be true");
   assert.equal(q1.equals(q3), false, "Quad.equals(differentQuad) must be false");
@@ -411,11 +411,11 @@ test("Quad.equals sanity: same quad is true, different quad is false", () => {
 // rust". RDF/JS comparison must be read-only; the argument must remain fully usable after.
 test("Term.equals does not consume its argument", () => {
   const f = new DataFactory();
-  const a = f.namedNode("https://e/x");
-  const b = f.namedNode("https://e/x");
+  const a = f.namedNode("https://example.org/x");
+  const b = f.namedNode("https://example.org/x");
   assert.equal(a.equals(b), true);
   // b MUST still be usable after being passed to equals().
-  assert.equal(b.value, "https://e/x", "b.value must work after a.equals(b)");
+  assert.equal(b.value, "https://example.org/x", "b.value must work after a.equals(b)");
   assert.equal(b.termType, "NamedNode", "b.termType must work after a.equals(b)");
   assert.equal(b.equals(a), true, "b.equals(a) must work after a.equals(b)");
 });
@@ -423,19 +423,19 @@ test("Term.equals does not consume its argument", () => {
 test("Quad.equals does not consume its argument", () => {
   const f = new DataFactory();
   const qa = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   const qb = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   assert.equal(qa.equals(qb), true);
   // qb MUST still be usable after being passed to equals() — read accessors AND
   // dataset insertion (a second downstream consumer of the same handle).
-  assert.equal(qb.subject.value, "https://e/s", "qb.subject must work after qa.equals(qb)");
+  assert.equal(qb.subject.value, "https://example.org/s", "qb.subject must work after qa.equals(qb)");
   assert.equal(qb.equals(qa), true, "qb.equals(qa) must work after qa.equals(qb)");
   const ds = new Dataset();
   ds.add(qb);
@@ -451,8 +451,8 @@ test("Quad.equals does not consume its argument", () => {
 // wasm, and therefore the half that belongs here.
 test("serialize refuses what serializeWithLoss projects, for a star-incapable target", () => {
   const ds = Dataset.parse(
-    `<https://e/s> <https://e/p> <https://e/o> .
-<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://e/s> <https://e/p> <https://e/o> )>> .
+    `<https://example.org/s> <https://example.org/p> <https://example.org/o> .
+<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .
 `,
     "nquads",
   );

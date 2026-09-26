@@ -367,12 +367,12 @@ fn linked_custom_function_recursion_resolves() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &crate::sparql::bind_in_current_env(&shapes.functions)
-                    .expect("the fixture's bodies parse and admit"),
-                focus_graph: Some(&data),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new()
+                .with_functions(
+                    &crate::sparql::bind_in_current_env(&shapes.functions)
+                        .expect("the fixture's bodies parse and admit"),
+                )
+                .with_focus_graph(Some(&data)),
         )
         .expect("the registered recursive function resolves");
 

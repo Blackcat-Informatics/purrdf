@@ -69,7 +69,10 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+    // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
+    // the left rows bind — see `crate::service_endpoints`.
+    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
     Ok(lift.finish(hash_join(&l, &r, ctx)))
@@ -118,41 +121,84 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     mu: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // Before the substitution walk copies `pattern` for this row, and before the copy is
+    // evaluated: both recurse over the correlated subtree. See `crate::stack`.
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    eval_substituted(pattern, &row, source, ctx)
+}
+
+/// [`eval_correlated`] with the row already in substitution form: substitute `row` into
+/// `pattern` and evaluate the copy in a substituted window.
+///
+/// The walk copies `pattern`'s own nodes and leaves every `EXISTS` body in it as a
+/// placeholder owed the row (see [`crate::deferred_exists`]): the bodies' sites are
+/// prepared first — on the first substitution of `pattern`, and kept where `source` says
+/// for every later one — and the placeholders are installed as the window's
+/// [`EvalCtx::deferred_exists`] for as long as the copy is evaluated.
+///
+/// # Errors
+///
+/// As [`eval_correlated`].
+pub(crate) fn eval_substituted<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &crate::expr::SubstitutionRow,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    #[cfg(test)]
+    if crate::deferred_exists::eager_forced() {
+        let substituted = crate::expr::substitute_pattern(pattern, row)?;
+        let mut guard = ctx.enter_substituted_exists(None, None);
+        return eval_evaluated(&substituted, &mut guard);
+    }
+    let sites = crate::deferred_exists::nested_sites(pattern, source, ctx)?;
+    let enclosing_placeholders = ctx.deferred_exists.clone();
+    let mut deferral = crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites);
     // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
     // another `LATERAL`'s substituted RHS, its already-installed enclosing map) resolves
-    // to a ledger ordinal — a `LATERAL` right operand, never a correlated `EXISTS` inner
-    // (which is not walked by `walk_spine` even unsubstituted; see the ledger module
-    // doc's "Attribution of work that is not a plan node"). Only then is the substitution
-    // walk worth tracking: every node it copies 1:1 keeps its own ledger identity across
-    // the per-row substituted copy instead of folding into the enclosing node.
+    // to a ledger ordinal — a `LATERAL` right operand, or a correlated `EXISTS` inner
+    // whose preparation's map the caller pushed. Only then is the substitution walk worth
+    // tracking: every node it copies 1:1 keeps its own ledger identity across the per-row
+    // substituted copy instead of folding into the enclosing node.
     let source_addr = std::ptr::from_ref(pattern) as usize;
     let (substituted, ledger_map) = if ctx.resolve_ledger_ordinal(source_addr).is_some() {
         // The immediately enclosing window's map, when THIS window is itself substituting a
-        // subtree an enclosing `LATERAL` window already substituted (`pattern` is then one
-        // of that window's own synthetic copies, not a real plan address) — read before
-        // this call's own map is pushed below, so it names exactly the one window `pattern`
+        // subtree an enclosing window already substituted (`pattern` is then one of that
+        // window's own synthetic copies, not a real plan address) — read before this
+        // call's own map is pushed below, so it names exactly the one window `pattern`
         // came from. `substitute_pattern_tracked` uses it to resolve past that window's
         // scaffolding straight to the real plan address, and to arbitrate `counts_rows` so
         // nesting never mints more than one counting node per real ordinal — see
         // `crate::expr::SubstitutionSource`'s doc.
         let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
-        let substituted =
-            crate::expr::substitute_pattern_tracked(pattern, &row, &mut map, enclosing);
+        let substituted = crate::expr::substitute_pattern_tracked(
+            pattern,
+            row,
+            &mut map,
+            enclosing,
+            &mut deferral,
+        )?;
         (substituted, Some(map))
     } else {
-        (crate::expr::substitute_pattern(pattern, &row), None)
+        (
+            crate::expr::substitute_pattern_deferring(pattern, row, &mut deferral)?,
+            None,
+        )
     };
+    let placeholders = deferral.into_placeholders();
     // `substituted` is a per-row heap temporary whose node addresses do not
     // outlive this call; the guard flags the window so address-keyed
-    // memoization is bypassed while it is evaluated, and restores the prior
-    // flag (and pops `ledger_map`, when one was pushed) on drop — even on the
-    // `?` this function's caller applies to its result — so nested correlated
-    // evaluations compose correctly.
-    let mut guard = ctx.enter_substituted_exists(ledger_map);
+    // memoization is bypassed while it is evaluated, installs its placeholders, and
+    // restores the prior flag and placeholders (and pops `ledger_map`, when one was
+    // pushed) on drop — even on the `?` this function's caller applies to its result —
+    // so nested correlated evaluations compose correctly.
+    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders);
     eval_evaluated(&substituted, &mut guard)
 }
 
@@ -252,6 +298,11 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         });
     }
 
+    // A variable-endpoint `SERVICE` some left row names no endpoint for is refused before
+    // any row's evaluation sends a request, so a refused query never contacts a remote
+    // first, whatever order its left rows come in.
+    crate::service_endpoints::admit_lateral_endpoints(&l, right, ctx)?;
+
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 
@@ -263,7 +314,18 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
     for mu in &l.rows {
-        let evaluated = eval_correlated(right, mu, &left_schema, ctx)?;
+        // `right` is a plan node unless this `LATERAL` is itself part of a substituted
+        // copy; only a plan node's nested `EXISTS` sites may be kept by its address.
+        let sites = if ctx.in_substituted_exists {
+            crate::deferred_exists::SiteSlot::Transient
+        } else {
+            crate::deferred_exists::SiteSlot::Plan
+        };
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites,
+            plan_map: None,
+        };
+        let evaluated = eval_correlated(right, mu, &left_schema, source, ctx)?;
         let r = match evaluated {
             Evaluated::Complete(seq) => seq,
             truncated @ Evaluated::Truncated(_) => {
@@ -319,35 +381,35 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
-/// Evaluate `left UNION right` as a multiset concatenation over the union schema.
+/// Evaluate a `UNION` of `arms` as a multiset concatenation of their solutions, in arm
+/// order, over the ordered union of their schemas (each arm's new columns after the
+/// columns before it) — exactly what the left-nested chain of binary unions the node
+/// stands for produced, one arm at a time.
 ///
-/// Gated on [`crate::parallel::is_parallel_safe_pattern`] over **both** branches:
-/// if either reaches an unsafe (counter/RNG-mutating) builtin, the sequential
-/// body below runs, evaluating both branches directly against the real `ctx`
-/// exactly as before this task. Otherwise both branches mint new `Computed`
-/// terms that must escape into the union's output rows, so they are evaluated
-/// concurrently (`rayon::join`) against their own forked child context, and each
-/// branch's escaping rows are captured via [`crate::parallel::portable_row`]
-/// **while its child is still alive** (the child is dropped the instant its
-/// closure returns). Only once both branches are done does the MAIN thread
-/// re-intern them back into `ctx.scratch`, left branch first then right, via
-/// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
-/// concat's exact row order (left rows, then right rows) and column layout.
+/// Gated on [`crate::parallel::is_parallel_safe_pattern`] over **every** arm: if any
+/// reaches an unsafe (counter/RNG-mutating) builtin, the sequential body below runs,
+/// evaluating the arms in order directly against the real `ctx`. Otherwise every arm
+/// mints new `Computed` terms that must escape into the union's output rows, so the
+/// arms are evaluated concurrently (an indexed parallel map) against their own forked
+/// child contexts, and each arm's escaping rows are captured via
+/// [`crate::parallel::portable_row`] **while its child is still alive** (the child is
+/// dropped the instant its closure returns). Only once every arm is done does the MAIN
+/// thread re-intern them back into `ctx.scratch`, in arm order, via
+/// [`crate::parallel::reintern_portable_row`] — reproducing the sequential concat's
+/// exact row order and column layout.
 ///
 /// # Under a truncated child: ONE rule, both paths
 ///
 /// `UNION` is a concatenation, and the rule is stated so that the result depends on the
 /// query, the data, and the budget — and on nothing else:
 ///
-/// > A truncated `UNION` yields the rows of the branches that COMPLETED, in branch order.
-/// > If the LEFT branch truncates, the union carries only the left branch's rows and the
-/// > right branch contributes nothing **even if it was already computed**. If the left
-/// > completes and the right truncates, the union carries the left rows followed by the
-/// > right branch's partial rows.
+/// > A truncated `UNION` yields the rows of the arms that COMPLETED, in arm order, then
+/// > the partial rows of the first arm that truncated. Every arm after that one
+/// > contributes nothing **even if it was already computed**.
 ///
-/// The clause about already-computed rows is the whole point. `rayon::join` starts both
-/// branches, so on the parallel path the right branch's rows may well exist by the time
-/// the left branch's truncation is known — and admitting them would make a governed
+/// The clause about already-computed rows is the whole point. The parallel path starts
+/// every arm, so a later arm's rows may well exist by the time an earlier arm's
+/// truncation is known — and admitting them would make a governed
 /// result larger *because a second thread got there*. Same query, same data, same budget
 /// would then give different partial answers on different machines and under different
 /// scheduling, which is precisely the property the order-stable reduction exists to
@@ -355,58 +417,63 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 /// truncated to the branch-ordered prefix on both paths and the extra rows are dropped.
 ///
 /// The soundness half is the `MONOTONE_BAG` / `MONOTONE` split the one visitor already
-/// records for this node, which the lift reads rather than restating: truncating the LEFT
-/// branch removes rows from the middle of the concatenation (a sub-bag, not a prefix),
-/// while truncating the RIGHT branch removes them from the end (a genuine prefix).
+/// records for this node, which the lift reads rather than restating: truncating any arm
+/// but the last removes rows from the middle of the concatenation (a sub-bag, not a
+/// prefix), while truncating the last removes them from the end (a genuine prefix).
 pub(crate) fn eval_union<D: DatasetView + Sync>(
     node: &GraphPattern,
-    left: &GraphPattern,
-    right: &GraphPattern,
+    arms: &[GraphPattern],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    if crate::parallel::sequential_operation_required()
-        // A governed `UNION` evaluates its arms in source order on one thread: both arms
-        // charge the same shared `GovernorState`, so forking them makes the budget — and
+    if arms.len() < 2
+        || crate::parallel::sequential_operation_required()
+        // A governed `UNION` evaluates its arms in source order on one thread: every arm
+        // charges the same shared `GovernorState`, so forking them makes the budget — and
         // with it the trip point and the certified rows — a lottery. See
         // `EvalCtx::may_fork_sibling_patterns`.
         || !ctx.may_fork_sibling_patterns()
-        || !crate::parallel::is_parallel_safe_pattern(left, ctx.safety_registries())
-        || !crate::parallel::is_parallel_safe_pattern(right, ctx.safety_registries())
+        || !arms
+            .iter()
+            .all(|arm| ctx.pattern_is_parallel_safe(arm))
     {
-        let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
-            return Ok(lift.withheld());
-        };
-        if lift.is_truncated() {
-            // The right arm is never started: the rows in hand ARE the union's output
-            // so far, and evaluating a fresh subtree after the budget is spent is the
-            // unbounded work the lift's own budget rule forbids.
-            return Ok(lift.finish(l));
+        // Inline for the two arms nearly every `UNION` has, so the common case spends no
+        // allocation on holding its arms' results.
+        let mut evaluated: smallvec::SmallVec<[SolutionSeq<D::Id>; 2]> =
+            smallvec::SmallVec::with_capacity(arms.len());
+        for (ordinal, arm) in arms.iter().enumerate() {
+            let Some(rows) = lift.absorb(ordinal, eval_evaluated(arm, ctx)?) else {
+                return Ok(lift.withheld());
+            };
+            evaluated.push(rows);
+            if lift.is_truncated() {
+                // No later arm is started: the rows in hand ARE the union's output so
+                // far, and evaluating a fresh subtree after the budget is spent is the
+                // unbounded work the lift's own budget rule forbids.
+                break;
+            }
         }
-        let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
-            return Ok(lift.withheld());
-        };
-        return Ok(lift.finish(concat_union(&l, &r, ctx)));
+        return Ok(lift.finish(concat_union(evaluated, ctx)));
     }
 
     let base = ctx.scratch.computed_count();
-    // A shared (immutable) borrow of `ctx`: both closures below only need
+    // A shared (immutable) borrow of `ctx`: every closure below only needs
     // `fork_for_worker`'s `&self` access, so they run concurrently over the same
     // `&EvalCtx` — `EvalCtx: Sync` (see its definition) makes this sound.
     let ctx_ref: &EvalCtx<'_, D> = ctx;
 
-    // Each closure forks its own child, evaluates its branch on it, and
-    // classifies every result row (see [`crate::parallel::minted_row`]): a row
-    // the child minted nothing new into (the common case for a UNION-over-BGP
-    // branch) is kept as-is with zero extra allocation, and only a row
-    // carrying a genuinely fresh cell pays for the portable-materialize round
-    // trip. The child (and its scratch) does not survive past this closure.
+    // Each closure forks its own child, evaluates its arm on it, and classifies every
+    // result row (see [`crate::parallel::minted_row`]): a row the child minted nothing
+    // new into (the common case for a UNION-over-BGP arm) is kept as-is with zero extra
+    // allocation, and only a row carrying a genuinely fresh cell pays for the
+    // portable-materialize round trip. The child (and its scratch) does not survive past
+    // this closure.
     let eval_branch = |pattern: &GraphPattern| -> Result<UnionBranch<crate::parallel::MintedRow<D::Id>>, EvalError> {
         let mut child = ctx_ref.fork_for_worker();
         let evaluated = eval_evaluated(pattern, &mut child)?;
         let truncated = evaluated.is_truncated();
-        // The branch's rows are materialized against the child's scratch either way; a
-        // truncated branch's certificate rides back separately because the portable-row
+        // The arm's rows are materialized against the child's scratch either way; a
+        // truncated arm's certificate rides back separately because the portable-row
         // round trip below has to happen while the child is still alive.
         let (schema, rows, certificate) = match evaluated {
             Evaluated::Complete(seq) => (seq.schema, seq.rows, None),
@@ -424,58 +491,73 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
             schema,
             rows: minted,
             certificate,
-            // Taken while the child is still alive, exactly as the rows are: a branch can
+            // Taken while the child is still alive, exactly as the rows are: an arm can
             // contain a property-function call (`is_parallel_safe_pattern` admits a
             // `Stable` relation), and its attestation belongs to the query's receipt.
             witness: core::mem::take(&mut child.witness),
         })
     };
 
-    let (left_result, right_result) = rayon::join(|| eval_branch(left), || eval_branch(right));
-    // The branch-order rule, applied before a single row is concatenated: see
-    // `union_branch_order` for why a computed-but-discarded right branch is the point.
-    let (left_branch, right_branch, governing) = union_branch_order(left_result?, right_result?);
-    let UnionBranch {
-        schema: l_schema,
-        rows: l_minted,
-        certificate: _,
-        witness: l_witness,
-    } = left_branch;
-    let UnionBranch {
-        schema: r_schema,
-        rows: r_minted,
-        certificate: _,
-        witness: r_witness,
-    } = right_branch;
-    // Both surviving branches' attestations, folded back into the parent now that the
-    // immutable borrow the join held is over. Branch order is irrelevant here (the fold
-    // is commutative — see `RelationWitness::merge`); what matters is that a branch the
-    // rule above emptied contributes nothing, which it now cannot.
-    ctx.absorb_worker_witnesses([l_witness, r_witness]);
-
-    let out = l_schema.union(&r_schema);
-    let out_len = out.len();
-    let right_to_out = right_to_out_map(&r_schema, &out);
-
-    let mut rows = Vec::with_capacity(l_minted.len() + r_minted.len());
-    for minted in l_minted {
-        let reinterned =
-            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
-        // Same shape as `merge`: one exact-size allocation initialized from the left
-        // row directly, then padded — no write-None-then-overwrite pass over the prefix.
-        let mut row = Solution::with_capacity(out_len);
-        row.extend_from_slice(&reinterned);
-        row.resize(out_len, None);
-        rows.push(row);
+    let results: Vec<_> = {
+        use rayon::prelude::*;
+        arms.par_iter().map(eval_branch).collect()
+    };
+    // An arm that built a triple term deeper than a worker can hold is evaluated again,
+    // with every arm, on this thread (see `crate::parallel::is_unscoped_refusal`).
+    if results.iter().any(crate::parallel::is_unscoped_refusal) {
+        drop(results);
+        let _sequential = crate::parallel::force_sequential_operation();
+        return eval_union(node, arms, ctx);
     }
-    for minted in r_minted {
-        let reinterned =
-            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
-        let mut row = smallvec::smallvec![None; out_len];
-        for (j, &cell) in reinterned.iter().enumerate() {
-            row[right_to_out[j]] = cell;
+    // Errors reduce in source order, as the binary chain's `left?, right?` did at every
+    // level: the first arm's error is the union's.
+    let mut branches = results.into_iter().collect::<Result<Vec<_>, EvalError>>()?;
+    // The arm-order rule, applied before a single row is concatenated: see
+    // `union_branch_order` for why a computed-but-discarded later arm is the point.
+    let governing = union_branch_order(&mut branches);
+    // Every surviving arm's attestations, folded back into the parent now that the
+    // immutable borrow the parallel map held is over. Arm order is irrelevant here (the
+    // fold is commutative — see `RelationWitness::merge`); what matters is that an arm
+    // the rule above emptied contributes nothing, which it now cannot.
+    ctx.absorb_worker_witnesses(
+        branches
+            .iter_mut()
+            .map(|branch| core::mem::take(&mut branch.witness)),
+    );
+
+    let mut out = VarSchema::new();
+    for branch in &branches {
+        for v in branch.schema.vars() {
+            out.push(v.clone());
         }
-        rows.push(row);
+    }
+    let out_len = out.len();
+    let mut rows = Vec::with_capacity(branches.iter().map(|branch| branch.rows.len()).sum());
+    for (ordinal, branch) in branches.into_iter().enumerate() {
+        if ordinal == 0 {
+            // The first arm's columns are the output's leading columns in order. Same
+            // shape as `merge`: one exact-size allocation initialized from the row
+            // directly, then padded — no write-None-then-overwrite pass over the prefix.
+            for minted in branch.rows {
+                let reinterned =
+                    crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+                let mut row = Solution::with_capacity(out_len);
+                row.extend_from_slice(&reinterned);
+                row.resize(out_len, None);
+                rows.push(row);
+            }
+            continue;
+        }
+        let arm_to_out = right_to_out_map(&branch.schema, &out);
+        for minted in branch.rows {
+            let reinterned =
+                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+            let mut row = smallvec::smallvec![None; out_len];
+            for (j, &cell) in reinterned.iter().enumerate() {
+                row[arm_to_out[j]] = cell;
+            }
+            rows.push(row);
+        }
     }
 
     let united = SolutionSeq {
@@ -491,45 +573,64 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq::empty(united.schema)))
 }
 
-/// The sequential `UNION` body: concatenate `l` then `r` over the ordered
-/// union schema (left columns first). Shared by both the sequential fallback
-/// and (conceptually) documents the exact row shape the parallel path in
+/// The sequential `UNION` body: concatenate the evaluated arms, in order, over the
+/// ordered union of their schemas (the first arm's columns first, then each later
+/// arm's new columns). Documents the exact row shape the parallel path in
 /// [`eval_union`] must reproduce.
+///
+/// One arm is returned as it is: the union of one bag is that bag. Two or more are
+/// capped at the intermediate-cell ceiling for the output's width — the one bag this
+/// node materializes.
 fn concat_union<D: DatasetView + Sync>(
-    l: &SolutionSeq<D::Id>,
-    r: &SolutionSeq<D::Id>,
+    mut arms: smallvec::SmallVec<[SolutionSeq<D::Id>; 2]>,
     ctx: &EvalCtx<'_, D>,
 ) -> SolutionSeq<D::Id> {
-    let out = l.schema.union(&r.schema);
+    if arms.len() == 1 {
+        return arms.remove(0);
+    }
+    let mut out = VarSchema::new();
+    for arm in &arms {
+        for v in arm.schema.vars() {
+            out.push(v.clone());
+        }
+    }
     let out_len = out.len();
-    let right_to_out = right_to_out_map(&r.schema, &out);
 
-    let expected = l.rows.len().saturating_add(r.rows.len());
+    let expected = arms
+        .iter()
+        .fold(0_usize, |n, arm| n.saturating_add(arm.rows.len()));
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let mut rows = Vec::with_capacity(cell_ceiling.map_or(expected, |cap| cap.min(expected)));
-    for lrow in &l.rows {
-        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-            break;
+    'arms: for (ordinal, arm) in arms.iter().enumerate() {
+        if ordinal == 0 {
+            for lrow in &arm.rows {
+                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break 'arms;
+                }
+                // The first arm's columns are out[0..len] in order; pad the rest with
+                // None. Same shape as `merge`: one exact-size allocation initialized
+                // from the row directly, no write-None-then-overwrite pass over the
+                // prefix.
+                let mut row = Solution::with_capacity(out_len);
+                row.extend_from_slice(lrow);
+                row.resize(out_len, None);
+                rows.push(row);
+            }
+            continue;
         }
-        // Left columns are out[0..left_len] in order; pad the rest with None. Same
-        // shape as `merge`: one exact-size allocation initialized from `lrow` directly,
-        // no write-None-then-overwrite pass over the left prefix.
-        let mut row = Solution::with_capacity(out_len);
-        row.extend_from_slice(lrow);
-        row.resize(out_len, None);
-        rows.push(row);
-    }
-    for rrow in &r.rows {
-        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-            break;
+        let arm_to_out = right_to_out_map(&arm.schema, &out);
+        for rrow in &arm.rows {
+            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                break 'arms;
+            }
+            let mut row = smallvec::smallvec![None; out_len];
+            for (j, &cell) in rrow.iter().enumerate() {
+                row[arm_to_out[j]] = cell;
+            }
+            rows.push(row);
         }
-        let mut row = smallvec::smallvec![None; out_len];
-        for (j, &cell) in rrow.iter().enumerate() {
-            row[right_to_out[j]] = cell;
-        }
-        rows.push(row);
     }
 
     SolutionSeq {
@@ -564,55 +665,45 @@ struct UnionBranch<T> {
     witness: crate::witness::RelationWitness,
 }
 
-/// The `UNION` branch-order truncation rule, applied.
+/// The `UNION` arm-order truncation rule, applied.
 ///
-/// > A truncated `UNION` yields the rows of the branches that COMPLETED, in branch order.
-/// > If the LEFT branch truncates, only its rows survive and the right branch contributes
-/// > nothing **even if it was already computed**; if the left completes and the right
-/// > truncates, both contribute and the right's partial rows are a genuine suffix.
+/// > A truncated `UNION` yields the rows of the arms that COMPLETED, in arm order, then
+/// > the partial rows of the first arm that truncated. Every later arm contributes
+/// > nothing **even if it was already computed**.
 ///
 /// The "even if it was already computed" clause is the reason this is a function rather
-/// than an `if` inside the sequential body. The sequential body never starts the right
-/// branch after the left truncates, but `rayon::join` starts both, so on the parallel
-/// path the right branch's rows can exist by the time the left branch's trip is known.
-/// Admitting them would make a governed result larger *because a second thread got
-/// there* — the same query, data, and budget would then produce different partial answers
-/// under different scheduling. Emptying the right branch here is what makes the two paths
-/// one observable rule.
+/// than an `if` inside the sequential body. The sequential body never starts an arm after
+/// one truncates, but the parallel path starts every arm, so a later arm's rows can exist
+/// by the time an earlier arm's trip is known. Admitting them would make a governed
+/// result larger *because another thread got there* — the same query, data, and budget
+/// would then produce different partial answers under different scheduling. Emptying the
+/// later arms here is what makes the two paths one observable rule.
 ///
-/// Returns the surviving branches plus the ordinal of the branch whose certificate
-/// governs (left before right, so a simultaneous trip reports the branch a sequential
-/// evaluation would have reached first — the same source-order reduction
-/// [`crate::parallel`] applies to errors).
-fn union_branch_order<T>(
-    left: UnionBranch<T>,
-    mut right: UnionBranch<T>,
-) -> (
-    UnionBranch<T>,
-    UnionBranch<T>,
-    Option<(usize, ChildCertificate)>,
-) {
-    if let Some(certificate) = left.certificate.clone() {
-        // Discarded, not concatenated. An empty schema unions to the left schema, so the
+/// Empties every arm after the first truncated one in place, and returns that arm's
+/// ordinal and certificate, which governs (the first in arm order, so a simultaneous trip
+/// reports the arm a sequential evaluation would have reached first — the same
+/// source-order reduction [`crate::parallel`] applies to errors).
+fn union_branch_order<T>(branches: &mut [UnionBranch<T>]) -> Option<(usize, ChildCertificate)> {
+    let (ordinal, certificate) = branches
+        .iter()
+        .enumerate()
+        .find_map(|(ordinal, branch)| Some((ordinal, branch.certificate.clone()?)))?;
+    for later in &mut branches[ordinal + 1..] {
+        // Discarded, not concatenated. An empty schema adds no column, so the
         // concatenation downstream reproduces the sequential body's output exactly.
-        right.rows = Vec::new();
-        right.schema = VarSchema::empty_shared();
-        right.certificate = None;
-        // The attestations of a branch whose rows are discarded go with them, for the
-        // SAME reason the rows do. The sequential body never starts the right branch once
-        // the left has truncated, so no relation in it is ever invoked there; `rayon::join`
-        // starts both, so on the parallel path it may well have been. Keeping the evidence
-        // would make the receipt of a governed query describe work that did not reach the
-        // answer, and describe it only on the parallel path — the schedule dependence the
-        // branch-order rule exists to remove.
-        right.witness = crate::witness::RelationWitness::default();
-        return (left, right, Some((0, certificate)));
+        later.rows = Vec::new();
+        later.schema = VarSchema::empty_shared();
+        later.certificate = None;
+        // The attestations of an arm whose rows are discarded go with them, for the SAME
+        // reason the rows do. The sequential body never starts a later arm once one has
+        // truncated, so no relation in it is ever invoked there; the parallel path starts
+        // them all, so on it one may well have been. Keeping the evidence would make the
+        // receipt of a governed query describe work that did not reach the answer, and
+        // describe it only on the parallel path — the schedule dependence the arm-order
+        // rule exists to remove.
+        later.witness = crate::witness::RelationWitness::default();
     }
-    let governing = right
-        .certificate
-        .clone()
-        .map(|certificate| (1, certificate));
-    (left, right, governing)
+    Some((ordinal, certificate))
 }
 
 /// The certificate half of a [`UnionBranch`], named for readability at the boundary.
@@ -911,7 +1002,9 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     left_join_lift(
         node,
         eval_evaluated(left, ctx)?,
-        |ctx| eval_evaluated(right, ctx),
+        // A variable-endpoint `SERVICE` in the optional side is answered over the
+        // endpoints the left rows bind — see `crate::service_endpoints`.
+        |l, ctx| crate::service_endpoints::eval_right_operand(l, right, ctx),
         expression,
         ctx,
     )
@@ -930,7 +1023,7 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
 fn left_join_lift<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: Evaluated<D::Id>,
-    right: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+    right: impl FnOnce(&SolutionSeq<D::Id>, &mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -945,7 +1038,7 @@ fn left_join_lift<D: DatasetView + Sync>(
         // lower bound; a padded row would be a fabricated answer.
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, right(ctx)?) else {
+    let Some(r) = lift.absorb(1, right(&l, ctx)?) else {
         return Ok(lift.withheld());
     };
     // The left arm did not truncate (that returned above), so the lift is truncated here
@@ -1284,7 +1377,14 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+    // A variable-endpoint `SERVICE` in the subtracted side is answered over the endpoints
+    // the left rows bind. `MINUS` still evaluates that side independently — nothing of a
+    // left row is substituted into it — and only the list of endpoints to invoke comes
+    // from the left: a row from any other endpoint binds the endpoint variable to a
+    // different IRI than every left row, so it could remove none of them. See
+    // `crate::service_endpoints`.
+    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
     let shared = l.schema.shared_columns(&r.schema);
@@ -1347,13 +1447,7 @@ mod tests {
         right: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<SolutionSeq, EvalError> {
-        eval(
-            &GraphPattern::Union {
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
-            },
-            ctx,
-        )
+        eval(&GraphPattern::union(left.clone(), right.clone()), ctx)
     }
 
     fn eval_left_join<D: DatasetView<Id = TermId> + Sync>(
@@ -1391,7 +1485,8 @@ mod tests {
         TrippedGovernor as TestTrippedGovernor,
     };
     use purrdf_sparql_algebra::{
-        Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        ArithmeticOperator, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+        Variable,
     };
 
     fn graph() -> Arc<RdfDataset> {
@@ -1784,10 +1879,7 @@ mod tests {
         };
         GraphPattern::Join {
             left: Box::new(scan),
-            right: Box::new(GraphPattern::Union {
-                left: Box::new(filter_branch),
-                right: Box::new(flag_branch),
-            }),
+            right: Box::new(GraphPattern::union(filter_branch, flag_branch)),
         }
     }
 
@@ -1917,36 +2009,35 @@ mod tests {
         let branch1 = GraphPattern::Extend {
             inner: Box::new(bgp(vp("s"), pred("http://ex/p1"), vp("o"))),
             variable: Variable::new("sum"),
-            expression: Expression::Add(
-                Box::new(Expression::Variable(Variable::new("o"))),
-                Box::new(one()),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("o")),
+                ArithmeticOperator::Add,
+                one(),
             ),
         };
         // branch2: {?s :p2 ?o} BIND(?o - 9 AS ?sum)  -> s=b, o=20, sum=11 (SAME as branch1)
         let branch2 = GraphPattern::Extend {
             inner: Box::new(bgp(vp("s"), pred("http://ex/p2"), vp("o"))),
             variable: Variable::new("sum"),
-            expression: Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("o"))),
-                Box::new(nine()),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("o")),
+                ArithmeticOperator::Subtract,
+                nine(),
             ),
         };
         // branch3: {?s :p3 ?o} BIND(?o + 2 AS ?sum)  -> s=c, o=10, sum=12 (DISJOINT)
         let branch3 = GraphPattern::Extend {
             inner: Box::new(bgp(vp("s"), pred("http://ex/p3"), vp("o"))),
             variable: Variable::new("sum"),
-            expression: Expression::Add(
-                Box::new(Expression::Variable(Variable::new("o"))),
-                Box::new(two()),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("o")),
+                ArithmeticOperator::Add,
+                two(),
             ),
         };
 
         let pattern = GraphPattern::Union {
-            left: Box::new(GraphPattern::Union {
-                left: Box::new(branch1),
-                right: Box::new(branch2),
-            }),
-            right: Box::new(branch3),
+            arms: vec![branch1, branch2, branch3],
         };
 
         let run = |forced: bool| {
@@ -2038,7 +2129,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             truncated_left,
-            |_ctx| -> Result<Evaluated<TermId>, EvalError> {
+            |_left, _ctx| -> Result<Evaluated<TermId>, EvalError> {
                 panic!("the right arm must not be evaluated once the left arm truncated")
             },
             None,
@@ -2072,7 +2163,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             Evaluated::Complete(left_rows.clone()),
-            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
+            move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
             None,
             &mut ctx,
         )
@@ -2100,7 +2191,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             Evaluated::Complete(left_rows),
-            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
+            move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
             None,
             &mut ctx,
         )
@@ -2136,10 +2227,7 @@ mod tests {
                 left: Box::new(knows.clone()),
                 right: Box::new(likes.clone()),
             },
-            GraphPattern::Union {
-                left: Box::new(knows.clone()),
-                right: Box::new(likes.clone()),
-            },
+            GraphPattern::union(knows.clone(), likes.clone()),
             GraphPattern::LeftJoin {
                 left: Box::new(knows.clone()),
                 right: Box::new(likes.clone()),
@@ -2226,13 +2314,13 @@ mod tests {
     /// with rows already in hand; the right branch is non-empty, so a result that
     /// wrongly admitted it would be visibly larger.
     fn union_over_lateral() -> GraphPattern {
-        GraphPattern::Union {
-            left: Box::new(GraphPattern::Lateral {
+        GraphPattern::union(
+            GraphPattern::Lateral {
                 left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
                 right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
-            }),
-            right: Box::new(bgp(vp("p"), pred("https://example.org/likes"), vp("q"))),
-        }
+            },
+            bgp(vp("p"), pred("https://example.org/likes"), vp("q")),
+        )
     }
 
     /// Everything about one evaluation that a caller can observe, rendered so two runs
@@ -2411,8 +2499,9 @@ mod tests {
             certificate: None,
             witness: right_witness,
         };
-        let (left_branch, right_branch, governing) =
-            union_branch_order(truncated_left, complete_right);
+        let mut branches = [truncated_left, complete_right];
+        let governing = union_branch_order(&mut branches);
+        let [left_branch, right_branch] = branches;
         assert_eq!(left_branch.rows, vec!["left-1", "left-2"]);
         assert!(
             right_branch.rows.is_empty(),
@@ -2456,8 +2545,9 @@ mod tests {
             )),
             witness: surviving_witness,
         };
-        let (left_branch, right_branch, governing) =
-            union_branch_order(complete_left, truncated_right);
+        let mut branches = [complete_left, truncated_right];
+        let governing = union_branch_order(&mut branches);
+        let [left_branch, right_branch] = branches;
         assert_eq!(left_branch.rows, vec!["left-1"]);
         assert_eq!(right_branch.rows, vec!["right-1"]);
         assert!(

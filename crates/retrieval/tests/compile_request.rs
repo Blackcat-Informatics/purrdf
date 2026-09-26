@@ -518,11 +518,10 @@ fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Optio
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| {
             panic!("the emitted unit must parse and prepare: {error}\n{sparql}")

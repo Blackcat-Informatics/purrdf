@@ -34,12 +34,32 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        self.prepared_fallible_in_state(dataset, prepared, substitutions, options, None, state)
+        if let ViewOperationStatus::Failed { error, evidence } = dataset.operation_status() {
+            return Err(FallibleSparqlError::Operational {
+                error,
+                evidence: GovernedEvidence::new(evidence, state.evidence()),
+            });
+        }
+        let evaluation = {
+            let _sequential = crate::parallel::force_sequential_operation();
+            self.query_governed_prepared_in_state(
+                dataset,
+                prepared,
+                &AdmittedSubstitutions::prepared(substitutions),
+                options,
+                state,
+            )
+        };
+        finish_governed_fallible_query(dataset, state, evaluation)
     }
 
     /// The prepared, shared-governor fallible entry with a federation source.
     ///
     /// `SERVICE` receives the same operation stop signal as local evaluation.
+    ///
+    /// Exactly [`Self::query_prepared_governed_fallible_in_operation`] with
+    /// [`QueryOptions::remote`] set to `source`; the explicit `source` replaces whatever
+    /// `options.remote` held.
     ///
     /// # Errors
     /// Returns the same typed errors and publication guarantees as
@@ -60,46 +80,15 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        self.prepared_fallible_in_state(
+        self.query_prepared_governed_fallible_in_operation(
             dataset,
             prepared,
             substitutions,
-            options,
-            Some(source),
+            QueryOptions {
+                remote: Some(source),
+                ..options
+            },
             state,
         )
-    }
-
-    #[allow(
-        clippy::result_large_err,
-        reason = "the error carries both operation receipts and certified partial answers"
-    )]
-    fn prepared_fallible_in_state<'d, D: FallibleDatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        prepared: &PreparedQuery,
-        substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
-        source: Option<&'d (dyn ServiceResolver + Sync)>,
-        state: &Arc<GovernorState>,
-    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        if let ViewOperationStatus::Failed { error, evidence } = dataset.operation_status() {
-            return Err(FallibleSparqlError::Operational {
-                error,
-                evidence: GovernedEvidence::new(evidence, state.evidence()),
-            });
-        }
-        let evaluation = {
-            let _sequential = crate::parallel::force_sequential_operation();
-            self.query_governed_prepared_in_state(
-                dataset,
-                prepared,
-                &AdmittedSubstitutions::prepared(substitutions),
-                options,
-                source,
-                state,
-            )
-        };
-        finish_governed_fallible_query(dataset, state, evaluation)
     }
 }

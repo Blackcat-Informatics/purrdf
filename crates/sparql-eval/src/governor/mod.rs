@@ -605,6 +605,31 @@ impl QueryGovernors {
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
     }
+
+    /// The ceiling a caller actually configured for `dimension`, as opposed to the
+    /// bookkeeping ceiling [`Self::METERED`] installs on every caller-settable dimension
+    /// purely to keep its counter running.
+    ///
+    /// A seam that leaves the evaluator and hands a ceiling to something outside it — a
+    /// `SERVICE` resolver sizing a remote `LIMIT`, for instance — must never see
+    /// `METERING_CEILING`: that value is not a bound anyone asked for, and reporting it
+    /// as one would size real infrastructure off a number chosen only so nothing could
+    /// reach it. Use this instead of [`Self::is_engaged_in`] combined with
+    /// [`Self::limits`] at any such seam. `None` covers both "unbounded" and "bounded
+    /// only by the metering sentinel"; `Some(ceiling)` is a ceiling a caller actually
+    /// narrowed below that.
+    #[must_use]
+    pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
+        if !self.limits.is_bounded(dimension) {
+            return None;
+        }
+        let ceiling = self.limits.get(dimension);
+        if ceiling == METERING_CEILING {
+            None
+        } else {
+            Some(ceiling)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +958,24 @@ impl GovernorState {
     #[must_use]
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
+    }
+
+    /// The ceiling a caller actually configured for `dimension`. The per-execution twin
+    /// of [`QueryGovernors::caller_ceiling`] — reads this state's captured limits rather
+    /// than the configuration it was built from, which is what a seam reached through
+    /// `EvalCtx::governor_state` (a `SERVICE` resolver, for instance) has
+    /// access to. See that method for why `Some` is withheld from the metering sentinel.
+    #[must_use]
+    pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
+        if !self.limits.is_bounded(dimension) {
+            return None;
+        }
+        let ceiling = self.limits.get(dimension);
+        if ceiling == METERING_CEILING {
+            None
+        } else {
+            Some(ceiling)
+        }
     }
 
     /// Whether **any** caller-settable governor is engaged in this execution.

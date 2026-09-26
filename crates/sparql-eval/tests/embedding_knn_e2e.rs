@@ -207,10 +207,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 }
 
 fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// Render a solution result as `[[neighbour local name, distance lexical], ..]`.

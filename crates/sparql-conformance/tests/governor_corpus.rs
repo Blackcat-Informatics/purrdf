@@ -1156,11 +1156,10 @@ fn observe(
             engine.query_governed(
                 &dataset,
                 request,
-                QueryOptions {
-                    env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+                QueryOptions::new().with_env(
+                    &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                         .expect("the harness declarations read cleanly"),
-                    ..QueryOptions::EMPTY
-                },
+                ),
                 &configured.governors,
             )
         }
@@ -1171,11 +1170,10 @@ fn observe(
             engine.query_governed(
                 &dataset,
                 request,
-                QueryOptions {
-                    env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
+                QueryOptions::new().with_env(
+                    &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
                         .expect("the harness declarations read cleanly"),
-                    ..QueryOptions::EMPTY
-                },
+                ),
                 &configured.governors,
             )
         }
@@ -1284,11 +1282,10 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
             &dataset,
             &query,
             None,
-            QueryOptions {
-                env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                     .expect("the harness declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
     render_charge_decomposition(explanation.ledger())
@@ -1327,11 +1324,10 @@ fn charge_decomposition_custom_aggregate(case: &Case) -> String {
             &dataset,
             &query,
             None,
-            QueryOptions {
-                env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
                     .expect("the harness declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
     render_charge_decomposition(explanation.ledger())

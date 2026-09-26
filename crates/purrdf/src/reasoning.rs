@@ -470,7 +470,7 @@ pub fn query_with_entailment<D: DatasetView>(
         None => None,
     };
     let options = match rebound_env.as_ref() {
-        Some(env) => QueryOptions { env, ..options },
+        Some(env) => options.with_env(env),
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -825,7 +825,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
         None => None,
     };
     let options = match rebound_env.as_ref() {
-        Some(env) => QueryOptions { env, ..options },
+        Some(env) => options.with_env(env),
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -1050,12 +1050,16 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
             collect_returned_value_variables(inner, names);
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             collect_returned_value_variables(left, names);
             collect_returned_value_variables(right, names);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_returned_value_variables(arm, names);
+            }
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
@@ -1098,18 +1102,23 @@ fn collect_expression_variables(expression: &Expression, names: &mut BTreeSet<St
             names.insert(variable.as_str().to_owned());
         }
         Expression::NamedNode(_) | Expression::Literal(_) | Expression::Exists(_) => {}
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                collect_expression_variables(operand, names);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            collect_expression_variables(first, names);
+            for (_, operand) in steps {
+                collect_expression_variables(operand, names);
+            }
+        }
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
+        | Expression::LessOrEqual(left, right) => {
             collect_expression_variables(left, names);
             collect_expression_variables(right, names);
         }
@@ -1157,12 +1166,16 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
             }
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             collect_all_variables(left, names);
             collect_all_variables(right, names);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_all_variables(arm, names);
+            }
         }
         GraphPattern::Extend {
             inner, variable, ..
@@ -1362,9 +1375,11 @@ fn restrict_pattern(
             left: recurse(left),
             right: recurse(right),
         },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: recurse(left),
-            right: recurse(right),
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms
+                .iter()
+                .map(|arm| restrict_pattern(arm, observable, witnesses))
+                .collect(),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: recurse(left),
@@ -1623,12 +1638,16 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
             })
         })),
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             collect_bgp(left, output);
             collect_bgp(right, output);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_bgp(arm, output);
+            }
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
@@ -2027,11 +2046,10 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions {
-                env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
             &ClosureRelations::NONE,
         )
         .expect("the registered aggregate resolves over the entailed closure");

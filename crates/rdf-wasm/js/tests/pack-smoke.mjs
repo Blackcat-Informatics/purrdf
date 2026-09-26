@@ -6,12 +6,12 @@
 // exercise the package-root API over the optimized wasm artifact.
 
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { parsePackument } from "./npm-pack-output.mjs";
+import { missingPackedFiles, parsePackument } from "./npm-pack-output.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
@@ -55,6 +55,7 @@ import {
   QueryEngine,
   shaclValidateToSarif,
 } from "@blackcatinformatics/purrdf";
+import { handleSparqlRequest } from "@blackcatinformatics/purrdf/cloudflare";
 
 await ready();
 
@@ -129,6 +130,17 @@ const data = [
   '<http://example.org/alice> <http://example.org/age> "nope" .',
   "",
 ].join("\n");
+// The ./cloudflare subpath resolves from the installed package and answers a request.
+const endpoint = await handleSparqlRequest(
+  new Request(
+    "https://example.org/sparql?query=" +
+      encodeURIComponent("PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }"),
+  ),
+  { engine, dataset: reparsed, governors: { deadlineMs: 10000 } },
+);
+assert.equal(endpoint.status, 200);
+assert.deepEqual(await endpoint.json(), { head: {}, boolean: true });
+
 const sarif = JSON.parse(shaclValidateToSarif(shapes, data));
 assert.equal(sarif.version, "2.1.0");
 assert.ok(sarif.runs.flatMap((run) => run.results ?? []).length >= 1);
@@ -139,6 +151,11 @@ try {
   const packOutput = run("npm", ["pack", "--json", "--pack-destination", root]);
   const packument = parsePackument(packOutput);
   await writeSummary(packument);
+  const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
+  const missing = missingPackedFiles(manifest, packument);
+  if (missing.length > 0) {
+    throw new Error(`the packed tarball lacks paths package.json promises: ${missing.join(", ")}`);
+  }
 
   const project = join(root, "project");
   await mkdir(project);

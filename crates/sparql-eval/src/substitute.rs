@@ -205,7 +205,18 @@ pub(crate) fn apply_substitutions(
         // here would be a walk with no rewrite in it.
         return Ok(query);
     }
-    Ok(apply_probes(query, probes))
+    stack_walk(|| apply_probes(query, probes))
+}
+
+/// Run a pre-binding rewrite inside a [`crate::stack::walk`] scope, reporting a refusal
+/// as the diagnostic every other evaluation failure is reported as.
+fn stack_walk(rewrite: impl FnOnce() -> Query) -> Result<Query, RdfDiagnostic> {
+    crate::stack::walk(rewrite).map_err(|e| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-query-eval"),
+            e.to_string(),
+        )
+    })
 }
 
 /// How many distinct pre-binding names one worker keeps interned.
@@ -498,6 +509,13 @@ fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm
 /// `map_core_pattern` descends both wrappers — so the hot path pays for no extra
 /// algebra node at all.
 fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at_core_root: bool) {
+    // The pre-binding rewrite walks the whole query, and a user-defined function applies
+    // it to its body wherever the call is evaluated, possibly deep: every level may
+    // refuse, inside the `crate::stack::walk` scope `apply_substitutions` and
+    // `apply_shacl_prebinding` open, which discards the half-rewritten query.
+    if crate::stack::walk_is_low("pre-binding rewrite") {
+        return;
+    }
     match pattern {
         GraphPattern::Bgp { patterns } => {
             let mut probed = Vec::new();
@@ -514,9 +532,14 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
             probe_term_pattern(object, probes, &mut probed);
             restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
-        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+        GraphPattern::Join { left, right } => {
             push_probes(left, probes, false);
             push_probes(right, probes, false);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                push_probes(arm, probes, false);
+            }
         }
         GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
             push_probes(inner, probes, false);
@@ -1274,7 +1297,7 @@ pub(crate) fn apply_shacl_prebinding(
         // of the algebra to change nothing in it.
         return Ok(query);
     }
-    Ok(apply_shacl_probes(query, probes))
+    stack_walk(|| apply_shacl_probes(query, probes))
 }
 
 /// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
@@ -1404,6 +1427,10 @@ fn substitute_in_graph_pattern(
     expr_subs: &ExprSubs,
     scope: WalkScope,
 ) -> SeedColumns {
+    // See `push_probes`: the same query, walked again.
+    if crate::stack::walk_is_low("pre-binding rewrite") {
+        return SeedColumns::at_core(scope, expr_subs.0.len());
+    }
     // A node that is not a solution-modifier wrapper hands its children the scope
     // beneath the seed; a wrapper hands its inner pattern its own.
     let beneath = scope.beneath();
@@ -1424,11 +1451,15 @@ fn substitute_in_graph_pattern(
         // EXPRESSION removes no column from any schema, so the divergence that stops
         // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
         // See `crate::enf`'s "The SHACL pre-binding fork".
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right } => {
+        GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
             substitute_in_graph_pattern(left, expr_subs, beneath);
             substitute_in_graph_pattern(right, expr_subs, beneath);
+            (false, core)
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                substitute_in_graph_pattern(arm, expr_subs, beneath);
+            }
             (false, core)
         }
         // A call that is a `Lateral`'s right operand is substituted in place and never
@@ -1774,6 +1805,10 @@ struct Reads {
 /// only the variables the body NAMES count here, as reads of the rows it is matched
 /// against.
 fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
+    // See `push_probes`.
+    if crate::stack::walk_is_low("pre-binding rewrite") {
+        return;
+    }
     fn note(list: &mut Vec<usize>, index: usize) {
         if !list.contains(&index) {
             list.push(index);
@@ -1799,18 +1834,23 @@ fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
             }
         }
         Expression::NamedNode(_) | Expression::Literal(_) | Expression::Bound(_) => {}
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                note_reads(operand, expr_subs, reads);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            note_reads(first, expr_subs, reads);
+            for (_, operand) in steps {
+                note_reads(operand, expr_subs, reads);
+            }
+        }
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
+        | Expression::LessOrEqual(left, right) => {
             note_reads(left, expr_subs, reads);
             note_reads(right, expr_subs, reads);
         }
@@ -1840,6 +1880,10 @@ fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
 /// body is not entered: a variable there is matched against rows, not read as a value,
 /// and the body's own expressions were already driven by the walk.
 fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
+    // See `push_probes`.
+    if crate::stack::walk_is_low("pre-binding rewrite") {
+        return;
+    }
     match expr {
         Expression::Variable(var) => {
             if let Some((_, to)) = renames.iter().find(|(from, _)| from == var) {
@@ -1850,18 +1894,23 @@ fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
         | Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Bound(_) => {}
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands.iter_mut() {
+                rename_reads(operand, renames);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            rename_reads(first, renames);
+            for (_, operand) in steps.iter_mut() {
+                rename_reads(operand, renames);
+            }
+        }
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
+        | Expression::LessOrEqual(left, right) => {
             rename_reads(left, renames);
             rename_reads(right, renames);
         }
@@ -2081,6 +2130,10 @@ fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &
 
 /// Recursively substitute pre-bound variables into an [`Expression`].
 fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
+    // See `push_probes`.
+    if crate::stack::walk_is_low("pre-binding rewrite") {
+        return;
+    }
     // Wildcard-free on purpose, for the same reason the graph-pattern walk is.
     match expr {
         Expression::Variable(var) => {
@@ -2103,18 +2156,23 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
             }
         }
         Expression::NamedNode(_) | Expression::Literal(_) => {}
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands.iter_mut() {
+                substitute_in_expression(operand, expr_subs);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            substitute_in_expression(first, expr_subs);
+            for (_, operand) in steps.iter_mut() {
+                substitute_in_expression(operand, expr_subs);
+            }
+        }
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
+        | Expression::LessOrEqual(left, right) => {
             substitute_in_expression(left, expr_subs);
             substitute_in_expression(right, expr_subs);
         }

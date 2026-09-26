@@ -72,7 +72,16 @@ export type GovernorCeiling = number | bigint | string;
 export interface GovernorOptions {
   /** Abstract execution steps, priced by the engine's charge schedule. */
   readonly fuel?: GovernorCeiling | null;
-  /** A wall-clock evaluation budget in milliseconds. `0` expires on the first poll. */
+  /**
+   * A wall-clock evaluation budget in milliseconds. `0` expires on the first poll.
+   *
+   * The deadline is read from `Date.now()`. On Cloudflare Workers that clock does not
+   * advance during CPU-bound execution — it moves only across I/O — so on the
+   * synchronous calls (`queryGoverned`, `updateGoverned`, …) a deadline cannot trip
+   * during CPU-bound work there. Use the asynchronous twins (`queryGovernedAsync`, …),
+   * which check the deadline at every yield and every host effect, where the clock
+   * moves.
+   */
   readonly deadlineMs?: GovernorCeiling | null;
   /**
    * Units committed to the query form's own answer sequence: one solution row for
@@ -666,6 +675,25 @@ export class Dataset implements Iterable<Quad> {
   ): string;
   query(sparql: string, base?: string | null): string;
   /**
+   * The asynchronous twin of `query`: the same document (SPARQL Results JSON for
+   * SELECT/ASK, Turtle — TriG for a result carrying a named graph — for
+   * CONSTRUCT/DESCRIBE), evaluated as an asynchronous job, so `options` can supply the
+   * `SERVICE`/`LOAD` handlers and an `AbortSignal`. Needs JSPI — see `hasAsyncQueries`.
+   */
+  queryAsync(sparql: string, options?: AsyncQueryOptions | null): Promise<string>;
+  /**
+   * This dataset's identity: unique within the wasm instance, fixed for its lifetime,
+   * never reused.
+   */
+  readonly id: number;
+  /**
+   * How many mutations this dataset's content has seen. Advances on every `add`/`delete`
+   * that changed the effective set and on every applied UPDATE; reading, querying and
+   * serializing never move it. An asynchronous UPDATE captures it when it starts and
+   * refuses to commit if it has moved since.
+   */
+  readonly generation: number;
+  /**
    * Canonical N-Quads of the flat assertion projection (RDFC-1.0 over the
    * RDF 1.2 abstract syntax).
    *
@@ -913,6 +941,10 @@ export class QueryEngine {
    *
    * `options.aggregateNamespace` registers purrdf's first-party statistical aggregate
    * set — see {@link AggregateNamespaceOption}.
+   *
+   * On Cloudflare Workers `Date.now()` does not advance during CPU-bound execution, so
+   * `options.deadlineMs` cannot trip here while the query computes; use
+   * `queryGovernedAsync` there (see {@link GovernorOptions.deadlineMs}).
    */
   queryGoverned(
     dataset: Dataset,
@@ -970,8 +1002,559 @@ export class QueryEngine {
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
   ): string;
+
+  // The asynchronous twins. Each runs the operation its synchronous twin runs, over a
+  // snapshot of `dataset` taken when the call starts, as a job that suspends on the
+  // host's `SERVICE`/`LOAD` handlers and yields to the event loop while it evaluates; each
+  // resolves to exactly the shape its synchronous twin returns. They need JSPI — see
+  // `hasAsyncQueries` — and reject with the reason before touching wasm where it is
+  // missing. Rejections: an option the twin would ignore is a `TypeError`; a parse or
+  // evaluation failure (including a `SERVICE`/`LOAD` with no handler, and a result of the
+  // wrong kind) is an `Error` with the synchronous twin's message — a request too deep
+  // for the job's stack region included: the parser's and the evaluator's refusals keep
+  // their code (`native-sparql-query-parse`/`native-sparql-update-parse`,
+  // `native-sparql-evaluation-stack-exhausted`) and gain the region's size and
+  // `stackBytes` as their remedy, while `native-sparql-host-stack-exhausted` (the fixed
+  // budget kept under the JavaScript engine's call stack, which V8 sizes the same for a
+  // job as for the synchronous lane) is the synchronous twin's refusal unchanged, since
+  // no region raises it; a cancellation through `signal` rejects with
+  // `signal.reason` (an `AbortError` without one); a fault — a handler that threw,
+  // rejected or answered something unrecognizable, or work no stack check guards
+  // reaching its region's guard band — is an `Error` with the fault's text. Errors built by the twin carry
+  // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
+  // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
+  // traps (or runs past its stack region's guard zone) poisons the instance, and so does a
+  // trap or a Rust panic in any synchronous call: every job in flight rejects with
+  // the poison error, and from then on every call into the package — synchronous or
+  // asynchronous, on objects created before the trap too — throws it; `free()` releases
+  // nothing and does not throw. The instance cannot be used again, and
+  // only a fresh JavaScript realm (a new page, Worker isolate or process) can load the
+  // package again.
+
+  /** The twin of `query`. */
+  queryAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<QueryResult>;
+  /** The twin of `select`. */
+  selectAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<SelectResult>;
+  /** The twin of `ask`. */
+  askAsync(dataset: Dataset, sparql: string, options?: AsyncQueryOptions | null): Promise<boolean>;
+  /** The twin of `construct`. */
+  constructAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<Dataset>;
+  /** The twin of `describe`. */
+  describeAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<Dataset>;
+  /**
+   * The twin of `queryRaw` — and, with `optionsJson` (which needs `format`), of
+   * `queryRawConfigured`.
+   */
+  queryRawAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryRawOptions | null,
+  ): Promise<string>;
+  /** `queryRawAsync` delivered as the document's UTF-8 bytes, for a host that sends them on. */
+  queryRawBytesAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryRawOptions | null,
+  ): Promise<Uint8Array>;
+  /** The twin of `queryRawWithContext`. */
+  queryRawWithContextAsync(
+    dataset: Dataset,
+    sparql: string,
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    options?: AsyncQueryRawWithContextOptions | null,
+  ): Promise<string>;
+  /**
+   * The twin of `queryGoverned`. `deadlineMs` spans the time spent awaiting the host's
+   * handlers as well as evaluation.
+   */
+  queryGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncGovernedQueryOptions | null,
+  ): Promise<AsyncQueryOutcome>;
+  /**
+   * A governed query whose complete answer is a document in the format negotiated from
+   * `accept` (an HTTP `Accept` header; absent means the SPARQL Protocol defaults) — the
+   * query a SPARQL Protocol endpoint answers. The format is chosen once the result exists,
+   * so a CONSTRUCT/DESCRIBE result carrying named graphs is offered only in the syntaxes
+   * that can hold them (TriG, N-Quads, JSON-LD). When `accept` allows none of those, it
+   * rejects with a `NotAcceptableError` naming them. A governor trip is an outcome, as on
+   * `queryGovernedAsync`. It has no synchronous twin.
+   */
+  queryGovernedNegotiatedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncNegotiatedQueryOptions | null,
+  ): Promise<AsyncNegotiatedQueryOutcome>;
+  /** The twin of `queryEntailmentGoverned`. */
+  queryEntailmentGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    entailment: string,
+    options?: AsyncEntailmentQueryOptions | null,
+  ): Promise<AsyncEntailmentQueryOutcome>;
+  /**
+   * The twin of `explainQuery`: resolves to the same rendered charge ledger. EXPLAIN
+   * evaluates the query to measure it, so the measuring run is a job like any other — it
+   * suspends on `resolveService`, yields to the event loop every `yieldEveryPolls` polls,
+   * and stops on `signal` — and a `SERVICE` clause the synchronous twin refuses for want
+   * of a source is explained over the host's answer. It takes no ceiling: the run is
+   * metered, never bounded, exactly as the synchronous twin's is. A deadline is a
+   * `signal` (`AbortSignal.timeout(ms)`), and a stop rejects rather than resolving to the
+   * ledger of a truncated run.
+   */
+  explainQueryAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<string>;
+  /**
+   * The twin of `update`: resolves to `dataset` once the update is applied. Asynchronous
+   * updates on one dataset run one at a time, in call order. The update reads a snapshot
+   * and is applied only if `dataset` was not mutated while it ran; otherwise it rejects
+   * and applies nothing.
+   */
+  updateAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncUpdateOptions | null,
+  ): Promise<Dataset>;
+  /**
+   * The twin of `updateGoverned`, serialized and applied as `updateAsync` is. `maxAnswers`
+   * is refused, exactly as on `updateGoverned`.
+   */
+  updateGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncGovernedQueryOptions | null,
+  ): Promise<AsyncUpdateOutcome>;
   free(): void;
 }
+
+/** The `capabilities` a service profile may grant. */
+export type ServiceCapabilityName = "query" | "network" | "credentials";
+
+/**
+ * One service's profile, as `ServiceCatalog.addService`/`setFallback` take it
+ * (`JSON.stringify` it). A host-resolved request needs `query` and `network`; a
+ * `credential` also needs `credentials`. `headers` are `[name, value]` pairs because order
+ * and repeated names are significant. Unknown keys and capability names are refused.
+ */
+export interface ServiceProfileJson {
+  readonly capabilities: readonly ServiceCapabilityName[];
+  readonly headers?: readonly (readonly [string, string])[];
+  readonly credential?: { readonly header: string; readonly value: string };
+  readonly userAgent?: string;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * The per-service policy host-resolved `SERVICE` requests are authorized against, before
+ * the host is ever called: deny by default, one profile per endpoint, an optional
+ * fallback. A denial fails the query even under `SERVICE SILENT`. Pass it to an
+ * asynchronous twin as `catalog` (it is copied; the catalog stays usable); it needs a
+ * `resolveService` handler to govern.
+ */
+export class ServiceCatalog {
+  /** An empty catalog: every service is denied. */
+  constructor();
+  /** Register `profileJson` (a `ServiceProfileJson` document) for `endpoint`, replacing any earlier one. */
+  addService(endpoint: string, profileJson: string): void;
+  /** Apply `profileJson` to every service with no entry of its own. */
+  setFallback(profileJson: string): void;
+  /**
+   * Whether the profile governing `endpoint` (its own, or the fallback) carries a
+   * credential — whether a request to it is one a shared cache must never answer.
+   */
+  carriesCredential(endpoint: string): boolean;
+  /**
+   * Authorize a `LOAD` of `iri` against this catalog: a document fetch needs the
+   * `network` capability (and a credential `credentials`), exactly as a `SERVICE` request
+   * is authorized.
+   */
+  authorizeLoad(iri: string): LoadAuthorization;
+  free(): void;
+}
+
+/** What `ServiceCatalog.authorizeLoad` decided for one `LOAD` IRI (a wasm handle: `free()` it). */
+export interface LoadAuthorization {
+  /** Why the catalog refuses the `LOAD`, or `undefined` when it allows it. */
+  readonly denial: string | undefined;
+  /**
+   * The profile's headers, then its credential header, as flattened `[name, value, …]`
+   * pairs in sending order. Empty on a denial.
+   */
+  readonly headers: string[];
+  /** The `Accept` header a `LOAD` fetch sends: every RDF syntax the engine parses. */
+  readonly accept: string;
+  /** The profile's `User-Agent`, when it names one. */
+  readonly userAgent: string | undefined;
+  /** The profile's per-request timeout in milliseconds, when it sets one. */
+  readonly timeoutMs: number | undefined;
+  free(): void;
+}
+
+/** A result shape the SPARQL Protocol negotiates formats for. */
+export type ProtocolResultKind = "solutions" | "boolean" | "graph" | "dataset";
+
+/** A format token `SparqlProtocolRequest#negotiate` returns. */
+export type ProtocolFormat =
+  | "json"
+  | "xml"
+  | "csv"
+  | "tsv"
+  | "turtle"
+  | "trig"
+  | "ntriples"
+  | "nquads"
+  | "jsonld";
+
+/**
+ * The `Error` `SparqlProtocolRequest` throws for a request that is not a SPARQL 1.1
+ * Protocol operation: `name` is the refusal's stable identifier (e.g.
+ * `"MissingOperation"`, `"UnsupportedContentType"`, `"MalformedOperation"`), `status`
+ * the HTTP status it maps to (`405` for a method, `415` for a `Content-Type`, `400`
+ * otherwise), and `parameter` the protocol parameter at fault, when there is one.
+ */
+export interface SparqlProtocolError extends Error {
+  readonly status: 400 | 405 | 415;
+  readonly parameter?: string;
+}
+
+/**
+ * One SPARQL 1.1 Protocol operation read from an HTTP request: `GET ?query=`, `POST
+ * application/sparql-query`, `POST application/sparql-update`, and `POST
+ * application/x-www-form-urlencoded` (`query=` / `update=`), with the dataset parameters.
+ * Every protocol decision is made in Rust; a refusal throws a `SparqlProtocolError`.
+ */
+export class SparqlProtocolRequest {
+  private constructor();
+  /**
+   * Read one operation from a request's method, `Content-Type` header, query string
+   * (without the leading `?`) and body bytes.
+   *
+   * @throws {SparqlProtocolError} A request that is not a protocol operation.
+   */
+  static parse(
+    method: string,
+    contentType: string | null | undefined,
+    queryString: string | null | undefined,
+    body: Uint8Array,
+  ): SparqlProtocolRequest;
+  /** The media type of a format token `negotiate` returns; `undefined` for any other string. */
+  static formatMediaType(token: string): string | undefined;
+  /** The media types a result of `kind` is offered in, in server preference order. */
+  static offeredMediaTypes(kind: ProtocolResultKind): string[];
+  /** The `detail` of a `406` for a result of `kind`, naming the formats that can carry it. */
+  static notAcceptableDetail(kind: ProtocolResultKind): string;
+  readonly kind: "query" | "update";
+  /** The operation text as the request carried it. */
+  readonly text: string;
+  /**
+   * The query's result kind from its query form, or `undefined` for an update.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` when no query form follows the prologue.
+   */
+  readonly resultKind: "solutions" | "boolean" | "graph" | undefined;
+  readonly hasDatasetParameters: boolean;
+  readonly defaultGraphUris: string[];
+  readonly namedGraphUris: string[];
+  readonly usingGraphUris: string[];
+  readonly usingNamedGraphUris: string[];
+  /** Parameters the protocol does not define, as flattened `[name, value, …]` pairs in request order. */
+  readonly extraParameters: string[];
+  /**
+   * The operation text to evaluate: the dataset parameters applied, and the whole text
+   * parsed under the engine's reading, so a malformed operation is refused here.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` or `UsingConflictsWithClause`.
+   */
+  effectiveText(): string;
+  /**
+   * The format token to answer this query in, negotiated from an `Accept` header (absent
+   * means the protocol default), or `undefined` when none is acceptable — a `406`.
+   *
+   * @throws {Error} On an update, which has no result to negotiate.
+   */
+  negotiate(accept?: string | null): ProtocolFormat | undefined;
+  free(): void;
+}
+
+/**
+ * A `SERVICE` effect, as `resolveService` receives it: the SPARQL Protocol POST to issue.
+ * `headers` are the catalog profile's headers and then its credential header, in sending
+ * order (append each pair; a repeated name must not be merged); empty without a catalog.
+ */
+export interface AsyncServiceRequest {
+  readonly kind: "service";
+  readonly endpoint: string;
+  /** The forwarded query text (`SELECT * WHERE { … }` for a plain group). */
+  readonly queryText: string;
+  readonly accept: string;
+  readonly contentType: string;
+  readonly userAgent: string;
+  /** The profile's per-request timeout (or the default), in milliseconds. */
+  readonly timeoutMs: number;
+  readonly headers: [string, string][];
+}
+
+/** A `LOAD` effect, as `resolveLoad` receives it. */
+export interface AsyncLoadRequest {
+  readonly kind: "load";
+  readonly iri: string;
+}
+
+/** Either effect a host handler can receive. */
+export type AsyncEffectRequest = AsyncServiceRequest | AsyncLoadRequest;
+
+/**
+ * What `resolveService` is told beside the request.
+ *
+ * One job asks once for a request it repeats with the same `silent` and
+ * `maxIntermediateCells`, and reuses that answer, a failure included but never a fault.
+ * Concurrent jobs share one call through the same `resolveService` only when the request,
+ * `silent` and `maxIntermediateCells` are identical and the joining job's deadline falls
+ * no later than the call's own. The call's own deadline is its start plus the
+ * `remainingDeadlineMs` it was told; a job without a deadline joins only a call told none.
+ * Every other job gets its own call and its own context. Every waiting job receives the
+ * shared answer as it stands. `LOAD` requests are never shared or reused.
+ */
+export interface AsyncResolverContext {
+  /**
+   * Aborts when the job is cancelled or its deadline passes; the job does not wait for
+   * the handler after that. For a call several jobs share, it aborts only once every one
+   * of them has stopped waiting.
+   */
+  readonly signal: AbortSignal;
+  /** Milliseconds left before the job's deadline, when it has one. For a shared call, the deadline of the job that started it. */
+  readonly remainingDeadlineMs: number | undefined;
+  /** Whether the clause is `SERVICE SILENT` — for information only: an empty answer is not the host's to invent. */
+  readonly silent: boolean;
+  /**
+   * The query's inclusive intermediate-cell ceiling, when the caller actually configured
+   * one. `undefined` for an ungoverned query and for a governed one that set no cell
+   * ceiling — never a metering bookkeeping sentinel.
+   */
+  readonly maxIntermediateCells: bigint | undefined;
+}
+
+/** What `resolveLoad` is told beside the request. */
+export interface AsyncLoadContext {
+  readonly signal: AbortSignal;
+}
+
+/**
+ * A typed failure a handler returns (never throws): `"transport"` — unreachable or
+ * unreadable, which `SERVICE SILENT`/`LOAD SILENT` swallow — or `"denied"` — the host's
+ * policy refused it, which fails the request even under `SILENT`.
+ */
+export interface ServiceFailure {
+  readonly kind: "transport" | "denied";
+  readonly message: string;
+}
+
+/**
+ * `resolveService`'s answer: SPARQL Results JSON (bytes or text), a `Response` (a non-ok
+ * status is a transport failure), or a typed failure. A throw, a rejection or any other
+ * value is a fault that fails the job, even under `SERVICE SILENT`.
+ */
+export type AsyncServiceAnswer = Uint8Array | ArrayBuffer | string | Response | ServiceFailure;
+
+/** A `LOAD` document with its media type (or any format name `Dataset.parse` accepts). */
+export type AsyncLoadDocument =
+  | { readonly bytes: Uint8Array | ArrayBuffer; readonly mediaType: string; readonly base?: string }
+  | { readonly text: string; readonly mediaType: string; readonly base?: string };
+
+/**
+ * `resolveLoad`'s answer: a document (its `base` defaults to the IRI), a `Response` (its
+ * `Content-Type` names the media type), a `Dataset`, or a typed failure. A bare string
+ * or bytes carry no media type and are a fault. A document that does not parse is the
+ * `LOAD`'s failure.
+ */
+export type AsyncLoadAnswer = AsyncLoadDocument | Response | Dataset | ServiceFailure;
+
+export type AsyncServiceResolver = (
+  request: AsyncServiceRequest,
+  ctx: AsyncResolverContext,
+) => AsyncServiceAnswer | Promise<AsyncServiceAnswer>;
+
+export type AsyncLoadResolver = (
+  request: AsyncLoadRequest,
+  ctx: AsyncLoadContext,
+) => AsyncLoadAnswer | Promise<AsyncLoadAnswer>;
+
+/** The options every asynchronous twin accepts beside its operation's own. */
+export interface AsyncHostOptions {
+  /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously, `SILENT` or not. */
+  readonly resolveService?: AsyncServiceResolver | null;
+  /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously, `SILENT` or not. */
+  readonly resolveLoad?: AsyncLoadResolver | null;
+  /** Cancels the job; an already-aborted signal rejects before the job begins. */
+  readonly signal?: AbortSignal | null;
+  /** Governor polls between yields to the event loop: an integer ≥ 0 (0 yields at every poll). Default 65 536. */
+  readonly yieldEveryPolls?: number | null;
+  /**
+   * The job's private shadow-stack region in bytes: an integer ≥ 524 288. Default 2 MiB.
+   * It does not raise the host-stack budget (`native-sparql-host-stack-exhausted`).
+   */
+  readonly stackBytes?: number | null;
+  /** The policy host-resolved `SERVICE` requests are authorized against. Needs `resolveService`. */
+  readonly catalog?: ServiceCatalog | null;
+  /** Endpoints answered in process from a snapshot of a dataset, with no host call. */
+  readonly localServices?: Readonly<Record<string, Dataset>> | null;
+  /** Not accepted: cancel an asynchronous twin through `signal`. */
+  readonly cancel?: never;
+}
+
+export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions {}
+
+export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions {
+  /**
+   * A `JsonLdSerializeOptions` document (`JSON.stringify` it) configuring a JSON-LD or
+   * YAML-LD `format`, as `queryRawConfigured` takes it. Needs `format`; not combinable
+   * with `provenanceNamespace`.
+   */
+  readonly optionsJson?: string | null;
+}
+
+export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions {
+  readonly yamlSchemaUrl?: string | null;
+}
+
+export interface AsyncGovernedQueryOptions
+  extends QueryOptions,
+    Omit<GovernorOptions, "cancel">,
+    AggregateNamespaceOption,
+    AsyncHostOptions {}
+
+export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
+  /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
+  readonly program?: string | null;
+}
+
+export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
+
+export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
+  /** The client's `Accept` header; absent means the SPARQL Protocol defaults. */
+  readonly accept?: string | null;
+}
+
+/**
+ * What one asynchronous job did: counts from the runtime, times in milliseconds.
+ * `stackHighWaterBytes` is the deepest the job's stack region was used — size
+ * `stackBytes` from it. Freezing the dataset before the job and serializing its result
+ * after do not yield; `freezeMs` and `serializeMs` show what they cost.
+ */
+export interface AsyncEvidence {
+  readonly polls: number;
+  readonly yields: number;
+  readonly serviceEffects: number;
+  readonly loadEffects: number;
+  readonly stackHighWaterBytes: number;
+  readonly serviceWaitMs: number;
+  readonly loadWaitMs: number;
+  readonly yieldWaitMs: number;
+  readonly freezeMs: number;
+  readonly evaluateMs: number;
+  readonly serializeMs: number;
+}
+
+export interface AsyncGovernorEvidence extends GovernorEvidence {
+  readonly async: AsyncEvidence;
+}
+
+/** `queryGovernedAsync`'s outcome: a `QueryOutcome` whose evidence carries the job's. */
+export interface AsyncQueryOutcome extends QueryOutcome {
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/**
+ * `queryEntailmentGovernedAsync`'s outcome. The job's evidence covers both phases, so it
+ * is on the outcome itself; an answered query outcome carries the same record.
+ */
+export interface AsyncEntailmentQueryOutcome extends EntailmentQueryOutcome {
+  readonly outcome?: AsyncQueryOutcome;
+  readonly evidence: { readonly async: AsyncEvidence };
+}
+
+/** A negotiated query's complete answer, serialized. */
+export interface NegotiatedBody {
+  /** The document's UTF-8 bytes. */
+  readonly bytes: Uint8Array;
+  readonly format: ProtocolFormat;
+  /** The document's media type, for a `Content-Type` header. */
+  readonly mediaType: string;
+}
+
+/**
+ * `queryGovernedNegotiatedAsync`'s outcome: a complete answer as a document, or an
+ * exhausted budget carrying the typed partial answers it reached. Never a thrown trip.
+ */
+export interface AsyncNegotiatedQueryOutcome {
+  readonly isComplete: boolean;
+  /** The complete answer. Absent when a governor stopped the execution. */
+  readonly body?: NegotiatedBody;
+  /** What the rows the execution reached bound. Absent when it completed. */
+  readonly partial?: PartialAnswers;
+  /** The governor that stopped the execution. Absent when it completed. */
+  readonly tripped?: TrippedGovernor;
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/** `updateGovernedAsync`'s outcome: an `UpdateOutcome` whose evidence carries the job's. */
+export interface AsyncUpdateOutcome extends UpdateOutcome {
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/**
+ * The shape of an error an asynchronous twin builds for a job that failed: `name` is
+ * `"Error"` for a failure or a fault, `"AbortError"` for a cancellation without a
+ * `signal.reason`, `"TimeoutError"` for an ungoverned job's deadline, and
+ * `"NotAcceptableError"` for a negotiated query whose result no acceptable format can carry.
+ * A cancellation with a `signal.reason` rejects with that reason itself, untouched.
+ */
+export interface AsyncJobError extends Error {
+  readonly evidence: { readonly async: AsyncEvidence };
+}
+
+/**
+ * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and a macrotask primitive to yield
+ * through. Where it is `false`, every asynchronous twin rejects with the reason before
+ * touching wasm; the synchronous API is unaffected.
+ */
+export function hasAsyncQueries(): boolean;
+
+/** The macrotask primitive asynchronous jobs yield through, or `undefined` when none exists. */
+export function asyncYieldPrimitive():
+  | "scheduler.yield"
+  | "setImmediate"
+  | "MessageChannel"
+  | undefined;
+
+/**
+ * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)
+ * bounds how many asynchronous jobs may be in flight at once; a twin started beyond it
+ * rejects. Unknown keys are refused.
+ */
+export function configureAsync(options: { readonly maxConcurrentJobs?: number }): void;
 
 /**
  * A cancellation bit the host can flip, shared with every governed call it is handed to.
@@ -979,10 +1562,17 @@ export class QueryEngine {
  * Latching by construction: the bit only ever moves from clear to set, and nothing clears
  * it. Build a fresh token per query rather than reusing one.
  *
- * A JavaScript host is single-threaded and the wasm boundary is synchronous, so a token
- * flipped on the same thread that is inside `queryGoverned` cannot be observed by it. The
- * two shapes that do work are cancelling BEFORE a call and cancelling a worker's query
- * from another thread that shares the token.
+ * A synchronous governed call holds the thread for its whole duration, so a token flipped
+ * on that same thread cannot run until the call returns and is never observed by it. For
+ * a synchronous call the token is for the two shapes that genuinely work: cancelling
+ * BEFORE the call, and cancelling a worker's query from another thread that shares the
+ * token. Both report the same `"cancelled"` trip.
+ *
+ * The asynchronous twins (`queryAsync`, `queryGovernedAsync`, …) are different: a job
+ * gives the event loop back at every yield and every host effect, so the page's own code
+ * does run mid-query. They are cancelled through an `AbortSignal` passed as `signal`,
+ * observed at the next yield or effect — a token is neither needed nor accepted there
+ * (passing `cancel` to an asynchronous twin is a `TypeError`).
  */
 export class CancellationToken {
   constructor();
@@ -1033,7 +1623,20 @@ export function provenanceFromJson(json: string, prefix: string, iri: string): P
 /** The XML twin of {@link provenanceFromJson}. */
 export function provenanceFromXml(xml: string, prefix: string, iri: string): ProvenanceInfo;
 
-export function ready(wasmBytesOrUrl?: BufferSource | URL | string): Promise<void>;
+/**
+ * Instantiate the wasm module. Idempotent: there is one instance per JavaScript realm. In
+ * Node the bytes are read from the colocated file; elsewhere pass the bytes, a URL or a
+ * compiled `WebAssembly.Module` (or omit it to fetch the colocated `.wasm`). Must be
+ * awaited once before any other API is used.
+ *
+ * @throws {Error} Once a trap or a Rust panic has poisoned the instance (see the
+ *   asynchronous twins on `QueryEngine`): the instance cannot be used again, and only a
+ *   fresh JavaScript realm (a new page, Worker isolate or process) can load the package
+ *   again.
+ */
+export function ready(
+  wasmBytesOrUrl?: BufferSource | URL | string | WebAssembly.Module,
+): Promise<void>;
 export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;
 export function streamToDataset(
   quadStream: AsyncIterable<Quad> | Iterable<Quad>,
@@ -1608,5 +2211,96 @@ export function shaclProductValidateToSarifExpecting(
   dataNt: string,
   expectIdentity: string,
 ): string;
+
+/**
+ * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
+ * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
+ * (`AbortSignal.timeout(ms)`). `shapesBase` stays positional, where the synchronous twin
+ * takes it.
+ */
+export interface AsyncShaclOptions extends AsyncHostOptions {}
+
+/**
+ * The asynchronous twin of `shaclValidateToSarif`: resolves to the same SARIF 2.1.0 JSON
+ * string, byte for byte.
+ *
+ * SHACL evaluates SPARQL — `sh:SPARQLTarget` queries, SHACL-SPARQL constraints and
+ * validators, SHACL-AF node expressions and rules — so the validation runs as a job like
+ * every other evaluating twin: every query it runs suspends on `resolveService` (and
+ * `localServices`), and the job yields to the event loop every `yieldEveryPolls` polls
+ * and stops on `signal`. The signal is polled between focus nodes as well as inside
+ * queries, so a validation with no SPARQL in it still yields and stops. A `SERVICE` the
+ * synchronous twin refuses for want of a source is answered by the host. (SHACL itself
+ * admits `SERVICE` only in a query that pre-binds nothing, such as a `sh:SPARQLTarget`:
+ * a constraint's query with `SERVICE` in it is refused while the shapes graph loads, on
+ * either lane.) A stop rejects — with the signal's reason, or its `TimeoutError` — and
+ * never resolves to the report of a validation that did not finish.
+ */
+export function shaclValidateToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/**
+ * The asynchronous twin of `shaclValidateChangesToSarif`: resolves to the same
+ * `ShaclChangeValidation` (call `free()` on it), under the job semantics
+ * `shaclValidateToSarifAsync` describes.
+ */
+export function shaclValidateChangesToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt?: string | null,
+  removedNt?: string | null,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<ShaclChangeValidation>;
+
+/**
+ * The asynchronous twin of `shaclEntail`: resolves to the same materialized N-Triples.
+ * A `sh:SPARQLRule`'s CONSTRUCT and every node expression run as the job's queries, and
+ * the signal is polled between the focus nodes of every rule.
+ */
+export function shaclEntailAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/**
+ * The asynchronous twin of `shaclProductValidateToSarif`: resolves to the same SARIF
+ * string, or rejects with the same `ShaclProductRefusal` the synchronous twin throws
+ * (its `evidence.async` added, as on every asynchronous rejection).
+ */
+export function shaclProductValidateToSarifAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuild`. */
+export function shaclProductValidateToSarifRebuildAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifExpecting`. */
+export function shaclProductValidateToSarifExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuildExpecting`. */
+export function shaclProductValidateToSarifRebuildExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
 
 export function version(): string;

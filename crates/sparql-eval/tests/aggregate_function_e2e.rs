@@ -181,10 +181,7 @@ fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
 }
 
 fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 fn request(query: &str) -> SparqlRequest<'_> {
@@ -441,10 +438,7 @@ fn unregistered_property_function_still_reports_the_property_function_code() {
         .query_with_options_view(
             &*ds,
             request(&format!("SELECT ?s WHERE {{ ?s <{EX}pf/nope> ?v }}")),
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .expect_err("nothing is registered under the configured namespace");
     assert_eq!(

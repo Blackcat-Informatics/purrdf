@@ -174,10 +174,7 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
     );
     let env =
         ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     for (key, expected) in [
         (
             "EXISTS { ?s <http://example.org/relation> ?o }",

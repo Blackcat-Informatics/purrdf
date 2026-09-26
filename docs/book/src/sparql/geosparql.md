@@ -57,18 +57,23 @@ let vocab = GeoVocabBuilder::new(
 ## The `geof:` family on the scalar seam
 
 `functions::register` installs every `geof:` function into a
-`UserFunctionRegistry` under the vocabulary's function namespace, and the
-registry is handed to the engine through `QueryOptions::functions`:
+`UserFunctionRegistry` under the vocabulary's function namespace. The engine
+binds the registry with `NativeSparqlEngine::bind_functions`, and the bound
+registry is handed to a query through `QueryOptions::with_functions`:
 
 ```rust,ignore
 use purrdf::geo::functions;
-use purrdf::sparql::{NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
+use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
 use purrdf::SparqlRequest;
 
 let mut functions_registry = UserFunctionRegistry::new();
 functions::register(&mut functions_registry, &vocab);
 
-let result = NativeSparqlEngine::new().query_with_options_view(
+let engine = NativeSparqlEngine::new();
+// Every `geof:` function is a native closure, so binding parses nothing.
+let bound = engine.bind_functions(functions_registry, ExtensionEnv::empty())?;
+
+let result = engine.query_with_options_view(
     &dataset,
     SparqlRequest {
         query: r#"PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
@@ -81,7 +86,7 @@ let result = NativeSparqlEngine::new().query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions { functions: &functions_registry, ..QueryOptions::EMPTY },
+    QueryOptions::new().with_functions(&bound),
 )?;
 ```
 
@@ -110,8 +115,8 @@ nothing and returning success would surface much later as a query whose
 use std::sync::Arc;
 use purrdf::geo::relation::{self, GeoIndex, GeoIndexConfig, GraphSelector};
 use purrdf::geo::{GeoTerm, RelationFamily};
-use purrdf::sparql::{ParserOptions, PropertyFunctionRegistry};
-use purrdf::TermValue;
+use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf::{SparqlRequest, TermValue};
 
 let config = GeoIndexConfig::new(
     vec![TermValue::iri(vocab.term(GeoTerm::AsWkt))],
@@ -122,13 +127,21 @@ let index = Arc::new(GeoIndex::from_dataset(&dataset, &vocab, &config)?);
 let mut relations = PropertyFunctionRegistry::new();
 relation::register(&mut relations, &vocab, &index, &[RelationFamily::SimpleFeatures])?;
 
-// The parser must claim `geo:sfWithin` in predicate position; the registry's
-// own descriptors are exactly the IRIs it should claim.
-let parser_options = ParserOptions {
-    extension_fn_namespaces: Vec::new(),
-    property_fn_namespaces: Vec::new(),
-    property_fn_iris: relations.describe()?.into_iter().map(|d| d.iri).collect(),
-};
+// The environment a query text is read in claims every registered relation IRI
+// — `geo:sfWithin` among them — in predicate position, so no parser option is
+// needed to reach it.
+let env = ExtensionEnv::over_relations(relations)?;
+
+let result = NativeSparqlEngine::new().query_with_options_view(
+    &dataset,
+    SparqlRequest {
+        query: r#"PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+                  SELECT ?a ?b WHERE { ?a geo:sfWithin ?b }"#,
+        base_iri: None,
+        substitutions: &[],
+    },
+    QueryOptions::new().with_env(&env),
+)?;
 ```
 
 An asserted `geo:sfWithin` triple matches whether or not the geometries

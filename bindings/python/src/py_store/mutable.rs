@@ -325,14 +325,11 @@ impl PyMutableDataset {
                         base_iri: None,
                         substitutions: &subs,
                     },
-                    purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?,
-                        ..purrdf_sparql_eval::QueryOptions::EMPTY
-                    },
+                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?),
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
         })?;
@@ -420,14 +417,11 @@ impl PyMutableDataset {
                         base_iri: None,
                         substitutions: &subs,
                     },
-                    purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?,
-                        ..purrdf_sparql_eval::QueryOptions::EMPTY
-                    },
+                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?),
                     governors,
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
@@ -543,10 +537,11 @@ impl PyMutableDataset {
                     substitutions: &subs,
                 },
                 plan.entailment(),
-                purrdf_sparql_eval::QueryOptions {
-                    env: &extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?,
-                    ..purrdf_sparql_eval::QueryOptions::EMPTY
-                },
+                purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                    parser_options,
+                    registry.as_ref(),
+                    aggregates.as_ref(),
+                )?),
                 &relations,
                 governors,
             )
@@ -630,14 +625,11 @@ impl PyMutableDataset {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?,
-                        ..purrdf_sparql_eval::QueryOptions::EMPTY
-                    },
+                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?),
                     governors,
                 )
                 .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
@@ -708,14 +700,11 @@ impl PyMutableDataset {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?,
-                        ..purrdf_sparql_eval::QueryOptions::EMPTY
-                    },
+                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?),
                 )
                 .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
             Ok::<_, PyErr>(dataset)

@@ -290,9 +290,11 @@ ORDER BY ?rank
   `SERVICE` 扩展点：一个宿主可注入的 `ServiceResolver`，携带**逐服务上下文**（请求头、
   凭据、超时、能力；默认拒绝），发出的 SPARQL Protocol 请求由确定性的序列化器构造，
   并在 823 项随库固化的语料上往返扫描（含更新请求）。止步于何处：PurRDF 不附带 HTTP
-  客户端——交换是一个由 Rust 宿主实现的 `HttpTransport` trait——而且没有任何随库发布的
-  接口（CLI、Python、wasm、C）安装解析器，因此那里的 `SERVICE` 与 `LOAD` 会按名称失败，
-  除非写作 `SILENT`；联邦查询是 Rust 宿主的组合，不是开箱即用的功能。原生扩展点上的宿主标量
+  客户端——交换是一个由 Rust 宿主实现的 `HttpTransport` trait。CLI、Python 与 C 接口
+  不安装解析器，wasm 包的同步方法同样不安装，因此那里的 `SERVICE` 与 `LOAD` 会按名称
+  失败，除非写作 `SILENT`。wasm 包的异步方法接受宿主提供的解析器：作业经由 JSPI 挂起、
+  等待其应答的 JavaScript `resolveService`/`resolveLoad` 处理函数，或由其 Cloudflare
+  适配器构建的、基于 `fetch` 的处理函数。联邦查询是宿主的组合，而不是内置的网络客户端。原生扩展点上的宿主标量
   函数携带 SPARQL 的表达式错误通道：逐解的定义域错误在 `FILTER` 下消去该行，在
   `BIND`/`SELECT` 下让变量保持未绑定，而不是中止查询。由完整的 W3C SPARQL 1.1 + 1.2
   求值语料把关：**862 个通过**，5 个入台账的上游勘误夹具。结果以 SPARQL
@@ -547,6 +549,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
 | [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-iri` + `purrdf-xsd` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
+| [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限（通过按目标启用的 `libc`/`windows-sys` 声明，无需构建期 C 工具链），wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 解析器与求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。 |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL 验证引擎（完整 Core + SHACL-SPARQL + SHACL-AF，含 SHACL Rules）。 |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
 | [`purrdf-entail`](./crates/entail/) | 蕴涵机制：RDF/RDFS/OWL-RL/D chase、OWL-Direct tableau 与 RIF-Core 规则——每次求闭包都返回推理报告。 |

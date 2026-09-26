@@ -266,6 +266,19 @@ pub trait DatasetView {
         None
     }
 
+    /// How deeply the triple terms this view holds can nest, if the view knows a bound:
+    /// no term it resolves holds a chain of more triple terms than this, the outermost
+    /// included (`<<( s p <<( s p o )>> )>>` holds two).
+    ///
+    /// A consumer may answer a pattern whose triple terms nest deeper as matching
+    /// nothing, without resolving or walking it, so a bound must be a guarantee: a view
+    /// that cannot vouch for every term it resolves answers `None`, the default, and is
+    /// matched the long way. Every [`RdfDataset`] is bounded at 16, the limit
+    /// [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze) refuses past.
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        None
+    }
+
     /// Precompute the loop-invariant [`ProbePlan`](Self::ProbePlan) for a pattern of
     /// the given bound-axis shape and graph constraint, to be reused across the probe
     /// rows of an index-nested-loop join slot via
@@ -831,6 +844,13 @@ impl DatasetView for RdfDataset {
     type Id = TermId;
     type ProbePlan = QuadProbePlan;
 
+    /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
+    /// which refuses a triple term nested past 16.
+    #[inline]
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        Some(crate::ir::validate::MAX_TERM_NESTING_DEPTH)
+    }
+
     #[inline]
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         // Inherent methods take method-resolution priority over trait methods, so
@@ -1013,6 +1033,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn len_hint(&self) -> Option<usize> {
         (**self).len_hint()
+    }
+
+    #[inline]
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        (**self).triple_term_nesting_bound()
     }
 
     #[inline]

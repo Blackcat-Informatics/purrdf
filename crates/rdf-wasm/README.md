@@ -51,7 +51,8 @@ const reparsed = Dataset.parse(nq, "nquads");
 
 ## API
 
-- **`ready(bytesOrUrl?)`** — await once before anything else (instantiates the wasm).
+- **`ready(bytesOrUrl?)`** — await once before anything else (instantiates the wasm
+  from bytes, a URL, or a compiled `WebAssembly.Module`).
 - **`DataFactory`** — `namedNode`, `blankNode`, `literal(value, languageOrDatatype?)`,
   `typedLiteral`, `directionalLiteral`, `variable`, `defaultGraph`, `quad`,
   `quotedTriple`, `fromTerm`, `fromQuad`.
@@ -80,6 +81,10 @@ const reparsed = Dataset.parse(nq, "nquads");
   path — the rows already reached together with a certificate saying whether they are a
   lower bound, an upper bound, or neither. A tripped UPDATE applies nothing at all.
   `explainQuery` renders the metered charge ledger those budgets are sized from.
+- **Asynchronous twins** — every evaluating `QueryEngine` method, and `Dataset.query`,
+  has a Promise-returning twin (`queryAsync` … `updateGovernedAsync`) that takes host
+  handlers for `SERVICE` and `LOAD`. See
+  [Asynchronous queries and federation](#asynchronous-queries-and-federation).
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?)` validates a
@@ -118,12 +123,78 @@ Use `mode: "incidence"` to inspect exact subject/predicate/object ports and nest
 triple terms, or `mode: "table"` for one row per structural statement. A quoted
 triple is never rendered as asserted unless an assertion occurrence is present.
 
+## Asynchronous queries and federation
+
+The crate has two lanes over one evaluator. The synchronous lane is offline: it installs
+no `SERVICE` or `LOAD` source and runs each call to completion inside one wasm call. The
+asynchronous lane (`src/async_query.rs`) runs the same evaluator as a *job* on its own
+stack region. The job suspends through WebAssembly JavaScript Promise Integration (JSPI)
+when it needs a `SERVICE` or `LOAD` answered, and yields to the event loop every
+`yieldEveryPolls` governor polls. The host does the I/O and owns its policy; PurRDF keeps
+the parsing, the evaluation, the joins, the `SILENT` semantics and the result encoding.
+
+- **Twins** — `queryAsync`, `selectAsync`, `askAsync`, `constructAsync`, `describeAsync`,
+  `queryRawAsync`, `queryRawBytesAsync`, `queryRawWithContextAsync`,
+  `queryGovernedAsync`, `queryEntailmentGovernedAsync`, `updateAsync`,
+  `updateGovernedAsync`, `explainQueryAsync`, `queryGovernedNegotiatedAsync` and
+  `Dataset.queryAsync`. Each
+  reads a snapshot of the dataset taken when it starts and resolves to its synchronous
+  twin's shape.
+- **SHACL twins** — `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
+  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
+  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
+  and `shaclProductValidateToSarifRebuildExpectingAsync`. SHACL evaluates SPARQL, so each
+  runs its synchronous twin's own body as a job whose signal and sources are installed as
+  the SHACL engine's execution scope (`purrdf_shapes::sparql::enter_execution_scope`):
+  every query the validation runs reaches the host's `SERVICE` answer, and the signal is
+  polled between focus nodes as well as inside queries. The engine's per-thread scopes
+  are swapped with the stack context at every suspension, so a synchronous validation
+  run while a job waits sees none of the job's governors, sources or registries. Each
+  resolves to exactly what its synchronous twin returns; a refused product rejects with
+  the same `ShaclProductRefusal`.
+- **Host handlers** — `resolveService(request, ctx)` answers a `SERVICE` request with
+  SPARQL Results JSON, a `Response`, or a typed failure: `{ kind: "transport" }`, which
+  `SERVICE SILENT` swallows to the join identity, or `{ kind: "denied" }`, which fails
+  even under `SILENT`. A handler that throws has faulted, and a fault fails the job even
+  under `SILENT`. `ctx.silent` is for information only; an empty answer is not the
+  handler's to invent. `resolveLoad` answers `LOAD` the same way, with a document and its
+  media type. A `ServiceCatalog` authorizes every request before the handler is called
+  (deny by default), and `localServices` answers named endpoints in process from a
+  `Dataset`. In a browser, the remote endpoint's CORS policy governs whether `fetch` can
+  read an answer.
+- **Scheduling** — `signal: AbortSignal` cancels a job at its next yield or effect;
+  asynchronous updates on one dataset run one at a time and commit only if the dataset
+  (`id`, `generation`) did not change while they ran;
+  `configureAsync({ maxConcurrentJobs })` bounds the jobs in flight; `stackBytes` sizes
+  each job's shadow-stack region and `evidence.async` reports what the job did, its stack
+  high-water mark included. It does not raise the budget kept under V8's own call stack,
+  which is the same size on both lanes: a request past it
+  (`native-sparql-host-stack-exhausted`, 637 nested parentheses or 283 nested groups on
+  either lane) must nest less deeply. A job that overruns its region's guard zone poisons the instance.
+- **Hosts** — JSPI is on by default in Chrome and Edge 137+, Firefox 139+, Safari 27,
+  Node 24.20+ and Cloudflare Workers (workerd). `hasAsyncQueries()` reports it; without
+  it the twins reject before touching wasm and the synchronous API is unchanged. On
+  Workers `Date.now()` does not advance during CPU-bound execution, so a synchronous
+  `deadlineMs` cannot trip during CPU-bound work there; the asynchronous lane observes
+  the deadline at every yield and every effect.
+- **Cloudflare adapter** — `@blackcatinformatics/purrdf/cloudflare` provides
+  `createFetchServiceResolver`, `createFetchLoadResolver` and `handleSparqlRequest`, a
+  SPARQL 1.1 Protocol endpoint built on `SparqlProtocolRequest`. `maxRemoteRequests` is
+  the exact control for the Workers subrequest limit, and the Cache API it can use does
+  nothing on `workers.dev` hostnames.
+
+The package [README](./js/README.md#asynchronous-queries-federation-and-the-cloudflare-adapter)
+states the full contracts and carries a `fetch`-based `resolveService` and a complete
+Worker, both executed by `js/tests/docs-worker-recipe.test.mjs`.
+
 ## Scope
 
 - **In-memory only** — the oxigraph `Store` (RocksDB) and the logic engine do not
-  compile to wasm and are excluded by design. SPARQL query runs offline over the
-  in-memory dataset; this package provides no network resolver, so remote
-  `SERVICE` and `LOAD` fail explicitly.
+  compile to wasm and are excluded by design. SPARQL runs over the in-memory
+  dataset. The synchronous methods install no `SERVICE` or `LOAD` source, so there a
+  remote `SERVICE` or `LOAD` fails explicitly, `SILENT` or not; the
+  asynchronous twins reach remote endpoints only through the handlers the host
+  passes them.
 - Text codecs ride purrdf's native codecs — no Store dependency and no
   `purrdf-gts` RDF-codec feature.
 - A quoted-triple term as a quad **object** round-trips through every format

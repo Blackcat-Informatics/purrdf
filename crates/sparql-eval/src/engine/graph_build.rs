@@ -231,7 +231,7 @@ impl NativeSparqlEngine {
             .force_sequential
             .then(crate::parallel::force_sequential_operation);
         let evaluated = (|| {
-            crate::eval::prepare_query_context(&query, &mut ctx)?;
+            let _terms = crate::eval::prepare_query_context(&query, &mut ctx)?;
             let Query::Construct {
                 template, pattern, ..
             } = query.as_ref()

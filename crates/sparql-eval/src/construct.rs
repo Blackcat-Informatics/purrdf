@@ -550,44 +550,26 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // from this map) — hoisted so its table allocation is reused across rows.
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
 
-    for row in &seq.rows {
-        blanks.clear();
+    // Instantiating a template term recurses through its nested triple terms, and a
+    // `CONSTRUCT` may be reached with the stack already deep (a SHACL rule, a nested
+    // host call): every level may refuse, and this scope then discards the half-built
+    // graph with the error. See `crate::stack::walk`.
+    crate::stack::walk(|| {
+        for row in &seq.rows {
+            blanks.clear();
 
-        if !has_reifier_decls {
-            // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
-            for ((quad, slot), ordinal) in template.iter().zip(&graph_slots).zip(&template_ordinals)
-            {
-                // The graph is resolved FIRST: a statement its graph slot skips
-                // is not instantiated at all, so it mints no blank labels and
-                // consumes no counter values on the way to being dropped.
-                let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
-                    continue;
-                };
-                if let Some((s, p, o)) = instantiate(
-                    &quad.triple,
-                    ordinal,
-                    row,
-                    &mut builder,
-                    &mut blanks,
-                    ctx,
-                    tracker,
-                ) {
-                    builder.push_quad(s, p, o, graph_id.term());
-                }
-            }
-        } else {
-            // TWO-PASS EMIT: first collect all instantiated statements, then route
-            // each one to push_reifier / push_annotation / push_quad.
-
-            // Instantiate every template quad for this row (None = skipped, by
-            // its graph slot or by the ordinary §16.2 template rules).
-            let instantiated: Vec<Option<Instantiated>> = template
-                .iter()
-                .zip(&graph_slots)
-                .zip(&template_ordinals)
-                .map(|((quad, slot), ordinal)| {
-                    let graph = slot.resolve(row, &mut builder, ctx)?;
-                    let (s, p, o) = instantiate(
+            if !has_reifier_decls {
+                // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
+                for ((quad, slot), ordinal) in
+                    template.iter().zip(&graph_slots).zip(&template_ordinals)
+                {
+                    // The graph is resolved FIRST: a statement its graph slot skips
+                    // is not instantiated at all, so it mints no blank labels and
+                    // consumes no counter values on the way to being dropped.
+                    let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
+                        continue;
+                    };
+                    if let Some((s, p, o)) = instantiate(
                         &quad.triple,
                         ordinal,
                         row,
@@ -595,81 +577,106 @@ fn build_construct_graph<D: DatasetView + Sync>(
                         &mut blanks,
                         ctx,
                         tracker,
-                    )?;
-                    Some(Instantiated { s, p, o, graph })
-                })
-                .collect();
-
-            // Pass 1: emit reifier declarations and build the per-row reifier set.
-            //
-            // The set is keyed by `(graph, reifier)`, not by the reifier alone:
-            // the statement layer is per-graph, so an annotation may only be
-            // routed onto a reifier that was declared in the SAME graph. With a
-            // single-graph template — every pre-quad-template `CONSTRUCT` — the
-            // graph half is constant and the key degenerates to the reifier id,
-            // which is exactly the previous behavior.
-            // Membership-only (insert/contains, never iterated), so the fixed-key
-            // `DetHashSet` is used: no `RandomState` seeding per row.
-            let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
-            for &idx in plan.reifier_decl_indices {
-                if let Some(e) = instantiated[idx] {
-                    builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                    reifier_ids.insert((e.graph, e.s));
+                    ) {
+                        builder.push_quad(s, p, o, graph_id.term());
+                    }
                 }
-            }
+            } else {
+                // TWO-PASS EMIT: first collect all instantiated statements, then route
+                // each one to push_reifier / push_annotation / push_quad.
 
-            // Pass 2: emit remaining triples, routing by VALUE, not just template
-            // position. A template slot with a variable predicate/object (e.g. the
-            // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
-            // annotation triple — but the `WHERE` reifier/annotation virtual layer
-            // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
-            // generic pattern's predicate/object against the reifier's OWN
-            // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
-            // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
-            // same fact `reifier_decl_indices` already declared for this row. Routing
-            // that row's `?q ?z` slot by POSITION alone would re-push it as a
-            // spurious "annotation whose predicate is rdf:reifies", doubling the
-            // reifier's encoding; routing it by VALUE instead recognizes the
-            // dynamically-produced edge and calls `push_reifier` again, which is an
-            // idempotent no-op against the identical pass-1 binding (W3C
-            // `eval-triple-terms` `construct-5`).
-            for (idx, statement) in instantiated.iter().enumerate() {
-                if reifier_decl_mask[idx] {
-                    continue; // already handled in pass 1
-                }
-                if let Some(e) = *statement {
-                    let is_dynamic_reifies =
-                        e.p == reifies_id && matches!(builder.resolve(e.o), TermRef::Triple { .. });
-                    if is_dynamic_reifies {
+                // Instantiate every template quad for this row (None = skipped, by
+                // its graph slot or by the ordinary §16.2 template rules).
+                let instantiated: Vec<Option<Instantiated>> = template
+                    .iter()
+                    .zip(&graph_slots)
+                    .zip(&template_ordinals)
+                    .map(|((quad, slot), ordinal)| {
+                        let graph = slot.resolve(row, &mut builder, ctx)?;
+                        let (s, p, o) = instantiate(
+                            &quad.triple,
+                            ordinal,
+                            row,
+                            &mut builder,
+                            &mut blanks,
+                            ctx,
+                            tracker,
+                        )?;
+                        Some(Instantiated { s, p, o, graph })
+                    })
+                    .collect();
+
+                // Pass 1: emit reifier declarations and build the per-row reifier set.
+                //
+                // The set is keyed by `(graph, reifier)`, not by the reifier alone:
+                // the statement layer is per-graph, so an annotation may only be
+                // routed onto a reifier that was declared in the SAME graph. With a
+                // single-graph template — every pre-quad-template `CONSTRUCT` — the
+                // graph half is constant and the key degenerates to the reifier id,
+                // which is exactly the previous behavior.
+                // Membership-only (insert/contains, never iterated), so the fixed-key
+                // `DetHashSet` is used: no `RandomState` seeding per row.
+                let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
+                for &idx in plan.reifier_decl_indices {
+                    if let Some(e) = instantiated[idx] {
                         builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                    } else if reifier_ids.contains(&(e.graph, e.s)) {
-                        builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
-                    } else {
-                        builder.push_quad(e.s, e.p, e.o, e.graph.term());
+                        reifier_ids.insert((e.graph, e.s));
+                    }
+                }
+
+                // Pass 2: emit remaining triples, routing by VALUE, not just template
+                // position. A template slot with a variable predicate/object (e.g. the
+                // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
+                // annotation triple — but the `WHERE` reifier/annotation virtual layer
+                // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
+                // generic pattern's predicate/object against the reifier's OWN
+                // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
+                // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
+                // same fact `reifier_decl_indices` already declared for this row. Routing
+                // that row's `?q ?z` slot by POSITION alone would re-push it as a
+                // spurious "annotation whose predicate is rdf:reifies", doubling the
+                // reifier's encoding; routing it by VALUE instead recognizes the
+                // dynamically-produced edge and calls `push_reifier` again, which is an
+                // idempotent no-op against the identical pass-1 binding (W3C
+                // `eval-triple-terms` `construct-5`).
+                for (idx, statement) in instantiated.iter().enumerate() {
+                    if reifier_decl_mask[idx] {
+                        continue; // already handled in pass 1
+                    }
+                    if let Some(e) = *statement {
+                        let is_dynamic_reifies = e.p == reifies_id
+                            && matches!(builder.resolve(e.o), TermRef::Triple { .. });
+                        if is_dynamic_reifies {
+                            builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
+                        } else if reifier_ids.contains(&(e.graph, e.s)) {
+                            builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
+                        } else {
+                            builder.push_quad(e.s, e.p, e.o, e.graph.term());
+                        }
                     }
                 }
             }
-        }
 
-        if let Some(ids) = loss_term_ids
+            if let Some(ids) = loss_term_ids
             && !plan.dropped.is_empty()
             // A uniform graph VARIABLE that this row leaves unbound (or binds to
             // a non-IRI) skips the declaration exactly as it skips a statement:
             // the row emitted nothing into a graph, so there is no graph to
             // declare the loss in.
             && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)
-        {
-            emit_dropped_losses(
-                plan.dropped,
-                &dropped_ordinals,
-                row,
-                &mut builder,
-                ctx,
-                ids,
-                graph_id.term(),
-            );
+            {
+                emit_dropped_losses(
+                    plan.dropped,
+                    &dropped_ordinals,
+                    row,
+                    &mut builder,
+                    ctx,
+                    ids,
+                    graph_id.term(),
+                );
+            }
         }
-    }
+    })?;
 
     // Value-constructing builtins (`listSlice`/`listConcat`) invent fresh
     // `rdf:List` cells while the WHERE is evaluated. A SPARQL expression can only
@@ -696,9 +703,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
         }
     }
 
-    builder
-        .validate()
-        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed validation: {d:?}")))
+    builder.validate().map_err(EvalError::Dataset)
 }
 
 /// Blank-label bookkeeping for SPARQL §16.2 template freshness across one
@@ -1021,10 +1026,14 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
         | GraphPattern::PropertyFunction(_) => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             collect_where_triples(left, out);
             collect_where_triples(right, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                collect_where_triples(arm, out);
+            }
         }
         GraphPattern::LeftJoin { left, right, .. } => {
             collect_where_triples(left, out);

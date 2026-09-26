@@ -24,7 +24,8 @@ workspace = true
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
 # must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
 # parser). It builds on the two CLOSED foundation leaves `purrdf-iri` and
-# `purrdf-xsd` plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
+# `purrdf-xsd`, the `purrdf-stack` leaf its recursion guard measures the stack
+# with, plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
 # tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
 # rayon/ahash edges elsewhere); it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
@@ -45,6 +46,11 @@ purrdf-cdt = { workspace = true }
 # comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
 # gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.
 memchr = { workspace = true }
+# How much stack is left: the parser's one recursion guard refuses, typed, when a
+# request would nest deeper than the thread parsing it has stack for. A leaf with no
+# dependency of its own beyond the target-gated native stack-limit read, so the
+# front-end stays a wasm-clean leaf.
+purrdf-stack = { workspace = true }
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
@@ -61,6 +67,9 @@ criterion = { workspace = true }
 # own parser. Dev-only: never a runtime or release dependency, so the wasm gate
 # is unaffected.
 regex = { workspace = true }
+# The counting allocator `tests/chain_parse_is_linear.rs` measures a chain's parse
+# with. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 name = "tokenize"

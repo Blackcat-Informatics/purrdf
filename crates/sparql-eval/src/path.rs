@@ -19,9 +19,11 @@
 //! Every operator is structural recursion over the path expression:
 //!
 //! - `^p` (`Reverse`) flips the direction flag.
-//! - `p/q` (`Sequence`) chains: `reach(q, ·)` over each `reach(p, node)` (and the
-//!   order swaps under backward evaluation so predecessors compose correctly).
-//! - `p|q` (`Alternative`) unions both sub-relations.
+//! - `p1/p2/…` (`Sequence`, one node however long the chain) steps a frontier through
+//!   each element in turn, `reach(p2, ·)` over each `reach(p1, node)` and so on (in
+//!   reverse element order under backward evaluation, so predecessors compose
+//!   correctly).
+//! - `p1|p2|…` (`Alternative`) unions every element's sub-relation, in source order.
 //! - `p?` (`ZeroOrOne`) adds the zero-length identity `{node}`.
 //! - `p*`/`p+` (`ZeroOrMore`/`OneOrMore`) take the transitive closure with a
 //!   **visited-set guard on the endpoint frontier**, so cyclic graphs terminate.
@@ -160,6 +162,11 @@ fn collect_negated<D: DatasetView + Sync>(
     dataset: &D,
     cache: &mut NegatedCache<D::Id>,
 ) {
+    // Every walk over the path expression in this module runs inside `eval_path`'s
+    // `crate::stack::walk` scope, which discards the traversal when a level refuses.
+    if crate::stack::walk_is_low("property path") {
+        return;
+    }
     use PropertyPathExpression as P;
     match path {
         P::NegatedPropertySet(elems) => {
@@ -184,9 +191,10 @@ fn collect_negated<D: DatasetView + Sync>(
             collect_negated(i, dataset, cache);
         }
         P::Range { inner, .. } => collect_negated(inner, dataset, cache),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            collect_negated(a, dataset, cache);
-            collect_negated(b, dataset, cache);
+        P::Sequence(elements) | P::Alternative(elements) => {
+            for element in elements {
+                collect_negated(element, dataset, cache);
+            }
         }
         P::NamedNode(_) | P::Wildcard { .. } => {}
     }
@@ -213,6 +221,19 @@ fn collect_negated<D: DatasetView + Sync>(
 /// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
 /// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
 pub(crate) fn eval_path<D: DatasetView + Sync>(
+    subject: &TermPattern,
+    path: &PropertyPathExpression,
+    object: &TermPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    // Every traversal below recurses over the path expression, whose height the parser
+    // bounds by count, not by stack, and the path may be reached deep in the evaluation:
+    // each level may refuse, and this scope discards the whole traversal when one does.
+    crate::stack::walk(|| eval_path_traversal(subject, path, object, ctx))?
+}
+
+/// [`eval_path`]'s body, run inside its [`crate::stack::walk`] scope.
+fn eval_path_traversal<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
@@ -361,7 +382,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // query text by the SPARQL parser, a hand-built `Query` by
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
-                let term = ctx.scratch.intern(dataset, sval);
+                let term = ctx.scratch.try_intern(dataset, sval)?;
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -382,7 +403,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if path_is_reflexive(path) {
-                let term = ctx.scratch.intern(dataset, oval);
+                let term = ctx.scratch.try_intern(dataset, oval)?;
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -566,7 +587,10 @@ fn reach_cached<D: DatasetView + Sync>(
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> Rc<BTreeSet<D::Id>> {
-    if ctx.stopped() {
+    // The recursion over the path expression every set-semantics traversal goes through.
+    // The placeholder may be memoized, but only in this traversal's own `PathCtx`, which
+    // the enclosing `crate::stack::walk` scope in `eval_path` drops with it.
+    if ctx.stopped() || crate::stack::walk_is_low("property path") {
         return Rc::new(BTreeSet::new());
     }
     // `^inner` only flips the direction flag: its reach set IS `inner`'s set for the
@@ -606,20 +630,12 @@ fn reach_uncached<D: DatasetView + Sync>(
         // Handled in `reach_cached` before the memo probe (shares `inner`'s `Rc`);
         // kept here only so the match stays exhaustive for a direct caller.
         P::Reverse(inner) => reach_cached(inner, node, !forward, ctx).as_ref().clone(),
-        P::Sequence(a, b) => {
-            // Forward: step `a` then `b`. Backward (predecessors): step `b` then `a`,
-            // each backward — so the composition order swaps with the direction.
-            let (first, second): (&P, &P) = if forward { (a, b) } else { (b, a) };
+        P::Sequence(elements) => sequence_reach(elements, node, forward, ctx),
+        P::Alternative(elements) => {
             let mut out = BTreeSet::new();
-            let first_reach = reach_cached(first, node, forward, ctx);
-            for mid in first_reach.iter().copied() {
-                out.extend(reach_cached(second, mid, forward, ctx).iter().copied());
+            for element in elements {
+                out.extend(reach_cached(element, node, forward, ctx).iter().copied());
             }
-            out
-        }
-        P::Alternative(a, b) => {
-            let mut out = reach_cached(a, node, forward, ctx).as_ref().clone();
-            out.extend(reach_cached(b, node, forward, ctx).iter().copied());
             out
         }
         P::ZeroOrOne(inner) => {
@@ -639,6 +655,43 @@ fn reach_uncached<D: DatasetView + Sync>(
     }
 }
 
+/// The set of nodes a [`PropertyPathExpression::Sequence`] reaches from `node`: the
+/// frontier `{node}` stepped through each element in turn, forward in source order and
+/// backward (predecessors) in reverse order.
+///
+/// This is the left-nested binary chain's reach exactly. `Sequence(Sequence(a, b), c)`
+/// reaches the union over `mid ∈ reach(Sequence(a, b), node)` of `reach(c, mid)`, and
+/// unfolding the inner node the same way leaves `a`, `b`, `c` applied in turn to the
+/// frontier each produced; backward, the binary arm stepped its right side first, which
+/// unfolds to the elements in reverse. The element reaches it asks for are the ones the
+/// binary tree asked for, through the same memo, so the graph is read and the budget
+/// charged exactly as before. What the chain no longer has is a memo entry per prefix
+/// node: a backward walk whose frontiers meet at the same node for two start nodes
+/// merges that node's memoized element sets again rather than reading one prefix set.
+/// That is set work over sets already in memory, never another graph read, and the
+/// whole chain's own entry still answers any start node it has seen.
+fn sequence_reach<D: DatasetView + Sync>(
+    elements: &[PropertyPathExpression],
+    node: D::Id,
+    forward: bool,
+    ctx: &PathCtx<'_, D>,
+) -> BTreeSet<D::Id> {
+    let mut frontier = BTreeSet::from([node]);
+    for k in 0..elements.len() {
+        // A frontier that died stays dead: no later element can reach anything from it.
+        if frontier.is_empty() {
+            break;
+        }
+        let element = &elements[if forward { k } else { elements.len() - 1 - k }];
+        let mut next = BTreeSet::new();
+        for mid in frontier {
+            next.extend(reach_cached(element, mid, forward, ctx).iter().copied());
+        }
+        frontier = next;
+    }
+    frontier
+}
+
 /// Whether `path` admits the zero-length identity, i.e. `reach(path, n, …)` always
 /// contains `n` itself regardless of the graph. Mirrors the identity-insertion in
 /// [`reach`] exactly:
@@ -647,20 +700,23 @@ fn reach_uncached<D: DatasetView + Sync>(
 /// - `Range { min, .. }` — `range_reach` starts `current = {node}` at k=0 and emits
 ///   `current` into `out` as soon as `k >= min`; so `node` enters `out` iff `min == 0`.
 /// - `Reverse(inner)` — only flips the direction flag; reflexivity is preserved.
-/// - `Sequence(a, b)` — the zero-length identity passes through both sides, so both
-///   must individually admit the identity.
-/// - `Alternative(a, b)` — either sub-path suffices.
+/// - `Sequence(elements)` — the zero-length identity passes through every element, so
+///   each must individually admit the identity.
+/// - `Alternative(elements)` — any one element suffices.
 /// - Everything else (`NamedNode`, `OneOrMore`, `NegatedPropertySet`, `Wildcard`) is
 ///   non-reflexive: `OneOrMore` returns `closure` only (node is included iff it cycles
 ///   back to itself, which is not a static guarantee).
 fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
+    if crate::stack::walk_is_low("property path") {
+        return false;
+    }
     use PropertyPathExpression as P;
     match path {
         P::ZeroOrMore(_) | P::ZeroOrOne(_) => true,
         P::Range { min, .. } => *min == 0,
         P::Reverse(inner) => path_is_reflexive(inner),
-        P::Sequence(a, b) => path_is_reflexive(a) && path_is_reflexive(b),
-        P::Alternative(a, b) => path_is_reflexive(a) || path_is_reflexive(b),
+        P::Sequence(elements) => elements.iter().all(path_is_reflexive),
+        P::Alternative(elements) => elements.iter().any(path_is_reflexive),
         P::NamedNode(_) | P::OneOrMore(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
     }
 }
@@ -679,13 +735,32 @@ fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
 ///   cyclic/infinite graphs, and mandated even when the repetition is nested
 ///   under a combinator (e.g. `(:p/:q)+`).
 fn path_has_repetition(path: &PropertyPathExpression) -> bool {
+    // `true`, not `false`: the caller (`eval_path_traversal`) uses this answer to choose
+    // between `simple_reach_multiset` (valid ONLY for a repetition-free path — it
+    // `unreachable!()`s on `ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) and `reach_cached`
+    // (the ALP fixpoint, which every arm of `reach_uncached` handles, repetition or not).
+    // At low stack the true answer cannot be computed, so the safe default must be the one
+    // that keeps `eval_path_traversal` on the seam valid for EVERY path shape — `true`
+    // routes to `reach_cached`, never to the multiset path an unclassified answer could
+    // route incorrectly to a genuinely repeating path.
+    //
+    // This local answer, not a coincidence elsewhere, is what keeps
+    // `simple_reach_multiset`'s `unreachable!()` unreached: `reach_cached` (and the
+    // `closure`/`range_reach` it calls for repetition) also observe the same low stack and
+    // return an empty placeholder rather than recursing further, and the enclosing
+    // `crate::stack::walk` scope in `eval_path` discards that placeholder and reports the
+    // typed refusal — so nothing downstream of this answer ever computes over it, but the
+    // *routing decision itself* no longer depends on that discard to stay memory-safe.
+    if crate::stack::walk_is_low("property path") {
+        return true;
+    }
     use PropertyPathExpression as P;
     match path {
         P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => true,
         P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
         P::Reverse(inner) => path_has_repetition(inner),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            path_has_repetition(a) || path_has_repetition(b)
+        P::Sequence(elements) | P::Alternative(elements) => {
+            elements.iter().any(path_has_repetition)
         }
     }
 }
@@ -705,23 +780,43 @@ fn simple_reach_multiset<D: DatasetView + Sync>(
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> Vec<D::Id> {
+    // The bag-semantics twin of `reach_cached`'s recursion.
+    if crate::stack::walk_is_low("property path") {
+        return Vec::new();
+    }
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx).into_iter().collect(),
         P::Reverse(inner) => simple_reach_multiset(inner, node, !forward, ctx),
-        P::Sequence(a, b) => {
-            // Forward: step `a` then `b`. Backward: step `b` then `a`, each backward
-            // — same direction-swap `reach_uncached`'s `Sequence` arm applies.
-            let (first, second): (&P, &P) = if forward { (a, b) } else { (b, a) };
-            let mut out = Vec::new();
-            for mid in simple_reach_multiset(first, node, forward, ctx) {
-                out.extend(simple_reach_multiset(second, mid, forward, ctx));
+        P::Sequence(elements) => {
+            // The frontier `[node]` stepped through each element in turn — forward in
+            // source order, backward in reverse, the direction swap `sequence_reach`
+            // applies — keeping one entry per derivation. Stepping every entry of a
+            // frontier in order and concatenating what each reaches is the left-nested
+            // binary chain's nested loops unfolded: the same entries, with the same
+            // multiplicities, in the same order (each derivation ordered by its
+            // intermediate nodes, first hop first).
+            let mut frontier = vec![node];
+            for k in 0..elements.len() {
+                if frontier.is_empty() {
+                    break;
+                }
+                let element = &elements[if forward { k } else { elements.len() - 1 - k }];
+                let mut next = Vec::new();
+                for mid in frontier {
+                    next.extend(simple_reach_multiset(element, mid, forward, ctx));
+                }
+                frontier = next;
             }
-            out
+            frontier
         }
-        P::Alternative(a, b) => {
-            let mut out = simple_reach_multiset(a, node, forward, ctx);
-            out.extend(simple_reach_multiset(b, node, forward, ctx));
+        // Each element's derivations in turn, in source order: the left-nested chain's
+        // bag union, `(a ⊎ b) ⊎ c`, concatenated the same way.
+        P::Alternative(elements) => {
+            let mut out = Vec::new();
+            for element in elements {
+                out.extend(simple_reach_multiset(element, node, forward, ctx));
+            }
             out
         }
         P::NegatedPropertySet(elems) => step_negated(elems, node, forward, ctx)
@@ -1241,6 +1336,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
     use purrdf_sparql_algebra::{NamedNode, TriplePattern};
+    use std::cell::Cell;
 
     const EX: &str = "http://ex/";
 
@@ -1433,7 +1529,7 @@ mod tests {
     fn sequence_chains_two_predicates() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b"), ("x", "q", "c")]);
         // :a :p/:q ?o → b, c
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let rows = run(&ds, &ground("a"), &seq, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1442,7 +1538,7 @@ mod tests {
     fn sequence_backward_from_object() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b")]);
         // ?s :p/:q :b  → a
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let rows = run(&ds, &var("s"), &seq, &ground("b"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
@@ -1450,7 +1546,7 @@ mod tests {
     #[test]
     fn alternative_unions_both() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c")]);
-        let alt = PropertyPathExpression::Alternative(Box::new(named("p")), Box::new(named("q")));
+        let alt = PropertyPathExpression::Alternative(vec![named("p"), named("q")]);
         let rows = run(&ds, &ground("a"), &alt, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1503,7 +1599,7 @@ mod tests {
         // Cycle closed by a composite step: a -p-> x -q-> a. (p/q)+ from a must
         // terminate and report a (a reaches itself in one (p/q) application).
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "a")]);
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(seq.clone()));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["a"]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(seq));
@@ -2125,10 +2221,10 @@ mod tests {
         // Temporal-shaped: (:before | ^:after)+ — before-edges and reversed
         // after-edges, transitively. e1 before e2; e3 after e2 (so e2 ^after e3).
         let ds = graph_of(&[("e1", "before", "e2"), ("e3", "after", "e2")]);
-        let alt = PropertyPathExpression::Alternative(
-            Box::new(named("before")),
-            Box::new(PropertyPathExpression::Reverse(Box::new(named("after")))),
-        );
+        let alt = PropertyPathExpression::Alternative(vec![
+            named("before"),
+            PropertyPathExpression::Reverse(Box::new(named("after"))),
+        ]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(alt));
         // From e1: e1 -before-> e2 -^after-> e3.
         assert_eq!(reach_locals(&ds, &plus, "e1", true), vec!["e2", "e3"]);
@@ -2148,13 +2244,10 @@ mod tests {
         ]);
         // :axiom :members/:rest*/:first ?x → A, B, C
         let rest_star = PropertyPathExpression::ZeroOrMore(Box::new(named("rest")));
-        let path = PropertyPathExpression::Sequence(
-            Box::new(named("members")),
-            Box::new(PropertyPathExpression::Sequence(
-                Box::new(rest_star),
-                Box::new(named("first")),
-            )),
-        );
+        let path = PropertyPathExpression::Sequence(vec![
+            named("members"),
+            PropertyPathExpression::Sequence(vec![rest_star, named("first")]),
+        ]);
         let rows = run(&ds, &ground("axiom"), &path, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["A", "B", "C"]));
     }
@@ -2250,5 +2343,105 @@ mod tests {
             !message.contains("BGP"),
             "message must not claim this variable was found in a BGP: {message:?}"
         );
+    }
+
+    // ---- `path_has_repetition` at low stack ---------------------------------
+
+    /// Force `is_low()` true for the calling thread — the same
+    /// [`purrdf_stack::replace_floor`] technique `tests/evaluation_stack.rs` uses — run
+    /// `body` inside a [`purrdf_stack::walk`] scope (outside one, `walk_is_low` is
+    /// unconditionally `false`; see its doc), and restore the real floor afterwards.
+    /// `body` reports its own observations through a captured reference rather than a
+    /// return value, because [`purrdf_stack::walk`] discards the closure's return value
+    /// once a level inside it has refused — only side effects survive.
+    fn with_forced_low_stack(body: impl FnOnce()) {
+        let low_floor = purrdf_stack::stack_pointer().wrapping_sub(4096);
+        let real_floor = purrdf_stack::replace_floor(low_floor);
+        let outcome = purrdf_stack::walk(body);
+        purrdf_stack::replace_floor(real_floor);
+        assert!(
+            outcome.is_err(),
+            "the floor this test forced must actually be observed as low"
+        );
+    }
+
+    /// The low-stack guard's answer must default to `true` — "assume repetition" —
+    /// never `false`, for EVERY path shape, not only ones that truly repeat.
+    ///
+    /// `eval_path_traversal` uses this answer to route between `simple_reach_multiset`
+    /// (valid ONLY for a repetition-free path: it `unreachable!()`s on
+    /// `ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) and `reach_cached` (the ALP fixpoint,
+    /// which `reach_uncached` handles for every path shape). At low stack the true answer
+    /// cannot be computed, so the only answer that keeps the routing decision safe on its
+    /// own — not merely safe because a later, coincidental check also happens to catch
+    /// the low stack first — is the one that always selects `reach_cached`: `true`.
+    #[test]
+    fn path_has_repetition_defaults_to_true_when_the_stack_is_low() {
+        // A genuinely repetition-free path (would truly answer `false` with room to
+        // compute) and a genuinely repeating one: both must answer `true` once the stack
+        // is low, so the low-stack answer is not merely "whatever the real answer would
+        // have been happens to already be `true`".
+        let repetition_free = PropertyPathExpression::Sequence(vec![
+            named("p"),
+            PropertyPathExpression::NegatedPropertySet(vec![npe("q", false)]),
+        ]);
+        assert!(
+            !path_has_repetition(&repetition_free),
+            "sanity: with room to compute, this path truly has no repetition"
+        );
+        let repeating = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        assert!(
+            path_has_repetition(&repeating),
+            "sanity: with room to compute, this path truly does repeat"
+        );
+
+        let repetition_free_low = Cell::new(None);
+        let repeating_low = Cell::new(None);
+        with_forced_low_stack(|| {
+            repetition_free_low.set(Some(path_has_repetition(&repetition_free)));
+            repeating_low.set(Some(path_has_repetition(&repeating)));
+        });
+        assert_eq!(
+            repetition_free_low.get(),
+            Some(true),
+            "a repetition-free path must still answer the safe default `true` once the \
+             stack is low — the old `false` could route it to `simple_reach_multiset`, \
+             which is valid for it, but only by coincidence of the answer being correct"
+        );
+        assert_eq!(
+            repeating_low.get(),
+            Some(true),
+            "a genuinely repeating path must answer `true`, routing to `reach_cached` \
+             rather than `simple_reach_multiset`, which `unreachable!()`s on it"
+        );
+    }
+
+    /// End to end through the public [`eval_path`] entry: a repetition path forced to
+    /// evaluate with no stack left is the typed [`EvalError::StackExhausted`] — never a
+    /// panic, and never a wrong answer reported as complete.
+    ///
+    /// Before this fix, `path_has_repetition` answered `false` here (a repetition-free
+    /// path with no stack to compute the true answer), which would have routed this
+    /// `OneOrMore` path to `simple_reach_multiset` — the one path shape its match
+    /// arm cannot handle (`unreachable!()`). It stayed unreached only because
+    /// `simple_reach_multiset`'s own low-stack guard, observing the SAME scope-wide
+    /// latch `path_has_repetition`'s guard had already set, returns an empty placeholder
+    /// before ever reaching that arm — a fact about the shared walk scope, not about
+    /// `path_has_repetition`'s own answer. This test exercises the real, public seam
+    /// rather than relying on that coupling: whatever the routing decision, the outcome
+    /// here must be the typed refusal, never a panic.
+    #[test]
+    fn a_repetition_path_forced_low_refuses_typed_never_panics() {
+        let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
+        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let low_floor = purrdf_stack::stack_pointer().wrapping_sub(4096);
+        let real_floor = purrdf_stack::replace_floor(low_floor);
+        let mut ctx = EvalCtx::new(&ds);
+        let result = eval_path(&ground("a"), &plus, &var("o"), &mut ctx);
+        purrdf_stack::replace_floor(real_floor);
+        match result {
+            Err(EvalError::StackExhausted { .. }) => {}
+            other => panic!("expected the typed stack refusal, got {other:?}"),
+        }
     }
 }

@@ -794,7 +794,7 @@ pub struct PackDict {
 /// than this is malformed or hostile, and is rejected at decode so the recursive
 /// [`term_value`](PackDict::term_value)/`resolve` can never overflow the stack. Chosen
 /// far above any legitimate document yet well within a comfortable call-stack budget.
-const MAX_TRIPLE_TERM_DEPTH: usize = 128;
+pub(crate) const MAX_TRIPLE_TERM_DEPTH: usize = 128;
 
 impl PackDict {
     /// Scan `view`'s base quads and build the unified dictionary (see the

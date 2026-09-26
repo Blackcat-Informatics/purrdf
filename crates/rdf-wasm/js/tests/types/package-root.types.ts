@@ -3,6 +3,19 @@
 
 import {
   ready,
+  asyncYieldPrimitive,
+  configureAsync,
+  hasAsyncQueries,
+  ServiceCatalog,
+  type AsyncEntailmentQueryOutcome,
+  type AsyncEvidence,
+  type AsyncJobError,
+  type AsyncLoadResolver,
+  type AsyncQueryOutcome,
+  type AsyncServiceResolver,
+  type AsyncShaclOptions,
+  type AsyncUpdateOutcome,
+  type ServiceProfileJson,
   CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
@@ -34,6 +47,15 @@ import {
   type VisualExport,
   type VisualModel,
   type VisualSvgDocument,
+  shaclEntailAsync,
+  shaclPackProduct,
+  ShaclChangeValidation,
+  shaclProductValidateToSarifAsync,
+  shaclProductValidateToSarifExpectingAsync,
+  shaclProductValidateToSarifRebuildAsync,
+  shaclProductValidateToSarifRebuildExpectingAsync,
+  shaclValidateChangesToSarifAsync,
+  shaclValidateToSarifAsync,
 } from "@blackcatinformatics/purrdf";
 
 await ready();
@@ -222,6 +244,157 @@ const entailed: EntailmentQueryOutcome = engine.queryEntailmentGoverned(
 const entailmentPhase: "answered" | "closure-stopped" = entailed.phase;
 const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");
 
+// The asynchronous twins.
+const asyncAvailable: boolean = hasAsyncQueries();
+const yieldPrimitive: "scheduler.yield" | "setImmediate" | "MessageChannel" | undefined =
+  asyncYieldPrimitive();
+configureAsync({ maxConcurrentJobs: 8 });
+const profile: ServiceProfileJson = {
+  capabilities: ["query", "network"],
+  headers: [["X-Tenant", "a"]],
+  userAgent: "example-worker/1.0",
+  timeoutMs: 5_000,
+};
+const catalog = new ServiceCatalog();
+catalog.addService("https://example.org/sparql", JSON.stringify(profile));
+catalog.setFallback(JSON.stringify({ capabilities: [] }));
+const resolveService: AsyncServiceResolver = async (request, ctx) => {
+  const endpoint: string = request.endpoint;
+  const headers: [string, string][] = request.headers;
+  const silent: boolean = ctx.silent;
+  const cells: bigint | undefined = ctx.maxIntermediateCells;
+  const remaining: number | undefined = ctx.remainingDeadlineMs;
+  void endpoint;
+  void headers;
+  void silent;
+  void cells;
+  void remaining;
+  if (ctx.signal.aborted) return { kind: "transport", message: "aborted" };
+  return fetch(request.endpoint, {
+    method: "POST",
+    headers: [["content-type", request.contentType], ["accept", request.accept], ...headers],
+    body: request.queryText,
+    signal: ctx.signal,
+  });
+};
+const resolveLoad: AsyncLoadResolver = (request) =>
+  request.iri.endsWith(".ttl")
+    ? { text: "<https://example.org/s> <https://example.org/p> 1 .", mediaType: "text/turtle" }
+    : { kind: "denied", message: `not allowed: ${request.iri}` };
+const controller = new AbortController();
+const asyncResult: Promise<QueryResult> = engine.queryAsync(matched, "ASK { ?s ?p ?o }", {
+  resolveService,
+  signal: controller.signal,
+  catalog,
+  yieldEveryPolls: 1_024,
+  stackBytes: 4 * 1024 * 1024,
+});
+const asyncSelect: Promise<SelectResult> = engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", {
+  localServices: { "https://example.org/local": matched },
+});
+const asyncAsk: Promise<boolean> = engine.askAsync(matched, "ASK { ?s ?p ?o }", { base: "https://example.org/" });
+const asyncConstruct: Promise<Dataset> = engine.constructAsync(
+  matched,
+  "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+);
+const asyncDescribe: Promise<Dataset> = engine.describeAsync(matched, "DESCRIBE <https://example.org/s>");
+const asyncRaw: Promise<string> = engine.queryRawAsync(matched, "ASK { ?s ?p ?o }", {
+  format: "json",
+  provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
+});
+const asyncRawConfigured: Promise<string> = engine.queryRawAsync(
+  matched,
+  "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+  { format: "jsonld", optionsJson: JSON.stringify({ version: 1, mode: "derived" }) },
+);
+const asyncRawBytes: Promise<Uint8Array> = engine.queryRawBytesAsync(matched, "ASK { ?s ?p ?o }");
+const asyncRawWithContext: Promise<string> = engine.queryRawWithContextAsync(
+  matched,
+  "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+  "jsonld",
+  compiledContext,
+  { yamlSchemaUrl: null },
+);
+const asyncGoverned: AsyncQueryOutcome = await engine.queryGovernedAsync(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  { fuel: 100_000, deadlineMs: 250, maxRemoteRequests: 4, resolveService, signal: controller.signal },
+);
+const asyncExplained: Promise<string> = engine.explainQueryAsync(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  { base: "https://example.org/", resolveService, signal: controller.signal, yieldEveryPolls: 0 },
+);
+const shaclOptions: AsyncShaclOptions = {
+  resolveService,
+  signal: controller.signal,
+  yieldEveryPolls: 0,
+  localServices: { "https://example.org/local": matched },
+};
+const shaclShapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .";
+const shaclData = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .";
+const asyncSarif: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, null, shaclOptions);
+const asyncSarifBased: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, "https://example.org/");
+const asyncChange: Promise<ShaclChangeValidation> = shaclValidateChangesToSarifAsync(
+  shaclShapes,
+  shaclData,
+  shaclData,
+  null,
+  undefined,
+  { signal: AbortSignal.timeout(1_000) },
+);
+const asyncShaclEntailed: Promise<string> = shaclEntailAsync(shaclShapes, shaclData, undefined, shaclOptions);
+const shaclProduct: Uint8Array = shaclPackProduct(shaclShapes);
+const asyncProductSarif: Promise<string> = shaclProductValidateToSarifAsync(shaclProduct, shaclData, shaclOptions);
+const asyncProductRebuilt: Promise<string> = shaclProductValidateToSarifRebuildAsync(shaclProduct, shaclData);
+const asyncProductExpected: Promise<string> = shaclProductValidateToSarifExpectingAsync(
+  shaclProduct,
+  shaclData,
+  "0".repeat(64),
+  null,
+);
+const asyncProductRebuiltExpected: Promise<string> = shaclProductValidateToSarifRebuildExpectingAsync(
+  shaclProduct,
+  shaclData,
+  "0".repeat(64),
+  { yieldEveryPolls: 1_024 },
+);
+// @ts-expect-error — no synchronous SHACL entry takes a ceiling, so neither does its twin.
+void shaclValidateToSarifAsync(shaclShapes, shaclData, null, { fuel: 10 });
+const asyncEvidence: AsyncEvidence = asyncGoverned.evidence.async;
+const stackHighWater: number = asyncEvidence.stackHighWaterBytes;
+const asyncEntailed: AsyncEntailmentQueryOutcome = await engine.queryEntailmentGovernedAsync(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  "rdfs",
+  { fuel: 100_000, program: null },
+);
+const entailedEvidence: AsyncEvidence = asyncEntailed.evidence.async;
+const asyncUpdated: Promise<Dataset> = engine.updateAsync(
+  new Dataset(),
+  "LOAD <https://example.org/doc.ttl>",
+  { resolveLoad },
+);
+const asyncApplied: AsyncUpdateOutcome = await engine.updateGovernedAsync(
+  new Dataset(),
+  "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
+  { fuel: 100_000 },
+);
+const appliedEvidence: AsyncEvidence = asyncApplied.evidence.async;
+const datasetAsync: Promise<string> = matched.queryAsync("ASK { ?s ?p ?o }", { resolveService });
+const datasetId: number = matched.id;
+const datasetGeneration: number = matched.generation;
+// @ts-expect-error an asynchronous twin is cancelled through `signal`, never a token
+engine.queryAsync(matched, "ASK { ?s ?p ?o }", { cancel });
+// @ts-expect-error governor keys are accepted only by the governed asynchronous twins
+engine.queryAsync(matched, "ASK { ?s ?p ?o }", { fuel: 1 });
+// @ts-expect-error a typed twin returns no document, so it takes no format
+engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", { format: "json" });
+asyncResult.catch((error: AsyncJobError) => {
+  const evidence: AsyncEvidence = error.evidence.async;
+  void evidence;
+});
+
 const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");
 if (result.kind === "ask") {
   const narrowed: boolean = result.boolean;
@@ -264,3 +437,29 @@ void applied;
 void ledger;
 void rebuiltFromNull;
 void fromFactoryNull;
+void asyncAvailable;
+void yieldPrimitive;
+void asyncSelect;
+void asyncAsk;
+void asyncConstruct;
+void asyncDescribe;
+void asyncRaw;
+void asyncRawConfigured;
+void asyncRawBytes;
+void asyncExplained;
+void asyncSarif;
+void asyncSarifBased;
+void asyncChange;
+void asyncShaclEntailed;
+void asyncProductSarif;
+void asyncProductRebuilt;
+void asyncProductExpected;
+void asyncProductRebuiltExpected;
+void asyncRawWithContext;
+void stackHighWater;
+void entailedEvidence;
+void asyncUpdated;
+void appliedEvidence;
+void datasetAsync;
+void datasetId;
+void datasetGeneration;

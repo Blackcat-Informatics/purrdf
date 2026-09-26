@@ -1796,11 +1796,10 @@ fn whole_query(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .expect("the caller's own text evaluates as a whole query");
     match outcome {

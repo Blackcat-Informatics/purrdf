@@ -203,6 +203,9 @@ fn check_ground_term(t: &GroundTerm) -> Result<(), EvalError> {
 }
 
 fn check_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
+    // One level per algebra node, and a user-defined function's body is admitted wherever
+    // the call is evaluated: see `crate::stack`.
+    crate::stack::check("basic-profile admission")?;
     match pattern {
         GraphPattern::Bgp { patterns } => {
             for t in patterns {
@@ -217,12 +220,12 @@ fn check_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
             check_term_pattern(object)
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right } => {
             check_pattern(left)?;
             check_pattern(right)
         }
+        GraphPattern::Union { arms } => arms.iter().try_for_each(check_pattern),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -311,23 +314,28 @@ fn check_property_function(call: &PropertyFunctionCall) -> Result<(), EvalError>
 }
 
 fn check_expression(expr: &Expression) -> Result<(), EvalError> {
+    // See `check_pattern`.
+    crate::stack::check("basic-profile admission")?;
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => Ok(()),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            operands.iter().try_for_each(check_expression)
+        }
+        Expression::Arithmetic(first, steps) => {
+            check_expression(first)?;
+            steps
+                .iter()
+                .try_for_each(|(_, operand)| check_expression(operand))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             check_expression(a)?;
             check_expression(b)
         }

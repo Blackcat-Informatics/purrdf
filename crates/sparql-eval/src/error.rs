@@ -57,20 +57,16 @@ pub enum UnsupportedKind {
     /// `heldIn` was called with no caller-supplied standpoint-predicate
     /// configuration.
     HeldInUnconfigured,
-    /// A manually constructed graph pattern's nesting exceeds the parser's
-    /// safety bound.
-    GraphPatternDepthExceeded,
 }
 
 impl UnsupportedKind {
     /// Every variant, for a caller that needs to test an arbitrary diagnostic
     /// code for membership (e.g. `purrdf_rdf::capture_support::is_deferred_construct`)
     /// without re-enumerating the closed set itself.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 3] = [
         Self::QuotedTripleTermVariable,
         Self::CustomFunction,
         Self::HeldInUnconfigured,
-        Self::GraphPatternDepthExceeded,
     ];
 
     /// The stable, machine-readable diagnostic code this kind maps to at the
@@ -82,7 +78,6 @@ impl UnsupportedKind {
             Self::QuotedTripleTermVariable => "native-sparql-quoted-triple-term-variable",
             Self::CustomFunction => "native-sparql-custom-function",
             Self::HeldInUnconfigured => "native-sparql-heldin-unconfigured",
-            Self::GraphPatternDepthExceeded => "native-sparql-graph-pattern-depth-exceeded",
         }
     }
 }
@@ -103,8 +98,7 @@ pub enum EvalError {
     /// residue: a variable-bound quoted-triple-term component in a BGP or property-path
     /// pattern (structural triple-term matching is out of scope), an unresolved custom
     /// SPARQL function or aggregate IRI, `heldIn` called without a caller-supplied
-    /// standpoint-predicate configuration, a manually constructed graph pattern
-    /// whose nesting exceeds the parser's safety bound, and a query OR update
+    /// standpoint-predicate configuration, and a query OR update
     /// declaring an unrecognized prologue `VERSION` (SPARQL 1.2 Query specification
     /// §4.4; [`purrdf_sparql_algebra::SparqlVersion::Other`]) — parsing is
     /// syntax-only for `VERSION` and accepts any string, so an unrecognized one is
@@ -135,6 +129,15 @@ pub enum EvalError {
         kind: Option<UnsupportedKind>,
     },
 
+    /// What the request builds was refused by the dataset it builds into: a
+    /// `CONSTRUCT` graph is a frozen dataset, and a template that instantiates a
+    /// statement no dataset admits — a triple term nested past the dataset's limit,
+    /// say — is refused by that dataset's own admission. Carries its diagnostic, whose
+    /// code (`rdf-ir-triple-nesting-limit`, …) is the one the request's diagnostic
+    /// carries too ([`Self::code`]), exactly as an `UPDATE` that writes the same
+    /// statement is refused.
+    Dataset(purrdf_core::RdfDiagnostic),
+
     /// An internal invariant was violated — e.g. a solution row whose width does
     /// not match its schema. This indicates a bug in the evaluator, not bad input
     /// (a frozen, validated dataset and a parsed algebra cannot legitimately cause
@@ -163,6 +166,25 @@ pub enum EvalError {
     /// `crate::remote::evaluate_in_memory` hand it back as
     /// [`RemoteError::Denied`](crate::RemoteError::Denied), which `SILENT` never swallows.
     ServiceDenied(crate::service::ServiceDenial),
+
+    /// A [`ServiceResolver`](crate::ServiceResolver) refused a `SERVICE` request as its
+    /// own host-policy decision, with **no catalog capability** disclosed as the cause —
+    /// see [`crate::remote::RemoteError::HostDenied`], which this carries the fields of.
+    ///
+    /// Distinct from [`Self::ServiceDenied`] because the two are different facts and
+    /// conflating them would report a capability the host never named: [`Self::ServiceDenied`]
+    /// names a capability an installed [`ServiceCatalog`](crate::service::ServiceCatalog)
+    /// withheld; this variant is what a host resolver's own policy (a rate limit, an
+    /// allowlist the host keeps outside any catalog, …) refuses on its own, independent of
+    /// any catalog. Structurally distinct for the same reason [`Self::ServiceDenied`] is —
+    /// it must survive an in-process resolver's nested `SERVICE` body without decaying
+    /// into endpoint-failure text that `SERVICE SILENT` is entitled to swallow.
+    ServiceHostDenied {
+        /// The service IRI that was refused.
+        endpoint: String,
+        /// The host's own denial message, verbatim.
+        message: String,
+    },
 
     /// The dataset carries structurally malformed RDF that a builtin cannot
     /// interpret — e.g. a cyclic `rdf:List` (a cell reachable from itself) or a
@@ -286,6 +308,41 @@ pub enum EvalError {
     /// environment. Ranking under the flushed one would return different distances
     /// with nothing to say so, which is a silent divergence rather than an answer.
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+
+    /// The request nests deeper than the stack of the thread evaluating it can hold:
+    /// `construct` was about to be evaluated — or parsed a level deeper, when the parse
+    /// is the one that ran out ([`ParseError::StackExhausted`]) — with less than
+    /// [`purrdf_stack::MARGIN_BYTES`] of stack left, or the plan (`"query algebra"`) is
+    /// too tall for the walks over it to fit the stack its evaluation starts on.
+    ///
+    /// Its own variant because nothing about the request is malformed and nothing about
+    /// the data is wrong: the same request answers
+    /// on a thread with a larger stack (a native thread spawned with more, or a wasm
+    /// asynchronous job given a larger `stackBytes`). Refusing is what stands between an
+    /// admitted request and a crash — natively an aborted process, on wasm32 a trapped
+    /// instance whose memory can no longer be trusted — so this is never a partial
+    /// answer and never retried shallower: the request as written does not fit.
+    StackExhausted {
+        /// What was about to be evaluated — an algebra node, an expression, an `EXISTS`,
+        /// a correlated evaluation, a property path, a template term.
+        construct: &'static str,
+    },
+
+    /// On `wasm32`, the request nests deeper than the JavaScript engine's own call
+    /// stack holds: the parser's host-stack budget refused it
+    /// ([`ParseError::HostStackExhausted`]), or its graph patterns nest deeper than
+    /// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] levels, the depth that budget
+    /// admits (`construct` is then `"graph pattern"`). Never raised on another target.
+    ///
+    /// Its own variant rather than [`Self::StackExhausted`] because no stack a caller
+    /// sizes answers it: the engine's call stack is about 984 KiB under V8 on the
+    /// synchronous lane and on an asynchronous job's suspendable stack alike, and a
+    /// job's `stackBytes` sizes only the shadow stack in linear memory. The remedy is a
+    /// request nested less deeply.
+    HostStackExhausted {
+        /// The construct the budget stopped at.
+        construct: &'static str,
+    },
 }
 
 impl EvalError {
@@ -298,7 +355,7 @@ impl EvalError {
         }
     }
 
-    /// Construct a CLASSIFIED [`EvalError::Unsupported`] — used ONLY by the four
+    /// Construct a CLASSIFIED [`EvalError::Unsupported`] — used ONLY by the
     /// call sites producing the narrow, enumerated S6-deferral residue
     /// [`UnsupportedKind`]'s docs list. Every other unsupported construct stays
     /// [`EvalError::unsupported`].
@@ -322,9 +379,11 @@ impl EvalError {
         match self {
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
+            | Self::Dataset(_)
             | Self::Internal(_)
             | Self::Remote(_)
             | Self::ServiceDenied(_)
+            | Self::ServiceHostDenied { .. }
             | Self::Data(_)
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
@@ -332,6 +391,19 @@ impl EvalError {
             | Self::CompositeBound(_)
             | Self::FloatEnvironment(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
+            Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
+            Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
+        }
+    }
+
+    /// The machine-readable code this error carries to the `SparqlEngine` boundary:
+    /// [`Self::diagnostic_code`], or — for [`Self::Dataset`] — the dataset's own
+    /// diagnostic code.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Dataset(diagnostic) => Some(&diagnostic.code),
+            other => other.diagnostic_code(),
         }
     }
 
@@ -346,6 +418,19 @@ impl EvalError {
     /// `native-sparql-…` family as [`UnsupportedKind::code`]'s entries, so the whole
     /// code space stays one vocabulary.
     pub const RELATION_INCOMPLETE_CODE: &'static str = "native-sparql-relation-incomplete";
+
+    /// The stable, machine-readable diagnostic code [`Self::StackExhausted`] maps to at
+    /// the `SparqlEngine` boundary — the string a host compares against to tell "this
+    /// request nests deeper than this thread's stack" from every other evaluation
+    /// failure, and to know that a larger stack (not a different request) answers it.
+    pub const STACK_EXHAUSTED_CODE: &'static str = "native-sparql-evaluation-stack-exhausted";
+
+    /// The stable, machine-readable diagnostic code [`Self::HostStackExhausted`] maps to
+    /// at the `SparqlEngine` boundary — the string a host compares against to tell "this
+    /// request nests deeper than the JavaScript engine's call stack holds" from a stack a
+    /// caller can size ([`Self::STACK_EXHAUSTED_CODE`]): no lane and no `stackBytes`
+    /// answers it.
+    pub const HOST_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-host-stack-exhausted";
 
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
@@ -406,10 +491,21 @@ impl core::fmt::Display for EvalError {
             Self::Unsupported { what, .. } => {
                 write!(f, "unsupported in sparql-eval (S6 scope): {what}")
             }
+            Self::Dataset(diagnostic) => write!(
+                f,
+                "the dataset this request builds refused it: {}",
+                diagnostic.message
+            ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::ServiceDenied(denial) => {
                 write!(f, "SERVICE federation denied: {denial}")
+            }
+            Self::ServiceHostDenied { endpoint, message } => {
+                write!(
+                    f,
+                    "SERVICE <{endpoint}>: the host denied the request: {message}"
+                )
             }
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
             Self::ExistsScopeCollision { variable, intro } => write!(
@@ -434,6 +530,31 @@ impl core::fmt::Display for EvalError {
                 "the thread's floating-point environment cannot run the distance \
                  arithmetic: {error}"
             ),
+            Self::StackExhausted { construct } => {
+                write!(
+                    f,
+                    "evaluation stack exhausted: the request's nesting exceeds what this \
+                     host's stack can evaluate ({construct} needs more stack than this \
+                     thread has left above its {}-byte reserve)",
+                    purrdf_stack::MARGIN_BYTES
+                )?;
+                // A wasm caller has no thread to spawn: each wasm lane names its own remedy.
+                if cfg!(target_arch = "wasm32") {
+                    Ok(())
+                } else {
+                    f.write_str("; run it on a thread with a larger stack")
+                }
+            }
+            Self::HostStackExhausted { construct } => write!(
+                f,
+                "host call stack budget exceeded: the request's {construct} nests deeper \
+                 than the JavaScript engine's own call stack holds ({} bytes of it are \
+                 budgeted for a request, {} nested graph patterns at most, the same on the \
+                 synchronous and the asynchronous lane; a larger stackBytes does not raise \
+                 it); nest the request less deeply",
+                purrdf_sparql_algebra::WASM_HOST_STACK_BUDGET,
+                purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH
+            ),
         }
     }
 }
@@ -441,8 +562,18 @@ impl core::fmt::Display for EvalError {
 impl std::error::Error for EvalError {}
 
 impl From<ParseError> for EvalError {
+    /// A parse that ran out of stack is [`EvalError::StackExhausted`], with the
+    /// diagnostic code a host reads to know a larger stack answers the request; one past
+    /// the host-stack budget is [`EvalError::HostStackExhausted`]; every other parse
+    /// failure is [`EvalError::Parse`].
     fn from(err: ParseError) -> Self {
-        Self::Parse(err.to_string())
+        match err {
+            ParseError::StackExhausted { construct, .. } => Self::StackExhausted { construct },
+            ParseError::HostStackExhausted { construct, .. } => {
+                Self::HostStackExhausted { construct }
+            }
+            other => Self::Parse(other.to_string()),
+        }
     }
 }
 
@@ -496,5 +627,67 @@ mod tests {
         assert_eq!(EvalError::function("x").diagnostic_code(), None);
         assert_eq!(EvalError::config("x").diagnostic_code(), None);
         assert_eq!(EvalError::Parse("x".to_owned()).diagnostic_code(), None);
+    }
+
+    /// A stack refusal carries its own code and names the construct it stopped at.
+    #[test]
+    fn stack_exhausted_carries_its_code_and_names_the_construct() {
+        let e = EvalError::StackExhausted {
+            construct: "FILTER EXISTS",
+        };
+        assert_eq!(
+            e.diagnostic_code(),
+            Some("native-sparql-evaluation-stack-exhausted")
+        );
+        assert!(e.to_string().contains("FILTER EXISTS"), "{e}");
+        assert!(e.to_string().contains("evaluation stack exhausted"), "{e}");
+        // Natively the remedy is a thread with a larger stack.
+        assert!(
+            e.to_string()
+                .ends_with("; run it on a thread with a larger stack"),
+            "{e}"
+        );
+    }
+
+    /// The host-stack refusal has its own code, and its message names the budget and
+    /// no larger stack as a remedy: no stack a caller sizes raises it. The parser's
+    /// refusal converts to it, and the shadow-stack one does not.
+    #[test]
+    fn host_stack_exhausted_carries_its_own_code_and_names_no_larger_stack() {
+        let e = EvalError::HostStackExhausted {
+            construct: "graph pattern",
+        };
+        assert_eq!(
+            e.diagnostic_code(),
+            Some("native-sparql-host-stack-exhausted")
+        );
+        let text = e.to_string();
+        assert!(text.contains("graph pattern"), "{text}");
+        assert!(text.contains("655360 bytes"), "{text}");
+        assert!(text.contains("284 nested graph patterns"), "{text}");
+        assert!(
+            text.contains("a larger stackBytes does not raise it"),
+            "{text}"
+        );
+        assert!(text.ends_with("nest the request less deeply"), "{text}");
+        assert!(!text.contains("thread"), "{text}");
+        assert_eq!(
+            EvalError::from(ParseError::HostStackExhausted {
+                construct: "bracketted expression",
+                at: 3,
+            }),
+            EvalError::HostStackExhausted {
+                construct: "bracketted expression"
+            }
+        );
+        assert_eq!(
+            EvalError::from(ParseError::StackExhausted {
+                construct: "bracketted expression",
+                at: 3,
+            }),
+            EvalError::StackExhausted {
+                construct: "bracketted expression"
+            }
+        );
     }
 }

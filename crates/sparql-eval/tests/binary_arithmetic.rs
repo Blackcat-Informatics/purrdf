@@ -260,10 +260,7 @@ fn stddev_is_the_correctly_rounded_square_root_of_the_variance() {
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(STAT_NS);
     let env = ExtensionEnv::over_aggregates(registry).expect("the statistical set reads cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     // About one double in four thousand has a square root that rounds twice through 64
     // bits; this window holds two (`k` = 17 327 and 18 933).
     let groups = 17_000..=19_000_u32;

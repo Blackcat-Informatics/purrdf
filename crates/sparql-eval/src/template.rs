@@ -194,6 +194,11 @@ pub(crate) fn instantiate_ground_term(
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
 ) -> Option<TermValue> {
+    // One level per nested triple term. Every caller runs this inside a
+    // `crate::stack::walk` scope, which discards the placeholder.
+    if crate::stack::walk_is_low("template term") {
+        return None;
+    }
     match term {
         TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
         TermPattern::Literal(l) => Some(literal_to_value(l)),
@@ -232,6 +237,10 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Option<TermValue> {
+    // See `instantiate_ground_term`.
+    if crate::stack::walk_is_low("template term") {
+        return None;
+    }
     match term {
         TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
         TermPattern::Literal(l) => Some(literal_to_value(l)),

@@ -1642,6 +1642,12 @@ fn write_file_without_following_symlink(
                 let result = (|| {
                     file.write_all(data)
                         .map_err(|e| format!("write {temp:?}: {e}"))?;
+                    // Closed before the rename below, which some platforms refuse on an
+                    // open file. On wasm32 `File` is an uninhabited stub with no `Drop`.
+                    #[cfg_attr(
+                        target_arch = "wasm32",
+                        allow(clippy::drop_non_drop, reason = "wasm32's File stub has no Drop")
+                    )]
                     drop(file);
                     prepare_replace_target(target, archive_path)?;
                     fs::rename(&temp, target).map_err(|e| format!("replace {target:?}: {e}"))?;

@@ -28,10 +28,16 @@
 //!
 //! # Hard-fail vs SILENT
 //!
-//! With no source configured, a variable endpoint, a transport error, or an
-//! undecodable response: a **non-silent** `SERVICE` raises [`EvalError::Remote`]
-//! (the query aborts), while `SERVICE SILENT` swallows the failure to the join
-//! identity (one empty row) so the surrounding query proceeds unchanged.
+//! With no source configured, a transport error, or an undecodable response: a
+//! **non-silent** `SERVICE` raises [`EvalError::Remote`] (the query aborts), while
+//! `SERVICE SILENT` swallows the failure to the join identity (one empty row) so the
+//! surrounding query proceeds unchanged.
+//!
+//! A variable endpoint (`SERVICE ?e`) is evaluated once per distinct IRI `?e` is bound
+//! to — see [`crate::service_endpoints`] for the shapes that bind it. One that no solution
+//! binds is not an endpoint failure but this engine's refusal, so it is an
+//! [`EvalError::Unsupported`] that `SILENT` does not swallow: `SILENT` tolerates an
+//! endpoint that fails, not a query that names none.
 //!
 //! A [`RemoteError::Denied`] is the exception, and belongs with the governors below
 //! rather than with the endpoint failures above: it is a refusal decided on *this* side
@@ -100,6 +106,16 @@ pub enum RemoteError {
     Decode(String),
     /// Federation is disabled for this source.
     Disabled,
+    /// No source is configured that could reach this endpoint: the engine was given
+    /// nowhere to send the request — e.g. a host that answers some endpoints in process
+    /// and supplied no handler for the rest. Carries the host's explanation.
+    ///
+    /// **Not silenceable**: `SILENT` tolerates an endpoint that fails, and no endpoint
+    /// was reached. This is a fact about how the engine was configured, the same fault
+    /// as evaluating a `SERVICE` with no source at all, and swallowing it to the join
+    /// identity would answer as if an endpoint had been consulted and had imposed
+    /// nothing.
+    Unconfigured(String),
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
     ///
@@ -118,6 +134,32 @@ pub enum RemoteError {
     /// inside a forwarded body can be recognized and re-raised as this variant instead of
     /// decaying into a silenceable endpoint failure.
     Denied(ServiceDenial),
+    /// A [`ServiceResolver`] refused the service by its own policy, with **no catalog
+    /// capability** to name as the cause — e.g. a host resolver's own rules (a rate
+    /// limit, an allowlist the host keeps outside any installed
+    /// [`ServiceCatalog`](crate::service::ServiceCatalog), …)
+    /// rather than a withheld [`ServiceCapability`](crate::service::ServiceCapability).
+    ///
+    /// Its own variant rather than folded into [`Self::Denied`], because [`Self::Denied`]
+    /// carries a [`ServiceDenial`] naming a specific withheld capability — that is a fact
+    /// about the *catalog's* configuration, and reusing it here would invent a capability
+    /// cause the host never stated. Reported instead as "the host denied the request",
+    /// which is exactly what is known: a decision, not a reason drawn from policy this
+    /// engine can see.
+    ///
+    /// **Not silenceable**, for the identical reason [`Self::Denied`] is not: the refusal
+    /// is decided on this side of the seam, deterministically, before any endpoint was
+    /// consulted, so it is grouped with the governors rather than the endpoint failures.
+    /// Structured (not folded into a formatted [`EvalError::Remote`]) so a denial raised
+    /// by a nested `SERVICE` inside a forwarded body survives being recognized and
+    /// re-raised as this variant rather than decaying into a silenceable endpoint failure —
+    /// see [`Self::Denied`]'s identical concern.
+    HostDenied {
+        /// The service IRI that was refused.
+        endpoint: String,
+        /// The host's own denial message, verbatim.
+        message: String,
+    },
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
     ///
@@ -134,6 +176,23 @@ pub enum RemoteError {
     /// response removes the positional-prefix/resumption claim even though the lower
     /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
     GovernedAfterCompletion(TrippedGovernor),
+    /// An in-process source ran out of stack parsing or evaluating the forwarded body:
+    /// the [`EvalError::StackExhausted`] of that evaluation, or the
+    /// [`purrdf_sparql_algebra::ParseError::StackExhausted`] of its re-parse, naming the
+    /// construct.
+    ///
+    /// **Not silenceable**, for the reason [`Self::Denied`] is not: no endpoint failed.
+    /// The body nests deeper than the stack of the thread evaluating it can hold, which
+    /// is a fact about this host, and swallowing it to the join identity would make the
+    /// surrounding join a no-op on exactly the requests that nest deepest.
+    StackExhausted(&'static str),
+    /// On `wasm32`, an in-process source's forwarded body nests deeper than the
+    /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
+    /// evaluation, or the [`purrdf_sparql_algebra::ParseError::HostStackExhausted`] of
+    /// its re-parse, naming the construct.
+    ///
+    /// **Not silenceable**, for the reason [`Self::StackExhausted`] is not.
+    HostStackExhausted(&'static str),
 }
 
 impl core::fmt::Display for RemoteError {
@@ -142,10 +201,20 @@ impl core::fmt::Display for RemoteError {
             Self::Transport(m) => write!(f, "transport: {m}"),
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
+            Self::Unconfigured(m) => write!(f, "{m}"),
             Self::Denied(denial) => write!(f, "denied: {denial}"),
+            Self::HostDenied { endpoint, message } => {
+                write!(f, "<{endpoint}>: the host denied the request: {message}")
+            }
             Self::Governed(governor) => write!(f, "governed: {governor}"),
             Self::GovernedAfterCompletion(governor) => {
                 write!(f, "governed after completed exchange: {governor}")
+            }
+            Self::StackExhausted(construct) => {
+                write!(f, "{}", EvalError::StackExhausted { construct })
+            }
+            Self::HostStackExhausted(construct) => {
+                write!(f, "{}", EvalError::HostStackExhausted { construct })
             }
         }
     }
@@ -189,8 +258,11 @@ pub struct ServiceRequest<'a> {
     /// The executing query's stop signal, or `None` when the caller set neither a
     /// deadline nor a cancellation. See [`ServiceResolver::resolve`].
     pub stop: Option<&'a Arc<dyn StopSignal>>,
-    /// The executing query's inclusive peak intermediate-cell ceiling, when one is
-    /// engaged. See [`ServiceResolver::resolve`].
+    /// The executing query's inclusive peak intermediate-cell ceiling, when the caller
+    /// actually configured one. `None` both when the dimension is unbounded and when it
+    /// is engaged only by [`QueryGovernors::METERED`]'s bookkeeping sentinel (an
+    /// ungoverned query, or a governed one that set no cell ceiling) — never that
+    /// sentinel value itself. See [`ServiceResolver::resolve`].
     pub max_intermediate_cells: Option<u64>,
 }
 
@@ -347,6 +419,12 @@ pub trait ServiceResolver {
 /// deeply nested) are both still searched, which is what closes the bypass
 /// where a written `LATERAL` sits inside a `SERVICE ?g { … }` auto-wrap.
 fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
+    // A walk over the whole forwarded body, from a `SERVICE` that may be deep. Neither
+    // answer is conservative (one refuses with a reason that would be false), so the
+    // walk runs in [`eval_service`]'s `crate::stack::walk` scope, which discards this.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return false;
+    }
     if let GraphPattern::Lateral { left, right } = pattern {
         let parser_reconstructs_it = matches!(
             right.as_ref(),
@@ -380,6 +458,10 @@ fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
 /// [`pattern_reaches_lateral`] through an expression's embedded patterns
 /// (an `EXISTS`'s inner pattern, recursively).
 fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    // See `pattern_reaches_lateral`.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return false;
+    }
     let mut found = false;
     crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
         found |= match part {
@@ -456,6 +538,13 @@ fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool 
 /// transitively: a ground quoted triple containing a blank node ANYWHERE in its
 /// subject/object tree is stripped exactly like a bare blank-node cell.
 fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
+    // A copy of the whole forwarded body: see `pattern_reaches_lateral`. The placeholder
+    // is discarded by [`eval_service`]'s `crate::stack::walk` scope.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return GraphPattern::Bgp {
+            patterns: Vec::new(),
+        };
+    }
     match pattern {
         // Leaves with no child pattern and no `Values` cells to inspect.
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
@@ -467,7 +556,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             object,
         } => GraphPattern::Path {
             subject: subject.clone(),
-            path: path.clone(),
+            path: crate::stack::clone::path(path),
             object: object.clone(),
         },
         GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
@@ -499,19 +588,18 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::LeftJoin {
             left: Box::new(sanitize_forwarded_body(left)),
             right: Box::new(sanitize_forwarded_body(right)),
-            expression: expression.clone(),
+            expression: expression.as_ref().map(crate::stack::clone::expression),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
             left: Box::new(sanitize_forwarded_body(left)),
             right: Box::new(sanitize_forwarded_body(right)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: expr.clone(),
+            expr: crate::stack::clone::expression(expr),
             inner: Box::new(sanitize_forwarded_body(inner)),
         },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(sanitize_forwarded_body(left)),
-            right: Box::new(sanitize_forwarded_body(right)),
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms.iter().map(sanitize_forwarded_body).collect(),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
@@ -524,7 +612,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Extend {
             inner: Box::new(sanitize_forwarded_body(inner)),
             variable: variable.clone(),
-            expression: expression.clone(),
+            expression: crate::stack::clone::expression(expression),
         },
         GraphPattern::Unfold {
             inner,
@@ -533,7 +621,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             companion,
         } => GraphPattern::Unfold {
             inner: Box::new(sanitize_forwarded_body(inner)),
-            expression: expression.clone(),
+            expression: crate::stack::clone::expression(expression),
             element: element.clone(),
             companion: companion.clone(),
         },
@@ -552,7 +640,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
             inner: Box::new(sanitize_forwarded_body(inner)),
-            expression: expression.clone(),
+            expression: expression.iter().map(crate::stack::clone::order).collect(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
             inner: Box::new(sanitize_forwarded_body(inner)),
@@ -580,7 +668,10 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Group {
             inner: Box::new(sanitize_forwarded_body(inner)),
             variables: variables.clone(),
-            aggregates: aggregates.clone(),
+            aggregates: aggregates
+                .iter()
+                .map(|(variable, call)| (variable.clone(), crate::stack::clone::aggregate(call)))
+                .collect(),
         },
     }
 }
@@ -650,17 +741,112 @@ fn strip_blank_columns(
 /// original row count, and an emptied block is the join identity only when that count is
 /// the single row Values-Insertion always injects — a hypothetical zero-row all-columns
 /// block (the empty relation, `FALSE`) is NOT the identity and must not be collapsed away.
+///
+/// A block joined beside a filtered pattern is moved beneath its filters where that
+/// changes no answer — see [`sink_values_under_filters`].
 fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphPattern {
     if is_join_identity_values(&right) {
         left
     } else if is_join_identity_values(&left) {
         right
+    } else if matches!(left, GraphPattern::Filter { .. })
+        && matches!(right, GraphPattern::Values { .. })
+    {
+        sink_values_under_filters(left, right)
     } else {
         GraphPattern::Join {
             left: Box::new(left),
             right: Box::new(right),
         }
     }
+}
+
+/// `Join(Filter(…Filter(x, e1)…, eN), values)` — the shape Values Insertion builds when it
+/// joins a one-row `VALUES` block beside a filtered pattern — rewritten so the block sits
+/// beneath the filters: `Filter(…Filter(Join(x, values), e1)…, eN)`.
+///
+/// # Why
+///
+/// The forwarded text. A `FILTER` constrains its whole group, so the first shape can only
+/// be written with the filtered pattern braced as a group of its own — one nesting level
+/// per wrapper, each a level of the parser's recursion — and a body the parser admitted
+/// could be forwarded as text needing twice its stack. The second is written flat, as the
+/// source was.
+///
+/// # Why the answer does not change
+///
+/// The block moves beneath a filter only when the filter mentions none of its variables
+/// (counting every variable of an `EXISTS` pattern inside it): such a filter reads nothing
+/// the join adds, so joining before or after it keeps the same rows. The first filter that
+/// does mention one stops the descent. Below it, the block is dropped rather than joined
+/// again when the pattern there already joins the identical one-row, fully bound block at
+/// the root of its own filter chain — the shape Values Insertion builds for a filter that
+/// reads the variable itself: every row there already binds each of the block's
+/// variables to the block's own value, so joining the block again is the identity.
+fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> GraphPattern {
+    let GraphPattern::Values {
+        variables: block_vars,
+        ..
+    } = &values
+    else {
+        return GraphPattern::Join {
+            left: Box::new(filtered),
+            right: Box::new(values),
+        };
+    };
+    let mut conditions = Vec::new();
+    let mut rest = filtered;
+    loop {
+        match rest {
+            GraphPattern::Filter { expr, inner } if !mentions_any(&expr, block_vars) => {
+                conditions.push(expr);
+                rest = *inner;
+            }
+            other => {
+                rest = other;
+                break;
+            }
+        }
+    }
+    let mut pattern = if joins_identical_block(&rest, &values) {
+        rest
+    } else {
+        GraphPattern::Join {
+            left: Box::new(rest),
+            right: Box::new(values),
+        }
+    };
+    for expr in conditions.into_iter().rev() {
+        pattern = GraphPattern::Filter {
+            expr,
+            inner: Box::new(pattern),
+        };
+    }
+    pattern
+}
+
+/// Whether `expr` mentions any of `vars`, an `EXISTS` pattern's variables included.
+fn mentions_any(expr: &purrdf_sparql_algebra::Expression, vars: &[Variable]) -> bool {
+    let mut mentioned = crate::DetHashSet::default();
+    crate::expr::expr_vars(expr, &mut mentioned);
+    vars.iter().any(|v| mentioned.contains(v))
+}
+
+/// Whether `pattern`, below its own chain of filters, is `Join(_, values)` with `values`
+/// a one-row block binding every one of its variables — so every row of `pattern` already
+/// binds them to exactly the block's values. See [`sink_values_under_filters`].
+fn joins_identical_block(pattern: &GraphPattern, values: &GraphPattern) -> bool {
+    let GraphPattern::Values { bindings, .. } = values else {
+        return false;
+    };
+    if bindings.len() != 1 || bindings[0].iter().any(Option::is_none) {
+        return false;
+    }
+    let mut cur = pattern;
+    while let GraphPattern::Filter { inner, .. } = cur {
+        cur = inner;
+    }
+    matches!(cur, GraphPattern::Join { right, .. } if **right == *values)
 }
 
 /// See [`join_dropping_empty_values`].
@@ -679,8 +865,10 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Remote`] for a non-silent failure (no source, variable
-/// endpoint, transport/decode error).
+/// Returns [`EvalError::Remote`] for a non-silent failure (no source, transport/decode
+/// error, a variable endpoint bound to a non-IRI), and [`EvalError::Unsupported`] — under
+/// `SILENT` too — for a variable endpoint no solution binds (see
+/// [`crate::service_endpoints`]).
 ///
 /// # Under a truncation
 ///
@@ -697,7 +885,6 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let _ = node;
     // A `LATERAL` clause inside a forwarded body is refused ONLY under `SERVICE
     // SILENT` — scoped to the hazard it actually guards against, the same
     // treatment the custom-scalar-function refusal further down gets, rather than
@@ -712,7 +899,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // `EvalError::Remote` from one that rejects it — surfaces exactly as it does
     // for any other forwarded construct the remote might not support, so the body
     // (including its `LATERAL { … }` text) is forwarded rather than refused.
-    if silent && pattern_reaches_lateral(inner) {
+    if silent && crate::stack::walk(|| pattern_reaches_lateral(inner))? {
         return Err(EvalError::unsupported(
             "a LATERAL clause inside a SERVICE SILENT body: LATERAL is a SEP-0006/Jena syntax \
              extension most remote SPARQL endpoints do not implement, and SILENT would swallow \
@@ -787,26 +974,30 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
              honest remote failure instead",
         ));
     }
-    // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
-    // resolution, which the engine defers — so it is a hard error unless SILENT.
+    // Resolve the endpoint IRI. A variable endpoint still unresolved here was not
+    // substituted by a `LATERAL` (a pattern earlier in the same group), so it is answered
+    // over the endpoints an enclosing group join, `OPTIONAL` or `MINUS` lists for it — or
+    // refused, under `SILENT` too: `SILENT` tolerates an endpoint that fails, and a
+    // clause no solution names an endpoint for has not reached one. Swallowing that to
+    // the join identity would return an answer that looks complete when nothing was
+    // asked. See `crate::service_endpoints`.
     let endpoint = match name {
         NamedNodePattern::NamedNode(n) => n.as_str().to_owned(),
-        NamedNodePattern::Variable(_) => {
-            return silent_or_err(silent, || {
-                "SERVICE with a variable endpoint is not supported (needs lateral evaluation)"
-                    .to_owned()
-            })
-            .map(Evaluated::Complete);
+        NamedNodePattern::Variable(variable) => {
+            return crate::service_endpoints::eval_variable_endpoint(node, variable, silent, ctx);
         }
     };
 
     // `Option<&dyn _>` is `Copy`, so this does NOT borrow `ctx` — leaving `&mut
     // ctx` free for interning the result below.
+    // No source: the engine was given nowhere to send the request. That is how the
+    // engine was configured, not an endpoint that failed, so it is refused under `SILENT`
+    // too — the join identity would claim an endpoint had been consulted.
     let Some(source) = ctx.remote else {
-        return silent_or_err(silent, || {
-            format!("no remote query source configured for SERVICE <{endpoint}>")
-        })
-        .map(Evaluated::Complete);
+        return Err(unconfigured(
+            silent,
+            format!("no remote query source configured for SERVICE <{endpoint}>"),
+        ));
     };
 
     // Poll the stop signal immediately before dispatch. The node-entry poll happens before
@@ -846,17 +1037,21 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // dropping it (never refusing, never emitting the illegal `_:` cell) is the sound,
     // maximal-utility fix. Local evaluation never runs this: it walks `inner` fresh, not
     // the sanitized copy.
-    let sanitized = sanitize_forwarded_body(inner);
-    let query_text = purrdf_sparql_algebra::pattern_to_select_query(&sanitized);
+    // Copying and serializing the body both walk all of it; see `sanitize_forwarded_body`.
+    let query_text = crate::stack::walk(|| {
+        let sanitized = sanitize_forwarded_body(inner);
+        purrdf_sparql_algebra::pattern_to_select_query(&sanitized)
+    })?;
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
-    let max_intermediate_cells = ctx.governor_state().and_then(|state| {
-        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
-        state
-            .is_engaged_in(dimension)
-            .then(|| state.limits().get(dimension))
-    });
+    // `caller_ceiling`, never `is_engaged_in` + `limits().get(..)`: the latter pair
+    // reports `QueryGovernors::METERED`'s bookkeeping sentinel as if it were a ceiling
+    // the caller had set, and a resolver sizing a remote `LIMIT` from that would be
+    // sizing it off a number that means "measure this, bound nothing".
+    let max_intermediate_cells = ctx
+        .governor_state()
+        .and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
     let response = source.resolve(
         ServiceRequest::new(&endpoint, &query_text)
             .silent(silent)
@@ -913,6 +1108,32 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         Err(RemoteError::Denied(denial)) => {
             return Err(EvalError::ServiceDenied(denial));
         }
+        // The host's own resolver refused it with no catalog capability to name — same
+        // non-silenceable precedence as the capability denial above, and for the same
+        // reason: decided on this side of the seam before any endpoint was consulted.
+        // Kept a distinct arm (rather than folded into the one above) so the reported
+        // cause is never a capability the host never stated.
+        Err(RemoteError::HostDenied { endpoint, message }) => {
+            return Err(EvalError::ServiceHostDenied { endpoint, message });
+        }
+        // The forwarded body ran out of stack inside an in-process source: not the
+        // endpoint's failure, so — like a denial — never swallowed under `SILENT`, and
+        // re-raised as the same typed refusal it was, however deep the nesting of
+        // in-process sources that carried it out.
+        Err(RemoteError::StackExhausted(construct)) => {
+            return Err(EvalError::StackExhausted { construct });
+        }
+        Err(RemoteError::HostStackExhausted(construct)) => {
+            return Err(EvalError::HostStackExhausted { construct });
+        }
+        // The source has nothing that reaches this endpoint: the same configuration
+        // fault as no source at all, and refused under `SILENT` the same way.
+        Err(RemoteError::Unconfigured(message)) => {
+            return Err(unconfigured(
+                silent,
+                format!("SERVICE <{endpoint}>: {message}"),
+            ));
+        }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
             // endpoint failure is deliberately erased, so the stop becomes the surviving
@@ -928,11 +1149,24 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         }
     };
 
-    let (seq, tripped) = ingest(resolved, ctx);
+    let (seq, tripped) = ingest(resolved, ctx)?;
     Ok(match tripped {
         None => Evaluated::Complete(seq),
         Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
     })
+}
+
+/// The refusal for a `SERVICE` the engine has no source to send to: [`EvalError::Remote`]
+/// with `message`, which under `SILENT` also says why `SILENT` does not apply.
+fn unconfigured(silent: bool, message: String) -> EvalError {
+    if silent {
+        EvalError::remote(format!(
+            "{message}; SILENT does not apply: it tolerates an endpoint that fails, and no \
+             endpoint was reached — configure a remote query source for it"
+        ))
+    } else {
+        EvalError::remote(message)
+    }
 }
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the
@@ -962,7 +1196,7 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
 /// Returns the interned bag together with the governor that stopped the ingest, if one
-/// did: the `remote-row-ingested` charge point is charged per row **as it is interned**,
+/// did (or the stack refusal of a triple term deeper than the evaluation can hold): the `remote-row-ingested` charge point is charged per row **as it is interned**,
 /// so an unbounded remote response cannot walk past the caller's ceilings by arriving
 /// from outside the dataset. Charging in row order makes the ingested prefix a positional
 /// prefix of the endpoint's answer, which is what lets the caller certify it.
@@ -980,7 +1214,7 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 fn ingest<D: DatasetView + Sync>(
     resolved: ResolvedBindings,
     ctx: &mut EvalCtx<'_, D>,
-) -> (SolutionSeq<D::Id>, Option<TrippedGovernor>) {
+) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
     let ResolvedBindings {
         variables,
         rows: resolved_rows,
@@ -1006,7 +1240,7 @@ fn ingest<D: DatasetView + Sync>(
             }
             crate::row_ingest::RowAdmission::Admitted => {}
         }
-        let row = ingest.intern_row(ctx, binding);
+        let row = ingest.intern_row(ctx, binding)?;
         rows.push(row);
     }
     if tripped.is_none()
@@ -1014,23 +1248,31 @@ fn ingest<D: DatasetView + Sync>(
     {
         tripped = ctx.observe_cell_count(attempted_cells).err();
     }
-    (SolutionSeq { schema, rows }, tripped)
+    Ok((SolutionSeq { schema, rows }, tripped))
 }
 
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
 ///
 /// Everything the inner evaluation can fail with is, from the OUTER query's point of view,
-/// this endpoint failing to produce a decodable answer — with exactly one exception. A
+/// this endpoint failing to produce a decodable answer — with exactly two exceptions. A
 /// nested `SERVICE` clause resolved through the same (gated) resolver raises
-/// [`EvalError::ServiceDenied`], and that is a refusal decided on this side of the seam,
-/// not an endpoint that did not answer. It must cross back as
-/// [`RemoteError::Denied`] so `eval_service` classifies it identically at every depth: a
-/// denial `SERVICE SILENT` never swallows. Mapping it to [`RemoteError::Decode`] would
-/// make a nested denial silenceable when the same denial one level up is not, and the
-/// resulting answer would look complete, be wrong, and be wrong the same way on every run.
+/// [`EvalError::ServiceDenied`] (a withheld catalog capability) or
+/// [`EvalError::ServiceHostDenied`] (the host's own refusal, no capability to name), and
+/// both are a refusal decided on this side of the seam, not an endpoint that did not
+/// answer. Each must cross back as its own [`RemoteError`] variant — [`RemoteError::Denied`]
+/// or [`RemoteError::HostDenied`] respectively — so `eval_service` classifies it
+/// identically, with the same wording, at every depth: neither denial `SERVICE SILENT`
+/// ever swallows. Mapping either to [`RemoteError::Decode`] would make a nested denial
+/// silenceable when the same denial one level up is not, and the resulting answer would
+/// look complete, be wrong, and be wrong the same way on every run.
 fn remote_error_for(error: EvalError) -> RemoteError {
     match error {
         EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
+        EvalError::ServiceHostDenied { endpoint, message } => {
+            RemoteError::HostDenied { endpoint, message }
+        }
+        EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
+        EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
         other => RemoteError::Decode(other.to_string()),
     }
 }
@@ -1053,13 +1295,28 @@ pub(crate) fn evaluate_in_memory(
         max_intermediate_cells,
         ..
     } = request;
+    // The re-parse runs at whatever depth the `SERVICE` sits, so it can run out of stack
+    // on a body the parser admitted higher up. That is this host's stack, not the endpoint:
+    // the same stack refusal the body's evaluation would raise, never a decode failure
+    // `SILENT` could swallow into the join identity.
     let parsed = purrdf_sparql_algebra::SparqlParser::new()
         .parse_query(query_text)
-        .map_err(|e| RemoteError::Decode(e.to_string()))?;
+        .map_err(|e| match e {
+            purrdf_sparql_algebra::ParseError::StackExhausted { construct, .. } => {
+                RemoteError::StackExhausted(construct)
+            }
+            purrdf_sparql_algebra::ParseError::HostStackExhausted { construct, .. } => {
+                RemoteError::HostStackExhausted(construct)
+            }
+            other => RemoteError::Decode(other.to_string()),
+        })?;
     // Evaluated here without the engine's admission, so the one rewrite admission
     // makes that changes answers rather than refusing — a blank node label shared by
     // two pieces of one basic graph pattern is one variable — is applied here too.
-    let parsed = crate::blank_scope::join_shared_blanks_in_query(&parsed).unwrap_or(parsed);
+    // A walk over the whole forwarded body, at whatever depth the `SERVICE` sits.
+    let parsed = crate::stack::walk(|| crate::blank_scope::join_shared_blanks_in_query(&parsed))
+        .map_err(remote_error_for)?
+        .unwrap_or(parsed);
     let mut ctx = EvalCtx::new(dataset).with_remote(nested);
     if stop.is_some() || max_intermediate_cells.is_some() {
         let mut governors = QueryGovernors::UNBOUNDED;
@@ -1243,6 +1500,84 @@ mod tests {
                 vec!["<http://ex/a>".to_owned(), "<http://ex/y>".to_owned()],
             ]
         );
+    }
+
+    // ── `RemoteError::HostDenied`: a raw host policy refusal, no catalog capability ────
+
+    #[test]
+    fn a_host_denial_nested_inside_a_forwarded_body_reaches_the_outer_seam_intact() {
+        const OUTER_EP: &str = "http://ep/outer";
+        const INNER_EP: &str = "http://ep/inner";
+
+        /// Forwards `OUTER_EP`'s body in-process (so the nested `SERVICE <INNER_EP>`
+        /// inside it is resolved through `self` again, exactly as
+        /// [`InProcessServiceResolver`] routes a nested clause), and refuses `INNER_EP`
+        /// itself with a raw host-policy denial — no catalog capability to name, the
+        /// shape [`RemoteError::HostDenied`] exists for.
+        struct DenyingInner;
+        impl ServiceResolver for DenyingInner {
+            fn resolve(
+                &self,
+                request: ServiceRequest<'_>,
+            ) -> Result<ResolvedBindings, RemoteError> {
+                if request.endpoint == INNER_EP {
+                    return Err(RemoteError::HostDenied {
+                        endpoint: request.endpoint.to_owned(),
+                        message: "tenant blocked".to_owned(),
+                    });
+                }
+                evaluate_in_memory(&local(), request, &Self)
+            }
+        }
+
+        for silent in [false, true] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {}<{OUTER_EP}> {{ \
+                 SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}",
+                if silent { "SILENT " } else { "" },
+            );
+            let err = run_with_source(&local(), &DenyingInner, &query)
+                .expect_err("a nested host denial must survive intact, SILENT or not");
+            let message = err.to_string();
+            assert!(
+                message.contains("the host denied the request: tenant blocked"),
+                "silent={silent}: {message}"
+            );
+            assert!(
+                !message.contains("withholds"),
+                "silent={silent}: a raw host denial must never read as a catalog-capability \
+                 one: {message}"
+            );
+            match err {
+                EvalError::ServiceHostDenied { endpoint, .. } => assert_eq!(endpoint, INNER_EP),
+                other => panic!("expected ServiceHostDenied, got {other:?}"),
+            }
+        }
+
+        // The neighbouring VALID case: the identical nested shape, but the inner
+        // endpoint answers instead of being denied — proving the denial above is about
+        // the denial, not about nested `SERVICE` never working through this resolver.
+        struct BothForward;
+        impl ServiceResolver for BothForward {
+            fn resolve(
+                &self,
+                request: ServiceRequest<'_>,
+            ) -> Result<ResolvedBindings, RemoteError> {
+                let ds = if request.endpoint == INNER_EP {
+                    endpoint()
+                } else {
+                    local()
+                };
+                evaluate_in_memory(&ds, request, &Self)
+            }
+        }
+        let query = format!(
+            "SELECT ?n WHERE {{ SERVICE <{OUTER_EP}> {{ \
+             SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}"
+        );
+        let result = run_with_source(&local(), &BothForward, &query)
+            .expect("the identical nested shape answers when the inner endpoint is not denied");
+        assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
     }
 
     #[test]
@@ -1939,6 +2274,78 @@ mod tests {
         );
     }
 
+    /// A `ServiceResolver` wrapper that records the ceiling each request it was handed
+    /// carried, then delegates. What a test asserts against, never a raw governor limit:
+    /// a resolver only ever sees a [`ServiceRequest`], so that is what must be checked.
+    struct RecordingSource<'a> {
+        inner: &'a (dyn ServiceResolver + Sync),
+        seen: Mutex<Vec<Option<u64>>>,
+    }
+
+    impl<'a> RecordingSource<'a> {
+        fn new(inner: &'a (dyn ServiceResolver + Sync)) -> Self {
+            Self {
+                inner,
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn seen(&self) -> Vec<Option<u64>> {
+            self.seen.lock().expect("uncontended").clone()
+        }
+    }
+
+    impl ServiceResolver for RecordingSource<'_> {
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+            self.seen
+                .lock()
+                .expect("uncontended")
+                .push(request.max_intermediate_cells);
+            self.inner.resolve(request)
+        }
+    }
+
+    #[test]
+    fn resolver_never_sees_the_metering_sentinel_as_a_caller_ceiling() {
+        // Neighbour case one — the one this test exists to catch: `METERED` alone is
+        // exactly what an ungoverned `queryAsync` and a `queryGovernedAsync` that sets
+        // only a deadline both run under (see `GovernorArgs::ceilings` in `purrdf-wasm`).
+        // It engages the intermediate-cell dimension for bookkeeping, but no caller
+        // configured a ceiling, so the resolver must see `None` — never `METERED`'s
+        // `u64::MAX - 1` sentinel handed over as if it were a real bound.
+        let fixture = FixtureSource::new(3);
+        let recording = RecordingSource::new(&fixture);
+        let run = run_governed(
+            &service_pattern(false),
+            &recording,
+            &QueryGovernors::METERED,
+        );
+        assert_eq!(run.tripped, None, "the metering run must complete");
+        assert_eq!(run.rows, 3);
+        assert_eq!(
+            recording.seen(),
+            vec![None],
+            "an unconfigured cell ceiling must never reach a resolver as a value"
+        );
+
+        // Neighbour case two: a caller who DID narrow the ceiling must still see the
+        // exact number they set. Proving case one drops the sentinel is worthless if the
+        // fix also drops every real ceiling — this is the control that shows it did not.
+        let fixture = FixtureSource::new(3);
+        let recording = RecordingSource::new(&fixture);
+        let run = run_governed(
+            &service_pattern(false),
+            &recording,
+            &QueryGovernors::METERED.with_max_intermediate_cells(5000),
+        );
+        assert_eq!(run.tripped, None);
+        assert_eq!(
+            recording.seen(),
+            vec![Some(5000)],
+            "a caller-configured ceiling must reach the resolver exactly"
+        );
+    }
+
     #[test]
     fn a_transport_error_under_silent_still_yields_the_join_identity() {
         // The regression guard: `SILENT` is about the endpoint, and an unreachable
@@ -2157,5 +2564,218 @@ mod tests {
             sanitized, leaf,
             "an all-columns-stripped injected Values must collapse out of the Join entirely"
         );
+    }
+
+    /// A one-row block binding `?t` to a quoted triple — a cell Values Insertion joins in
+    /// because no expression constant can spell it, and one sanitizing keeps.
+    fn triple_block() -> GraphPattern {
+        let iri = |local: &str| NamedNode::new_unchecked(format!("http://ex/{local}"));
+        GraphPattern::Values {
+            variables: vec![Variable::new("t")],
+            bindings: vec![vec![Some(GroundTerm::Triple(Box::new(GroundTriple {
+                subject: GroundTerm::NamedNode(iri("a")),
+                predicate: iri("knows"),
+                object: GroundTerm::NamedNode(iri("x")),
+            })))]],
+        }
+    }
+
+    /// `pattern` with `block` joined beside every filter whose inner pattern is itself
+    /// filtered — the shape Values Insertion builds for an outer filter reading `?t` —
+    /// and, when `inner_reads` is set, beneath every inner filter too (the shape it builds
+    /// for a filter reading `?t` itself).
+    fn inject(pattern: &GraphPattern, block: &GraphPattern, inner_reads: bool) -> GraphPattern {
+        match pattern {
+            GraphPattern::Filter { expr, inner } => {
+                let inner = inject(inner, block, inner_reads);
+                let inner = match inner {
+                    GraphPattern::Filter { expr, inner } => {
+                        let inner = if inner_reads {
+                            GraphPattern::Join {
+                                left: inner,
+                                right: Box::new(block.clone()),
+                            }
+                        } else {
+                            *inner
+                        };
+                        GraphPattern::Join {
+                            left: Box::new(GraphPattern::Filter {
+                                expr,
+                                inner: Box::new(inner),
+                            }),
+                            right: Box::new(block.clone()),
+                        }
+                    }
+                    other => other,
+                };
+                GraphPattern::Filter {
+                    expr: expr.clone(),
+                    inner: Box::new(inner),
+                }
+            }
+            GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+                name: name.clone(),
+                inner: Box::new(inject(inner, block, inner_reads)),
+            },
+            GraphPattern::Join { left, right } => GraphPattern::Join {
+                left: Box::new(inject(left, block, inner_reads)),
+                right: Box::new(inject(right, block, inner_reads)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// `n` nested `GRAPH` groups, each filtered twice; the outer filter reads `?t`, the
+    /// inner one reads it only when `inner_reads` is set.
+    fn doubly_filtered_body(n: usize, inner_reads: bool) -> GraphPattern {
+        let inner_filter = if inner_reads {
+            "!BOUND(?t)"
+        } else {
+            "?o != <http://ex/x>"
+        };
+        let mut body = "?s <http://ex/knows> ?o".to_owned();
+        for _ in 0..n {
+            body = format!(
+                "GRAPH <http://ex/g> {{ ?s <http://ex/knows> ?o {body} \
+                 FILTER({inner_filter}) FILTER(!BOUND(?t)) }}"
+            );
+        }
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ {body} }}"))
+            .expect("the source body is admitted");
+        let purrdf_sparql_algebra::Query::Select {
+            pattern: GraphPattern::Project { inner, .. },
+            ..
+        } = query
+        else {
+            panic!("a SELECT with its projection");
+        };
+        *inner
+    }
+
+    /// Whether the parser admits `pattern`'s forwarded text.
+    fn forwarded_text_is_admitted(pattern: &GraphPattern) -> Result<(), String> {
+        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&text)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Whether the parser admits `pattern`'s forwarded text with exactly `bytes` of
+    /// stack left (to within one 4 KiB frame), measured with the guard's own
+    /// [`purrdf_stack::remaining`] rather than trusting the size a thread asked for.
+    fn admitted_with_stack_left(pattern: &GraphPattern, bytes: usize) -> bool {
+        fn descend(bytes: usize, text: &str) -> bool {
+            if purrdf_stack::remaining() <= bytes {
+                return purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(text)
+                    .is_ok();
+            }
+            let frame = core::hint::black_box([0_u8; 4096]);
+            let admitted = descend(bytes, text);
+            core::hint::black_box(&frame);
+            admitted
+        }
+        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        std::thread::Builder::new()
+            .stack_size(bytes + 1024 * 1024)
+            .spawn(move || descend(bytes, &text))
+            .expect("spawn")
+            .join()
+            .expect("the parsing thread returned rather than aborting")
+    }
+
+    /// The least stack left, to within 4 KiB, on which the parser admits `pattern`'s
+    /// forwarded text.
+    fn stack_to_admit(pattern: &GraphPattern) -> usize {
+        let (mut lo, mut hi) = (0_usize, 64 * 1024 * 1024);
+        assert!(admitted_with_stack_left(pattern, hi), "admitted on 64 MiB");
+        while hi - lo > 4096 {
+            let mid = lo.midpoint(hi);
+            if admitted_with_stack_left(pattern, mid) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        hi
+    }
+
+    #[test]
+    fn a_block_joined_beside_filters_is_forwarded_beneath_them_and_admitted() {
+        // 120 nested groups, admitted as written. Joined beside each group's filters, the
+        // block would force a brace per group — twice the nesting — and on the stack the
+        // flat text needs, that text is refused; moved beneath the filters, which do not
+        // read `?t`, it is written flat.
+        let injected = inject(&doubly_filtered_body(120, false), &triple_block(), false);
+        let sanitized = sanitize_forwarded_body(&injected);
+        forwarded_text_is_admitted(&sanitized).expect("forwarded beneath the filters");
+        assert!(
+            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            "the block beside the filters needs more stack than beneath them"
+        );
+        // The one level's shape: the block is joined to the triple, under both filters.
+        let GraphPattern::Graph { inner, .. } = &sanitized else {
+            panic!("the outermost group is a GRAPH");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the outer filter stays outermost");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the inner filter is directly beneath it");
+        };
+        assert!(
+            matches!(&**inner, GraphPattern::Join { right, .. } if **right == triple_block()),
+            "the block is joined beneath both filters: {inner:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_a_filter_reads_is_not_moved_past_it_and_is_joined_once() {
+        // The inner filter reads `?t`, so Values Insertion joined the block beneath it as
+        // well: the outer block stops at that filter, where every row already binds `?t`
+        // to the block's value, and joining it again there would be the identity.
+        let injected = inject(&doubly_filtered_body(120, true), &triple_block(), true);
+        let sanitized = sanitize_forwarded_body(&injected);
+        forwarded_text_is_admitted(&sanitized).expect("forwarded without the repeated block");
+        assert!(
+            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            "the block beside the reading filter needs more stack than the text without it"
+        );
+        let GraphPattern::Graph { inner, .. } = &sanitized else {
+            panic!("the outermost group is a GRAPH");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the outer filter stays outermost");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the reading filter is directly beneath it, not behind a second block");
+        };
+        assert!(
+            matches!(&**inner, GraphPattern::Join { right, .. } if **right == triple_block()),
+            "the reading filter keeps its own block: {inner:?}"
+        );
+
+        // The valid neighbour of the move: a block that a filter reads, with nothing
+        // beneath that filter binding it, stays beside the filter — moving it would bind
+        // `?t` for a filter that saw it unbound.
+        let reader = GraphPattern::Filter {
+            expr: purrdf_sparql_algebra::Expression::Bound(Variable::new("t")),
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/knows",
+                    )),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+        };
+        let beside = GraphPattern::Join {
+            left: Box::new(reader),
+            right: Box::new(triple_block()),
+        };
+        assert_eq!(sanitize_forwarded_body(&beside), beside);
     }
 }

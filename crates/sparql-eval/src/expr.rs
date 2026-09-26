@@ -35,7 +35,9 @@ use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfTextDirection, TermRef, TermValue,
     ViewTermId,
 };
-use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
+use purrdf_sparql_algebra::{
+    ArithmeticOperator, Expression, Function, GraphPattern, PurrdfFn, Variable,
+};
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
     numeric_round, numeric_unary_plus, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div,
@@ -64,6 +66,10 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    // Every node is one level of this recursion — an operator chain is one node, its
+    // operands folded by a loop — and the tree is as tall as the stack that parsed it
+    // held, which is not the stack evaluating it takes: see `crate::stack`.
+    crate::stack::check("expression")?;
     match expr {
         // ---- atoms ---------------------------------------------------------
         Expression::NamedNode(n) => Ok(const_atom(ctx, expr, || {
@@ -76,25 +82,24 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
         // ---- logical (Kleene three-valued) --------------------------------
-        Expression::Or(a, b) => {
-            let va = ebv_of(a, row, schema, ctx)?;
-            let vb = ebv_of(b, row, schema, ctx)?;
-            let r = match (va, vb) {
-                (Some(true), _) | (_, Some(true)) => Some(true),
-                (Some(false), Some(false)) => Some(false),
-                _ => None,
-            };
-            Ok(r.map(|b| bool_term(ctx, b)))
+        // A chain is the left fold of the binary operator, which evaluates both of
+        // its operands, left then right, before combining them: so every operand is
+        // evaluated, in order, a hard error stops the chain at the first operand that
+        // raises one, and the value is the fold of `kleene_or`/`kleene_and` from the
+        // operator's identity — the value the left-nested binary tree has.
+        Expression::Or(operands) => {
+            let mut value = Some(false);
+            for operand in operands {
+                value = kleene_or(value, ebv_of(operand, row, schema, ctx)?);
+            }
+            Ok(value.map(|b| bool_term(ctx, b)))
         }
-        Expression::And(a, b) => {
-            let va = ebv_of(a, row, schema, ctx)?;
-            let vb = ebv_of(b, row, schema, ctx)?;
-            let r = match (va, vb) {
-                (Some(false), _) | (_, Some(false)) => Some(false),
-                (Some(true), Some(true)) => Some(true),
-                _ => None,
-            };
-            Ok(r.map(|b| bool_term(ctx, b)))
+        Expression::And(operands) => {
+            let mut value = Some(true);
+            for operand in operands {
+                value = kleene_and(value, ebv_of(operand, row, schema, ctx)?);
+            }
+            Ok(value.map(|b| bool_term(ctx, b)))
         }
         Expression::Not(a) => {
             let v = ebv_of(a, row, schema, ctx)?;
@@ -181,10 +186,7 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         // operands, overflow, divide-by-zero, and the indeterminate-timezone
         // instant-difference case) → Ok(None), NOT Err. A hard EvalError would
         // propagate out of FILTER and break the query; Ok(None) just drops the row.
-        Expression::Add(a, b) => binary_value(a, b, row, schema, ctx, value_add),
-        Expression::Subtract(a, b) => binary_value(a, b, row, schema, ctx, value_sub),
-        Expression::Multiply(a, b) => binary_value(a, b, row, schema, ctx, value_mul),
-        Expression::Divide(a, b) => binary_value(a, b, row, schema, ctx, value_div),
+        Expression::Arithmetic(first, steps) => arithmetic_chain(first, steps, row, schema, ctx),
         Expression::UnaryPlus(a) => unary_numeric(a, row, schema, ctx, numeric_unary_plus),
         Expression::UnaryMinus(a) => unary_numeric(a, row, schema, ctx, value_unary_minus),
 
@@ -394,10 +396,25 @@ fn lookup<I: ViewTermId>(
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the value is a triple term nested deeper than the
+/// evaluation can keep stack for (see [`crate::stack::admit_term`]).
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    ctx.scratch.try_intern_checked(ctx.dataset, value)
+}
+
+/// Intern a value that is no triple term — a constant atom the query wrote, a literal a
+/// string function built — so there is no depth to admit (see [`intern`]).
+fn intern_leaf<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
+    debug_assert!(!matches!(value, TermValue::Triple { .. }));
     ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
@@ -437,13 +454,13 @@ fn const_atom<D: DatasetView + Sync>(
     // here would silently return a stale, wrong-row constant. Bypass the cache
     // entirely for the duration of that window.
     if ctx.in_substituted_exists {
-        return intern(ctx, build());
+        return intern_leaf(ctx, build());
     }
     let key = std::ptr::from_ref::<Expression>(expr) as usize;
     if let Some(term) = ctx.const_atom_cache.get(&key) {
         return *term;
     }
-    let term = intern(ctx, build());
+    let term = intern_leaf(ctx, build());
     ctx.const_atom_cache.insert(key, term);
     term
 }
@@ -976,8 +993,10 @@ fn is_literal(v: &TermValue) -> bool {
 /// an earlier task's revert-check confirmed as much: the widened
 /// `Expression::Exists` arm below is VESTIGIAL for correlation detection today.
 /// Its one live purpose is column preservation: `substitute_pattern_impl`'s
-/// `Filter`/`Extend`/`LeftJoin`/`OrderBy`/`Group` arms call this function to build
-/// the `free` set handed to `wrap_with_expr_term_only_values`, which decides which
+/// `Filter`/`Extend`/`LeftJoin`/`OrderBy`/`Group` arms build the `free` set handed
+/// to `wrap_with_expr_term_only_values` from it (through [`Deferral`], which takes a
+/// deferred nested body's widened set from its site, computed once by this same
+/// walk, rather than walking the body per row), which decides which
 /// outer bindings need joining in as a one-row `VALUES` table before the
 /// expression evaluates. A variable this walk includes past a real `Project`
 /// boundary that `analyze_pattern` would have excluded costs nothing there: a
@@ -989,24 +1008,29 @@ fn is_literal(v: &TermValue) -> bool {
 /// between. Do not "optimize away" the widened `Exists` arm on the mistaken
 /// assumption it still drives the correlation decision, and do not double-trust it
 /// against `analyze_pattern`'s output — the two are allowed to differ.
-fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
+pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
             out.insert(v.clone());
         }
         Expression::NamedNode(_) | Expression::Literal(_) => {}
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                expr_vars(operand, out);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            expr_vars(first, out);
+            for (_, operand) in steps {
+                expr_vars(operand, out);
+            }
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             expr_vars(a, out);
             expr_vars(b, out);
         }
@@ -1099,7 +1123,24 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// `analyze_pattern(P).free_vars` for the same `P` — see [`expr_vars`]'s doc for
 /// why that one-directional divergence is safe for this walk's actual consumer.
 pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    pattern_vars_outside(pattern, None, out);
+}
+
+/// [`pattern_all_vars`], except that a `SERVICE ?endpoint { … }` clause on `endpoint`
+/// contributes nothing — neither its endpoint variable nor its body — when `endpoint` is
+/// given: what the rest of `pattern` mentions. A variable absent from that set is bound
+/// by nothing in `pattern` but those clauses, whose bodies never bind their own endpoint
+/// (see `crate::service_endpoints`). An `EXISTS` body is walked whole, as
+/// [`expr_vars`] walks it: a superset, which only ever reports a mention.
+pub(crate) fn pattern_vars_outside(
+    pattern: &GraphPattern,
+    endpoint: Option<&Variable>,
+    out: &mut DetHashSet<Variable>,
+) {
     use purrdf_sparql_algebra::NamedNodePattern;
+
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::VarWalked);
 
     match pattern {
         GraphPattern::Bgp { patterns } => {
@@ -1129,20 +1170,27 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
             if let NamedNodePattern::Variable(v) = name {
                 out.insert(v.clone());
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Service { name, inner, .. } => {
             if let NamedNodePattern::Variable(v) = name {
+                if endpoint == Some(v) {
+                    return;
+                }
                 out.insert(v.clone());
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right } => {
-            pattern_all_vars(left, out);
-            pattern_all_vars(right, out);
+            pattern_vars_outside(left, endpoint, out);
+            pattern_vars_outside(right, endpoint, out);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                pattern_vars_outside(arm, endpoint, out);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -1152,12 +1200,12 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
             if let Some(e) = expression {
                 expr_vars(e, out);
             }
-            pattern_all_vars(left, out);
-            pattern_all_vars(right, out);
+            pattern_vars_outside(left, endpoint, out);
+            pattern_vars_outside(right, endpoint, out);
         }
         GraphPattern::Filter { expr, inner } => {
             expr_vars(expr, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Extend {
             inner,
@@ -1166,7 +1214,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
         } => {
             out.insert(variable.clone());
             expr_vars(expression, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Unfold {
             inner,
@@ -1179,7 +1227,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                 out.insert(companion.clone());
             }
             expr_vars(expression, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::OrderBy { inner, expression } => {
             for oe in expression {
@@ -1188,7 +1236,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                     | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, out),
                 }
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Group {
             inner,
@@ -1206,14 +1254,14 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                     expr_vars(arg, out);
                 }
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => pattern_all_vars(inner, out),
+        | GraphPattern::Slice { inner, .. } => pattern_vars_outside(inner, endpoint, out),
         GraphPattern::Project { inner, variables } => {
             out.extend(variables.iter().cloned());
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
     }
 }
@@ -1452,34 +1500,106 @@ fn exists_use_probe(
 /// `crate::enf`'s module doc, "Governed truncation") and never trusted as the
 /// EXISTS's real answer (the barrier makes the enclosing operator withhold its
 /// whole output, so the boolean returned here is never observed by a caller).
+///
+/// # Inside a substituted copy
+///
+/// A nested `EXISTS` the substitution walk left as a placeholder is answered by
+/// [`exists_deferred`], which substitutes the body it stands for — once, for this row —
+/// rather than by preparing the placeholder: see `crate::deferred_exists`.
 fn exists<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
-    let prepared = ctx.prepared_exists(pattern);
-    let (normalized, witness_wrapped, analysis, free_vars, stateful, ledger_source) =
-        match prepared.as_ref() {
-            // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
-            // every μ — the whole EXISTS is constant `false`, no evaluation needed.
-            crate::eval::PreparedExists::FoldedFalse => return Ok(false),
-            crate::eval::PreparedExists::Pattern {
-                normalized,
-                witness_wrapped,
-                analysis,
-                free_vars,
-                stateful,
-                ledger_source,
-            } => (
-                normalized,
-                witness_wrapped,
-                analysis,
-                free_vars,
-                *stateful,
-                ledger_source,
-            ),
-        };
+    // Before the site is prepared: preparing it walks its whole inner pattern, and
+    // evaluating it recurses into that pattern. See `crate::stack`.
+    crate::stack::check("EXISTS")?;
+    let address = std::ptr::from_ref(pattern) as usize;
+    if let Some(slot) = ctx
+        .deferred_exists
+        .as_ref()
+        .and_then(|placeholders| placeholders.get(&address))
+        .cloned()
+    {
+        return exists_deferred(&slot, row, schema, ctx);
+    }
+    if crate::deferred_exists::is_placeholder(pattern) {
+        return Err(EvalError::internal(
+            "a nested EXISTS placeholder was evaluated outside the substituted copy that \
+             left it",
+        ));
+    }
+    let prepared = ctx.prepared_exists(pattern)?;
+    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
+        return Ok(false);
+    };
+    exists_prepared(
+        PreparedSite {
+            key: address,
+            prepared: &prepared,
+            plan_map: ledger_source,
+        },
+        row,
+        schema,
+        ctx,
+    )
+}
+
+/// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to
+/// know about where the preparation came from.
+#[derive(Clone, Copy)]
+struct PreparedSite<'s> {
+    /// The address the site's definition-path memo is keyed by.
+    key: usize,
+    /// The site's preparation, which also keeps the sites of the `EXISTS` bodies nested in
+    /// it.
+    prepared: &'s crate::eval::PreparedExists,
+    /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes (the
+    /// preparation's own `ledger_source` for a site of the plan).
+    plan_map: &'s Arc<SubstitutionSourceMap>,
+}
+
+/// Answer an `EXISTS` for the current row from its preparation: the strategy decision,
+/// the memoized probe and the per-row definition, as [`exists`] documents them.
+fn exists_prepared<D: DatasetView + Sync>(
+    site: PreparedSite<'_>,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    let ledger_source = site.plan_map;
+    let (
+        normalized,
+        witness_wrapped,
+        analysis,
+        free_vars,
+        stateful,
+        witness_sites,
+        normalized_sites,
+    ) = match site.prepared {
+        // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
+        // every μ — the whole EXISTS is constant `false`, no evaluation needed.
+        crate::eval::PreparedExists::FoldedFalse => return Ok(false),
+        crate::eval::PreparedExists::Pattern {
+            normalized,
+            witness_wrapped,
+            analysis,
+            free_vars,
+            stateful,
+            witness_sites,
+            normalized_sites,
+            ..
+        } => (
+            normalized,
+            witness_wrapped,
+            analysis,
+            free_vars,
+            *stateful,
+            witness_sites,
+            normalized_sites,
+        ),
+    };
 
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
     // `VALUES` column inside this `EXISTS` body that collides with a variable
@@ -1513,7 +1633,10 @@ fn exists<D: DatasetView + Sync>(
     // `exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision`
     // in `crate::exists_admission_gate` (the W3C `exists04`/`exists05`
     // shape — nested `FILTER EXISTS`/`FILTER NOT EXISTS`, correlated only
-    // through the DEFINITION path).
+    // through the DEFINITION path). The same holds for a nested site the substitution
+    // deferred ([`exists_deferred`]) and that reaches this function with nothing owed:
+    // it is the body the eager copy would have been, reached inside the same window,
+    // and skipped exactly as that copy was.
     if !ctx.in_substituted_exists {
         // The outer-bound variables (a concrete binding in the current row), built
         // only for this check: it is the one consumer that needs the set itself.
@@ -1529,9 +1652,12 @@ fn exists<D: DatasetView + Sync>(
                 }
             })
             .collect();
-        if let Some((var, intro)) =
+        // A walk over the whole inner pattern, from an `EXISTS` that may be deep: inside
+        // a `crate::stack::walk` scope, so a level that runs out of stack refuses rather
+        // than answering "no collision" for a pattern it never finished reading.
+        if let Some((var, intro)) = crate::stack::walk(|| {
             crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
-        {
+        })? {
             return Err(EvalError::exists_scope_collision(
                 var.as_str().to_owned(),
                 intro.as_str(),
@@ -1654,7 +1780,7 @@ fn exists<D: DatasetView + Sync>(
         let memo_key = use_memo.then(|| {
             let restriction = definition_restriction_key(row, schema, free_vars);
             (
-                std::ptr::from_ref::<GraphPattern>(pattern) as usize,
+                site.key,
                 ctx.graph_key(),
                 crate::eval::schema_fingerprint(schema),
                 restriction,
@@ -1672,10 +1798,10 @@ fn exists<D: DatasetView + Sync>(
         // Applied unconditionally in production; [`suppress_first_witness_wrap_for_test`]
         // is a `cfg(test)`-only seam that evaluates `normalized` unwrapped instead, to
         // compare consumption without changing the boolean answer.
-        let to_evaluate: &GraphPattern = if exists_apply_first_witness_wrap() {
-            witness_wrapped
+        let (to_evaluate, sites): (&GraphPattern, _) = if exists_apply_first_witness_wrap() {
+            (witness_wrapped, witness_sites)
         } else {
-            normalized
+            (normalized, normalized_sites)
         };
         // Push this site's ledger-source correspondence (`PreparedExists::Pattern::
         // ledger_source` — `crate::enf::ledger_source_map`) as the enclosing window
@@ -1693,7 +1819,11 @@ fn exists<D: DatasetView + Sync>(
         if track_ledger {
             ctx.correlated_node_maps.push(Arc::clone(ledger_source));
         }
-        let inner_result = crate::binop::eval_correlated(to_evaluate, row, schema, ctx);
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites: crate::deferred_exists::SiteSlot::Prepared(sites),
+            plan_map: Some(ledger_source.as_ref()),
+        };
+        let inner_result = crate::binop::eval_correlated(to_evaluate, row, schema, source, ctx);
         if track_ledger {
             ctx.correlated_node_maps.pop();
         }
@@ -1720,6 +1850,176 @@ fn exists<D: DatasetView + Sync>(
         }
         Ok(answer)
     }
+}
+
+/// Answer a nested `EXISTS` the substitution walk left as a placeholder, for the current
+/// row: the body the placeholder stands for (`slot.site`), owed the substitution the walk
+/// would have applied to it (`slot.env`) and then this row — see `crate::deferred_exists`.
+///
+/// What is decided here, and why each choice answers what the eager copy answered:
+///
+/// * **Nothing owed.** No layer binds a variable of the body, so the eager copy was the
+///   body as written: the site's own preparation is answered exactly as [`exists`] answers
+///   any other `EXISTS` reached inside a substituted window.
+/// * **One merged row owed.** The layers agree, so substituting their union once builds
+///   the eager copy up to redundant one-row joins. The body is answered by its per-row
+///   definition over that union and this row — which is the answer both strategies give
+///   (`crate::enf`'s one-definition theorem): the memoized probe the eager copy might
+///   have been admitted to was evaluated per row there too (a window caches nothing), so
+///   it was never cheaper than the definition. The `cfg(test)` strategy override is still
+///   honoured, so a test forcing the probe sees what the probe sees.
+/// * **Layers that disagree.** Reachable only through a rebinding SEP-0007 leaves
+///   undefined: the body is substituted one layer at a time, in full, and answered as
+///   [`exists`] answers the copy — exactly the eager evaluation.
+fn exists_deferred<D: DatasetView + Sync>(
+    slot: &crate::deferred_exists::DeferredExists,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    let site = &slot.site;
+    let crate::eval::PreparedExists::Pattern {
+        normalized,
+        witness_wrapped,
+        witness_sites,
+        normalized_sites,
+        ..
+    } = site.prepared.as_ref()
+    else {
+        return Ok(false);
+    };
+    let env = match slot.env.state() {
+        crate::deferred_exists::EnvState::Empty => {
+            return exists_prepared(
+                PreparedSite {
+                    key: std::ptr::from_ref(normalized.as_ref()) as usize,
+                    prepared: &site.prepared,
+                    plan_map: &site.plan_map,
+                },
+                row,
+                schema,
+                ctx,
+            );
+        }
+        crate::deferred_exists::EnvState::Layered => {
+            return exists_layered(slot, row, schema, ctx);
+        }
+        crate::deferred_exists::EnvState::Merged(env) => env,
+    };
+    let source = |sites| crate::deferred_exists::CorrelatedSource {
+        sites: crate::deferred_exists::SiteSlot::Prepared(sites),
+        plan_map: Some(site.plan_map.as_ref()),
+    };
+    // The site's map, pushed as the window the substitution resolves through, exactly as
+    // `exists_prepared` pushes a plan site's `ledger_source`.
+    let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
+
+    #[cfg(test)]
+    if FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) == Some(ForcedExistsStrategy::Probe) {
+        // The probe the eager copy would have run: the body with the carried substitution
+        // only, evaluated unconstrained, then probed with the row.
+        if track_ledger {
+            ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+        }
+        let evaluated =
+            crate::binop::eval_substituted(normalized, env, source(normalized_sites), ctx);
+        if track_ledger {
+            ctx.correlated_node_maps.pop();
+        }
+        let evaluated = evaluated?;
+        if let Evaluated::Truncated(truncation) = &evaluated {
+            ctx.expression_barrier.record(truncation.tripped());
+            return Ok(false);
+        }
+        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
+            return Ok(false);
+        }
+        let inner = evaluated
+            .into_complete()
+            .unwrap_or_else(|_| unreachable!("a non-truncated result is complete by construction"));
+        let shared = schema.shared_columns(&inner.schema);
+        let (keyed, wild) = crate::binop::build_index(&inner, &shared);
+        return Ok(crate::binop::probe_has_match(
+            row,
+            &shared,
+            &keyed,
+            &wild,
+            &inner.rows,
+        ));
+    }
+
+    // The per-row definition over the carried substitution and this row, as one row.
+    let current = outer_bindings_for_substitution(row, schema, ctx);
+    let Some(substitution) = crate::deferred_exists::with_row(env, &current, &site.vars) else {
+        // This row disagrees with a carried layer: the layers are applied one at a time.
+        return exists_layered(slot, row, schema, ctx);
+    };
+    let (to_evaluate, sites): (&GraphPattern, _) = if exists_apply_first_witness_wrap() {
+        (witness_wrapped, witness_sites)
+    } else {
+        (normalized, normalized_sites)
+    };
+    if track_ledger {
+        ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+    }
+    let inner_result =
+        crate::binop::eval_substituted(to_evaluate, &substitution, source(sites), ctx);
+    if track_ledger {
+        ctx.correlated_node_maps.pop();
+    }
+    let inner = inner_result?;
+    if let Evaluated::Truncated(truncation) = &inner {
+        ctx.expression_barrier.record(truncation.tripped());
+        return Ok(false);
+    }
+    if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+        return Ok(false);
+    }
+    let consumed = inner.rows().len();
+    for _ in 0..consumed {
+        if charge_exists_evidence(
+            ctx,
+            crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(!inner.rows().is_empty())
+}
+
+/// [`exists_deferred`] for layers that disagree: substitute them into the body one at a
+/// time, in full, and answer the copy as [`exists`] answers any `EXISTS` reached inside a
+/// substituted window.
+fn exists_layered<D: DatasetView + Sync>(
+    slot: &crate::deferred_exists::DeferredExists,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    let crate::eval::PreparedExists::Pattern { normalized, .. } = slot.site.prepared.as_ref()
+    else {
+        return Ok(false);
+    };
+    let mut copy: Option<Box<GraphPattern>> = None;
+    for layer in slot.env.layers() {
+        let from: &GraphPattern = copy.as_deref().unwrap_or(normalized);
+        copy = Some(substitute_pattern(from, layer)?);
+    }
+    let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
+    let prepared = crate::eval::PreparedExists::build_guarded(body)?;
+    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
+        return Ok(false);
+    };
+    exists_prepared(
+        PreparedSite {
+            key: std::ptr::from_ref(body) as usize,
+            prepared: &prepared,
+            plan_map: ledger_source,
+        },
+        row,
+        schema,
+        ctx,
+    )
 }
 
 /// Charge one occurrence of `point` for the [`exists`] decision site. A trip is
@@ -1809,6 +2109,7 @@ fn definition_restriction_key<I: ViewTermId>(
 /// leaf/wrapper clone of a bound quoted-triple term pays one small,
 /// fixed-size `Box` allocation — not a `String`, and not one that grows with
 /// leaf/wrapper count times term length.
+#[derive(Clone, Default)]
 pub(crate) struct SubstitutionRow {
     pub(crate) expr: Vec<(Variable, Expression)>,
     pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
@@ -1923,12 +2224,190 @@ impl SubstitutionRow {
               lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
               32-bit targets such as wasm32, where the same box is still the field's type"
 )]
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the walk ran out of stack: it runs once per outer
+/// row, from a correlated evaluation that may already be deep, inside a
+/// [`crate::stack::walk`] scope that discards the partial copy.
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
-) -> Box<GraphPattern> {
-    let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-    substitute_pattern_impl(pattern, row, &mut tracking)
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::walk(|| {
+        let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
+        substitute_pattern_impl(pattern, row, &mut tracking, &mut Deferral::eager())
+    })
+}
+
+/// [`substitute_pattern`], leaving every nested `EXISTS` body outside a `SERVICE` body as a
+/// placeholder recorded on `defer` (see [`Deferral`] and `crate::deferred_exists`).
+///
+/// # Errors
+///
+/// As [`substitute_pattern`].
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
+pub(crate) fn substitute_pattern_deferring(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+    defer: &mut Deferral<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::walk(|| {
+        let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
+        substitute_pattern_impl(pattern, row, &mut tracking, defer)
+    })
+}
+
+/// How the substitution walk treats a nested `EXISTS` body — see
+/// `crate::deferred_exists` for why it is not copied.
+///
+/// A deferring walk leaves each body it meets outside a `SERVICE` body as a
+/// [`crate::deferred_exists::placeholder`], recorded here with the body's site and the
+/// substitution it is owed; an eager walk (and every walk below a `SERVICE`, whose body is
+/// forwarded as text) substitutes the body in full, as SPARQL's `substitute` reads.
+pub(crate) struct Deferral<'a> {
+    /// The placeholders of the copy this walk may be copying (a `LATERAL` inside a
+    /// substituted window), so one is recognised and owed this row too.
+    enclosing: Option<&'a crate::deferred_exists::DeferredMap>,
+    /// The sites of the bodies of the pattern being substituted; `None` for an eager walk.
+    sites: Option<&'a crate::deferred_exists::NestedSites>,
+    /// How many `SERVICE` bodies the walk is inside.
+    eager_depth: usize,
+    /// The placeholders this walk left.
+    placeholders: crate::deferred_exists::DeferredMap,
+}
+
+impl<'a> Deferral<'a> {
+    /// A deferring walk over a pattern whose bodies' sites are `sites`, copying from a
+    /// window whose placeholders are `enclosing`.
+    pub(crate) fn new(
+        enclosing: Option<&'a crate::deferred_exists::DeferredMap>,
+        sites: &'a crate::deferred_exists::NestedSites,
+    ) -> Self {
+        Self {
+            enclosing,
+            sites: Some(sites),
+            eager_depth: 0,
+            placeholders: crate::deferred_exists::DeferredMap::default(),
+        }
+    }
+
+    /// A walk that defers nothing.
+    fn eager() -> Self {
+        Self {
+            enclosing: None,
+            sites: None,
+            eager_depth: 0,
+            placeholders: crate::deferred_exists::DeferredMap::default(),
+        }
+    }
+
+    /// The placeholders this walk left, for the window that evaluates its copy.
+    pub(crate) fn into_placeholders(self) -> Option<Arc<crate::deferred_exists::DeferredMap>> {
+        (!self.placeholders.is_empty()).then(|| Arc::new(self.placeholders))
+    }
+
+    /// The site a nested `EXISTS` body stands for, and the substitution it already
+    /// carries, when this walk defers it: the enclosing window's own entry for a
+    /// placeholder, or the prepared site of a body.
+    fn deferred_site(
+        &self,
+        body: &GraphPattern,
+    ) -> Option<(
+        &Arc<crate::deferred_exists::ExistsSite>,
+        Option<&crate::deferred_exists::SubstitutionEnv>,
+    )> {
+        let sites = self.sites?;
+        let address = std::ptr::from_ref(body) as usize;
+        if let Some(slot) = self.enclosing.and_then(|map| map.get(&address)) {
+            return Some((&slot.site, Some(&slot.env)));
+        }
+        if self.eager_depth > 0 {
+            return None;
+        }
+        sites.get(&address).map(|site| (site, None))
+    }
+
+    /// Leave `body` as a placeholder owed `row`, returning the placeholder — or `None` when
+    /// this walk substitutes `body` in full.
+    fn defer(&mut self, body: &GraphPattern, row: &SubstitutionRow) -> Option<Box<GraphPattern>> {
+        let (site, carried) = self.deferred_site(body)?;
+        let env = match carried {
+            Some(env) => env.then(row, &site.vars),
+            None => crate::deferred_exists::SubstitutionEnv::default().then(row, &site.vars),
+        };
+        let slot = crate::deferred_exists::DeferredExists {
+            site: Arc::clone(site),
+            env,
+        };
+        let placeholder = crate::deferred_exists::placeholder();
+        self.placeholders
+            .insert(std::ptr::from_ref(placeholder.as_ref()) as usize, slot);
+        Some(placeholder)
+    }
+
+    /// Add the variables of `expr` to `out`: [`expr_vars`], except that a body this walk
+    /// defers contributes its site's variable set by reference instead of being walked.
+    fn expr_vars(&self, expr: &Expression, out: &mut FreeVars) {
+        match expr {
+            Expression::Exists(body) => match self.deferred_site(body) {
+                Some((site, _)) => out.sites.push(Arc::clone(site)),
+                None => expr_vars(expr, &mut out.direct),
+            },
+            Expression::Variable(_)
+            | Expression::Bound(_)
+            | Expression::NamedNode(_)
+            | Expression::Literal(_) => expr_vars(expr, &mut out.direct),
+            _ => {
+                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        crate::governor::soundness::ExpressionPart::Sub(sub) => {
+                            self.expr_vars(sub, out);
+                        }
+                        crate::governor::soundness::ExpressionPart::Exists(body) => {
+                            self.expr_vars_of_body(body, out);
+                        }
+                        crate::governor::soundness::ExpressionPart::Call(_) => {}
+                    }
+                    false
+                });
+            }
+        }
+    }
+
+    /// [`Self::expr_vars`] for an `EXISTS` body met inside a larger expression.
+    fn expr_vars_of_body(&self, body: &GraphPattern, out: &mut FreeVars) {
+        match self.deferred_site(body) {
+            Some((site, _)) => out.sites.push(Arc::clone(site)),
+            None => pattern_all_vars(body, &mut out.direct),
+        }
+    }
+}
+
+/// The variables an expression-bearing node's expression mentions, as the substitution
+/// walk needs them: the ones it mentions directly, plus the variable sets of the nested
+/// `EXISTS` bodies the walk defers, held by reference rather than copied in.
+#[derive(Default)]
+struct FreeVars {
+    direct: DetHashSet<Variable>,
+    sites: Vec<Arc<crate::deferred_exists::ExistsSite>>,
+}
+
+impl FreeVars {
+    /// Whether the expression mentions `variable`.
+    fn contains(&self, variable: &Variable) -> bool {
+        self.direct.contains(variable) || self.sites.iter().any(|site| site.vars.contains(variable))
+    }
+
+    /// Whether the expression mentions no variable at all.
+    fn is_empty(&self) -> bool {
+        self.direct.is_empty() && self.sites.iter().all(|site| site.vars.is_empty())
+    }
 }
 
 /// One [`SubstitutionSourceMap`] entry: which real plan node a substituted-tree node is
@@ -2053,6 +2532,11 @@ struct SubstitutionTracking<'a> {
 /// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
 /// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
 /// nested `LATERAL` needs it.
+///
+/// # Errors
+///
+/// As [`substitute_pattern`]; `tracked` then holds entries for a discarded copy, and the
+/// caller drops it with the error.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
@@ -2064,15 +2548,18 @@ pub(crate) fn substitute_pattern_tracked(
     row: &SubstitutionRow,
     tracked: &mut SubstitutionSourceMap,
     enclosing: Option<&SubstitutionSourceMap>,
-) -> Box<GraphPattern> {
-    let mut claimed = DetHashSet::default();
-    let mut tracking = SubstitutionTracking {
-        map: tracked,
-        enclosing,
-        claimed: &mut claimed,
-    };
-    let mut tracking = Some(&mut tracking);
-    substitute_pattern_impl(pattern, row, &mut tracking)
+    defer: &mut Deferral<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::walk(|| {
+        let mut claimed = DetHashSet::default();
+        let mut tracking = SubstitutionTracking {
+            map: tracked,
+            enclosing,
+            claimed: &mut claimed,
+        };
+        let mut tracking = Some(&mut tracking);
+        substitute_pattern_impl(pattern, row, &mut tracking, defer)
+    })
 }
 
 /// The substitution walk itself. Every arm ends by boxing the node it built and — through
@@ -2096,7 +2583,17 @@ fn substitute_pattern_impl(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
+    defer: &mut Deferral<'_>,
 ) -> Box<GraphPattern> {
+    // One level of a copy of the whole correlated subtree, made once per outer row: see
+    // `crate::stack::walk`, whose scope discards this placeholder.
+    if crate::stack::walk_is_low("correlated substitution") {
+        return Box::new(GraphPattern::Bgp {
+            patterns: Vec::new(),
+        });
+    }
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Substituted);
     match pattern {
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
@@ -2127,7 +2624,7 @@ fn substitute_pattern_impl(
             let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
-                    path: path.clone(),
+                    path: crate::stack::clone::path(path),
                     object: object.clone(),
                 },
                 pattern,
@@ -2150,13 +2647,13 @@ fn substitute_pattern_impl(
         // joined against a one-row `VALUES` carrying it — `expr` then evaluates
         // against a row where the variable is bound like any other.
         GraphPattern::Filter { expr, inner } => {
-            let mut free = DetHashSet::default();
-            expr_vars(expr, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let mut free = FreeVars::default();
+            defer.expr_vars(expr, &mut free);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Filter {
-                    expr: substitute_expr(expr, row, map),
+                    expr: substitute_expr(expr, row, map, defer),
                     inner: inner_final,
                 },
                 pattern,
@@ -2168,15 +2665,15 @@ fn substitute_pattern_impl(
             variable,
             expression,
         } => {
-            let mut free = DetHashSet::default();
-            expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let mut free = FreeVars::default();
+            defer.expr_vars(expression, &mut free);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Extend {
                     inner: inner_final,
                     variable: variable.clone(),
-                    expression: substitute_expr(expression, row, map),
+                    expression: substitute_expr(expression, row, map, defer),
                 },
                 pattern,
                 map,
@@ -2192,14 +2689,14 @@ fn substitute_pattern_impl(
             element,
             companion,
         } => {
-            let mut free = DetHashSet::default();
-            expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let mut free = FreeVars::default();
+            defer.expr_vars(expression, &mut free);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Unfold {
                     inner: inner_final,
-                    expression: substitute_expr(expression, row, map),
+                    expression: substitute_expr(expression, row, map, defer),
                     element: element.clone(),
                     companion: companion.clone(),
                 },
@@ -2208,8 +2705,8 @@ fn substitute_pattern_impl(
             )
         }
         GraphPattern::Join { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
+            let left_sub = substitute_pattern_impl(left, row, map, defer);
+            let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Join {
                     left: left_sub,
@@ -2219,17 +2716,22 @@ fn substitute_pattern_impl(
                 map,
             )
         }
-        GraphPattern::Union { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
-            boxed_and_mapped(
-                GraphPattern::Union {
-                    left: left_sub,
-                    right: right_sub,
-                },
-                pattern,
-                map,
-            )
+        GraphPattern::Union { arms } => {
+            // Each arm is built boxed and then moved into the arm vector, which is sized
+            // up front so no push reallocates it: an arm's root moves exactly once, and
+            // its tracked address moves with it before anything else can allocate at the
+            // address it left.
+            let mut arms_sub = Vec::with_capacity(arms.len());
+            for arm in arms {
+                let boxed = substitute_pattern_impl(arm, row, map, defer);
+                let before = std::ptr::from_ref(boxed.as_ref()) as usize;
+                arms_sub.push(*boxed);
+                let after = arms_sub.last().map_or(before, |moved| {
+                    std::ptr::from_ref::<GraphPattern>(moved) as usize
+                });
+                remap_moved(map, before, after);
+            }
+            boxed_and_mapped(GraphPattern::Union { arms: arms_sub }, pattern, map)
         }
         // The optional inline filter evaluates against the (already merged) joined
         // row, so a term-only variable it needs is injected on `left`: an outer
@@ -2241,18 +2743,20 @@ fn substitute_pattern_impl(
             right,
             expression,
         } => {
-            let mut free = DetHashSet::default();
+            let mut free = FreeVars::default();
             if let Some(e) = expression {
-                expr_vars(e, &mut free);
+                defer.expr_vars(e, &mut free);
             }
-            let left_sub = substitute_pattern_impl(left, row, map);
+            let left_sub = substitute_pattern_impl(left, row, map, defer);
             let left_final = wrap_with_expr_term_only_values(left_sub, &free, row, left, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
+            let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::LeftJoin {
                     left: left_final,
                     right: right_sub,
-                    expression: expression.as_ref().map(|e| substitute_expr(e, row, map)),
+                    expression: expression
+                        .as_ref()
+                        .map(|e| substitute_expr(e, row, map, defer)),
                 },
                 pattern,
                 map,
@@ -2263,8 +2767,8 @@ fn substitute_pattern_impl(
         // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
         // evaluation-time injection).
         GraphPattern::Minus { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
+            let left_sub = substitute_pattern_impl(left, row, map, defer);
+            let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Minus {
                     left: left_sub,
@@ -2281,7 +2785,7 @@ fn substitute_pattern_impl(
         // call in place, and the driver of the rest is joined onto the LEFT operand —
         // the same placement `crate::substitute`'s whole-query rewrites use.
         GraphPattern::Lateral { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map);
+            let left_sub = substitute_pattern_impl(left, row, map, defer);
             let (left_sub, right_sub) = if let GraphPattern::PropertyFunction(call) = &**right {
                 let mut bound = call.clone();
                 let seed =
@@ -2298,7 +2802,7 @@ fn substitute_pattern_impl(
                 };
                 (left_sub, right_sub)
             } else {
-                (left_sub, substitute_pattern_impl(right, row, map))
+                (left_sub, substitute_pattern_impl(right, row, map, defer))
             };
             boxed_and_mapped(
                 GraphPattern::Lateral {
@@ -2346,7 +2850,7 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
                     name: resolved_name,
@@ -2386,7 +2890,15 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            // Bound, but to a term that is not an IRI: it names no endpoint. Left as a
+            // variable, `SILENT` or not, so the clause surfaces the refusal an
+            // unresolvable endpoint gets in `crate::service_endpoints` — `SILENT`
+            // tolerates an endpoint that fails, not a value that names none.
+            // The body is forwarded as text, so it is substituted in full: a placeholder
+            // left in it would be sent to the endpoint in place of the body.
+            defer.eager_depth += 1;
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            defer.eager_depth -= 1;
             boxed_and_mapped(
                 GraphPattern::Service {
                     name: resolved_name,
@@ -2398,14 +2910,16 @@ fn substitute_pattern_impl(
             )
         }
         GraphPattern::OrderBy { inner, expression } => {
-            let mut free = DetHashSet::default();
+            let mut free = FreeVars::default();
             for oe in expression {
                 match oe {
                     purrdf_sparql_algebra::OrderExpression::Asc(e)
-                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, &mut free),
+                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
+                        defer.expr_vars(e, &mut free);
+                    }
                 }
             }
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::OrderBy {
@@ -2415,12 +2929,18 @@ fn substitute_pattern_impl(
                         .map(|oe| match oe {
                             purrdf_sparql_algebra::OrderExpression::Asc(e) => {
                                 purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(
-                                    e, row, &mut *map,
+                                    e,
+                                    row,
+                                    &mut *map,
+                                    &mut *defer,
                                 ))
                             }
                             purrdf_sparql_algebra::OrderExpression::Desc(e) => {
                                 purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(
-                                    e, row, &mut *map,
+                                    e,
+                                    row,
+                                    &mut *map,
+                                    &mut *defer,
                                 ))
                             }
                         })
@@ -2435,20 +2955,20 @@ fn substitute_pattern_impl(
             variables,
             aggregates,
         } => {
-            let mut free = DetHashSet::default();
+            let mut free = FreeVars::default();
             for (_, agg) in aggregates {
                 for arg in agg.args() {
-                    expr_vars(arg, &mut free);
+                    defer.expr_vars(arg, &mut free);
                 }
                 // A `FOLD`'s sort keys read the group's rows exactly as its
                 // arguments do, so their variables are free in this node too:
                 // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
                 // unbound in the substituted pattern.
                 for order in agg.order_by() {
-                    expr_vars(crate::modifier::order_sort_key(order), &mut free);
+                    defer.expr_vars(crate::modifier::order_sort_key(order), &mut free);
                 }
             }
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Group {
@@ -2460,7 +2980,7 @@ fn substitute_pattern_impl(
                             let args = agg
                                 .args()
                                 .iter()
-                                .map(|e| substitute_expr(e, row, &mut *map))
+                                .map(|e| substitute_expr(e, row, &mut *map, &mut *defer))
                                 .collect();
                             let order_by = agg
                                 .order_by()
@@ -2472,6 +2992,7 @@ fn substitute_pattern_impl(
                                             crate::modifier::order_sort_key(order),
                                             row,
                                             &mut *map,
+                                            &mut *defer,
                                         ),
                                     )
                                 })
@@ -2498,11 +3019,11 @@ fn substitute_pattern_impl(
         }
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             boxed_and_mapped(GraphPattern::Distinct { inner: inner_sub }, pattern, map)
         }
         GraphPattern::Reduced { inner } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             boxed_and_mapped(GraphPattern::Reduced { inner: inner_sub }, pattern, map)
         }
         GraphPattern::Slice {
@@ -2510,7 +3031,7 @@ fn substitute_pattern_impl(
             start,
             length,
         } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Slice {
                     inner: inner_sub,
@@ -2525,7 +3046,7 @@ fn substitute_pattern_impl(
         // projected variables survive to the inner pattern's substitution.
         GraphPattern::Project { inner, variables } => {
             let narrowed = row.narrow_to(variables);
-            let inner_sub = substitute_pattern_impl(inner, &narrowed, map);
+            let inner_sub = substitute_pattern_impl(inner, &narrowed, map, defer);
             boxed_and_mapped(
                 GraphPattern::Project {
                     inner: inner_sub,
@@ -2605,6 +3126,17 @@ fn boxed_and_mapped_as(
         );
     }
     boxed
+}
+
+/// Move the tracked entry of a node that moved from address `before` to `after` — an
+/// arm unboxed into a `UNION`'s arm vector — so the entry names the node where the copy
+/// finally holds it. A no-op when `map` is disengaged or the node was never mapped.
+fn remap_moved(map: &mut Option<&mut SubstitutionTracking<'_>>, before: usize, after: usize) {
+    if let Some(tracking) = map.as_deref_mut()
+        && let Some(entry) = tracking.map.remove(&before)
+    {
+        tracking.map.insert(after, entry);
+    }
 }
 
 /// Demote an already-mapped node (inserted `counts_rows: true` by [`boxed_and_mapped`]) to
@@ -2758,7 +3290,7 @@ fn join_leaf_with_values(
 )]
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
-    expr_free_vars: &DetHashSet<Variable>,
+    expr_free_vars: &FreeVars,
     row: &SubstitutionRow,
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
@@ -2869,8 +3401,10 @@ fn plant_mapped_driver(
 /// Substitute outer-bound variables in expression positions by replacing
 /// `Expression::Variable(v)` with the corresponding constant expression
 /// (`row.expr`) — the IRI/literal fast path. A nested `EXISTS`'s inner pattern
-/// gets the FULL row (`row`, not just `row.expr`), so Values Insertion reaches
-/// its leaves too.
+/// is owed the FULL row (`row`, not just `row.expr`), so Values Insertion reaches
+/// its leaves too — applied when the nested `EXISTS` is evaluated, from the
+/// placeholder this walk leaves (see [`Deferral`]), or here, in full, below a
+/// `SERVICE`.
 ///
 /// This function alone is NOT total over `Expression::Variable`: a blank-node
 /// or quoted-triple binding has no `row.expr` entry (no expression syntax
@@ -2886,7 +3420,14 @@ fn substitute_expr(
     expr: &Expression,
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
+    defer: &mut Deferral<'_>,
 ) -> Expression {
+    // See `substitute_pattern_impl`: the same copy, one expression level at a time.
+    if crate::stack::walk_is_low("correlated substitution") {
+        return Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN));
+    }
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Substituted);
     let bindings = &row.expr;
     match expr {
         Expression::Variable(v) => {
@@ -2915,94 +3456,92 @@ fn substitute_expr(
             expr.clone()
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
-        Expression::Or(a, b) => Expression::Or(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+        Expression::Or(operands) => Expression::Or(
+            operands
+                .iter()
+                .map(|operand| substitute_expr(operand, row, &mut *map, &mut *defer))
+                .collect(),
         ),
-        Expression::And(a, b) => Expression::And(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+        Expression::And(operands) => Expression::And(
+            operands
+                .iter()
+                .map(|operand| substitute_expr(operand, row, &mut *map, &mut *defer))
+                .collect(),
+        ),
+        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
+            Box::new(substitute_expr(first, row, map, defer)),
+            steps
+                .iter()
+                .map(|(op, operand)| (*op, substitute_expr(operand, row, &mut *map, &mut *defer)))
+                .collect(),
         ),
         Expression::Equal(a, b) => Expression::Equal(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::SameTerm(a, b) => Expression::SameTerm(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::Greater(a, b) => Expression::Greater(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::Less(a, b) => Expression::Less(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
+            Box::new(substitute_expr(a, row, map, defer)),
+            Box::new(substitute_expr(b, row, map, defer)),
         ),
-        Expression::Add(a, b) => Expression::Add(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Subtract(a, b) => Expression::Subtract(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Multiply(a, b) => Expression::Multiply(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::Divide(a, b) => Expression::Divide(
-            Box::new(substitute_expr(a, row, map)),
-            Box::new(substitute_expr(b, row, map)),
-        ),
-        Expression::UnaryPlus(a) => Expression::UnaryPlus(Box::new(substitute_expr(a, row, map))),
-        Expression::UnaryMinus(a) => Expression::UnaryMinus(Box::new(substitute_expr(a, row, map))),
-        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row, map))),
+        Expression::UnaryPlus(a) => {
+            Expression::UnaryPlus(Box::new(substitute_expr(a, row, map, defer)))
+        }
+        Expression::UnaryMinus(a) => {
+            Expression::UnaryMinus(Box::new(substitute_expr(a, row, map, defer)))
+        }
+        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row, map, defer))),
         Expression::If(c, t, e) => Expression::If(
-            Box::new(substitute_expr(c, row, map)),
-            Box::new(substitute_expr(t, row, map)),
-            Box::new(substitute_expr(e, row, map)),
+            Box::new(substitute_expr(c, row, map, defer)),
+            Box::new(substitute_expr(t, row, map, defer)),
+            Box::new(substitute_expr(e, row, map, defer)),
         ),
         Expression::In(needle, haystack) => Expression::In(
-            Box::new(substitute_expr(needle, row, map)),
+            Box::new(substitute_expr(needle, row, map, defer)),
             haystack
                 .iter()
-                .map(|h| substitute_expr(h, row, &mut *map))
+                .map(|h| substitute_expr(h, row, &mut *map, &mut *defer))
                 .collect(),
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
-                .map(|i| substitute_expr(i, row, &mut *map))
+                .map(|i| substitute_expr(i, row, &mut *map, &mut *defer))
                 .collect(),
         ),
         Expression::FunctionCall(f, args) => Expression::FunctionCall(
             f.clone(),
             args.iter()
-                .map(|a| substitute_expr(a, row, &mut *map))
+                .map(|a| substitute_expr(a, row, &mut *map, &mut *defer))
                 .collect(),
         ),
-        // Tracked exactly like every `GraphPattern`-position substitution
-        // (`substitute_pattern_impl`, this arm's sibling call sites) — a nested `EXISTS`'s
-        // inner pattern DOES have ledger identity now: `crate::eval::PreparedExists::build`
-        // pushes it as the enclosing window (via `crate::enf::ledger_source_map`) BEFORE
-        // `crate::binop::eval_correlated` walks the OUTER inner that carries this
-        // `Expression::Exists`, so `inner_pat`'s address already resolves one hop through
-        // `map`'s `enclosing` to the ORIGINAL, ledger-indexed nested-`EXISTS` AST node (see
-        // `boxed_and_mapped_as`). Threading `map` through is what lets the nested site's
-        // OWN charges resolve too, and what lets `EvalCtx::prepared_exists` key its cache by
-        // a stable address instead of rebuilding on every outer row.
-        Expression::Exists(inner_pat) => {
-            Expression::Exists(substitute_pattern_impl(inner_pat, row, map))
-        }
+        // Outside a `SERVICE` body the nested body is not copied at all: it is left as a
+        // placeholder owed `row`, substituted once when it is evaluated — see
+        // `crate::deferred_exists`. A body the window being substituted from already left
+        // as a placeholder (this walk is copying a copy: a `LATERAL` inside it) is owed
+        // this row after the ones it already carries. Below a `SERVICE` the body is
+        // substituted in full, tracked like every `GraphPattern`-position substitution
+        // (`substitute_pattern_impl`, this arm's sibling call sites), so its nodes keep
+        // their ledger identity through `map`.
+        Expression::Exists(inner_pat) => match defer.defer(inner_pat, row) {
+            Some(placeholder) => Expression::Exists(placeholder),
+            None => Expression::Exists(substitute_pattern_impl(inner_pat, row, map, defer)),
+        },
     }
 }
 
@@ -3576,7 +4115,7 @@ fn eval_function<D: DatasetView + Sync>(
             if let Some((func, body)) = ctx.user_functions.resolve(iri.as_str()) {
                 let result =
                     crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             // A caller-injected native (host-Rust closure) function, resolved from
             // the same registry's second table. Checked after the SPARQL-bodied
@@ -3586,7 +4125,7 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
             // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
@@ -3598,7 +4137,7 @@ fn eval_function<D: DatasetView + Sync>(
             // ordering, not a precedence rule.
             if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
                 let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -4220,7 +4759,7 @@ fn make_string<D: DatasetView + Sync>(
     lang: Option<String>,
 ) -> Option<SolutionTerm<D::Id>> {
     match lang {
-        Some(l) => intern(
+        Some(l) => intern_leaf(
             ctx,
             TermValue::Literal {
                 lexical_form: lexical,
@@ -4243,7 +4782,7 @@ fn make_string_dir<D: DatasetView + Sync>(
     dir: Option<RdfTextDirection>,
 ) -> Option<SolutionTerm<D::Id>> {
     match (lang, dir) {
-        (Some(l), Some(d)) => intern(
+        (Some(l), Some(d)) => intern_leaf(
             ctx,
             TermValue::Literal {
                 lexical_form: lexical,
@@ -4547,7 +5086,7 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
         "rtl" => RdfTextDirection::Rtl,
         _ => return Ok(None),
     };
-    Ok(intern(
+    Ok(intern_leaf(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
@@ -4633,7 +5172,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         p: Box::new(p.clone()),
         o: Box::new(o.clone()),
     };
-    Ok(intern(ctx, triple))
+    intern(ctx, triple)
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -4645,7 +5184,7 @@ fn triple_part<D: DatasetView + Sync>(
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
             let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            Ok(intern(ctx, part))
+            intern(ctx, part)
         }
         _ => Ok(None),
     }
@@ -4681,27 +5220,79 @@ pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
 /// call `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
 /// error, overflow, divide-by-zero, indeterminate timezone mix — all SPARQL
 /// expression errors).
-fn binary_value<D: DatasetView + Sync>(
-    a: &Expression,
-    b: &Expression,
+/// SPARQL's three-valued `||` over two effective boolean values (`None` is an
+/// error): `true` if either is `true`, `false` if both are `false`, an error
+/// otherwise (§17.2).
+const fn kleene_or(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    match (a, b) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+/// SPARQL's three-valued `&&` over two effective boolean values (`None` is an
+/// error): `false` if either is `false`, `true` if both are `true`, an error
+/// otherwise (§17.2).
+const fn kleene_and(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    match (a, b) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+/// Evaluate an [`Expression::Arithmetic`] chain: the left fold of its binary
+/// operators, exactly as the left-nested tree of binary nodes evaluates.
+///
+/// The binary node evaluates its left operand, then its right, then applies the
+/// operator; in the tree, the left operand of every step is the value of the steps
+/// before it. So the fold evaluates the first operand, then each step's operand in
+/// turn — every operand, whether or not an earlier step raised an expression error,
+/// so a hard error (and anything an operand's evaluation does) happens in the same
+/// order — and applies each step with [`arithmetic_step`] to the value so far, which
+/// is the term the binary node would have produced for it. An expression error
+/// (`Ok(None)`) in any operand or step makes every later step, and the chain, an
+/// error.
+fn arithmetic_chain<D: DatasetView + Sync>(
+    first: &Expression,
+    steps: &[(ArithmeticOperator, Expression)],
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-    op: impl Fn(&XsdValue, &XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some(ta), Some(tb)) = (
-        eval_expr(a, row, schema, ctx)?,
-        eval_expr(b, row, schema, ctx)?,
-    ) else {
-        return Ok(None);
-    };
-    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) else {
-        return Ok(None); // operand with no XSD value
-    };
-    match op(&xa, &xb) {
-        Ok(result) => Ok(Some(xsd_to_term(ctx, &result))),
-        Err(_) => Ok(None), // overflow / div-by-zero / type-mismatch → expression error
+    let mut value = eval_expr(first, row, schema, ctx)?;
+    for (op, operand) in steps {
+        let right = eval_expr(operand, row, schema, ctx)?;
+        value = match (value, right) {
+            (Some(ta), Some(tb)) => arithmetic_step(ctx, *op, ta, tb),
+            _ => None,
+        };
     }
+    Ok(value)
+}
+
+/// Apply one binary arithmetic operator to two evaluated operand terms, as the
+/// binary node does: resolve both to XSD values and call the operator, returning
+/// `None` — SPARQL's expression error, NOT a hard error — for an operand with no
+/// XSD value and for overflow, division by zero or a type mismatch.
+fn arithmetic_step<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    op: ArithmeticOperator,
+    ta: SolutionTerm<D::Id>,
+    tb: SolutionTerm<D::Id>,
+) -> Option<SolutionTerm<D::Id>> {
+    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) else {
+        return None; // operand with no XSD value
+    };
+    let result = match op {
+        ArithmeticOperator::Add => value_add(&xa, &xb),
+        ArithmeticOperator::Subtract => value_sub(&xa, &xb),
+        ArithmeticOperator::Multiply => value_mul(&xa, &xb),
+        ArithmeticOperator::Divide => value_div(&xa, &xb),
+    };
+    // Overflow / div-by-zero / type-mismatch → expression error.
+    result.ok().map(|result| xsd_to_term(ctx, &result))
 }
 
 /// Evaluate a unary numeric expression (`+` / `-`): resolve the operand, call `op`,
@@ -4997,12 +5588,9 @@ mod tests {
         let ds = empty_ds();
         // (error || true) == true, even though the left operand errors.
         let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
-        let expr = Expression::Or(
-            Box::new(err),
-            Box::new(typed_lit(
-                "true",
-                "http://www.w3.org/2001/XMLSchema#boolean",
-            )),
+        let expr = Expression::or(
+            err,
+            typed_lit("true", "http://www.w3.org/2001/XMLSchema#boolean"),
         );
         assert_eq!(ebv(&ds, &expr), Some(true));
     }
@@ -5011,12 +5599,9 @@ mod tests {
     fn kleene_and_with_error_and_false_is_false() {
         let ds = empty_ds();
         let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
-        let expr = Expression::And(
-            Box::new(err),
-            Box::new(typed_lit(
-                "false",
-                "http://www.w3.org/2001/XMLSchema#boolean",
-            )),
+        let expr = Expression::and(
+            err,
+            typed_lit("false", "http://www.w3.org/2001/XMLSchema#boolean"),
         );
         assert_eq!(ebv(&ds, &expr), Some(false));
     }
@@ -5560,9 +6145,10 @@ mod tests {
     fn arithmetic_add_integers() {
         let ds = empty_ds();
         // 1 + 2 = 3
-        let expr = Expression::Add(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("2", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("1", XINT),
+            ArithmeticOperator::Add,
+            typed_lit("2", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
@@ -5571,9 +6157,10 @@ mod tests {
     fn arithmetic_subtract_integers() {
         let ds = empty_ds();
         // 7 - 3 = 4
-        let expr = Expression::Subtract(
-            Box::new(typed_lit("7", XINT)),
-            Box::new(typed_lit("3", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("7", XINT),
+            ArithmeticOperator::Subtract,
+            typed_lit("3", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("4".to_owned()));
     }
@@ -5582,9 +6169,10 @@ mod tests {
     fn arithmetic_multiply_integers() {
         let ds = empty_ds();
         // 3 * 4 = 12
-        let expr = Expression::Multiply(
-            Box::new(typed_lit("3", XINT)),
-            Box::new(typed_lit("4", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("3", XINT),
+            ArithmeticOperator::Multiply,
+            typed_lit("4", XINT),
         );
         assert_eq!(lex(&ds, &expr), Some("12".to_owned()));
     }
@@ -5593,9 +6181,10 @@ mod tests {
     fn arithmetic_divide_integer_returns_decimal() {
         let ds = empty_ds();
         // 1 / 2 = 0.5 (decimal, per XPath op:numeric-divide)
-        let expr = Expression::Divide(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("2", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("1", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("2", XINT),
         );
         // The result is a decimal; lexical "0.5" at scale 18 → canonical starts "0.5"
         let result = lex(&ds, &expr).expect("should produce a value");
@@ -5611,9 +6200,10 @@ mod tests {
     fn arithmetic_divide_10_4() {
         let ds = empty_ds();
         // 10 / 4 = 2.5
-        let expr = Expression::Divide(
-            Box::new(typed_lit("10", XINT)),
-            Box::new(typed_lit("4", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("10", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("4", XINT),
         );
         let result = lex(&ds, &expr).expect("should produce a value");
         assert!(
@@ -5628,7 +6218,7 @@ mod tests {
     fn arithmetic_type_error_is_ok_none() {
         let ds = empty_ds();
         // "a" + 1 → type error → Ok(None) (a FILTER drops the row; no hard Err).
-        let expr = Expression::Add(Box::new(lit("a")), Box::new(typed_lit("1", XINT)));
+        let expr = Expression::arithmetic(lit("a"), ArithmeticOperator::Add, typed_lit("1", XINT));
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
         let result = eval_expr(&expr, &[], &schema, &mut ctx).expect("no hard error");
@@ -5642,9 +6232,10 @@ mod tests {
     fn arithmetic_divide_by_zero_is_ok_none() {
         let ds = empty_ds();
         // integer/0 → DivisionByZero → Ok(None)
-        let expr = Expression::Divide(
-            Box::new(typed_lit("5", XINT)),
-            Box::new(typed_lit("0", XINT)),
+        let expr = Expression::arithmetic(
+            typed_lit("5", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("0", XINT),
         );
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
@@ -5707,9 +6298,10 @@ mod tests {
         // :a has age 30, so plus1 should be 31.
         // :b has age 17, so plus1 should be 18.
         let inner = bgp1("s", "http://ex/age", "n");
-        let expr = Expression::Add(
-            Box::new(Expression::Variable(Variable::new("n"))),
-            Box::new(typed_lit("1", XINT)),
+        let expr = Expression::arithmetic(
+            Expression::Variable(Variable::new("n")),
+            ArithmeticOperator::Add,
+            typed_lit("1", XINT),
         );
         let seq = eval(
             &GraphPattern::Extend {
@@ -5995,9 +6587,10 @@ mod tests {
         // difference is indeterminate (mixed timezone, not kept).
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             )),
             Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
@@ -6023,9 +6616,10 @@ mod tests {
         // is asserted in a single place.
         let ds = temporal_graph();
         let cond = Expression::Greater(
-            Box::new(Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             )),
             Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
@@ -6080,9 +6674,10 @@ mod tests {
         // is unambiguously later -> determinate `false`, excluded.
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::Add(
-                Box::new(Expression::Variable(Variable::new("start"))),
-                Box::new(typed_lit("P5D", XSD_DAYTIME_DURATION)),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("start")),
+                ArithmeticOperator::Add,
+                typed_lit("P5D", XSD_DAYTIME_DURATION),
             )),
             Box::new(Expression::Variable(Variable::new("end"))),
         );
@@ -6113,15 +6708,17 @@ mod tests {
         let bound = GraphPattern::Extend {
             inner: Box::new(inner),
             variable: Variable::new("len"),
-            expression: Expression::Subtract(
-                Box::new(Expression::Variable(Variable::new("end"))),
-                Box::new(Expression::Variable(Variable::new("start"))),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("end")),
+                ArithmeticOperator::Subtract,
+                Expression::Variable(Variable::new("start")),
             ),
         };
         let cond = Expression::GreaterOrEqual(
-            Box::new(Expression::Divide(
-                Box::new(Expression::Variable(Variable::new("len"))),
-                Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+            Box::new(Expression::arithmetic(
+                Expression::Variable(Variable::new("len")),
+                ArithmeticOperator::Divide,
+                typed_lit("P1D", XSD_DAYTIME_DURATION),
             )),
             Box::new(typed_lit("7", XINT)),
         );
@@ -6635,9 +7232,10 @@ mod tests {
         // 2024-01-31 + P1M must clamp to the TARGET month's last day AND land
         // on that month's leap day — "add 30 days" would give 2024-03-02,
         // which passes neither.
-        let e = Expression::Add(
-            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("2024-01-31T00:00:00", XSD_DATETIME),
+            ArithmeticOperator::Add,
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("dateTime + yearMonthDuration");
         assert_eq!(lex, "2024-02-29T00:00:00");
@@ -6649,8 +7247,8 @@ mod tests {
         let ds = empty_ds();
         let dt = typed_lit("2024-01-31T00:00:00", XSD_DATETIME);
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let forward = Expression::Add(Box::new(dt.clone()), Box::new(dur.clone()));
-        let commuted = Expression::Add(Box::new(dur), Box::new(dt));
+        let forward = Expression::arithmetic(dt.clone(), ArithmeticOperator::Add, dur.clone());
+        let commuted = Expression::arithmetic(dur, ArithmeticOperator::Add, dt);
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("dateTime + duration");
         let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("duration + dateTime");
         assert_eq!(flex, "2024-02-01T00:00:00");
@@ -6664,9 +7262,10 @@ mod tests {
         let ds = empty_ds();
         // `-` has no commuted row: `duration - instant` is meaningless, even
         // though `instant - duration` (not tested here) is well-defined.
-        let e = Expression::Subtract(
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Subtract,
+            typed_lit("2024-01-31T00:00:00", XSD_DATETIME),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6676,9 +7275,10 @@ mod tests {
         let ds = empty_ds();
         // earlier - later must be NEGATIVE; a `|a - b|` implementation would
         // pass an unsigned variant of this test but not this one.
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-10T10:00:00Z", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-10T10:00:00Z", XSD_DATETIME),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("instant difference");
         assert_eq!(lex, "-P9D");
@@ -6688,9 +7288,10 @@ mod tests {
     #[test]
     fn timezone_mix_is_indeterminate() {
         let ds = empty_ds();
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-01T10:00:00", XSD_DATETIME),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6701,9 +7302,10 @@ mod tests {
     #[test]
     fn two_untimezoned_instants_still_subtract() {
         let ds = empty_ds();
-        let e = Expression::Subtract(
-            Box::new(typed_lit("2001-01-10T10:00:00", XSD_DATETIME)),
-            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        let e = Expression::arithmetic(
+            typed_lit("2001-01-10T10:00:00", XSD_DATETIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("2001-01-01T10:00:00", XSD_DATETIME),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("untimezoned difference");
         assert_eq!(lex, "P9D");
@@ -6715,9 +7317,10 @@ mod tests {
         let ds = empty_ds();
         // Dual discriminator A: a zero-valued yearMonthDuration result must
         // canonicalize as "P0M", not the general-duration "PT0S".
-        let e = Expression::Subtract(
-            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("P1Y", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Subtract,
+            typed_lit("P1Y", XSD_YEARMONTH_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("P1Y - P1Y");
         assert_eq!(lex, "P0M");
@@ -6730,9 +7333,10 @@ mod tests {
         // Dual discriminator B: the components alone look exactly like a
         // pure yearMonthDuration ("P1M"); only the declared tags differ, and
         // that must be enough to force the general xsd:duration result.
-        let e = Expression::Add(
-            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
-            Box::new(typed_lit("PT0S", XSD_DAYTIME_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("P1M", XSD_YEARMONTH_DURATION),
+            ArithmeticOperator::Add,
+            typed_lit("PT0S", XSD_DAYTIME_DURATION),
         );
         let (lex, dt) = lex_and_dt(&ds, &e).expect("P1M + PT0S");
         assert_eq!(lex, "P1M");
@@ -6747,8 +7351,8 @@ mod tests {
         // form, not through a plain single-discriminant numeric dispatch.
         let n = typed_lit("3", XINT);
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let forward = Expression::Multiply(Box::new(n.clone()), Box::new(dur.clone()));
-        let commuted = Expression::Multiply(Box::new(dur), Box::new(n));
+        let forward = Expression::arithmetic(n.clone(), ArithmeticOperator::Multiply, dur.clone());
+        let commuted = Expression::arithmetic(dur, ArithmeticOperator::Multiply, n);
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("3 * P1D");
         let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("P1D * 3");
         assert_eq!(flex, "P3D");
@@ -6765,13 +7369,18 @@ mod tests {
         // duration without silent rounding, so this is a type error, not a
         // coerced multiplication.
         let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
-        let by_double = Expression::Multiply(
-            Box::new(dur.clone()),
-            Box::new(typed_lit("1.5", XSD_DOUBLE)),
+        let by_double = Expression::arithmetic(
+            dur.clone(),
+            ArithmeticOperator::Multiply,
+            typed_lit("1.5", XSD_DOUBLE),
         );
         assert_eq!(lex(&ds, &by_double), None);
         // A NaN factor must stay a type error too, never coerce to zero.
-        let by_nan = Expression::Multiply(Box::new(dur), Box::new(typed_lit("NaN", XSD_DOUBLE)));
+        let by_nan = Expression::arithmetic(
+            dur,
+            ArithmeticOperator::Multiply,
+            typed_lit("NaN", XSD_DOUBLE),
+        );
         assert_eq!(lex(&ds, &by_nan), None);
     }
 
@@ -6780,9 +7389,10 @@ mod tests {
         let ds = empty_ds();
         // Unlike `*`, `/` is not symmetric: `Nx / DUR` has no valid row even
         // though `DUR / Nx` does.
-        let e = Expression::Divide(
-            Box::new(typed_lit("3", XINT)),
-            Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+        let e = Expression::arithmetic(
+            typed_lit("3", XINT),
+            ArithmeticOperator::Divide,
+            typed_lit("P1D", XSD_DAYTIME_DURATION),
         );
         assert_eq!(lex(&ds, &e), None);
     }
@@ -6824,17 +7434,19 @@ mod tests {
         // The only pin of `time`'s CyclicDay second-action through this
         // dispatch: crossing midnight in either direction must wrap, not
         // error or clamp.
-        let forward = Expression::Add(
-            Box::new(typed_lit("23:00:00", XSD_TIME)),
-            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        let forward = Expression::arithmetic(
+            typed_lit("23:00:00", XSD_TIME),
+            ArithmeticOperator::Add,
+            typed_lit("PT2H", XSD_DAYTIME_DURATION),
         );
         let (flex, fdt) = lex_and_dt(&ds, &forward).expect("23:00:00 + PT2H");
         assert_eq!(flex, "01:00:00");
         assert_eq!(fdt, XSD_TIME);
 
-        let backward = Expression::Subtract(
-            Box::new(typed_lit("01:00:00", XSD_TIME)),
-            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        let backward = Expression::arithmetic(
+            typed_lit("01:00:00", XSD_TIME),
+            ArithmeticOperator::Subtract,
+            typed_lit("PT2H", XSD_DAYTIME_DURATION),
         );
         let (blex, bdt) = lex_and_dt(&ds, &backward).expect("01:00:00 - PT2H");
         assert_eq!(blex, "23:00:00");
@@ -7624,29 +8236,22 @@ mod tests {
         );
     }
 
-    /// Before this fix, `EvalCtx::prepared_exists` early-returned a FRESH
-    /// `PreparedExists::build` (ENF-normalize, clone, full structural analysis) EVERY time
-    /// it was reached while `EvalCtx::in_substituted_exists` was set — which is exactly what
-    /// happens for a nested `EXISTS` reached while an OUTER correlated `EXISTS`'s definition
-    /// path substitutes and re-evaluates its inner once per distinct μ-restriction. With
-    /// `crate::enf::ledger_source_map` tracking installed and
-    /// `crate::expr::substitute_expr`'s `Expression::Exists`
-    /// arm threaded through the tracked substitution walk, `prepared_exists` now resolves
-    /// the nested site's per-row copy address one hop back to its STABLE, un-substituted
-    /// AST address and hits `EvalCtx::exists_prepared_cache` under that address instead.
+    /// A nested `EXISTS` reached while an OUTER correlated `EXISTS`'s definition path
+    /// substitutes and re-evaluates its inner once per distinct μ-restriction is prepared
+    /// ONCE per evaluation, not once per reach: the substitution leaves it as a
+    /// placeholder whose site (`crate::deferred_exists::ExistsSite`) was prepared from
+    /// the written body and cached by that body's address. Under an explanation (a charge
+    /// ledger installed) too, where the walk is tracked.
     ///
     /// Observable via `crate::eval::PREPARED_EXISTS_BUILD_COUNT` (test-only,
     /// thread-local — see its doc): 3 outer rows, 3 DISTINCT μ-restrictions (so the OUTER
     /// `EXISTS`'s own μ-restriction memo cannot mask this), and therefore 3 separate
-    /// definition-path reaches of the nested `EXISTS` site. Before this fix: 1 build for the
-    /// OUTER site + 3 rebuilds for the NESTED site (once per reach) = 4. After: 1 + 1 = 2 —
-    /// the nested site built once, reused for the other two reaches.
+    /// definition-path reaches of the nested `EXISTS` site. Rebuilding per reach counts
+    /// 1 build for the OUTER site + 3 for the NESTED site = 4; one build per site counts
+    /// 1 + 1 = 2.
     ///
-    /// Revert check: reverting the `Expression::Exists` arm in `crate::expr::substitute_expr`
-    /// back to the untracked `Expression::Exists(substitute_pattern(inner_pat, row))`, OR
-    /// reverting `EvalCtx::prepared_exists`'s one-hop resolve back to an unconditional
-    /// build-fresh under `in_substituted_exists`, reproduces the pre-fix count of 4 — this
-    /// test then fails, which is the intended regression signal.
+    /// Revert check: keeping nothing on the preparation (preparing its nested sites afresh
+    /// on every substitution, as for a per-row copy) reproduces the count of 4.
     #[test]
     fn nested_exists_prepare_is_cached_across_rows() {
         let mut b = RdfDatasetBuilder::new();
@@ -8345,9 +8950,10 @@ mod tests {
         let bind_sum = GraphPattern::Extend {
             inner: Box::new(scan),
             variable: Variable::new("sum"),
-            expression: Expression::Add(
-                Box::new(Expression::Variable(Variable::new("o"))),
-                Box::new(typed_lit("5", XINT)),
+            expression: Expression::arithmetic(
+                Expression::Variable(Variable::new("o")),
+                ArithmeticOperator::Add,
+                typed_lit("5", XINT),
             ),
         };
         let bind_label = GraphPattern::Extend {
@@ -8492,7 +9098,7 @@ mod tests {
         };
         let row = row_binding_iri("s", "alice");
 
-        let substituted = *substitute_pattern(&bgp, &row);
+        let substituted = *substitute_pattern(&bgp, &row).expect("the test stack is not exhausted");
         let GraphPattern::Join { left, right } = substituted else {
             panic!("expected a Join, got {bgp:?} -> not a Join");
         };
@@ -8537,7 +9143,8 @@ mod tests {
         };
         let row = row_binding_iri("s", "a");
 
-        let substituted = *substitute_pattern(&minus, &row);
+        let substituted =
+            *substitute_pattern(&minus, &row).expect("the test stack is not exhausted");
         let GraphPattern::Minus { left, right } = substituted else {
             panic!("Minus wrapper preserved");
         };
@@ -8610,7 +9217,8 @@ mod tests {
         };
         let row = row_binding_iri("s", "x1");
 
-        let substituted = *substitute_pattern(&subselect, &row);
+        let substituted =
+            *substitute_pattern(&subselect, &row).expect("the test stack is not exhausted");
         let GraphPattern::Project { inner, variables } = substituted else {
             panic!("Project wrapper preserved");
         };
@@ -8644,7 +9252,8 @@ mod tests {
             )],
         };
 
-        let substituted = *substitute_pattern(&call, &row);
+        let substituted =
+            *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
         let GraphPattern::PropertyFunction(c) = substituted else {
             panic!("a written value needs no driver, so the call stays a bare call");
         };
@@ -8682,7 +9291,8 @@ mod tests {
             term: vec![(Variable::new("w"), blank.clone())],
         };
 
-        let substituted = *substitute_pattern(&call, &row);
+        let substituted =
+            *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
         assert_eq!(
             substituted,
             GraphPattern::Lateral {
@@ -9746,5 +10356,226 @@ mod tests {
                 "{literal:?}"
             );
         }
+    }
+
+    // ---- n-ary chains are the left fold of their binary operator ---------------
+
+    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+
+    /// A `true`, `false` or type-error operand, by its three-valued value.
+    fn truth(value: Option<bool>) -> Expression {
+        match value {
+            Some(true) => typed_lit("true", XBOOL),
+            Some(false) => typed_lit("false", XBOOL),
+            // `<a> < <b>`: IRIs do not order, a type error.
+            None => Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b"))),
+        }
+    }
+
+    /// Every sequence of `len` three-valued operands.
+    fn truth_sequences(len: u32) -> Vec<Vec<Option<bool>>> {
+        (0..3_usize.pow(len))
+            .map(|mut code| {
+                (0..len)
+                    .map(|_| {
+                        let value = [Some(true), Some(false), None][code % 3];
+                        code /= 3;
+                        value
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The binary-shaped left-nested tree `op(op(op(a, b), c), d)` of a chain: every
+    /// node two operands, exactly the tree the binary operator's grammar builds.
+    fn left_nested(
+        operands: Vec<Expression>,
+        node: fn(Vec<Expression>) -> Expression,
+    ) -> Expression {
+        let mut operands = operands.into_iter();
+        let first = operands.next().expect("at least one operand");
+        operands.fold(first, |left, right| node(vec![left, right]))
+    }
+
+    /// For every sequence of up to five `true`/`false`/error operands, the n-ary `||`
+    /// and `&&` evaluate to exactly what the left-nested binary tree does, and to the
+    /// three-valued value computed here from the truth table: `||` is `true` if any
+    /// operand is, `false` if all are, an error otherwise; `&&` dually.
+    #[test]
+    fn n_ary_logical_chains_are_the_left_fold_of_the_binary_operator() {
+        let ds = empty_ds();
+        for len in 1..=5 {
+            for values in truth_sequences(len) {
+                let operands: Vec<Expression> = values.iter().map(|v| truth(*v)).collect();
+                let or_expected = if values.contains(&Some(true)) {
+                    Some(true)
+                } else if values.iter().all(|v| *v == Some(false)) {
+                    Some(false)
+                } else {
+                    None
+                };
+                let and_expected = if values.contains(&Some(false)) {
+                    Some(false)
+                } else if values.iter().all(|v| *v == Some(true)) {
+                    Some(true)
+                } else {
+                    None
+                };
+                let flat_or = Expression::Or(operands.clone());
+                assert_eq!(ebv(&ds, &flat_or), or_expected, "|| {values:?}");
+                let flat_and = Expression::And(operands.clone());
+                assert_eq!(ebv(&ds, &flat_and), and_expected, "&& {values:?}");
+                if len >= 2 {
+                    let nested_or = left_nested(operands.clone(), Expression::Or);
+                    assert_eq!(ebv(&ds, &nested_or), or_expected, "nested || {values:?}");
+                    let nested_and = left_nested(operands, Expression::And);
+                    assert_eq!(ebv(&ds, &nested_and), and_expected, "nested && {values:?}");
+                }
+            }
+        }
+        // The constructed shapes the parser never builds: an empty chain is the
+        // operator's identity.
+        assert_eq!(ebv(&ds, &Expression::Or(vec![])), Some(false));
+        assert_eq!(ebv(&ds, &Expression::And(vec![])), Some(true));
+    }
+
+    /// An operand that raises a HARD error (an unregistered custom function) fails the
+    /// whole chain wherever it stands — after a `true` in `||` or a `false` in `&&`
+    /// too — because the binary operator evaluates both of its operands, so the tree
+    /// the chain stands for reaches every operand. Its neighbour without the hard
+    /// operand answers.
+    #[test]
+    fn a_hard_error_anywhere_in_a_logical_chain_fails_it() {
+        let ds = empty_ds();
+        let hard = || {
+            Expression::FunctionCall(
+                Function::Custom(NamedNode::new_unchecked(
+                    "https://example.org/fn/unregistered",
+                )),
+                vec![],
+            )
+        };
+        let run = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            eval_ebv(expr, &[], &VarSchema::new(), &mut ctx)
+        };
+        let or = Expression::Or(vec![truth(Some(true)), truth(None), hard()]);
+        assert!(run(&or).is_err());
+        let and = Expression::And(vec![truth(Some(false)), hard(), truth(Some(true))]);
+        assert!(run(&and).is_err());
+        let or = Expression::Or(vec![truth(Some(true)), truth(None), truth(Some(false))]);
+        assert_eq!(run(&or).expect("no hard error"), Some(true));
+    }
+
+    /// The terms an arithmetic chain is drawn from: integers, decimals, a float,
+    /// doubles on both sides of a rounding tie, `NaN`, zero (for division), and a
+    /// string, which is a type error.
+    fn arithmetic_operand(index: usize) -> Expression {
+        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+        match index % 11 {
+            0 => typed_lit("7", XINT),
+            1 => typed_lit("-3", XINT),
+            2 => typed_lit("0", XINT),
+            3 => typed_lit("2.5", XDEC),
+            4 => typed_lit("0.1", XDEC),
+            5 => typed_lit("1.5", XFLT),
+            6 => typed_lit("1.0E16", XDBL),
+            7 => typed_lit("1.0E0", XDBL),
+            8 => typed_lit("NaN", XDBL),
+            9 => typed_lit("3", XINT),
+            _ => lit("x"),
+        }
+    }
+
+    /// Four hundred deterministic chains of two to nine operands over every operator
+    /// and every operand type evaluate, as one n-ary node, to exactly the term —
+    /// lexical form and datatype, or the error — that the left-nested binary tree of
+    /// one-step nodes evaluates to. The binary tree is the grammar's own shape; the
+    /// chain is its left spine.
+    #[test]
+    fn arithmetic_chains_are_the_left_fold_of_the_binary_operators() {
+        let ds = empty_ds();
+        let ops = [
+            ArithmeticOperator::Add,
+            ArithmeticOperator::Subtract,
+            ArithmeticOperator::Multiply,
+            ArithmeticOperator::Divide,
+        ];
+        let term = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            let term = eval_expr(expr, &[], &VarSchema::new(), &mut ctx).expect("no hard error");
+            term.map(|t| value_of(&ctx, t))
+        };
+        // A fixed linear congruential sequence: the cases are the same on every run.
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(state >> 33).expect("31 bits fit") % bound
+        };
+        let mut values = 0;
+        for _ in 0..400 {
+            let len = 2 + next(8);
+            let first = arithmetic_operand(next(11));
+            let steps: Vec<(ArithmeticOperator, Expression)> = (1..len)
+                .map(|_| (ops[next(4)], arithmetic_operand(next(11))))
+                .collect();
+            let flat = Expression::Arithmetic(Box::new(first.clone()), steps.clone());
+            let nested = steps.iter().cloned().fold(first, |left, step| {
+                Expression::Arithmetic(Box::new(left), vec![step])
+            });
+            let expected = term(&nested);
+            values += usize::from(expected.is_some());
+            assert_eq!(term(&flat), expected, "{flat:?}");
+        }
+        // The cases are not all errors: most of them compare values.
+        assert!(values > 100, "{values} of 400 chains have a value");
+        // A chain with no step denotes its first operand.
+        assert_eq!(
+            term(&Expression::Arithmetic(
+                Box::new(typed_lit("7", XINT)),
+                vec![]
+            )),
+            term(&typed_lit("7", XINT))
+        );
+    }
+
+    /// Every operand of an arithmetic chain is evaluated, as the binary node evaluates
+    /// both of its operands: a hard error after a step that already raised a type
+    /// error still fails the chain, and its neighbour without the hard operand is the
+    /// ordinary type error.
+    #[test]
+    fn a_hard_error_after_a_type_error_in_an_arithmetic_chain_fails_it() {
+        let ds = empty_ds();
+        let run = |expr: &Expression| {
+            let mut ctx = EvalCtx::new(&*ds);
+            eval_expr(expr, &[], &VarSchema::new(), &mut ctx).map(|term| term.is_some())
+        };
+        let hard = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(
+                "https://example.org/fn/unregistered",
+            )),
+            vec![],
+        );
+        let chain = Expression::Arithmetic(
+            Box::new(lit("x")),
+            vec![
+                (ArithmeticOperator::Add, typed_lit("1", XINT)),
+                (ArithmeticOperator::Multiply, hard),
+            ],
+        );
+        assert!(run(&chain).is_err());
+        let neighbour = Expression::Arithmetic(
+            Box::new(lit("x")),
+            vec![
+                (ArithmeticOperator::Add, typed_lit("1", XINT)),
+                (ArithmeticOperator::Multiply, typed_lit("2", XINT)),
+            ],
+        );
+        assert!(!run(&neighbour).expect("no hard error"));
     }
 }

@@ -167,6 +167,12 @@ fn is_spine(pattern: &GraphPattern) -> bool {
 
 /// The leaves under the spine rooted at `pattern`, in written order.
 fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
+    // A walk over the whole query. From an in-process `SERVICE`, which may sit deep in
+    // an evaluation, it runs inside a `crate::stack::walk` scope that discards the
+    // placeholder; everywhere else no scope is open and this never refuses.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     match pattern {
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
             if is_spine(pattern) =>
@@ -180,6 +186,10 @@ fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) 
 
 /// [`spine_leaves`], mutably.
 fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut GraphPattern>) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     if !is_spine(pattern) {
         out.push(pattern);
         return;
@@ -270,6 +280,10 @@ fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
 /// spine walked in place, so a pattern with nothing to rename allocates nothing
 /// (this walk runs on every admission, prepared re-runs included).
 fn any_spine_leaf(pattern: &GraphPattern, test: &mut impl FnMut(&GraphPattern) -> bool) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     match pattern {
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
             if is_spine(pattern) =>
@@ -305,6 +319,10 @@ fn leaf_has_blank(leaf: &GraphPattern) -> bool {
 }
 
 fn pattern_needs(pattern: &GraphPattern) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     if is_spine(pattern) {
         // Only a spine with blanks in two of its leaves can share a label, and only
         // that one pays for collecting them.
@@ -331,8 +349,8 @@ fn pattern_needs(pattern: &GraphPattern) -> bool {
         | GraphPattern::Service { .. } => false,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => pattern_needs(left) || pattern_needs(right),
+        GraphPattern::Union { arms } => arms.iter().any(pattern_needs),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -379,20 +397,24 @@ fn aggregate_needs(aggregate: &AggregateExpression) -> bool {
 }
 
 fn expression_needs(expr: &Expression) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     match expr {
         Expression::Exists(pattern) => pattern_needs(pattern),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            operands.iter().any(expression_needs)
+        }
+        Expression::Arithmetic(first, steps) => {
+            expression_needs(first) || steps.iter().any(|(_, operand)| expression_needs(operand))
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => expression_needs(a) || expression_needs(b),
+        | Expression::LessOrEqual(a, b) => expression_needs(a) || expression_needs(b),
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             expression_needs(a)
         }
@@ -417,6 +439,10 @@ fn expression_needs(expr: &Expression) -> bool {
 // ---------------------------------------------------------------------------
 
 fn rewrite_pattern(pattern: &mut GraphPattern, next_spine: &mut usize) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     if is_spine(pattern) {
         let shared = {
             let mut leaves = Vec::new();
@@ -445,10 +471,14 @@ fn rewrite_pattern(pattern: &mut GraphPattern, next_spine: &mut usize) {
         | GraphPattern::Service { .. } => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             rewrite_pattern(left, next_spine);
             rewrite_pattern(right, next_spine);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                rewrite_pattern(arm, next_spine);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -533,20 +563,29 @@ fn rewrite_aggregate(
 }
 
 fn rewrite_expression(expr: &mut Expression, next_spine: &mut usize) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     match expr {
         Expression::Exists(pattern) => rewrite_pattern(pattern, next_spine),
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                rewrite_expression(operand, next_spine);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            rewrite_expression(first, next_spine);
+            for (_, operand) in steps {
+                rewrite_expression(operand, next_spine);
+            }
+        }
+        Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
+        | Expression::LessOrEqual(a, b) => {
             rewrite_expression(a, next_spine);
             rewrite_expression(b, next_spine);
         }

@@ -1002,11 +1002,24 @@ fn is_blank_var(var: &Variable) -> bool {
 
 /// Compile a triple pattern's positions. Returns `Ok(None)` if a ground constant is
 /// absent from the dataset (the pattern — and hence the BGP — cannot match).
+///
+/// So does a pattern whose subject or object holds triple terms nested deeper than any
+/// the dataset holds ([`DatasetView::triple_term_nesting_bound`]): no term it could
+/// match exists, and it is answered as matching nothing before any of it is converted,
+/// looked up or matched level by level. The nesting is counted without recursion. A
+/// dataset that vouches for no bound is matched the long way, which the evaluation's
+/// reserve for its triple terms keeps within the stack (see [`crate::stack`]).
 fn compile_pattern<D: DatasetView>(
     pattern: &TriplePattern,
     schema: &VarSchema,
     dataset: &D,
 ) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
+    if let Some(bound) = dataset.triple_term_nesting_bound()
+        && (pattern.subject.triple_term_nesting() > bound
+            || pattern.object.triple_term_nesting() > bound)
+    {
+        return Ok(None);
+    }
     let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
         return Ok(None);
     };
@@ -1419,6 +1432,9 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
+    // One level per algebra node, and a governed evaluation surveys its whole plan
+    // before the first operator runs: see `crate::stack`.
+    crate::stack::check("plan survey")?;
     match pattern {
         GraphPattern::Bgp { patterns } => {
             if patterns.is_empty() {
@@ -1507,9 +1523,19 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 )?;
             }
         }
-        GraphPattern::Union { left, right }
-        | GraphPattern::LeftJoin { left, right, .. }
-        | GraphPattern::Minus { left, right } => {
+        GraphPattern::Union { arms } => {
+            for arm in arms {
+                survey_pattern_plans(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    arm,
+                    relations,
+                    survey,
+                )?;
+            }
+        }
+        GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
             survey_pattern_plans(
                 dataset,
                 active_dataset,

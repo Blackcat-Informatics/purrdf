@@ -24,10 +24,10 @@ use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, FastMap, RdfDataset};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
-    AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, InternedGoverned,
-    InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine, Prebinding,
-    PreparedExecution, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding,
-    UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, GraphResolver,
+    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine,
+    Prebinding, PreparedExecution, PropertyFunctionRegistry, QueryOptions, ServiceResolver,
+    ShaclPrebinding, StopCause, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -620,6 +620,21 @@ thread_local! {
     /// the `Arc` still lets nested evaluator workers share the one operation-owned state.
     static CURRENT_GOVERNORS: RefCell<Option<Arc<GovernorState>>> = const { RefCell::new(None) };
 
+    /// The `SERVICE` and `LOAD` sources in force for the current validation, set by
+    /// [`enter_execution_scope`] together with the governors that bound them.
+    ///
+    /// Read only when [`CURRENT_GOVERNORS`] holds a state, so the ungoverned path —
+    /// every synchronous validation — pays nothing for it: [`AmbientScopes::snapshot`]
+    /// already read the governor slot and skips this one when it is empty. That is
+    /// exact rather than an approximation, because [`enter_execution_scope`] is the
+    /// only way to install sources and it installs a governor state beside them.
+    static CURRENT_SOURCES: RefCell<Option<Arc<QuerySources>>> = const { RefCell::new(None) };
+
+    /// The extension environment [`current_env`] last built, beside the registry handles
+    /// it was built from. Module-level rather than inside [`current_env`] so
+    /// [`replace_ambient_context`] can carry it with the scopes it memoizes.
+    static CACHED_ENV: RefCell<Option<CachedEnv>> = const { RefCell::new(None) };
+
     /// The custom node-expression function call depth in force on this thread — the
     /// counter [`crate::expression::RecursionGuard::enter_call`] charges.
     ///
@@ -708,6 +723,191 @@ pub fn enter_governor_scope(state: Arc<GovernorState>) -> GovernorScope {
 #[must_use]
 pub fn current_governors() -> Option<Arc<GovernorState>> {
     CURRENT_GOVERNORS.with(|slot| slot.borrow().clone())
+}
+
+/// The effect sources a validation's SPARQL may reach beyond the data graph: a
+/// `SERVICE` clause's resolver and a `LOAD`'s.
+///
+/// Owned (`Arc`) rather than borrowed because they live in a thread-local slot for
+/// the length of a validation, and `Send` because a suspended caller carries them in
+/// its [`AmbientContext`] off the thread-local and back.
+#[derive(Clone, Default)]
+pub struct QuerySources {
+    /// The `SERVICE` source, if any. Without one a non-`SILENT` `SERVICE` fails by
+    /// name, exactly as it does on a validation that installed no sources.
+    pub remote: Option<Arc<dyn ServiceResolver + Send + Sync>>,
+    /// The `LOAD` source, if any.
+    pub load: Option<Arc<dyn GraphResolver + Send + Sync>>,
+}
+
+impl std::fmt::Debug for QuerySources {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuerySources")
+            .field("remote", &self.remote.as_ref().map(|_| "<resolver>"))
+            .field("load", &self.load.as_ref().map(|_| "<resolver>"))
+            .finish()
+    }
+}
+
+/// An RAII scope that installs a governor state and the effect sources it bounds for
+/// the duration of a validation, restoring the previous values on drop.
+///
+/// The one door through which SHACL SPARQL reaches a `SERVICE` or `LOAD` source.
+/// It installs the governors WITH the sources, never the sources alone, because a
+/// remote call is the one place an evaluation can wait on something it does not
+/// control, and the state is what carries the stop signal that call observes: a
+/// source with no signal beside it would be an unbounded wait. It is also what keeps
+/// the ungoverned path free — the sources' slot is read only when a governor state is
+/// installed, and this is the only way to fill it.
+///
+/// A governed validation runs its focus nodes serially (see `validate_with_governors`),
+/// so every query of the validation runs on the thread that holds this scope.
+#[must_use]
+#[derive(Debug)]
+pub struct ExecutionScope {
+    /// Held for its `Drop`, which restores the governor slot after this scope's own
+    /// `Drop` has restored the sources' slot.
+    _governors: GovernorScope,
+    previous_sources: Option<Arc<QuerySources>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for ExecutionScope {
+    fn drop(&mut self) {
+        let restore = self.previous_sources.take();
+        CURRENT_SOURCES.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `state` as the governor accounting for every SPARQL query this thread runs,
+/// and `sources` as the `SERVICE` and `LOAD` sources those queries reach, returning a
+/// guard that restores both when dropped.
+///
+/// Whatever validation, change validation or rule application runs inside the scope is
+/// governed by `state` — its focus nodes run serially and poll `state`'s stop signal
+/// between them as well as inside every query — and resolves its `SERVICE` clauses
+/// through `sources`. After it returns, [`GovernorState::tripped`] says whether the stop
+/// signal (or a ceiling) ended it.
+pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -> ExecutionScope {
+    let governors = enter_governor_scope(state);
+    let previous_sources =
+        CURRENT_SOURCES.with(|slot| slot.borrow_mut().replace(Arc::new(sources)));
+    ExecutionScope {
+        _governors: governors,
+        previous_sources,
+        _not_send: PhantomData,
+    }
+}
+
+/// Every ambient scope this module keeps on the thread, taken off it as one value.
+///
+/// The ambient scopes are RAII guards over thread-locals, which assumes the guards
+/// nest: the scope a validation installs is removed before the scope around it is.
+/// A caller that suspends a validation mid-flight — a stack-switching runtime that
+/// parks one validation's frames and runs another, or a synchronous call, before
+/// resuming it — breaks that nesting, and without this the next caller on the thread
+/// would read the suspended validation's governors, sources and registries as its own,
+/// and the suspended one would resume under whatever the next caller left installed.
+///
+/// Such a runtime swaps the whole context at every suspension and resumption with
+/// [`replace_ambient_context`], exactly as it swaps its stack context: each validation
+/// then sees only the scopes it installed, and its guards restore values it installed,
+/// in whatever order the validations finish. [`Self::default`] is the context of a
+/// thread with no validation in progress.
+///
+/// What is here, and what is deliberately not:
+///
+/// * the function, property-function and aggregate registries, the parser options, the
+///   governor state, the effect sources and the custom-function call depth — every
+///   installed scope — and the extension environment memoized from them, so a resumed
+///   validation finds its own memo rather than rebuilding it;
+/// * NOT the per-thread engine (its plan cache is borrowed only inside one planning
+///   statement, which neither polls nor calls a resolver) and NOT the prepared-handle
+///   cache (a running validation holds its handle checked OUT, so nothing another
+///   caller does to the cache can reach it, and an entry prepared under another
+///   environment is re-prepared at checkout rather than run).
+#[derive(Default)]
+pub struct AmbientContext {
+    functions: Option<Arc<BoundFunctionRegistry>>,
+    parser_options: Option<Arc<ParserOptions>>,
+    property_functions: Option<Arc<PropertyFunctionRegistry>>,
+    aggregates: Option<Arc<AggregateRegistry>>,
+    governors: Option<Arc<GovernorState>>,
+    sources: Option<Arc<QuerySources>>,
+    cached_env: Option<CachedEnv>,
+    call_depth: u32,
+}
+
+impl std::fmt::Debug for AmbientContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmbientContext")
+            .field("functions", &self.functions.is_some())
+            .field("parser_options", &self.parser_options.is_some())
+            .field("property_functions", &self.property_functions.is_some())
+            .field("aggregates", &self.aggregates.is_some())
+            .field("governors", &self.governors.is_some())
+            .field("sources", &self.sources)
+            .field("cached_env", &self.cached_env.is_some())
+            .field("call_depth", &self.call_depth)
+            .finish()
+    }
+}
+
+impl AmbientContext {
+    /// Whether this context has no scope installed — the context of a thread with no
+    /// validation in progress.
+    #[must_use]
+    pub const fn is_idle(&self) -> bool {
+        self.functions.is_none()
+            && self.parser_options.is_none()
+            && self.property_functions.is_none()
+            && self.aggregates.is_none()
+            && self.governors.is_none()
+            && self.sources.is_none()
+            && self.call_depth == 0
+    }
+}
+
+/// Install `next` as this thread's ambient context and return the one it replaces.
+/// See [`AmbientContext`].
+pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
+    AmbientContext {
+        functions: CURRENT_FUNCTIONS.with(|slot| slot.replace(next.functions)),
+        parser_options: CURRENT_PARSER_OPTIONS.with(|slot| slot.replace(next.parser_options)),
+        property_functions: CURRENT_PROPERTY_FUNCTIONS
+            .with(|slot| slot.replace(next.property_functions)),
+        aggregates: CURRENT_AGGREGATES.with(|slot| slot.replace(next.aggregates)),
+        governors: CURRENT_GOVERNORS.with(|slot| slot.replace(next.governors)),
+        sources: CURRENT_SOURCES.with(|slot| slot.replace(next.sources)),
+        cached_env: CACHED_ENV.with(|slot| slot.replace(next.cached_env)),
+        call_depth: CURRENT_CALL_DEPTH.with(|slot| slot.replace(next.call_depth)),
+    }
+}
+
+/// The error a governed validation stops with when `state`'s stop signal fires between
+/// two evaluations, rather than inside a query.
+///
+/// Its words are never the reported outcome: the governed entries read the TYPED trip
+/// back off the state, which [`GovernorState::poll_stop`] latched, exactly as they do for
+/// a trip inside a query. The message exists so the `Err` that unwinds the validation
+/// names what happened if some caller reads it anyway.
+pub(crate) fn stopped_between_evaluations(cause: StopCause) -> String {
+    format!(
+        "validation stopped between evaluations ({cause:?}); a conformance verdict cannot be \
+         computed from a validation that did not finish"
+    )
+}
+
+/// Poll the stop signal of `governors` — the state read once, before a loop, with
+/// [`current_governors`] — and turn a fired signal into the error that unwinds the
+/// validation. `None` (the ungoverned path) costs one branch.
+pub(crate) fn poll_between_evaluations(governors: Option<&GovernorState>) -> Result<(), String> {
+    match governors.and_then(GovernorState::poll_stop) {
+        Some(cause) => Err(stopped_between_evaluations(cause)),
+        None => Ok(()),
+    }
 }
 
 /// Run one SHACL-driven SPARQL query against `dataset`, under this validation's governors
@@ -855,6 +1055,9 @@ struct AmbientScopes {
     env: Arc<ExtensionEnv>,
     /// The operation budget in force, if a validation installed one.
     governors: Option<Arc<GovernorState>>,
+    /// The `SERVICE` and `LOAD` sources in force, if an execution scope installed them.
+    /// Always `None` on an ungoverned run — see [`CURRENT_SOURCES`].
+    sources: Option<Arc<QuerySources>>,
     /// The custom-function call depth, so a recursion that reaches SPARQL and comes
     /// back keeps counting instead of restarting at zero.
     call_depth: u32,
@@ -873,10 +1076,19 @@ impl AmbientScopes {
     ///
     /// `Err(String)` if the extension environment cannot be derived.
     fn snapshot() -> Result<Self, String> {
+        let governors = current_governors();
+        // Sources exist only beside a governor state (see `CURRENT_SOURCES`), so the
+        // ungoverned path does not touch their slot at all.
+        let sources = if governors.is_some() {
+            CURRENT_SOURCES.with(|slot| slot.borrow().clone())
+        } else {
+            None
+        };
         Ok(Self {
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
             env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
-            governors: current_governors(),
+            governors,
+            sources,
             call_depth: current_call_depth(),
         })
     }
@@ -900,20 +1112,36 @@ impl AmbientScopes {
         bnode_mint_prefix: Option<&'a str>,
     ) -> QueryOptions<'a> {
         let functions = self.functions();
-        QueryOptions {
-            prebinding,
-            functions,
-            env: &self.env,
-            bnode_mint_prefix,
-            // The graph THIS query is reading, handed to any expression-bodied
-            // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
-            // fixpoint round that rebuilt its dataset supplies the rebuilt one.
-            focus_graph: functions
-                .requires_focus_graph()
-                .then(|| dataset.focus_graph())
-                .flatten(),
-            call_depth: self.call_depth,
-        }
+        // The graph THIS query is reading, handed to any expression-bodied
+        // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
+        // fixpoint round that rebuilt its dataset supplies the rebuilt one.
+        let focus_graph = functions
+            .requires_focus_graph()
+            .then(|| dataset.focus_graph())
+            .flatten();
+        // A shapes graph's SPARQL runs over the data graph under validation. It
+        // reaches a `SERVICE` or `LOAD` source only when the validation's caller
+        // installed one through `enter_execution_scope`; otherwise none is
+        // configured, and a non-`SILENT` `SERVICE` fails by name.
+        let remote = self
+            .sources
+            .as_deref()
+            .and_then(|sources| sources.remote.as_deref())
+            .map(|remote| remote as &(dyn ServiceResolver + Sync));
+        let load = self
+            .sources
+            .as_deref()
+            .and_then(|sources| sources.load.as_deref())
+            .map(|load| load as &(dyn GraphResolver + Sync));
+        QueryOptions::new()
+            .with_prebinding(prebinding)
+            .with_functions(functions)
+            .with_env(&self.env)
+            .with_bnode_mint_prefix(bnode_mint_prefix)
+            .with_focus_graph(focus_graph)
+            .with_call_depth(self.call_depth)
+            .with_remote(remote)
+            .with_load(load)
     }
 
     /// The configuration a prepared plan's admission depends on, held so a handle
@@ -1076,14 +1304,10 @@ impl ShaclExecution {
             "a repeated parameter name has no single slot to bind and must fall back to the \
              `&str` door, which keeps a per-variable path for it"
         );
-        let options = QueryOptions {
-            prebinding: lane,
-            functions: scopes.functions(),
-            env: &scopes.env,
-            bnode_mint_prefix: None,
-            focus_graph: None,
-            call_depth: 0,
-        };
+        let options = QueryOptions::new()
+            .with_prebinding(lane)
+            .with_functions(scopes.functions())
+            .with_env(&scopes.env);
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
             .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -1608,10 +1832,6 @@ impl Drop for FunctionScope {
 ///
 /// A message if a registered relation's or aggregate's declaration methods panic.
 pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
-    thread_local! {
-        static CACHED_ENV: RefCell<Option<CachedEnv>> = const { RefCell::new(None) };
-    }
-
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let options = current_parser_options();

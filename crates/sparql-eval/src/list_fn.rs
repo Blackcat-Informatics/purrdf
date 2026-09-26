@@ -97,7 +97,7 @@ fn list_get<D: DatasetView + Sync>(
         return Ok(None);
     }
     match members.into_iter().nth(idx as usize) {
-        Some(value) => Ok(intern(ctx, value)),
+        Some(value) => intern(ctx, value),
         None => Ok(None),
     }
 }
@@ -158,7 +158,7 @@ fn list_slice<D: DatasetView + Sync>(
     let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
     let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
     let value = materialize_list(ctx, slice);
-    Ok(intern(ctx, value))
+    intern(ctx, value)
 }
 
 /// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
@@ -176,7 +176,7 @@ fn list_concat<D: DatasetView + Sync>(
     };
     left.extend(right);
     let value = materialize_list(ctx, left);
-    Ok(intern(ctx, value))
+    intern(ctx, value)
 }
 
 /// Invent a fresh `rdf:List` carrying `members` in order, returning its head term.
@@ -267,11 +267,16 @@ fn as_index(value: &TermValue) -> Option<i64> {
 /// something here would be.
 ///
 /// [`RdfDataset`]: purrdf_core::RdfDataset
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the value is a triple term nested deeper than the
+/// evaluation can keep stack for (see [`crate::stack::admit_term`]).
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
-) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern_checked(ctx.dataset, value)
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    ctx.scratch.try_intern_checked(ctx.dataset, value)
 }
 
 /// Intern a typed (no-language) literal. Infallible: there is no tag to judge.

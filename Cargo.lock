@@ -1676,8 +1676,10 @@ dependencies = [
  "memchr",
  "pretty_assertions",
  "proptest",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-xsd",
  "regex",
 ]
@@ -1718,6 +1720,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-xsd",
  "rayon",
  "regex",
@@ -1738,6 +1741,14 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-iri",
+]
+
+[[package]]
+name = "purrdf-stack"
+version = "2.0.2"
+dependencies = [
+ "libc",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1777,12 +1788,16 @@ name = "purrdf-wasm"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "js-sys",
  "pretty_assertions",
  "purrdf",
  "purrdf-core",
  "purrdf-events",
+ "purrdf-shapes",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-validate",
  "serde",
  "serde_json",

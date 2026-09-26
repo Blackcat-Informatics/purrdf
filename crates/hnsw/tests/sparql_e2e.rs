@@ -76,11 +76,10 @@ fn answer(registry: &PropertyFunctionRegistry, query: &str) -> Vec<Vec<Option<Te
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
     let SparqlResult::Solutions { rows, .. } = result else {

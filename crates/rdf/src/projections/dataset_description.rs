@@ -404,9 +404,11 @@ fn pattern_reaches_non_reproducible_builtin(
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => None,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => pattern_reaches_non_reproducible_builtin(left)
             .or_else(|| pattern_reaches_non_reproducible_builtin(right)),
+        GraphPattern::Union { arms } => arms
+            .iter()
+            .find_map(pattern_reaches_non_reproducible_builtin),
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
@@ -510,18 +512,21 @@ fn expression_reaches_non_reproducible_builtin(
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => None,
-        Expression::Or(left, right)
-        | Expression::And(left, right)
-        | Expression::Equal(left, right)
+        Expression::Or(operands) | Expression::And(operands) => operands
+            .iter()
+            .find_map(expression_reaches_non_reproducible_builtin),
+        Expression::Arithmetic(first, steps) => expression_reaches_non_reproducible_builtin(first)
+            .or_else(|| {
+                steps
+                    .iter()
+                    .find_map(|(_, operand)| expression_reaches_non_reproducible_builtin(operand))
+            }),
+        Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right)
-        | Expression::Add(left, right)
-        | Expression::Subtract(left, right)
-        | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => expression_reaches_non_reproducible_builtin(left)
+        | Expression::LessOrEqual(left, right) => expression_reaches_non_reproducible_builtin(left)
             .or_else(|| expression_reaches_non_reproducible_builtin(right)),
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
             expression_reaches_non_reproducible_builtin(inner)

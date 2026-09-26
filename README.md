@@ -355,10 +355,13 @@ triple pattern.
   outgoing SPARQL Protocol request built by the deterministic serializer,
   round-trip-swept over the 823-item vendored corpus (update requests
   included). Where it stops: PurRDF ships no HTTP client — the exchange is an
-  `HttpTransport` trait the Rust host implements — and no shipped surface (CLI,
-  Python, wasm, C) installs a resolver, so `SERVICE` and `LOAD` there fail by
-  name unless written `SILENT`; federation is a Rust-host composition, not a
-  turnkey feature. A host scalar function
+  `HttpTransport` trait the Rust host implements. The CLI, Python and C surfaces
+  install no resolver, and neither do the wasm package's synchronous methods, so
+  `SERVICE` and `LOAD` there fail by name, `SILENT` or not. The wasm
+  package's asynchronous methods take host resolvers: JavaScript
+  `resolveService`/`resolveLoad` handlers the job suspends on through JSPI, or
+  the `fetch`-based ones its Cloudflare adapter builds. Federation is a host
+  composition, not a built-in network client. A host scalar function
   on the native seam carries SPARQL's expression-error channel: a per-solution
   domain error eliminates the row under `FILTER` or leaves the variable unbound
   under `BIND`/`SELECT` instead of aborting the query. Gated by the full W3C
@@ -680,6 +683,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space, with the caller-keyed extension seams (scalar functions, property functions — including the path-witness and embedding-kNN relations — custom aggregates, and the per-service `ServiceResolver`) and the execution governors. |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
 | [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL composite datatypes (`cdt:List`/`cdt:Map`): the value space, an iterative bounded lexical scanner, canonical spelling, and the fifteen-function library. A `no_std` closed leaf over `purrdf-iri` + `purrdf-xsd`; reached through the evaluator, not re-exported by the umbrella. |
+| [`purrdf-stack`](./crates/stack/) | How much stack the running thread has left — natively the operating system's thread limit, read via target-gated `libc`/`windows-sys` declarations with no build-time C toolchain, on wasm32 the shadow stack against a floor the host can install — and the margin the SPARQL parser and evaluator refuse at, typed, instead of overflowing. |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL validation engine (full Core + SHACL-SPARQL + SHACL-AF, including SHACL Rules). |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
 | [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |

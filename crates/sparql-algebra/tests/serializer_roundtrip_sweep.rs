@@ -280,9 +280,8 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             expr: expr.clone(),
             inner: Box::new(normalize_join_assoc(inner)),
         },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(normalize_join_assoc(left)),
-            right: Box::new(normalize_join_assoc(right)),
+        GraphPattern::Union { arms } => GraphPattern::Union {
+            arms: arms.iter().map(normalize_join_assoc).collect(),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),

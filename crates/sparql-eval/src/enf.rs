@@ -299,6 +299,11 @@ fn order_by_erasable(expression: &[OrderExpression]) -> bool {
 /// deterministic, and idempotent — see the module doc's "Fixpoint, determinism,
 /// idempotence" section.
 pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
+    // One level per erased spine wrapper, reached from an `EXISTS` that may already be
+    // deep: see `crate::stack::walk`, whose scope discards this placeholder.
+    if crate::stack::walk_is_low("EXISTS normalization") {
+        return Enf::FoldedEmpty;
+    }
     match pattern {
         // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
         // join condition) being effect-free; see the module doc's "Side
@@ -311,7 +316,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             if left_join_erasable(right, expression.as_ref()) {
                 normalize(left)
             } else {
-                Enf::Pattern(pattern.clone())
+                Enf::Pattern(crate::stack::clone::pattern(pattern))
             }
         }
         // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
@@ -319,7 +324,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             if order_by_erasable(expression) {
                 normalize(inner)
             } else {
-                Enf::Pattern(pattern.clone())
+                Enf::Pattern(crate::stack::clone::pattern(pattern))
             }
         }
         // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
@@ -338,7 +343,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             // hard-failed or reached a federation endpoint must not be erased.
             (_, Some(0)) => {
                 if soundness::pattern_can_hard_error(inner) {
-                    Enf::Pattern(pattern.clone())
+                    Enf::Pattern(crate::stack::clone::pattern(pattern))
                 } else {
                     Enf::FoldedEmpty
                 }
@@ -348,7 +353,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             // whatever this recursion returns.
             (0, _) => normalize(inner),
             // start > 0: not a transparent wrapper; stop here, unmodified.
-            (_, _) => Enf::Pattern(pattern.clone()),
+            (_, _) => Enf::Pattern(crate::stack::clone::pattern(pattern)),
         },
         // Project is transparent to the spine, but it is also a real node in the
         // output (the `PrjMap` boundary substitution narrows against) — rebuild it
@@ -360,18 +365,24 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
                 variables: variables.clone(),
             }),
         },
-        // Union: both branches are on the spine (empty iff BOTH are), so both get
-        // the same treatment; a branch that folds to empty drops out of the
-        // reconstructed Union entirely (Union(∅, R) ≡ R for emptiness purposes).
-        GraphPattern::Union { left, right } => match (normalize(left), normalize(right)) {
-            (Enf::FoldedEmpty, Enf::FoldedEmpty) => Enf::FoldedEmpty,
-            (Enf::FoldedEmpty, Enf::Pattern(r)) => Enf::Pattern(r),
-            (Enf::Pattern(l), Enf::FoldedEmpty) => Enf::Pattern(l),
-            (Enf::Pattern(l), Enf::Pattern(r)) => Enf::Pattern(GraphPattern::Union {
-                left: Box::new(l),
-                right: Box::new(r),
-            }),
-        },
+        // Union: every arm is on the spine (empty iff ALL are), so each gets the
+        // same treatment; an arm that folds to empty drops out of the reconstructed
+        // Union entirely (Union(∅, R) ≡ R for emptiness purposes), and a union left
+        // with one arm is that arm.
+        GraphPattern::Union { arms } => {
+            let mut kept: Vec<GraphPattern> = arms
+                .iter()
+                .filter_map(|arm| match normalize(arm) {
+                    Enf::FoldedEmpty => None,
+                    Enf::Pattern(p) => Some(p),
+                })
+                .collect();
+            match kept.len() {
+                0 => Enf::FoldedEmpty,
+                1 => Enf::Pattern(kept.remove(0)),
+                _ => Enf::Pattern(GraphPattern::Union { arms: kept }),
+            }
+        }
         // Every other variant consumes a row SET, not merely emptiness (Join/Filter/
         // Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
         // PropertyFunction/Service/Group/Lateral) — the spine stops here, unmodified.
@@ -381,7 +392,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         // output is empty (every row whose expression denotes no composite, or an
         // empty one, contributes zero rows), so erasing it would answer `EXISTS`
         // `true` for a pattern that has no solutions.
-        other => Enf::Pattern(other.clone()),
+        other => Enf::Pattern(crate::stack::clone::pattern(other)),
     }
 }
 
@@ -395,8 +406,8 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
 /// ordinal to every node [`crate::governor::soundness::walk_spine`] visits —
 /// including an `EXISTS`/`NOT EXISTS` inner pattern reached through an expression
 /// (`crate::governor::soundness::visit_exists_patterns`), so `original`'s own nodes
-/// already have ledger identity. But `normalize`'s `other => Enf::Pattern(other.clone())`
-/// arm (and its two erasure-fallback arms) allocate a FRESH clone: `normalized`'s own
+/// already have ledger identity. But `normalize`'s `other` arm (a wholesale copy of
+/// `other`) and its two erasure-fallback arms allocate a FRESH clone: `normalized`'s own
 /// addresses never equal `original`'s, so a charge made while evaluating `normalized`
 /// can never resolve to the ledger ordinal `original` already has. This walk is the
 /// bridge: [`crate::binop::eval_correlated`]'s `EXISTS` caller pushes the returned map
@@ -417,8 +428,8 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
 /// [`crate::governor::soundness::walk_spine`] used to assign `original`'s own
 /// ordinals). This also walks into any `EXISTS` pattern nested inside an expression the
 /// clone carries, so a doubly-nested `EXISTS` reached this way gets its own entry too —
-/// which is what lets [`crate::eval::EvalCtx::prepared_exists`] resolve a nested site's
-/// cache key back to a stable address instead of rebuilding every outer row.
+/// which is what lets a nested site read from this preparation carry its own map on to
+/// the plan (`crate::deferred_exists`).
 ///
 /// Declines to track — returning the map unchanged, with no entry for that node — for
 /// `normalize`'s two SYNTHESIZING cases, `Project` and `Union`: their own root is a
@@ -441,6 +452,11 @@ pub(crate) fn ledger_source_map(
 
 /// [`ledger_source_map`]'s recursive spine walk. See that function's doc.
 fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut SubstitutionSourceMap) {
+    // See `normalize`: the same spine, walked again. The partial map is discarded by the
+    // enclosing `crate::stack::walk` scope.
+    if crate::stack::walk_is_low("EXISTS normalization") {
+        return;
+    }
     match original {
         GraphPattern::LeftJoin {
             left,
@@ -491,6 +507,10 @@ fn map_clone_1to1(
     normalized: &GraphPattern,
     map: &mut SubstitutionSourceMap,
 ) {
+    // A walk over the whole normalized subtree: see `map_spine`.
+    if crate::stack::walk_is_low("EXISTS normalization") {
+        return;
+    }
     map.insert(
         std::ptr::from_ref(normalized) as usize,
         SubstitutionSource {

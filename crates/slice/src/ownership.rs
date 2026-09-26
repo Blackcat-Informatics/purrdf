@@ -895,9 +895,10 @@ fn walk_path(p: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut BTreeS
         P::NamedNode(n) => insert_oxiri(n, out),
         P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => walk_path(a, out),
         P::Range { inner, .. } => walk_path(inner, out),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            walk_path(a, out);
-            walk_path(b, out);
+        P::Sequence(elements) | P::Alternative(elements) => {
+            for element in elements {
+                walk_path(element, out);
+            }
         }
         P::NegatedPropertySet(elems) => {
             for e in elems {
@@ -917,18 +918,23 @@ fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<Nam
         // term reference; only its datatype IRI is.
         E::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
         E::Variable(_) | E::Bound(_) => {}
-        E::Or(a, b)
-        | E::And(a, b)
-        | E::Equal(a, b)
+        E::Or(operands) | E::And(operands) => {
+            for operand in operands {
+                walk_expression(operand, out);
+            }
+        }
+        E::Arithmetic(first, steps) => {
+            walk_expression(first, out);
+            for (_, operand) in steps {
+                walk_expression(operand, out);
+            }
+        }
+        E::Equal(a, b)
         | E::SameTerm(a, b)
         | E::Greater(a, b)
         | E::GreaterOrEqual(a, b)
         | E::Less(a, b)
-        | E::LessOrEqual(a, b)
-        | E::Add(a, b)
-        | E::Subtract(a, b)
-        | E::Multiply(a, b)
-        | E::Divide(a, b) => {
+        | E::LessOrEqual(a, b) => {
             walk_expression(a, out);
             walk_expression(b, out);
         }
@@ -990,12 +996,14 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
             walk_path(path, out);
             walk_term_pattern(object, out);
         }
-        G::Join { left, right }
-        | G::Union { left, right }
-        | G::Lateral { left, right }
-        | G::Minus { left, right } => {
+        G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
             walk_graph_pattern(left, out);
             walk_graph_pattern(right, out);
+        }
+        G::Union { arms } => {
+            for arm in arms {
+                walk_graph_pattern(arm, out);
+            }
         }
         G::LeftJoin {
             left,

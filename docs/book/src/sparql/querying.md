@@ -98,9 +98,13 @@ Anything outside this surface — and every malformed query — is a typed
   capabilities (see
   [below](#per-service-context-the-serviceresolver-seam)). Where it stops:
   PurRDF ships no HTTP client (the exchange is an `HttpTransport` trait the
-  Rust host implements) and no shipped surface — CLI, Python, wasm or C —
-  installs a resolver, so a non-`SILENT` `SERVICE` or `LOAD` there fails by
-  name; federation is a Rust-host composition. All seven W3C
+  Rust host implements). The CLI, Python and C surfaces install no resolver,
+  and neither do the wasm package's synchronous methods, so a `SERVICE` or
+  `LOAD` there fails by name, `SILENT` or not. The wasm package's asynchronous
+  methods take host resolvers — JavaScript handlers the job suspends on
+  through JSPI (see
+  [Getting Started: JavaScript](../getting-started/javascript.md#asynchronous-queries-and-federation)).
+  Federation is a host composition. All seven W3C
   `service` federation cases pass
   through this seam. The forwarded body is re-emitted through the
   deterministic serializer — the federation wire format — whose
@@ -480,12 +484,16 @@ so a Jena-backed endpoint answers it), or an honest failure from one that does
 not implement it — surfaces the same way any other unsupported forwarded
 construct's rejection would. A variable-endpoint `SERVICE ?g` is refused only
 when nothing supplies `?g`'s binding — nothing in the incoming solution names
-an IRI for the remote evaluator to resolve. When an enclosing pattern binds
-`?g` — a preceding triple pattern in the same group, or a `LATERAL` left-hand
-side's per-row correlation — the endpoint resolves to that IRI before the
-remote call is made (the same per-row substitution described under "Points of
-disagreement with Jena" above) and the query dispatches normally, the same as
-a `SERVICE` with a fixed IRI.
+an IRI for the remote evaluator to resolve — and `SERVICE SILENT` does not
+change that, because `SILENT` tolerates an endpoint that fails, not a query
+that names none. When an enclosing pattern binds `?g` — a preceding triple
+pattern in the same group, or a `LATERAL` left-hand side's per-row correlation
+— the endpoint resolves to that IRI before the remote call is made (the same
+per-row substitution described under "Points of disagreement with Jena" above)
+and the query dispatches normally, the same as a `SERVICE` with a fixed IRI.
+When the left side of the `OPTIONAL`, `MINUS` or group join holding the clause
+binds `?g` in every solution, the right side is still evaluated on its own and
+the clause is sent once to each distinct IRI that left side binds `?g` to.
 
 ### Per-service context: the `ServiceResolver` seam
 
@@ -553,6 +561,7 @@ exactly, and confines it to what it is a promise *about*:
 |---|---|---|
 | The endpoint is unreachable, or its response undecodable | query error | join identity |
 | A capability was denied | query error | query error |
+| No endpoint was reached: no source is configured, or the endpoint value is not an IRI | query error | query error |
 | This engine's own governor tripped | truncation | truncation |
 
 The first and last rows are long-standing behaviour: `SILENT` is a statement
@@ -560,7 +569,7 @@ about an endpoint the caller does not control, never about the caller's own
 budget, so a governor trip reached through a `SERVICE` clause propagates as a
 truncation whether or not `SILENT` is written.
 
-The middle row follows from that same principle. A capability denial is a
+The denial row follows from that same principle. A capability denial is a
 decision taken on *this* side of the seam — by the host running the engine,
 deterministically, before any endpoint was consulted — so it is exactly like a
 governor trip and nothing like an unreachable endpoint. Swallowing one would put
@@ -575,6 +584,15 @@ travels back out through that inner evaluation — as a structured denial, never
 flattened into a message. Flattening it would make a nested denial silenceable
 by an enclosing `SERVICE SILENT` while the identical denial one level up is not,
 which is the same look-complete-and-be-wrong outcome the row exists to prevent.
+
+The row after it is the same rule seen from the query's side. `SILENT` tolerates
+an endpoint that fails, and when the engine was given no source to send the
+request to, or the endpoint variable is bound to a literal or a blank node, no
+endpoint was reached at all: the first is how the engine was configured, the
+second a query that names no endpoint. Answering the join identity would claim
+an endpoint had been consulted, so both are refused with a message that says
+why `SILENT` does not apply. `LOAD SILENT` with no `GraphResolver` is refused the
+same way.
 
 There is deliberately no knob that softens this. A host that genuinely wants a
 blocked service to behave like an unreachable one already has an exact way to
@@ -1444,11 +1462,11 @@ into an `AggregateRegistry` under an IRI of the caller's choosing:
 
 ```rust,ignore
 use std::sync::Arc;
-use purrdf_core::{SparqlRequest, TermValue};
-use purrdf_sparql_eval::{
+use purrdf::sparql::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    NativeSparqlEngine, QueryOptions, Volatility,
+    ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
+use purrdf::{SparqlRequest, TermValue};
 
 /// A running total over one numeric argument — `example.org`'s own
 /// `AGG(<https://example.org/agg#total>, ?x)`.
@@ -1521,6 +1539,9 @@ registry.register(
     "https://example.org/agg#total",
     Arc::new(TotalAggregate),
 );
+// The environment a query text is read in: `AGG(<iri>, …)` is admitted against
+// this registry.
+let env = ExtensionEnv::over_aggregates(registry)?;
 
 let engine = NativeSparqlEngine::new();
 let result = engine.query_with_options_view(
@@ -1530,10 +1551,7 @@ let result = engine.query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions {
-        aggregates: &registry,
-        ..QueryOptions::EMPTY
-    },
+    QueryOptions::new().with_env(&env),
 )?;
 ```
 

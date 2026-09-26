@@ -780,8 +780,13 @@ fn triple_rule_producer(
     let subject_plan = ExprPlan::of(data, subject);
     let predicate_plan = ExprPlan::of(data, predicate);
     let object_plan = ExprPlan::of(data, object);
+    // Read once per firing, polled per focus node: a governed rule application stops
+    // (and a host slicing its signal into yields gets the event loop back) between
+    // focus nodes of a rule that runs no SPARQL; the ungoverned path pays one branch.
+    let governors = crate::sparql::current_governors();
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
+        crate::sparql::poll_between_evaluations(governors.as_deref())?;
         if !conditions_hold(data, focus, &plan)? {
             continue;
         }
@@ -838,6 +843,9 @@ fn sparql_rule_producer(
     // per round, and so every slot starts unbound — see `with_cached_execution`.
     const THIS_SLOT: usize = 0;
     let parameters = crate::sparql::this_and_shape_context_names(shapes_graph_iri, Some(&shape.id));
+    // Polled between focus nodes as well as inside each CONSTRUCT, as on the triple
+    // rule producer.
+    let governors = crate::sparql::current_governors();
     crate::sparql::with_cached_execution(
         construct,
         parameters,
@@ -850,6 +858,7 @@ fn sparql_rule_producer(
                 Some(&shape.id),
             )?;
             for focus in &focus_nodes {
+                crate::sparql::poll_between_evaluations(governors.as_deref())?;
                 if !conditions_hold(data, focus, &plan)? {
                     continue;
                 }
