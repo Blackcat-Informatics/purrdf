@@ -6,6 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[path = "support/shacl_lists.rs"]
+mod shacl_lists;
+
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
@@ -335,7 +338,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // The SHACL list-component fixture (see `support/shacl_lists.rs`): the
+    // projected instances of real data and their SHACL verdicts.
+    let list_schema = shacl_lists::compiled()?;
+    let lists = emit_linkml(&list_schema, &config)?;
+    check_ledger_sound(&lists.losses, "json-schema", "linkml-1.11")?;
+    let list_probes = shacl_lists::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+
     let output = json!({
+        "lists": {
+            "element_names": lists.element_names,
+            "losses": serde_json::from_str::<Value>(&lists.losses.render_json())?,
+            "probes": list_probes,
+            "schema": serde_json::from_str::<Value>(&list_schema.schema_json)?,
+            "yaml": lists.yaml,
+        },
         "exact": {
             "element_names": exact.element_names,
             "reverse": reverse_payload(&exact, &import_config)?,

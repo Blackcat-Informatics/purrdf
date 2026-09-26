@@ -362,8 +362,15 @@ const directory = mkdtempSync(path.join(tmpdir(), "purrdf-typescript-oracle-"));
 try {
   const exactResults = compileFixture("exact", manifest.exact, directory);
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);
+  const listResults = compileFixture("lists", manifest.lists, directory);
   assertFixture("exact", manifest.exact, exactResults);
   assertFixture("lossy", manifest.lossy, lossyResults);
+  // The SHACL list components over projected instances: every probe agrees
+  // with the SHACL verdict but for the two located losses TypeScript's type
+  // system has no statement for (distinct elements, an integer minimum).
+  assertFixture("lists", manifest.lists, listResults);
+  const listDivergences = listResults.filter(({ probe, valid }) => valid !== probe.sourceValid);
+  assert.equal(listDivergences.length, 2, "lists fixture divergences drifted");
   const divergenceCount = lossyResults.filter(
     ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
   ).length;
@@ -375,6 +382,7 @@ try {
       `${manifest.exact.probes.length} exact boon probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
       `${divergenceCount} divergences map to the complete 18-code loss profile; ` +
+      `${manifest.lists.probes.length} SHACL list-component probes agree but for 2 located losses; ` +
       "verified reverse SHACL import passes",
   );
 } finally {

@@ -6,6 +6,9 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 
+#[path = "support/shacl_lists.rs"]
+mod shacl_lists;
+
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
@@ -1003,6 +1006,57 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
     })
 }
 
+/// The SHACL list-component fixture (see `support/shacl_lists.rs`): the
+/// projected instances of real data, whose verdicts are SHACL validation's.
+/// TypeScript expresses the length bounds as tuple types and the member type as
+/// the element type; it has no type for distinct elements or for an integer
+/// minimum, so exactly those two probes diverge, at their located losses.
+fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
+    let compiled = shacl_lists::compiled()?;
+    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let package = emit_typescript(&compiled, &config()?)?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    let members = "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items";
+    let expected_losses = [
+        (
+            "unique-repeated",
+            (
+                "unique-items-validation-dropped",
+                "#/$defs/Holder/properties/ex:unique/anyOf/1/properties/@list/uniqueItems"
+                    .to_owned(),
+            ),
+        ),
+        (
+            "member-negative",
+            ("numeric-validation-dropped", format!("{members}/minimum")),
+        ),
+    ];
+    let mut probes = Vec::new();
+    for case in shacl_lists::cases()? {
+        let expected_loss = expected_losses
+            .iter()
+            .find(|(label, _)| *label == case.label)
+            .map(|(_, (code, location))| (*code, location.as_str()));
+        probes.push(probe(
+            &schema,
+            &package,
+            case.label,
+            "Holder",
+            case.value,
+            "variable",
+            case.conforms,
+            expected_loss,
+        )?);
+    }
+    Ok(Fixture {
+        declaration: declaration(&package)?,
+        type_names: package.type_names.clone(),
+        losses: ledger_json(&package)?,
+        probes,
+        compiler_probes: Vec::new(),
+    })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
@@ -1023,6 +1077,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = json!({
         "exact": exact_fixture(&exact_schema, exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, lossy_package)?,
+        "lists": lists_fixture()?,
         "reverse": reverse,
     });
     println!("{}", serde_json::to_string(&output)?);

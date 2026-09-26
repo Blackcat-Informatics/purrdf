@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 
 REPO = Path(__file__).resolve().parents[3]
-FLAT_BASELINE_SHA256 = "9277681d425755b085048a302ddd2fa530630a98154352eba8e6672e6a7dff70"
+FLAT_BASELINE_SHA256 = "6076e1cba57e9e4763e64bff04d2889b3b4024dacdf0194cd72891e370b3289d"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
     "properties",
@@ -344,6 +344,25 @@ def _assert_package_runtime(
     )
 
 
+def _assert_lists(lists: dict[str, Any]) -> None:
+    """Every SHACL list-component probe agrees with its SHACL verdict."""
+    losses = lists["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("list-component package has an unregistered loss")
+    holder = _load_models(lists["model_paths"])["Holder"]
+    for probe in lists["probes"]:
+        try:
+            holder.model_validate(probe["value"])
+            valid = True
+        except ValidationError:
+            valid = False
+        if valid != probe["conforms"]:
+            raise AssertionError(
+                f"list-component probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"Pydantic={valid}"
+            )
+
+
 def _assert_strict_routed_types(root: Path) -> None:
     consumer = root / "routed_consumer.py"
     consumer.write_text(
@@ -421,7 +440,11 @@ def main() -> None:
     )
     with tempfile.TemporaryDirectory(prefix="purrdf-pydantic-oracle-") as directory:
         root = Path(directory)
-        for artifacts in [payload["artifacts"], payload["routed"]["artifacts"]]:
+        for artifacts in [
+            payload["artifacts"],
+            payload["routed"]["artifacts"],
+            payload["lists"]["artifacts"],
+        ]:
             for relative, text in artifacts.items():
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -437,6 +460,7 @@ def main() -> None:
                 payload["routed"]["model_paths"],
                 payload["routed"]["metadata"],
             )
+            _assert_lists(payload["lists"])
             routed_root = importlib.import_module("routed_oracle_models")
             if routed_root.__version__ != payload["routed"]["version"]:
                 raise AssertionError("routed package version export drifted")
@@ -446,7 +470,8 @@ def main() -> None:
     print(
         f"Pydantic oracle: {len(payload['version_oracle'])} PEP 440 differential cases "
         "agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, "
-        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import"
+        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import; "
+        f"{len(payload['lists']['probes'])} SHACL list-component probes agree"
     )
 
 

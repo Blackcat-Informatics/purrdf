@@ -246,6 +246,16 @@ if (divergenceCount !== manifest.lossy.probes.length) {
     `lossy fixture exposed ${divergenceCount}/${manifest.lossy.probes.length} divergences`,
   );
 }
+// The SHACL list components over projected instances: each list property is
+// the delegated custom scalar, so every non-conforming probe diverges at its
+// located delegation and every conforming one agrees.
+const listResults = await executeFixture("lists", manifest.lists);
+const listDivergences = listResults.filter(({ probe, valid }) => valid !== probe.sourceValid);
+assert.equal(
+  listDivergences.length,
+  manifest.lists.probes.filter((probe) => !probe.sourceValid).length,
+  "lists fixture divergences drifted",
+);
 const codecCount = [...manifest.exact.probes, ...manifest.lossy.probes].filter(
   (probe) => probe.usedCodec,
 ).length;
@@ -254,5 +264,6 @@ console.log(
     `${exactResults.length} exact boon/variable-coercion probes agree; ` +
     `${divergenceCount} located divergences cover the complete ${profile.size}-code profile; ` +
     `${codecCount} probes exercise the production value codec; ` +
+    `${listResults.length} SHACL list-component probes agree or diverge at their located delegation; ` +
     "verified reverse SHACL import passes",
 );
