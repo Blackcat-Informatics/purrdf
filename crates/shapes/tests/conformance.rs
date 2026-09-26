@@ -142,11 +142,14 @@ const RESULT_MESSAGE: &str = "<http://www.w3.org/ns/shacl#resultMessage>";
 /// report subject is a blank node or an IRI, so a line's predicate is its second
 /// whitespace-separated token.
 fn canonical_without_messages(nt: &str) -> String {
-    let kept: String = nt
+    let mut kept = String::with_capacity(nt.len());
+    for line in nt
         .lines()
         .filter(|line| line.split_whitespace().nth(1) != Some(RESULT_MESSAGE))
-        .map(|line| format!("{line}\n"))
-        .collect();
+    {
+        kept.push_str(line);
+        kept.push('\n');
+    }
     let dataset = purrdf::parse_dataset(kept.as_bytes(), "application/n-triples", None)
         .unwrap_or_else(|e| panic!("a report's N-Triples parse: {e}"));
     purrdf::canonicalize(dataset.as_ref()).nquads
