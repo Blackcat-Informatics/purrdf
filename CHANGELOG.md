@@ -10,6 +10,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
+  onto a list value's `@list` array: `sh:minListLength` as `minItems`,
+  `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,
+  and `sh:memberShape` as `items`, compiled as one value's schema. Each
+  component requires a list, and on a node shape they judge the focus node's
+  `rdf:first` and `rdf:rest`. Lexical constraints judge an IRI's `@id`, the
+  constants `rdf:nil`, `true` and `false`, and a bare integer's numeral length.
+  Numeric datatypes are told apart over their lexical and value spaces. A range
+  bound compares a typed integer-family or decimal literal by an order pattern
+  on its lexical form, with SPARQL's numeric promotion against a double or
+  float bound. `rdf:langString` and `rdf:dirLangString` are told apart. A node
+  shape's node kind, `sh:in`, `sh:hasValue` and lexical constraints judge the
+  focus node's `@id`. What remains recorded is what no JSON Schema keyword
+  states, each case with its reason: a list kept as linked nodes, a pattern
+  over a bare integer, a bound over double or float lexical forms, a temporal
+  bound, and a node shape's class membership. The Pydantic emitter enforces
+  `uniqueItems`. LinkML carries `@list` and `@direction`, and its `any_of`
+  branches keep to the anonymous-slot-expression fields.
+- **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
+  pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
+  it: each normal character and character range gains its variants, and every
+  escape is left unaffected.
 - **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
   ranked-retrieval surface computes with. The module holds:
   - `Scalar`, `Bound` and `Bounded`, which moved here from
@@ -2391,6 +2413,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
+
+- **BREAKING** **shapes:** the JSON-LD instance projection
+  (`instance::project_graph`, `project_subject`) changes shape so that it drops
+  nothing a constraint judges. A well-formed RDF list is now the JSON-LD list
+  object `{"@list": [...]}`, and its cells are no longer `@graph` nodes;
+  `rdf:nil` is `{"@list": []}`. The list conversion of JSON-LD 1.1 Processing
+  Algorithms and API section 8.4.2 decides which lists convert, read strictly so
+  that no triple is dropped. A member list carries its head cell's label as
+  `@index`. An `@id` is now the full IRI, never a compact IRI; keys and `@type`
+  stay compacted. A bare JSON scalar now appears only for a canonical
+  `xsd:integer` within 64 bits and for `xsd:boolean` `true` or `false`. Every
+  other numeric literal, `xsd:decimal` and `xsd:double` included, keeps its
+  `{"@value", "@type"}` object. An `rdf:dirLangString` literal carries
+  `@direction`. Value-vocabulary enum members are `{"@id": <full IRI>}` to
+  match. The JSON Schema compiler changes in lock-step, and a consumer that
+  reads projected documents must read the new forms.
 
 - **BREAKING** **shapes:** a built-in constraint component's declaration that
   carries validators binds natively. SHACL 1.2 SPARQL Extensions selects "one of the

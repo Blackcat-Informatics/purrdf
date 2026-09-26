@@ -375,6 +375,70 @@ SPARQL 1.2 RL grammar rule [2],
 implemented as written: once a declaration follows a rule or data block, at
 most one rule or data block may follow it before the next declaration.
 
+## JSON-LD instance projection and JSON Schema
+
+`json_schema::compile` and `instance::project_graph` are one pair. The schema
+describes the JSON-LD `@graph` document the projection writes, and a projected
+node validates exactly when it conforms to the shapes, except for the recorded
+losses listed below. The projection drops no triple. Every carried term keeps
+what a constraint can judge:
+
+- An `@id` is the full IRI, or `_:label` for a blank node. It is never a compact
+  IRI, so a lexical constraint judges `str()` of an IRI directly. Keys and
+  `@type` values stay compacted.
+- A well-formed RDF list is the JSON-LD list object `{"@list": [...]}`, and its
+  cells are not `@graph` nodes. `rdf:nil` is `{"@list": []}`. The list
+  conversion of JSON-LD 1.1 Processing Algorithms and API section 8.4.2 decides
+  which lists convert, read strictly so that no triple is dropped. A branching,
+  cyclic, shared, IRI-named or annotated list (a cell typed `rdf:List`
+  included) keeps the node-graph form. A list that is a member of another list
+  carries its head cell's label as `@index`. `@index` is not RDF-significant,
+  and it keeps two distinct member lists distinct.
+- A bare JSON scalar appears only where it denotes the literal exactly
+  (JSON-LD 1.1 section 8.6): a canonical `xsd:integer` within 64 bits, and
+  `xsd:boolean` `true` or `false`. Every other numeric literal keeps its
+  `{"@value", "@type"}` object.
+- An `rdf:dirLangString` literal carries `@direction`.
+
+The schema projects the SHACL 1.2 list components onto the `@list` array.
+`sh:minListLength` becomes `minItems`, `sh:maxListLength` becomes `maxItems`,
+`sh:uniqueMembers true` becomes `uniqueItems`, and `sh:memberShape` becomes
+`items`, compiled as one value's schema. Each of them requires a list. On a
+node shape they judge the focus node's `rdf:first` and `rdf:rest`. Every
+`sh:flags` letter, `i` included, is written into the ECMA-262 pattern. `i`
+follows XPath's case variants, not simple case folding. Lexical constraints
+judge an IRI's `@id`. They judge the constants `rdf:nil`, `true` and `false` at
+compile time, and a bare integer's numeral length as an integer range.
+Numeric datatypes are told apart over their lexical and value spaces. A range
+bound compares a typed integer-family or decimal literal by an order pattern on
+its lexical form, with SPARQL's numeric promotion against a double or float
+bound. A node shape's node kind, `sh:in`, `sh:hasValue` and lexical
+constraints judge the focus node's `@id`.
+
+What remains is recorded on the forward ledger, each case with its reason:
+
+- A list kept as linked `@graph` nodes is not judged. A JSON Schema keyword
+  judges only the instance location it applies to and the locations beneath
+  it, so none reaches another node's `rdf:first`.
+- A node shape's `sh:uniqueMembers` does not compare the focus node's own
+  member with its tail's members. Those are two instance locations.
+- A pattern over a bare integer's numeral is not judged. The integers whose
+  numerals start with `1` are no finite union of the intervals and residue
+  classes `minimum`, `maximum` and `multipleOf` state.
+- A range bound over `xsd:double` or `xsd:float` lexical forms is not judged.
+  Those forms on one side of a bound are no regular language.
+- A temporal range bound is not projected.
+- A node shape's class membership is not judged. It runs through
+  `rdfs:subClassOf*` triples on other nodes.
+
+The Pydantic package enforces the list components, uniqueness included, with a
+validator over the raw JSON items. TypeScript states the length bounds as
+tuple types; it has no type for distinct elements. LinkML states all four on
+the `@list` slot. GraphQL delegates a list value to its custom scalar, because
+a list value is a node reference or a list object, and GraphQL has no input
+union. Each emitter oracle runs these components over projected instances of
+real data.
+
 ## Ontology-complete developer schemas
 
 The public `compile_schema` boundary accepts a `SchemaCompileRequest` that binds
