@@ -67,6 +67,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   recorded. A pattern conjunct restates `"type": "string"`, so LinkML reads it
   with its string carrier. Every emitter oracle runs a temporal fixture over
   projected instances.
+- **shapes:** a range bound survives the SHACL → JSON Schema → SHACL round
+  trip exactly. This covers integer-family, decimal, double and float bounds,
+  and bounds over `xsd:dateTime`, `xsd:date` and `xsd:time`, with or without
+  `sh:datatype`. Each rejection the compiler writes from a bound names the
+  bound in its `$comment`: the facet's SHACL term and the bound as an N-Triples
+  term. The importer believes the comment only when the rejections the bound
+  projects to, narrowed by the value's datatype, are exactly the ones carrying
+  it, and when the `minimum` / `maximum` beside a numeric bound are the
+  integers it admits. `sh:maxExclusive 150` therefore reads back as itself, not
+  as `sh:maxInclusive 149`. A decimal or temporal bound is no longer recorded as
+  `schema-applicator-dropped`. A datatype's value schema with bounds folded into
+  it keeps its `sh:datatype` too.
 - **validate:** every host names an ANONYMOUS node expression. A
   `purrdf_validate::ExprSelector` names the expression in one of three ways:
   the node itself (an IRI or `_:label`, as before); a walk from a named node

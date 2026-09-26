@@ -4524,15 +4524,13 @@ fn compile_bounds(
     ctx: &mut Ctx<'_>,
 ) {
     let mut numeric = false;
-    let mut low: Option<i128> = None;
-    let mut high: Option<i128> = None;
-    let mut no_integer = false;
     let mut typed: Vec<Value> = Vec::new();
     let mut numbers: Vec<(Facet, BoundNumberValue)> = Vec::new();
     for &(facet, term) in bounds {
         match range_bound(term) {
             RangeBound::Temporal(bound) => {
                 for rejection in temporal_bound_rejections(facet, &bound, ctx.ns) {
+                    let rejection = with_bound_comment(rejection, facet, term);
                     if !rejected.contains(&rejection) {
                         rejected.push(rejection);
                     }
@@ -4545,18 +4543,11 @@ fn compile_bounds(
             RangeBound::Number(number) => {
                 numeric = true;
                 let threshold = Threshold::for_bound(facet, number.as_bound());
-                match threshold.integer_range() {
-                    None => no_integer = true,
-                    Some((least, greatest)) => {
-                        if let Some(least) = least {
-                            low = Some(low.map_or(least, |n| n.max(least)));
-                        }
-                        if let Some(greatest) = greatest {
-                            high = Some(high.map_or(greatest, |n| n.min(greatest)));
-                        }
-                    }
-                }
-                typed.extend(typed_bound_rejections(&threshold, ctx.ns));
+                typed.extend(
+                    typed_bound_rejections(&threshold, ctx.ns)
+                        .into_iter()
+                        .map(|rejection| with_bound_comment(rejection, facet, term)),
+                );
                 numbers.push((facet, number));
             }
         }
@@ -4564,14 +4555,15 @@ fn compile_bounds(
     if !numeric {
         return;
     }
-    if no_integer || low.zip(high).is_some_and(|(low, high)| low > high) {
-        rejected.push(json!({ "type": "integer" }));
-    } else {
-        if let Some(low) = low {
-            value.insert("minimum".to_owned(), json_integer(low));
-        }
-        if let Some(high) = high {
-            value.insert("maximum".to_owned(), json_integer(high));
+    match bare_integer_bounds(bounds) {
+        BareIntegerBounds::None => rejected.push(json!({ "type": "integer" })),
+        BareIntegerBounds::Range(low, high) => {
+            if let Some(low) = low {
+                value.insert("minimum".to_owned(), json_integer(low));
+            }
+            if let Some(high) = high {
+                value.insert("maximum".to_owned(), json_integer(high));
+            }
         }
     }
     rejected.extend(typed);
@@ -4589,12 +4581,7 @@ fn compile_bounds(
         return;
     }
     for (facet, _) in &numbers {
-        let term_name = match facet {
-            Facet::MinInclusive => "sh:minInclusive",
-            Facet::MinExclusive => "sh:minExclusive",
-            Facet::MaxInclusive => "sh:maxInclusive",
-            Facet::MaxExclusive => "sh:maxExclusive",
-        };
+        let term_name = facet_term(*facet);
         ctx.record(
             term_name,
             shape_iri,
@@ -4645,6 +4632,148 @@ fn temporal_bound_rejections(
     ]
 }
 
+/// The bare integers a property's numeric range bounds admit, as `minimum` and
+/// `maximum` state them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BareIntegerBounds {
+    /// No integer satisfies every bound: a bare integer is rejected outright.
+    None,
+    /// The least and greatest integer every bound admits (`None` for unbounded).
+    Range(Option<i128>, Option<i128>),
+}
+
+/// The bare integers `bounds` admit — the one computation both the compiler's
+/// `minimum`/`maximum` and the reverse reader's check of them run. A temporal or
+/// incomparable bound compares with no bare integer and constrains nothing here.
+fn bare_integer_bounds(bounds: &[(Facet, &Term)]) -> BareIntegerBounds {
+    let mut low: Option<i128> = None;
+    let mut high: Option<i128> = None;
+    for &(facet, term) in bounds {
+        let RangeBound::Number(number) = range_bound(term) else {
+            continue;
+        };
+        match Threshold::for_bound(facet, number.as_bound()).integer_range() {
+            None => return BareIntegerBounds::None,
+            Some((least, greatest)) => {
+                if let Some(least) = least {
+                    low = Some(low.map_or(least, |n| n.max(least)));
+                }
+                if let Some(greatest) = greatest {
+                    high = Some(high.map_or(greatest, |n| n.min(greatest)));
+                }
+            }
+        }
+    }
+    if low.zip(high).is_some_and(|(low, high)| low > high) {
+        BareIntegerBounds::None
+    } else {
+        BareIntegerBounds::Range(low, high)
+    }
+}
+
+/// The facet a range-bound constraint states, with its bound; `None` for any other
+/// constraint.
+fn range_facet(constraint: &Constraint) -> Option<(Facet, &Term)> {
+    match constraint {
+        Constraint::MinInclusive(term) => Some((Facet::MinInclusive, term)),
+        Constraint::MinExclusive(term) => Some((Facet::MinExclusive, term)),
+        Constraint::MaxInclusive(term) => Some((Facet::MaxInclusive, term)),
+        Constraint::MaxExclusive(term) => Some((Facet::MaxExclusive, term)),
+        _ => None,
+    }
+}
+
+/// The SHACL term naming `facet`.
+const fn facet_term(facet: Facet) -> &'static str {
+    match facet {
+        Facet::MinInclusive => "sh:minInclusive",
+        Facet::MinExclusive => "sh:minExclusive",
+        Facet::MaxInclusive => "sh:maxInclusive",
+        Facet::MaxExclusive => "sh:maxExclusive",
+    }
+}
+
+/// `rejection`, carrying the bound it states as its `$comment`: the facet's SHACL
+/// term, one space, and the bound as an N-Triples term — `sh:minInclusive
+/// "2020-01-01"^^<http://www.w3.org/2001/XMLSchema#date>`.
+///
+/// An order pattern is the bound's regular language, not its value, and several
+/// bounds state one language (`< 150` and `≤ 149` admit the same integers). The
+/// comment names which one this rejection was written from, so the reverse reader
+/// recovers the bound itself; it believes the comment only when the rejections the
+/// comment's bound projects to are exactly the ones it reads
+/// ([`range_bound_rejections`]).
+fn with_bound_comment(mut rejection: Value, facet: Facet, term: &Term) -> Value {
+    if let Value::Object(object) = &mut rejection {
+        object.insert(
+            "$comment".to_owned(),
+            json!(format!("{} {term}", facet_term(facet))),
+        );
+    }
+    rejection
+}
+
+/// The rejections a range-bound constraint projects to, each carrying its bound's
+/// `$comment` — for an integer-family, decimal, double or float bound the typed
+/// literals it rejects, for a temporal bound the values that are not of its
+/// datatype and those on the wrong side of it — before the value schema's
+/// datatypes narrow them. `None` for another constraint, or a bound nothing compares
+/// with.
+pub(crate) fn range_bound_rejections(
+    constraint: &Constraint,
+    ns: &Namespaces,
+) -> Option<Vec<Value>> {
+    let (facet, term) = range_facet(constraint)?;
+    let rejections = match range_bound(term) {
+        RangeBound::Number(number) => {
+            typed_bound_rejections(&Threshold::for_bound(facet, number.as_bound()), ns)
+        }
+        RangeBound::Temporal(bound) => temporal_bound_rejections(facet, &bound, ns),
+        RangeBound::Incomparable => return None,
+    };
+    Some(
+        rejections
+            .into_iter()
+            .map(|rejection| with_bound_comment(rejection, facet, term))
+            .collect(),
+    )
+}
+
+/// Read a rejection's bound `$comment` ([`with_bound_comment`]) back as the
+/// range-bound constraint it names; `None` when it names none.
+pub(crate) fn range_bound_comment(comment: &str) -> Option<Constraint> {
+    let (facet, term) = comment.split_once(' ')?;
+    let term = crate::free_expression::parse_term(term).ok()?;
+    if !matches!(term, Term::Literal(_)) {
+        return None;
+    }
+    Some(match facet {
+        "sh:minInclusive" => Constraint::MinInclusive(term),
+        "sh:minExclusive" => Constraint::MinExclusive(term),
+        "sh:maxInclusive" => Constraint::MaxInclusive(term),
+        "sh:maxExclusive" => Constraint::MaxExclusive(term),
+        _ => return None,
+    })
+}
+
+/// Whether `constraint` is a range bound over a number (an integer-family,
+/// decimal, double or float literal) — one `minimum` and `maximum` speak for.
+pub(crate) fn is_numeric_range_bound(constraint: &Constraint) -> bool {
+    range_facet(constraint)
+        .is_some_and(|(_, term)| matches!(range_bound(term), RangeBound::Number(_)))
+}
+
+/// The bare integers the range bounds among `constraints` admit (see
+/// [`BareIntegerBounds`]) — the reverse reader's check that the `minimum` and
+/// `maximum` it read are the ones its recovered bounds state.
+pub(crate) fn constraint_bare_integer_bounds(constraints: &[&Constraint]) -> BareIntegerBounds {
+    let bounds: Vec<(Facet, &Term)> = constraints
+        .iter()
+        .filter_map(|constraint| range_facet(constraint))
+        .collect();
+    bare_integer_bounds(&bounds)
+}
+
 /// The typed literals of an integer-family or decimal datatype one bound
 /// rejects: those whose lexical form is not a well-typed numeral in
 /// `threshold`.
@@ -4686,12 +4815,8 @@ pub(crate) fn expected_typed_bound_rejections(
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for constraint in constraints {
-        let (facet, term) = match constraint {
-            Constraint::MinInclusive(term) => (Facet::MinInclusive, term),
-            Constraint::MinExclusive(term) => (Facet::MinExclusive, term),
-            Constraint::MaxInclusive(term) => (Facet::MaxInclusive, term),
-            Constraint::MaxExclusive(term) => (Facet::MaxExclusive, term),
-            _ => continue,
+        let Some((facet, term)) = range_facet(constraint) else {
+            continue;
         };
         if let RangeBound::Number(number) = range_bound(term) {
             out.extend(typed_bound_rejections(
@@ -4706,7 +4831,7 @@ pub(crate) fn expected_typed_bound_rejections(
 /// Whether a rejection can reach a typed literal whose `@type` is one of
 /// `types` — always, unless it names its `@type` by `const` or excludes
 /// `types` by `not`/`enum`.
-fn typed_rejection_reaches(rejection: &Value, types: &BTreeSet<String>) -> bool {
+pub(crate) fn typed_rejection_reaches(rejection: &Value, types: &BTreeSet<String>) -> bool {
     let at_type = &rejection["properties"]["@type"];
     if let Some(only) = at_type["const"].as_str() {
         return types.contains(only);
