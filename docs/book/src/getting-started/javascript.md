@@ -305,13 +305,15 @@ Workers limits how many subrequests one invocation may make, and
 `maxRemoteRequests` is the exact control for it: every `SERVICE` request and
 every `LOAD` is charged before it reaches the handler, so a request never makes
 more subrequests than the ceiling. The Cache API does nothing on `workers.dev`
-hostnames, so the `cache` option takes effect only on a custom domain — there
-`cache.match` and `cache.put` reject with "No Cache was configured", which the
-resolver treats as an optimisation failure, never the query's answer: a
-rejected `match` is a miss and a rejected `put` never discards an answer the
-remote already returned. `onCacheError(error, { operation, endpoint })`
-reports every such failure (one `console.warn` line by default), so it is
-visible, never silent. On Workers `Date.now()` does not advance during
+hostnames, so caching is effectively off there; on a custom domain it works. A
+runtime started without a cache configured (a locally run workerd, for
+example) rejects `cache.match` and `cache.put` with "No Cache was configured",
+which the resolver treats as an optimisation failure, never the query's
+answer: a rejected `match` is a miss and a rejected `put` never discards an
+answer the remote already returned.
+`onCacheError(error, { operation, endpoint })` reports every such failure (one
+`console.warn` line by default), so it is visible, never silent, while the
+query still answers. On Workers `Date.now()` does not advance during
 CPU-bound execution, so a synchronous `deadlineMs` cannot trip during
 CPU-bound work there; the asynchronous lane observes the deadline at every
 yield and every effect.

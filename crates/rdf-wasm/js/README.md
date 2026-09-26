@@ -564,7 +564,8 @@ pieces:
   it reuses answers through the Cache API, and it refuses a request that carries a
   credential with a `TypeError` (a fault) rather than read it from or write it to a shared
   cache. The cache is an optimisation and never decides the answer: a `cache.match`
-  rejection (e.g. a workerd Worker with no Cache configured) is treated as a miss, and a
+  rejection (e.g. "No Cache was configured" from a workerd runtime started without a
+  cache) is treated as a miss, and a
   `cache.put` failure never discards an answer the remote already returned — with
   `waitUntil` the failed put is still handed to it, and without one it is awaited inside a
   `try`. Every cache failure is reported through `onCacheError(error, { operation, endpoint })`,
@@ -650,10 +651,11 @@ Workers limits how many subrequests one invocation may make. `maxRemoteRequests`
 exact control for that limit. Every `SERVICE` request and every `LOAD` is charged against
 it before it reaches the handler, including one the cache then answers, so a request
 never makes more subrequests than the ceiling. Set it to the subrequests you allow one
-query. The Cache API does nothing on `workers.dev` hostnames, so the `cache` option takes
-effect only on a Worker served from a custom domain — there `cache.match` and `cache.put`
-reject with "No Cache was configured", which is exactly the failure `onCacheError` reports
-while the query still answers from the remote.
+query. The Cache API does nothing on `workers.dev` hostnames, so caching is effectively
+off there; on a Worker served from a custom domain it works. A runtime started without a
+cache configured (a locally run workerd, for example) rejects `cache.match` and
+`cache.put` with "No Cache was configured", which is exactly the failure `onCacheError`
+reports while the query still answers from the remote.
 
 ## Scope
 

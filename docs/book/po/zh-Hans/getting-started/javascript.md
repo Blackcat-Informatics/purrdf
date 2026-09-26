@@ -208,7 +208,7 @@ export default {
 };
 ```
 
-Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精确对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，因此一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名上不起任何作用，因此 `cache` 选项只在自定义域名上生效——在那里 `cache.match` 与 `cache.put` 会以"No Cache was configured"拒绝，处理函数把它当作优化层的失败，绝不当作查询的答案：被拒绝的 `match` 视为未命中，被拒绝的 `put` 绝不会丢弃远端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每一次这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞掉。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，因此同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一次宿主请求时检查截止时间。
+Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精确对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，因此一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名上不起任何作用，因此缓存在那里实际上处于关闭状态；在自定义域名上它可以正常工作。未配置缓存就启动的运行时（例如在本地运行的 workerd）会以"No Cache was configured"拒绝 `cache.match` 与 `cache.put`，处理函数把它当作优化层的失败，绝不当作查询的答案：被拒绝的 `match` 视为未命中，被拒绝的 `put` 绝不会丢弃远端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每一次这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞掉，查询也照常作答。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，因此同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一次宿主请求时检查截止时间。
 
 包的 [README](https://github.com/Blackcat-Informatics/purrdf/tree/main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-adapter) 是这些约定的完整参考。
 

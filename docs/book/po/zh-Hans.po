@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-25T21:00:11-06:00\n"
+"POT-Creation-Date: 2026-09-25T22:00:15-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1478,30 +1478,33 @@ msgid ""
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
 "every `LOAD` is charged before it reaches the handler, so a request never "
 "makes more subrequests than the ceiling. The Cache API does nothing on "
-"`workers.dev` hostnames, so the `cache` option takes effect only on a custom "
-"domain — there `cache.match` and `cache.put` reject with \"No Cache was "
-"configured\", which the resolver treats as an optimisation failure, never "
-"the query's answer: a rejected `match` is a miss and a rejected `put` never "
-"discards an answer the remote already returned. `onCacheError(error, "
+"`workers.dev` hostnames, so caching is effectively off there; on a custom "
+"domain it works. A runtime started without a cache configured (a locally run "
+"workerd, for example) rejects `cache.match` and `cache.put` with \"No Cache "
+"was configured\", which the resolver treats as an optimisation failure, "
+"never the query's answer: a rejected `match` is a miss and a rejected `put` "
+"never discards an answer the remote already returned. `onCacheError(error, "
 "{ operation, endpoint })` reports every such failure (one `console.warn` "
-"line by default), so it is visible, never silent. On Workers `Date.now()` "
-"does not advance during CPU-bound execution, so a synchronous `deadlineMs` "
-"cannot trip during CPU-bound work there; the asynchronous lane observes the "
-"deadline at every yield and every effect."
+"line by default), so it is visible, never silent, while the query still "
+"answers. On Workers `Date.now()` does not advance during CPU-bound "
+"execution, so a synchronous `deadlineMs` cannot trip during CPU-bound work "
+"there; the asynchronous lane observes the deadline at every yield and every "
+"effect."
 msgstr ""
-"Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精确"
-"对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，因此"
-"一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名上不起"
-"任何作用，因此 `cache` 选项只在自定义域名上生效——在那里 `cache.match` 与 "
-"`cache.put` 会以\"No Cache was configured\"拒绝，处理函数把它当作优化层的失"
-"败，绝不当作查询的答案：被拒绝的 `match` 视为未命中，被拒绝的 `put` 绝不会丢"
-"弃远端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每"
-"一次这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞"
-"掉。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，因此同步的 "
-"`deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一"
-"次宿主请求时检查截止时间。"
+"Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精"
+"确对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，"
+"因此一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名"
+"上不起任何作用，因此缓存在那里实际上处于关闭状态；在自定义域名上它可以正常工"
+"作。未配置缓存就启动的运行时（例如在本地运行的 workerd）会以\"No Cache was "
+"configured\"拒绝 `cache.match` 与 `cache.put`，处理函数把它当作优化层的失败，"
+"绝不当作查询的答案：被拒绝的 `match` 视为未命中，被拒绝的 `put` 绝不会丢弃远"
+"端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每一"
+"次这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞"
+"掉，查询也照常作答。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，"
+"因此同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一"
+"次让出和每一次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:319
+#: src/getting-started/javascript.md:321
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1511,11 +1514,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:323
+#: src/getting-started/javascript.md:325
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:325
+#: src/getting-started/javascript.md:327
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1527,7 +1530,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则"
 "会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:330
+#: src/getting-started/javascript.md:332
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1539,26 +1542,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:339
+#: src/getting-started/javascript.md:341
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:341
+#: src/getting-started/javascript.md:343
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:346
+#: src/getting-started/javascript.md:348
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:347
+#: src/getting-started/javascript.md:349
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:350
+#: src/getting-started/javascript.md:352
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."
