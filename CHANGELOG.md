@@ -28,6 +28,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   bound, and a node shape's class membership. The Pydantic emitter enforces
   `uniqueItems`. LinkML carries `@list` and `@direction`, and its `any_of`
   branches keep to the anonymous-slot-expression fields.
+- **shapes:** the GraphQL emitter carries a JSON Schema `anyOf` whose
+  alternatives every value selects exactly one of (by JSON kind, or among
+  object alternatives by a required key no other declares) as a `@oneOf` input
+  object and an output union, instead of the fallback scalar. An alternative
+  that is not an object type is a union member through a wrapper type with a
+  `value` field. A SHACL list value (a node reference or a `@list` object) and
+  its `sh:memberShape` members are therefore typed. `GraphqlNameMap` gains
+  `unions` (so a struct literal of it must name the field), and
+  `GraphqlPackage` gains `decode_input` and `encode_output` beside
+  `encode_input` and `decode_output`. The GraphQL oracle serializes every valid
+  value through its output type with GraphQL.js.
 - **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
   pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
   it: each normal character and character range gains its variants, and every

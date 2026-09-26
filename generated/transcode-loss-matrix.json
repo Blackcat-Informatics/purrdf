@@ -585,7 +585,7 @@
     "from": "json-schema",
     "to": "graphql-september-2025",
     "intentional": true,
-    "note": "General JSON Schema anyOf and type unions define input-value unions. GraphQL has no input union type, so a non-finite union is carried through the caller-named fallback scalar and branch validation is delegated."
+    "note": "A JSON Schema anyOf is carried as a @oneOf input object and an output union when every value selects one alternative, by its JSON kind or, among object alternatives, by a required key no other alternative declares. A type-array union, or an anyOf whose alternatives overlap so a value would satisfy several, has no exactly-one-field input GraphQL could coerce it through; it is carried through the caller-named fallback scalar and branch validation is delegated."
   },
   {
     "code": "unique-items-validation-dropped",

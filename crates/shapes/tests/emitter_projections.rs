@@ -445,7 +445,7 @@ fn graphql_projects_min_list_length() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: HolderExSubject\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -456,12 +456,20 @@ fn graphql_projects_min_list_length() {
                 "#/$defs/Holder"
             ),
             (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1"
+            ),
+            (
+                "array-cardinality-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/minItems"
             ),
             (
                 "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -472,12 +480,20 @@ fn graphql_projects_min_list_length() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:subject"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"
             ),
         ])
     );
@@ -571,7 +587,7 @@ fn graphql_projects_max_list_length() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: HolderExSubject\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -582,12 +598,20 @@ fn graphql_projects_max_list_length() {
                 "#/$defs/Holder"
             ),
             (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1"
+            ),
+            (
+                "array-cardinality-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/maxItems"
             ),
             (
                 "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -598,12 +622,20 @@ fn graphql_projects_max_list_length() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:subject"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"
             ),
         ])
     );
@@ -716,7 +748,7 @@ fn graphql_projects_unique_members() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exOther: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exOther: HolderExOther\n  exSubject: HolderExSubject\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -727,16 +759,28 @@ fn graphql_projects_unique_members() {
                 "#/$defs/Holder"
             ),
             (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:other/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:other/anyOf/1"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1"
             ),
             (
                 "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:other"
+                "#/$defs/Holder/properties/ex:other/anyOf/1/properties/@list/items"
             ),
             (
                 "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -747,16 +791,32 @@ fn graphql_projects_unique_members() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:other/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:other"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:subject"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:other/anyOf/1/properties/@list"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"
+            ),
+            (
+                "unique-items-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/uniqueItems"
             ),
         ])
     );
@@ -862,7 +922,7 @@ fn graphql_projects_member_shape() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: HolderExSubject\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -873,12 +933,28 @@ fn graphql_projects_member_shape() {
                 "#/$defs/Holder"
             ),
             (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0"
+            ),
+            (
+                "additional-properties-validation-narrowed",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1"
+            ),
+            (
+                "array-cardinality-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/maxItems"
             ),
             (
                 "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject"
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list/items"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -889,12 +965,28 @@ fn graphql_projects_member_shape() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/ex:subject/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:subject"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/1/properties/@list"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/properties/@list/items/anyOf/0/properties/@id/pattern"
             ),
         ])
     );
@@ -1148,7 +1240,7 @@ fn graphql_projects_list_valued_class() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -1157,10 +1249,6 @@ fn graphql_projects_list_valued_class() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -1175,8 +1263,16 @@ fn graphql_projects_list_valued_class() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/ex:subject"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
             (
                 "union-validation-delegated",
@@ -1480,7 +1576,7 @@ fn graphql_projects_subset_of() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -1489,10 +1585,6 @@ fn graphql_projects_subset_of() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -1507,8 +1599,12 @@ fn graphql_projects_subset_of() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -1630,7 +1726,7 @@ fn graphql_projects_path_valued_pairs() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -1639,10 +1735,6 @@ fn graphql_projects_path_valued_pairs() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -1657,8 +1749,12 @@ fn graphql_projects_path_valued_pairs() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -1752,7 +1848,7 @@ fn graphql_projects_iri_pair() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -1761,10 +1857,6 @@ fn graphql_projects_iri_pair() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -1779,8 +1871,12 @@ fn graphql_projects_iri_pair() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -1867,7 +1963,7 @@ fn graphql_projects_single_line() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -1876,10 +1972,6 @@ fn graphql_projects_single_line() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -1899,11 +1991,15 @@ fn graphql_projects_single_line() {
             ),
             (
                 "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "nullable-presence-validation-widened",
                 "#/$defs/Holder/properties/ex:subject"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -1993,7 +2089,7 @@ fn graphql_projects_root_class() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2002,10 +2098,6 @@ fn graphql_projects_root_class() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -2020,8 +2112,12 @@ fn graphql_projects_root_class() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2227,7 +2323,7 @@ fn graphql_projects_unique_values_for() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2236,10 +2332,6 @@ fn graphql_projects_unique_values_for() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -2254,8 +2346,12 @@ fn graphql_projects_unique_values_for() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2354,7 +2450,7 @@ fn graphql_projects_closed_by_types() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: String\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: String\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2363,10 +2459,6 @@ fn graphql_projects_closed_by_types() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -2378,11 +2470,15 @@ fn graphql_projects_closed_by_types() {
             ),
             (
                 "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "nullable-presence-validation-widened",
                 "#/$defs/Holder/properties/ex:subject"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2478,7 +2574,7 @@ fn graphql_projects_computed_values() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exKept: String\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exKept: String\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2487,10 +2583,6 @@ fn graphql_projects_computed_values() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "nullable-presence-validation-widened",
@@ -2502,11 +2594,15 @@ fn graphql_projects_computed_values() {
             ),
             (
                 "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "nullable-presence-validation-widened",
                 "#/$defs/Holder/properties/ex:kept"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2593,7 +2689,7 @@ fn graphql_projects_target_where() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2602,10 +2698,6 @@ fn graphql_projects_target_where() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -2620,8 +2712,12 @@ fn graphql_projects_target_where() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2713,7 +2809,7 @@ fn graphql_projects_node_expression_target() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2722,10 +2818,6 @@ fn graphql_projects_node_expression_target() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -2740,8 +2832,12 @@ fn graphql_projects_node_expression_target() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
@@ -2849,7 +2945,7 @@ fn graphql_projects_debug_severity() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exKept: String\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exKept: String\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2858,10 +2954,6 @@ fn graphql_projects_debug_severity() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -2877,11 +2969,15 @@ fn graphql_projects_debug_severity() {
             ),
             (
                 "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "nullable-presence-validation-widened",
                 "#/$defs/Holder/properties/ex:kept"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
             (
                 "union-validation-delegated",
@@ -2981,7 +3077,7 @@ fn graphql_projects_reifier_severity() {
     assert_eq!(
         gql_type(&emitted.graphql, "Holder").as_deref(),
         Some(
-            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: RdfValue\n}"
+            "type Holder {\n  annotation: RdfValue\n  exSubject: RdfValue\n  id: String\n  type: HolderType\n}"
         )
     );
     assert_eq!(
@@ -2990,10 +3086,6 @@ fn graphql_projects_reifier_severity() {
             (
                 "additional-properties-validation-narrowed",
                 "#/$defs/Holder"
-            ),
-            (
-                "custom-scalar-validation-delegated",
-                "#/$defs/Holder/properties/@type"
             ),
             (
                 "custom-scalar-validation-delegated",
@@ -3008,8 +3100,12 @@ fn graphql_projects_reifier_severity() {
                 "#/$defs/Holder/properties/@id"
             ),
             (
-                "union-validation-delegated",
-                "#/$defs/Holder/properties/@type/anyOf"
+                "nullable-presence-validation-widened",
+                "#/$defs/Holder/properties/@type"
+            ),
+            (
+                "singleton-list-coercion-widened",
+                "#/$defs/Holder/properties/@type/anyOf/1"
             ),
         ])
     );
