@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
+import { NESTING_SHAPES, NUMBERS, attempt, realLimit } from "./fixtures/nesting.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -461,26 +462,71 @@ test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 });
 
-// Nesting is bounded by the parser, not by the stack. The parser is recursive descent,
-// so before it refused deep nesting, a FILTER nested about 950 parentheses deep ran the
-// wasm shadow stack out of linear memory: the call trapped ("memory access out of
-// bounds") and the instance was unusable afterwards. The parser now refuses the level
-// past its nesting limit with a typed syntax error, however deep the request goes.
-const NESTING_LIMIT = 128;
-const PARENTHESIZED_REFUSAL = new RegExp(
-  `bracketted expression nesting exceeds the safety limit of ${NESTING_LIMIT}`,
-);
-/** A FILTER comparing `?o` with itself, the left operand wrapped in `depth` parentheses. */
-const parenthesizedFilter = (depth) =>
-  `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
+// How deep a request may nest is bounded by the stacks it runs on, not by a fixed count.
+// The parser is recursive descent, so before it measured its stack a FILTER nested about
+// 950 parentheses deep ran the wasm shadow stack out of linear memory and trapped the
+// instance. Every recursive level now measures the shadow stack it has left, and — since
+// V8's own call stack, which wasm code cannot read, runs out first for some constructs —
+// is also charged what it costs that stack against a host-stack budget
+// (`WASM_HOST_STACK_BUDGET`, 640 KiB: 2 304 bytes a group, 1 408 a function call, 1 024 a
+// bracket, 576 a path group, …). Past either, the request is a typed stack refusal and the
+// instance answers the next one.
 
-test("a FILTER nested 10 000 parentheses deep is a typed parse error, and the engine answers afterwards", () => {
+// Every shape at 128, 500 and 1 000 levels on the synchronous lane: 128 levels of every
+// shape answer; 500 parentheses, negations and path groups answer, while 500 nested calls
+// or groups do not fit; of 1 000, only path groups answer. Each answer is the one the
+// nesting computes, and each refusal is typed.
+test("nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that", async () => {
+  const ds = Dataset.parse(NUMBERS, "nquads");
+  const engine = new QueryEngine();
+  const run = (query) => engine.select(ds, query);
+  const answers = {
+    128: new Set(NESTING_SHAPES.map(([what]) => what)),
+    500: new Set(["nested parentheses", "nested -(", "nested property-path groups"]),
+    1000: new Set(["nested property-path groups"]),
+  };
+  for (const [what, text, expected] of NESTING_SHAPES) {
+    for (const depth of [128, 500, 1_000]) {
+      const outcome = await attempt(run, text(depth), `${what} ${depth} deep`);
+      if (answers[depth].has(what)) {
+        assert.deepEqual(outcome.subjects, expected, `${what} ${depth} deep answers what it computes`);
+      } else {
+        assert.ok(outcome.refused, `${what} ${depth} deep is refused`);
+      }
+    }
+  }
+});
+
+// The real limit of every shape on the synchronous lane, found by bisection: the deepest
+// level that answers holds its computed value and one level more is the typed refusal —
+// a refusal pair at the lane's real end. Past the WHERE group's own 2 304 bytes, the
+// host-stack budget admits 637 brackets, 537 negations, 283 groups and 1 133 path groups;
+// nested calls run out of shadow stack in their evaluation first.
+test("on the synchronous lane the deepest answer and the first refusal are neighbours", async () => {
+  const ds = Dataset.parse(NUMBERS, "nquads");
+  const engine = new QueryEngine();
+  const run = (query) => engine.select(ds, query);
+  const limits = {};
+  for (const shape of NESTING_SHAPES) limits[shape[0]] = await realLimit(run, shape);
+  const calls = limits["nested ABS("];
+  assert.ok(calls >= 128 && calls <= 463, `nested ABS( answers ${calls} deep`);
+  delete limits["nested ABS("];
+  assert.deepEqual(limits, {
+    "nested parentheses": 637,
+    "nested -(": 537,
+    "nested groups": 283,
+    "nested property-path groups": 1133,
+  });
+});
+
+test("a FILTER nested 10 000 parentheses deep is a typed stack refusal, and the engine answers afterwards", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const engine = new QueryEngine();
+  const deep = `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(10_000)}?o${")".repeat(10_000)} = ?o) }`;
   // Twice: a trap would have left the instance unusable, so the second call would not
   // reach the parser to refuse it the same way.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    assert.throws(() => engine.select(ds, parenthesizedFilter(10_000)), PARENTHESIZED_REFUSAL);
+    assert.throws(() => engine.select(ds, deep), /SPARQL parse stack exhausted .*bracketted expression/);
   }
   // The instance is intact: an ordinary query answers exactly.
   const names = engine
@@ -488,16 +534,6 @@ test("a FILTER nested 10 000 parentheses deep is a typed parse error, and the en
     .rows.toArray()
     .map((row) => row.name.value);
   assert.deepEqual(names, ["Ann", "Bob"]);
-});
-
-test("the deepest parenthesised FILTER the parser admits answers, and one parenthesis more is refused", () => {
-  const ds = Dataset.parse(TRIG, "trig");
-  const engine = new QueryEngine();
-  // The WHERE group is the first nesting level, so a FILTER inside it holds one
-  // parenthesis fewer than the limit. `?o = ?o` holds on every default-graph triple.
-  const deepest = engine.select(ds, parenthesizedFilter(NESTING_LIMIT - 1));
-  assert.equal(deepest.rowCount, 3, "every default-graph triple passes the deepest admitted FILTER");
-  assert.throws(() => engine.select(ds, parenthesizedFilter(NESTING_LIMIT)), PARENTHESIZED_REFUSAL);
 });
 
 // Nesting the parser admits can still be more than the stack can EVALUATE: one written

@@ -4,13 +4,12 @@
 // Child process for the trap-poisoning test. Run with
 // `--wasm-stack-switching-stack-size=32`: V8 runs every JSPI-promised call on a
 // secondary native stack of that many KiB (984 by default), while synchronous calls keep
-// the full main stack. The parser recurses once per nested `{ … }` and refuses nesting
-// deeper than 128 with its own typed error; at 129 levels, the recursion plus that
-// refusal's path needs more native stack than 32 KiB, so the asynchronous run overflows
-// V8's stack — a genuine `RangeError` trap out of the promising call — while the
-// synchronous run of the very same query reports the parser's own refusal. (Measured on
-// the shipped artifact: 128 levels still answer asynchronously on a 32 KiB stack, and
-// 129 trap; the same 129-level query refuses synchronously on the main stack.)
+// the full main stack. The parser recurses once per nested `{ … }` and, on wasm32,
+// refuses a group past its host-stack budget (283 groups inside the WHERE group) with its
+// own typed error; 300 nested groups recurse through far more native stack than 32 KiB
+// before reaching that refusal, so the asynchronous run overflows V8's stack — a genuine
+// `RangeError` trap out of the promising call — while the synchronous run of the very
+// same query, on the full main stack, reports the parser's own refusal.
 //
 // Before the trap, the same objects serve every lane through jobs that finish, jobs that
 // fault and jobs whose host reports a typed failure — none of which may poison anything.
@@ -40,7 +39,7 @@ function nested(depth) {
   for (let level = 0; level < depth; level += 1) pattern = `{ ${pattern} }`;
   return `SELECT ?s WHERE ${pattern}`;
 }
-const TOO_DEEP = nested(129);
+const TOO_DEEP = nested(300);
 
 const report = {};
 

@@ -244,28 +244,29 @@ fn plan_payload_bytes(
 /// Admit `query`: structurally valid, and feasibility ordered against the supplied
 /// registries.
 ///
-/// # Why the evaluator's nesting guard is deliberately NOT here
+/// # Why the evaluator's depth guard is deliberately NOT here
 ///
-/// [`crate::governor::soundness::validate_graph_pattern_depth`] refuses an algebra
-/// nested past `MAX_GRAPH_PATTERN_DEPTH`, and running it here would look like the
-/// obvious place: admission is once, and the plan is immutable afterwards. It is
-/// the wrong place, and the reason is an acceptance boundary this crate states and
-/// tests — `prepared_admission.rs`'s
+/// [`crate::governor::soundness::validate_graph_pattern_depth`] measures a plan's
+/// height against the stack the EVALUATION runs on, and running it here would look
+/// like the obvious place: admission is once, and the plan is immutable afterwards.
+/// It is the wrong place, for two reasons. The stack a plan is evaluated on is not
+/// the one it is admitted on — a prepared plan runs later, on whatever thread the
+/// caller evaluates it from — so only the evaluation can measure it. And on `wasm32`
+/// that guard also applies a graph-pattern count narrower than the parser's envelope,
+/// an acceptance boundary this crate states and tests — `prepared_admission.rs`'s
 /// `parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance`.
-/// Preparation accepts **the parser's envelope**; the evaluator's narrower guard
-/// belongs to EXECUTION. A flat `OPTIONAL {} OPTIONAL {} …` spine uses two brace
-/// levels, is inside the parser's combinator budget, and lowers to a left-nested
-/// `LeftJoin` chain far deeper than the evaluator's limit: preparing it must
-/// succeed and evaluating it must return a typed diagnostic. Moving the guard here
-/// was tried and turned preparing that query — and one of this workspace's own
-/// generated corpus queries — into a refusal. That is over-refusal: nothing looks
-/// broken, a refusal reads as strictness, and a caller that only prepares a plan
-/// gets an error for a plan that was always legal to prepare.
+/// Preparation accepts **the parser's envelope**; the evaluator's guard belongs to
+/// EXECUTION. Moving a count guard here was tried and turned preparing a flat
+/// `OPTIONAL {} OPTIONAL {} …` spine — and one of this workspace's own generated corpus
+/// queries — into a refusal. That is over-refusal: nothing looks broken, a refusal
+/// reads as strictness, and a caller that only prepares a plan gets an error for a
+/// plan that was always legal to prepare.
 ///
-/// The stack-safety backstop admission DOES need is already here and is a different,
-/// looser bound: [`purrdf_sparql_algebra::Query::validate`] refuses past
-/// `MAX_GRAPH_PATTERN_NODES + 8 * MAX_GRAPH_PATTERN_DEPTH` structural nodes,
-/// iteratively, before the recursive feasibility pass below descends the tree.
+/// The stack-safety backstop admission DOES need is already here:
+/// [`purrdf_sparql_algebra::Query::validate`] refuses, iteratively and typed, a tree
+/// whose walks do not fit the stack left on the admitting thread, before the recursive
+/// feasibility pass below descends it — the parser's own measure, so a query the
+/// parser built on this thread passes it.
 ///
 /// `parameters` are the variables a prepared execution will bind on every run — see
 /// [`NativeSparqlEngine::prepare_execution`] — and are counted as bound where that
@@ -277,9 +278,7 @@ fn admit_algebra(
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
     reach: ShaclPrebinding,
 ) -> Result<Option<Query>, RdfDiagnostic> {
-    query
-        .validate()
-        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
+    query.validate().map_err(algebra_diagnostic)?;
     crate::property_fn_plan::plan_query(query, relations, aggregates, parameters, reach)
         .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
@@ -3613,10 +3612,25 @@ fn check_prepared_registries_unchanged(
 ///
 /// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`).
 fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
-    prepared
-        .query
-        .validate()
-        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))
+    prepared.query.validate().map_err(algebra_diagnostic)
+}
+
+/// The diagnostic for an algebra [`purrdf_sparql_algebra::Query::validate`] refused: a
+/// tree too tall for the stack left is the evaluation's own stack refusal
+/// ([`crate::EvalError::STACK_EXHAUSTED_CODE`], which tells a host a larger stack answers
+/// it), and every other refusal is `native-sparql-algebra`.
+fn algebra_diagnostic(error: purrdf_sparql_algebra::ParseError) -> RdfDiagnostic {
+    if matches!(
+        error,
+        purrdf_sparql_algebra::ParseError::StackExhausted { .. }
+    ) {
+        let error = crate::error::EvalError::from(error);
+        return RdfDiagnostic::error(
+            eval_diagnostic_code(&error, "native-sparql-algebra"),
+            error.to_string(),
+        );
+    }
+    RdfDiagnostic::error("native-sparql-algebra", error.to_string())
 }
 
 /// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
@@ -6802,30 +6816,23 @@ mod tests {
         );
     }
 
-    /// **Removing the per-call nesting walk moved no acceptance boundary: an
-    /// over-deep plan is still refused at evaluation, and the one node shallower is
-    /// still evaluated and still answers.**
+    /// **The evaluation's depth guard measures the stack the evaluation runs on: a plan
+    /// admitted on one thread answers on a thread with room for it, and the same plan
+    /// is the typed stack refusal on a thread without.**
     ///
     /// [`check_plan_soundness`] used to run
     /// [`crate::governor::soundness::validate_graph_pattern_depth`] on every
     /// evaluation of a `&PreparedQuery`, and [`crate::eval::prepare_query_context`]
-    /// ran it again inside that same evaluation. One of the two went. Removing a
-    /// refusal is where a refusal changes without anyone meaning it to, and it can
-    /// go wrong in both directions: the guard could stop firing at all (and a deep
-    /// tree would reach the recursive evaluator), or the surviving copy could fire
-    /// somewhere else.
-    ///
-    /// It can also go wrong at a boundary nobody was looking at, which is what
-    /// happened on the first attempt at this change. Relocating the walk to
-    /// [`admit_algebra`] passed every test in this module and turned PREPARING a
-    /// flat `OPTIONAL {} OPTIONAL {} …` spine into a refusal —
-    /// `prepared_admission.rs` states that spine as an acceptance the crate keeps,
-    /// and a whole generated corpus query stopped preparing with it. So this test
-    /// drives the boundary through the door that decides it, EVALUATION, and its
-    /// neighbouring case is checked for its answer rather than for merely not
-    /// erroring.
+    /// ran it again inside that same evaluation. One of the two went, and the survivor
+    /// is the one inside the evaluation, which is the only place the stack the plan is
+    /// walked on can be measured. Relocating the walk to [`admit_algebra`] once turned
+    /// PREPARING a flat `OPTIONAL {} OPTIONAL {} …` spine into a refusal —
+    /// `prepared_admission.rs` states that spine as an acceptance the crate keeps. So
+    /// this test drives the boundary through the door that decides it, EVALUATION, on
+    /// two threads, and the admitted side is checked for its answer rather than for
+    /// merely not erroring.
     #[test]
-    fn removing_the_duplicate_nesting_walk_moved_no_acceptance_boundary() {
+    fn the_evaluation_measures_the_stack_it_runs_on() {
         use purrdf_sparql_algebra::{
             NamedNode, NamedNodePattern, QueryDataset, TermPattern, TriplePattern, Variable,
         };
@@ -6855,40 +6862,58 @@ mod tests {
             }
         }
 
-        let limit = purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH;
-        let engine = NativeSparqlEngine::new();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(|| {
+                let engine = NativeSparqlEngine::new();
+                // A thousand levels, eight times the count the evaluator used to
+                // refuse past, prepare and ANSWER where the stack holds them.
+                let admitted = PreparedQuery::rewritten(nested(1_000), QueryOptions::EMPTY)
+                    .expect("a thousand nested levels prepare");
+                let answer = engine
+                    .query_prepared(&social(), &admitted, &[], QueryOptions::EMPTY)
+                    .expect("a thousand nested levels evaluate");
+                let SparqlResult::Solutions { rows, .. } = answer else {
+                    panic!("a SELECT answers with solutions, got {answer:?}");
+                };
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "the admitted plan produces its real `:a :knows :b` row: {rows:?}"
+                );
 
-        // Both sides PREPARE: admission is the parser's envelope, which is looser
-        // than the evaluator's depth limit, and that is the boundary the first
-        // attempt at this change moved.
-        let over = PreparedQuery::rewritten(nested(limit + 1), QueryOptions::EMPTY)
-            .expect("preparation admits the parser's envelope, over-deep or not");
-        let at = PreparedQuery::rewritten(nested(limit), QueryOptions::EMPTY)
-            .expect("the documented limit itself prepares");
-
-        // The refusal is at EVALUATION, and it is still the nesting guard's own
-        // rather than some other failure that happens to reject the same tree.
-        let refused = engine
-            .query_prepared(&social(), &over, &[], QueryOptions::EMPTY)
-            .expect_err("one node past the documented limit is still refused");
-        assert_eq!(
-            refused.code, "native-sparql-graph-pattern-depth-exceeded",
-            "the refusal must still be the nesting guard's own: {refused}"
-        );
-
-        // The neighbour, at exactly the limit, still ANSWERS — which is the half a
-        // test that only drove the refusal would have passed without.
-        let answer = engine
-            .query_prepared(&social(), &at, &[], QueryOptions::EMPTY)
-            .expect("a plan at the limit must still evaluate");
-        let SparqlResult::Solutions { rows, .. } = answer else {
-            panic!("a SELECT answers with solutions, got {answer:?}");
-        };
-        assert_eq!(
-            rows.len(),
-            1,
-            "the admitted neighbour must still produce its real `:a :knows :b` row: {rows:?}"
-        );
+                // Ten thousand levels prepare here too — admission is this thread's
+                // measure — but their walks need 5 MB at the parser's 512-byte charge,
+                // more than the C library hands a 256 KiB request, so the same plan
+                // evaluated there is the evaluation's own typed stack refusal. The
+                // plan is built and dropped here, where its drop fits.
+                let tall = PreparedQuery::rewritten(nested(10_000), QueryOptions::EMPTY)
+                    .expect("ten thousand nested levels prepare on a large stack");
+                let refused = std::thread::scope(|scope| {
+                    std::thread::Builder::new()
+                        .stack_size(256 * 1024)
+                        .spawn_scoped(scope, || {
+                            NativeSparqlEngine::new().query_prepared(
+                                &social(),
+                                &tall,
+                                &[],
+                                QueryOptions::EMPTY,
+                            )
+                        })
+                        .expect("spawn")
+                        .join()
+                        .expect("the small thread returned rather than aborting")
+                })
+                .expect_err("a plan too tall for the evaluating thread's stack is refused");
+                assert_eq!(
+                    refused.code,
+                    crate::EvalError::STACK_EXHAUSTED_CODE,
+                    "the refusal is the evaluation's stack refusal: {refused}"
+                );
+            })
+            .expect("spawn")
+            .join()
+            .expect("the large thread returned");
     }
 
     /// A one-in-one-out relation whose declared [`Volatility`](crate::Volatility) is the

@@ -499,22 +499,22 @@ fn modified_steps_inside_a_long_chain_keep_their_meaning() {
     assert_eq!(neighbour, vec![row(&["n3000"])]);
 }
 
-/// Assert `result` is the parser's typed nesting refusal naming `limit`.
-fn assert_nesting_refusal(result: Result<SparqlResult, RdfDiagnostic>, limit: usize, what: &str) {
+/// Assert `result` is a typed stack refusal: the parser's, or the evaluator's.
+fn assert_stack_refusal(result: Result<SparqlResult, RdfDiagnostic>, what: &str) {
     let diagnostic = result.expect_err(&format!("{what} is refused"));
     assert!(
-        diagnostic
-            .message
-            .contains(&format!("nesting exceeds the safety limit of {limit}")),
+        diagnostic.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+            || diagnostic.message.contains("SPARQL parse stack exhausted"),
         "{what}: {diagnostic:?}"
     );
 }
 
-/// What really nests is still the typed refusal: 200 right-nested path groups,
-/// `p0/(p1/(p2/…))`, are past the recursion budget. One hundred answer the one pair
-/// their 101 steps connect — not the whole graph, and not a shorter chain's pair.
+/// What really nests is bounded by the stack: 200 right-nested path groups,
+/// `p0/(p1/(p2/…))`, past the removed 128-level recursion budget, answer on a test
+/// thread the one pair their 201 steps connect — not the whole graph, and not a shorter
+/// chain's pair — and ten thousand are the typed stack refusal.
 #[test]
-fn nested_path_groups_past_the_budget_are_still_refused() {
+fn nested_path_groups_are_bounded_by_the_stack() {
     let data = chain(300);
     let nested = |depth: usize| {
         let parts = (0..=depth)
@@ -525,8 +525,8 @@ fn nested_path_groups_past_the_budget_are_still_refused() {
             right_nested(&parts, "/")
         )
     };
-    assert_nesting_refusal(run(&data, &nested(200)), 128, "200 nested path groups");
-    assert_eq!(rows(run(&data, &nested(100))), vec![row(&["n0", "n101"])]);
+    assert_eq!(rows(run(&data, &nested(200))), vec![row(&["n0", "n201"])]);
+    assert_stack_refusal(run(&data, &nested(10_000)), "10 000 nested path groups");
 }
 
 /// A `SERVICE` forwards its body as text the in-process endpoint re-parses. A body

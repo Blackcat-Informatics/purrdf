@@ -4,16 +4,15 @@
 //! The guard every recursive evaluator entry passes through, refusing when the running
 //! evaluation has too little stack left.
 //!
-//! The parser bounds how deeply a request may nest
-//! ([`purrdf_sparql_algebra::MAX_NESTING_DEPTH`]), but a level-count bound cannot bound
-//! the stack *evaluating* that request needs: one written level of `FILTER NOT EXISTS`
-//! costs the evaluator about 16.7 KB of wasm32 shadow stack, one of `LATERAL` about
-//! 9.5 KB, and any other algebra level (`OPTIONAL`, `MINUS`, `BIND`, a sibling spine)
-//! about 4.8 KB, so the deepest admitted requests need more than the synchronous wasm
-//! lane's whole 1 MiB stack, while the flat and shallow ones a lower count would refuse
-//! need a fraction of it. Exhausting the stack is not an error anywhere: natively the
-//! process aborts, and on `wasm32-unknown-unknown` the shadow stack runs below its floor
-//! and traps with the instance's memory in an unknown state.
+//! The parser admits a request as deep as the stack of the thread parsing it holds, but
+//! that does not bound the stack *evaluating* it needs: one written level of
+//! `FILTER NOT EXISTS` costs the evaluator about 16.7 KB of wasm32 shadow stack, one of
+//! `LATERAL` about 9.5 KB, and any other algebra level (`OPTIONAL`, `MINUS`, `BIND`, a
+//! sibling spine) about 4.8 KB — far more than the parser spent on it — while the flat
+//! and shallow requests need a fraction of any stack. Exhausting the stack is not an
+//! error anywhere: natively the process aborts, and on `wasm32-unknown-unknown` the
+//! shadow stack runs below its floor and traps with the instance's memory in an unknown
+//! state.
 //!
 //! So every evaluator entry that can deepen the stack measures the stack actually left
 //! and refuses with [`EvalError::StackExhausted`] — naming the construct — when it is
@@ -26,17 +25,18 @@
 //!   outer row) and every user-defined function call — and so do the fallible walks a
 //!   plan passes through before its first operator: a governed evaluation's plan survey
 //!   and the `1.2-basic` profile's admission.
-//! * **Walks with no error channel** that run while evaluating — over a subtree whose
-//!   height only the parser's budgets bound — run inside a `walk` scope. Each level asks
+//! * **Walks with no error channel** that run while evaluating — over a subtree as tall
+//!   as the stack that parsed it held — run inside a `walk` scope. Each level asks
 //!   `walk_is_low`; the first that finds the margin gone latches the refusal and returns a
 //!   placeholder, and the scope discards whatever the walk built and returns the error.
 //!   These are an `EXISTS` site's preparation (normalization, its source map, its
 //!   structural analysis) and its scope-collision check, a correlated evaluation's
 //!   per-row substitution copy, a property path's traversal, a `SERVICE` body's analysis,
-//!   copy and serialization, an in-process `SERVICE`'s blank-node rewrite, a function
-//!   body's copy and pre-binding rewrite, and template instantiation (`CONSTRUCT`, and
-//!   an update's `DELETE`/`INSERT` and `DATA` templates). Their copies of algebra trees
-//!   go through the `clone` submodule rather than the derived `Clone`, so they can refuse too.
+//!   copy and serialization (the serializer's own levels ask too), an in-process
+//!   `SERVICE`'s blank-node rewrite, a function body's copy and pre-binding rewrite, and
+//!   template instantiation (`CONSTRUCT`, and an update's `DELETE`/`INSERT` and `DATA`
+//!   templates). Their copies of algebra trees go through the `clone` submodule rather
+//!   than the derived `Clone`, so they can refuse too.
 //! * **Walks whose answer has a safe side** answer it when the stack is low, with no
 //!   scope: the parallel-safety classification answers "unsafe" (the loop runs
 //!   sequentially), `EXISTS` probe admissibility answers "not admissible" (the per-row
@@ -44,17 +44,24 @@
 //!   is evaluated). Each is always correct, and the evaluation that follows refuses at
 //!   its own next check.
 //!
-//! What remains unchecked is bounded by the parser's budgets (128 levels of graph
-//! pattern, 512 of expression), at tens to a few hundred bytes a level: the derived copy
-//! and drop of terms and of the per-row copies, the algebra serializer, the one-level
-//! visitors — all of which the margin holds wherever they run — and the infallible walks
-//! that run once over the whole plan before its first operator (planning, blank-node
-//! scoping, the parallel and admission analyses). Those start from the top of the stack
-//! the evaluation starts on; a thread too small even for them would need far more to
-//! evaluate the first levels of the query, and is outside what this guard can make
-//! safe. The parser guards its own recursion against the same measurement, so the
-//! re-parse of a body an in-process `SERVICE` forwards — which runs at whatever depth
-//! the `SERVICE` sits — refuses rather than overflows too.
+//! What remains unchecked is bounded otherwise:
+//!
+//! * The infallible walks that run once over the whole plan before its first operator
+//!   (planning, blank-node scoping, the endpoint, parallel and admission analyses), and
+//!   the derived copy and drop of the whole plan, start from the top of the stack the
+//!   evaluation starts on. Every evaluation first measures the whole plan's height
+//!   against that stack at the parser's per-level charge
+//!   (`governor::soundness::validate_graph_pattern_depth`), which holds the costliest of
+//!   those walks with room to spare, and refuses the plan, typed, where it does not fit.
+//! * The drop of a per-row copy runs where the copy was made, by a guarded walk whose
+//!   levels cost more than the drop's.
+//! * Terms nest no deeper than [`purrdf_sparql_algebra::MAX_TRIPLE_TERM_NESTING`], so their
+//!   derived copy, comparison and matching fit the margin wherever they run.
+//! * The one-level visitors do not recurse.
+//!
+//! The parser guards its own recursion against the same measurement, so the re-parse of
+//! a body an in-process `SERVICE` forwards — which runs at whatever depth the `SERVICE`
+//! sits — refuses rather than overflows too.
 //!
 //! # The measurement
 //!

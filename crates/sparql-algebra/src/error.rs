@@ -78,16 +78,21 @@ pub enum ParseError {
     },
     /// The query nests deeper than the stack of the thread parsing it can hold:
     /// `construct` was about to be parsed one level deeper with less than
-    /// [`purrdf_stack::MARGIN_BYTES`] of stack left.
+    /// [`purrdf_stack::MARGIN_BYTES`] of stack left, or a node about to be built there
+    /// would make a tree too tall for the walks over it to fit that stack, or — on
+    /// `wasm32` — the level would spend more of the host engine's call stack than
+    /// [`crate::WASM_HOST_STACK_BUDGET`] allows. [`crate::Query::validate`] and
+    /// [`crate::GraphPattern::validate_height`] refuse a tree too tall for the stack left
+    /// with it too, naming `"query algebra"`.
     ///
     /// Its own variant rather than a [`Self::Syntax`] because nothing about the text is
-    /// wrong: it is inside the nesting limit, and the same text parses on a thread with
-    /// a larger stack. Refusing is what stands between an admitted nesting depth and a
-    /// crash — natively an aborted process, on `wasm32` a trapped instance — when the
-    /// parse runs where little stack is left (a small thread, or a query re-parsed deep
-    /// inside an evaluation, as an in-process `SERVICE` body is). A caller that must
-    /// tell "a larger stack answers this" from a malformed query matches on this
-    /// variant, never on the message.
+    /// wrong: how deep a request may nest is the stack it runs on, and the same text
+    /// parses on a thread with a larger stack. Refusing is what stands between a deep
+    /// request and a crash — natively an aborted process, on `wasm32` a trapped
+    /// instance — when the parse runs where little stack is left (a small thread, or a
+    /// query re-parsed deep inside an evaluation, as an in-process `SERVICE` body is). A
+    /// caller that must tell "a larger stack answers this" from a malformed query
+    /// matches on this variant, never on the message.
     StackExhausted {
         /// The construct about to be parsed a level deeper (`"group graph pattern"`,
         /// `"bracketted expression"`, …).
@@ -178,9 +183,8 @@ impl fmt::Display for ParseError {
             Self::StackExhausted { construct, at } => write!(
                 f,
                 "SPARQL parse stack exhausted at byte {at}: the {construct} opened there \
-                 nests deeper than this thread's stack can parse (less than {} bytes \
-                 were left); parse it on a thread with a larger stack",
-                purrdf_stack::MARGIN_BYTES
+                 nests deeper than the stack parsing it can hold; parse it on a thread with \
+                 a larger stack"
             ),
         }
     }

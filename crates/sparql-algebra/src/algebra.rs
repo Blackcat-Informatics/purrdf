@@ -1018,6 +1018,14 @@ impl core::fmt::Display for PropertyPathExpression {
     /// no grammar production for it, so this text does not round-trip back
     /// through [`crate::parser::SparqlParser`]).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // A level that finds the stack low inside a `purrdf_stack::walk` scope — the
+        // evaluator renders a forwarded `SERVICE` body inside one — writes nothing
+        // more; the scope discards the truncated text and reports the refusal. It
+        // never returns an error, which `format!` would turn into a panic. Outside a
+        // scope the check never fires.
+        if purrdf_stack::walk_is_low("algebra serialization") {
+            return Ok(());
+        }
         match self {
             Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),
             Self::Reverse(a) => write!(f, "^{}", PathElt(a)),

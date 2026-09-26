@@ -481,7 +481,11 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 ///   distinct IRIs rather than one;
 /// * 62 → 59 when the duplicate nesting walk went: **three**, the traversal stack
 ///   that second walk allocated and grew on every call.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 59;
+/// * 59 → 58 when the per-evaluation walk that remained stopped counting graph-pattern
+///   levels and measured the whole plan's height against the stack instead
+///   (`GraphPattern::validate_height`): **one**, measured with each walk alone in
+///   place — the old walk costs this fixture 59, the new one 58.
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 58;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

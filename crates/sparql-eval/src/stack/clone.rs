@@ -8,10 +8,10 @@
 //! evaluator copies whole subtrees from wherever it happens to be: an `EXISTS` preparing
 //! its site copies the site's inner pattern, a correlated substitution copies a property
 //! path leaf, a `SERVICE` copies its body before serializing it, a user-defined function
-//! copies its body before rewriting it. The tree the parser admits is up to 512
-//! levels tall, and one level of the derived copy costs a few hundred bytes of native
-//! stack, so a copy made deep in an evaluation can need more stack than the guard's margin
-//! leaves.
+//! copies its body before rewriting it. The tree the parser admits is as tall as the
+//! stack that parsed it holds, and one level of the derived copy costs a few hundred bytes
+//! of native stack, so a copy made deep in an evaluation can need more stack than the
+//! guard's margin leaves.
 //!
 //! These are the same copies, one level at a time, each level first asking
 //! [`super::walk_is_low`]. They must run inside a [`super::walk`] scope — every caller's
@@ -19,7 +19,7 @@
 //! refuse, and copy exactly what the derived `Clone` copies. The leaves they reach
 //! (terms, triple patterns, `VALUES` cells) are copied with their own `Clone`: their
 //! nesting is the triple-term nesting the parser bounds at
-//! [`purrdf_sparql_algebra::MAX_NESTING_DEPTH`], at a few dozen bytes a level.
+//! [`purrdf_sparql_algebra::MAX_TRIPLE_TERM_NESTING`], at a few hundred bytes a level.
 //!
 //! Every `match` here is exhaustive and wildcard-free, so a new algebra variant is a
 //! compile error here rather than a node these copies silently drop.
@@ -347,7 +347,7 @@ mod tests {
     fn a_copy_that_runs_out_of_stack_is_refused() {
         // An operator chain is one node however long, so the depth comes from real
         // nesting: seventy bracket levels of seven operator levels each, 490 levels in
-        // all, inside both of the parser's budgets.
+        // all, which a test thread's stack parses.
         let mut nested = String::from("?x");
         for _ in 0..70 {
             nested = format!("(?x || ?x && ?x != ?x + ?x * {nested})");

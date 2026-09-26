@@ -7,11 +7,15 @@
 //! the same request on a thread with room answers with the rows its semantics give.
 //!
 //! Each deep request is prepared on a roomy thread and evaluated on a small one. The
-//! parser bounds its own recursion by level count, and parsing the deepest nested forms
-//! takes more native stack than the small thread has, so preparing there would test the
-//! parser rather than the evaluator; a prepared plan is exactly what a host that parses
-//! once and evaluates on worker threads hands them. The flat `OPTIONAL` spine parses in a
-//! few KiB, so it also goes through the whole request path on the small thread.
+//! parser measures its own stack too, and parsing the deepest nested forms takes more
+//! native stack than the small thread has, so preparing there would test the parser
+//! rather than the evaluator; a prepared plan is exactly what a host that parses once and
+//! evaluates on worker threads hands them. The flat `OPTIONAL` spine parses in a few KiB,
+//! so it also goes through the whole request path on the small thread. And whole requests
+//! nested far past every count this workspace used to enforce — calls, negations, groups,
+//! operator levels, path groups, spines, and a property-function plan under them — are
+//! swept across every stack from the margin to one that holds them: each answers or is a
+//! typed refusal, never an abort.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -604,4 +608,168 @@ fn a_suspension_inside_a_path_s_walk_scope_leaves_the_scope_with_the_evaluation(
     assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE, "{refused:?}");
     assert!(refused.message.contains("the waiting walk"), "{refused:?}");
     assert!(!after, "and the thread refuses the next query");
+}
+
+/// A relation `<rel:tag>` binding `<s1>` to `<t>`, for a request whose property-function
+/// call sends its plan through the feasibility pass, which walks the whole pattern.
+fn tag_relation() -> purrdf_sparql_eval::ExtensionEnv {
+    let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
+    registry.register(
+        format!("{EX}rel/tag"),
+        Arc::new(
+            purrdf_sparql_eval::MemoryRelation::new(
+                1,
+                1,
+                vec![vec![
+                    TermValue::iri(format!("{EX}s1")),
+                    TermValue::iri(format!("{EX}t")),
+                ]],
+            )
+            .expect("every row is two values wide"),
+        ),
+    );
+    purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
+        .expect("the fixture declaration reads cleanly")
+}
+
+/// Run a whole request with `bytes` of stack left, with [`tag_relation`] registered.
+fn request_with_relation(query: &str, bytes: usize) -> Result<Vec<String>, RdfDiagnostic> {
+    let query = query.to_owned();
+    on_stack(bytes, move || {
+        let env = tag_relation();
+        subjects(NativeSparqlEngine::new().query_with_options_view(
+            &*dataset(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new().with_env(&env),
+        ))
+    })
+}
+
+/// Whether `result` is a typed stack refusal: the parser's or the evaluator's.
+fn is_stack_refusal(result: &Result<Vec<String>, RdfDiagnostic>) -> bool {
+    result.as_ref().is_err_and(|diagnostic| {
+        diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
+            || diagnostic.message.contains("SPARQL parse stack exhausted")
+    })
+}
+
+/// Requests nested far past the removed counts (128 recursive levels, 512 levels of
+/// tree height, 128 levels of graph pattern, 2 048 spine nodes), each with the only
+/// subjects its nesting computes, and whether it calls [`tag_relation`].
+fn tall_requests() -> Vec<(&'static str, String, &'static [&'static str], bool)> {
+    let o1 = format!("<{EX}o1>");
+    let mut chain = format!("?o = {o1}");
+    for _ in 0..150 {
+        chain = format!("(?o != <{EX}zz> && {chain})");
+    }
+    vec![
+        (
+            "300 nested STR calls",
+            format!(
+                "SELECT ?s WHERE {{ ?s <{EX}p> ?o FILTER({}?o{} = \"{EX}o1\") }}",
+                "STR(".repeat(300),
+                ")".repeat(300)
+            ),
+            &["s1"],
+            false,
+        ),
+        (
+            "2 000 negations",
+            format!(
+                "SELECT ?s WHERE {{ ?s <{EX}p> ?o FILTER({}(?o = {o1})) }}",
+                "!".repeat(2_000)
+            ),
+            &["s1"],
+            false,
+        ),
+        (
+            "400 nested groups",
+            format!(
+                "SELECT ?s WHERE {{ {}?s <{EX}q> ?z{} }}",
+                "{ ".repeat(400),
+                " }".repeat(400)
+            ),
+            &["s1"],
+            false,
+        ),
+        (
+            "150 bracket levels of operators",
+            format!("SELECT ?s WHERE {{ ?s <{EX}p> ?o FILTER({chain}) }}"),
+            &["s1"],
+            false,
+        ),
+        (
+            "300 nested path groups",
+            format!(
+                "SELECT ?s WHERE {{ ?s {}<{EX}p>{} {o1} }}",
+                "(".repeat(300),
+                ")".repeat(300)
+            ),
+            &["s1"],
+            false,
+        ),
+        ("200 nested LATERAL", lateral(200), &["s1"], false),
+        (
+            "2 500 sibling OPTIONAL",
+            optional_spine(2_500),
+            &["s1", "s2", "s3", "s4"],
+            false,
+        ),
+        (
+            "a property-function call under 300 nested groups",
+            format!(
+                "SELECT ?s WHERE {{ ?s <{EX}q> ?z {}?s <{EX}rel/tag> ?t{} }}",
+                "{ ".repeat(300),
+                " }".repeat(300)
+            ),
+            &["s1"],
+            true,
+        ),
+    ]
+}
+
+/// Wherever in a request the stack runs out — its parse, the walks over its plan before
+/// the first operator, the property-function planning pass, its evaluation — the request
+/// returns: it answers exactly (a stack with room) or it is a typed stack refusal (one
+/// without), never an abort, which would take this test process down. Once it answers on
+/// a stack it answers on every larger one, and the largest holds every request.
+#[test]
+fn every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_counts() {
+    let floor = purrdf_stack::MARGIN_BYTES;
+    for (what, query, expected, relation) in tall_requests() {
+        let mut answered_at = None;
+        for step in 0..40 {
+            let bytes = floor + step * 160 * 1024;
+            let outcome = if relation {
+                request_with_relation(&query, bytes)
+            } else {
+                request(&query, bytes)
+            };
+            match outcome {
+                Ok(names) => {
+                    assert_eq!(names, expected, "{what} with {bytes} bytes left");
+                    answered_at.get_or_insert(bytes);
+                }
+                refused => {
+                    assert!(
+                        is_stack_refusal(&refused),
+                        "{what} with {bytes} bytes left: {refused:?}"
+                    );
+                    assert!(
+                        answered_at.is_none(),
+                        "{what}: refused with {bytes} bytes after answering with less"
+                    );
+                }
+            }
+        }
+        assert!(
+            answered_at.is_some(),
+            "{what}: answers within {} KiB",
+            (floor + 39 * 160 * 1024) / 1024
+        );
+    }
 }

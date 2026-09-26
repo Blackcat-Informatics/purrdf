@@ -748,8 +748,9 @@ fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphP
 ///
 /// The forwarded text. A `FILTER` constrains its whole group, so the first shape can only
 /// be written with the filtered pattern braced as a group of its own — one nesting level
-/// per wrapper, which the parser's nesting budget counts — and a body the parser admitted
-/// could be forwarded as text it refuses. The second is written flat, as the source was.
+/// per wrapper, each a level of the parser's recursion — and a body the parser admitted
+/// could be forwarded as text needing twice its stack. The second is written flat, as the
+/// source was.
 ///
 /// # Why the answer does not change
 ///
@@ -1246,7 +1247,7 @@ pub(crate) fn evaluate_in_memory(
         ..
     } = request;
     // The re-parse runs at whatever depth the `SERVICE` sits, so it can run out of stack
-    // on a body the parser's limits admit. That is this host's stack, not the endpoint:
+    // on a body the parser admitted higher up. That is this host's stack, not the endpoint:
     // the same stack refusal the body's evaluation would raise, never a decode failure
     // `SILENT` could swallow into the join identity.
     let parsed = purrdf_sparql_algebra::SparqlParser::new()
@@ -2609,18 +2610,59 @@ mod tests {
             .map_err(|e| e.to_string())
     }
 
+    /// Whether the parser admits `pattern`'s forwarded text with exactly `bytes` of
+    /// stack left (to within one 4 KiB frame), measured with the guard's own
+    /// [`purrdf_stack::remaining`] rather than trusting the size a thread asked for.
+    fn admitted_with_stack_left(pattern: &GraphPattern, bytes: usize) -> bool {
+        fn descend(bytes: usize, text: &str) -> bool {
+            if purrdf_stack::remaining() <= bytes {
+                return purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(text)
+                    .is_ok();
+            }
+            let frame = core::hint::black_box([0_u8; 4096]);
+            let admitted = descend(bytes, text);
+            core::hint::black_box(&frame);
+            admitted
+        }
+        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        std::thread::Builder::new()
+            .stack_size(bytes + 1024 * 1024)
+            .spawn(move || descend(bytes, &text))
+            .expect("spawn")
+            .join()
+            .expect("the parsing thread returned rather than aborting")
+    }
+
+    /// The least stack left, to within 4 KiB, on which the parser admits `pattern`'s
+    /// forwarded text.
+    fn stack_to_admit(pattern: &GraphPattern) -> usize {
+        let (mut lo, mut hi) = (0_usize, 64 * 1024 * 1024);
+        assert!(admitted_with_stack_left(pattern, hi), "admitted on 64 MiB");
+        while hi - lo > 4096 {
+            let mid = lo.midpoint(hi);
+            if admitted_with_stack_left(pattern, mid) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        hi
+    }
+
     #[test]
     fn a_block_joined_beside_filters_is_forwarded_beneath_them_and_admitted() {
         // 120 nested groups, admitted as written. Joined beside each group's filters, the
-        // block would force a brace per group — twice the nesting — and the text would be
-        // refused; moved beneath the filters, which do not read `?t`, it is written flat.
+        // block would force a brace per group — twice the nesting — and on the stack the
+        // flat text needs, that text is refused; moved beneath the filters, which do not
+        // read `?t`, it is written flat.
         let injected = inject(&doubly_filtered_body(120, false), &triple_block(), false);
-        assert!(
-            forwarded_text_is_admitted(&injected).is_err(),
-            "the block beside the filters does not fit the nesting budget"
-        );
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded beneath the filters");
+        assert!(
+            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            "the block beside the filters needs more stack than beneath them"
+        );
         // The one level's shape: the block is joined to the triple, under both filters.
         let GraphPattern::Graph { inner, .. } = &sanitized else {
             panic!("the outermost group is a GRAPH");
@@ -2643,12 +2685,12 @@ mod tests {
         // well: the outer block stops at that filter, where every row already binds `?t`
         // to the block's value, and joining it again there would be the identity.
         let injected = inject(&doubly_filtered_body(120, true), &triple_block(), true);
-        assert!(
-            forwarded_text_is_admitted(&injected).is_err(),
-            "the block beside the reading filter does not fit the nesting budget"
-        );
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded without the repeated block");
+        assert!(
+            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            "the block beside the reading filter needs more stack than the text without it"
+        );
         let GraphPattern::Graph { inner, .. } = &sanitized else {
             panic!("the outermost group is a GRAPH");
         };

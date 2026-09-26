@@ -297,8 +297,22 @@ fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() 
     );
 }
 
+/// A plan too tall for the stack it is published on is refused before any governor
+/// work or substitution, and the destination is untouched. The plan is admitted on a
+/// large stack — admission measures the admitting thread — and published from a
+/// 4 MiB thread, whose stack cannot hold the walks over a hundred thousand joins at the
+/// parser's 512-byte charge; the refusal is the evaluation's own typed stack refusal.
 #[test]
 fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(deeply_joined_construct_on_a_large_stack)
+        .expect("spawn")
+        .join()
+        .expect("the large thread returned");
+}
+
+fn deeply_joined_construct_on_a_large_stack() {
     use purrdf_sparql_algebra::{GraphPattern, Query};
     let engine = NativeSparqlEngine::new();
     let data = dataset();
@@ -307,7 +321,7 @@ fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
     let Query::Construct { pattern, .. } = &mut algebra else {
         panic!("construct")
     };
-    for _ in 0..=purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH {
+    for _ in 0..100_000 {
         *pattern = GraphPattern::Join {
             left: Box::new(std::mem::replace(
                 pattern,
@@ -322,35 +336,43 @@ fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
     }
     algebra
         .validate()
-        .expect("structurally valid algebra still requires execution-depth admission");
+        .expect("a large stack admits a hundred thousand joins");
     // `algebra` was built as a fresh, owned `Query` — never spliced into an
     // already-admitted `PreparedQuery` (that field is private with no setter; see
     // `crates/sparql-eval/src/engine.rs`). `PreparedQuery::rewritten` admits it
-    // legitimately: `Query::validate`'s structural bound is looser than the
-    // execution-depth check the publication entry runs, so admission succeeds here
-    // and the refusal below is entirely the publication entry's own, later check.
+    // legitimately on this thread; the refusal below is entirely the publication
+    // entry's own, later check, against the stack it runs on.
     let prepared = purrdf_sparql_eval::PreparedQuery::rewritten(algebra, QueryOptions::EMPTY)
-        .expect("structurally valid algebra is admitted; only execution depth refuses it");
+        .expect("admitted where the stack holds its walks");
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let before = state.evidence();
     let mut target = RdfDatasetBuilder::new();
     let existing = target.intern_iri("https://example.org/existing");
     let predicate = target.intern_iri(VALUE);
     target.push_quad(existing, predicate, existing, None);
-    let result = engine.construct_prepared_in_operation_into_view(
-        data.as_ref(),
-        &prepared,
-        &[("s".to_owned(), TermValue::blank("c1"))],
-        QueryOptions::EMPTY,
-        &state,
-        &mut target,
-    );
+    let result = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn_scoped(scope, || {
+                NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
+                    data.as_ref(),
+                    &prepared,
+                    &[("s".to_owned(), TermValue::blank("c1"))],
+                    QueryOptions::EMPTY,
+                    &state,
+                    &mut target,
+                )
+            })
+            .expect("spawn")
+            .join()
+            .expect("the publishing thread returned rather than aborting")
+    });
     let Err(GraphBuildError::Query(diagnostic)) = result else {
-        panic!("excessive execution depth must be refused")
+        panic!("a plan too tall for the publishing stack must be refused")
     };
     assert_eq!(
         diagnostic.code,
-        "native-sparql-graph-pattern-depth-exceeded"
+        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
     );
     assert_eq!(state.evidence(), before, "admission precedes governor work");
     let output = target.freeze().expect("untouched destination");

@@ -4,17 +4,15 @@
 //! Admitted in, admitted out: the text [`pattern_to_select_query`] renders for any
 //! algebra the parser admits is admitted again, and re-parses to the same tree.
 //!
-//! The parser bounds nesting (`MAX_NESTING_DEPTH`) and operator-tree height (the
-//! expression-height budget), and every bracket or brace the renderer writes is a
-//! level of both. A renderer that brackets more than the grammar needs therefore
-//! turns an admitted body into refused text — and the forwarded text of a `SERVICE`
-//! is exactly such a rendering, so a refusal there becomes an endpoint failure,
-//! which `SERVICE SILENT` answers with the join identity. These tests pin the
-//! property three ways: a proptest over generated expression and property-path
-//! trees, the named precedence cases (with the brackets they must and must not
-//! carry), and, for every construct family that nests or chains, the deepest body
-//! the parser admits inside a `SERVICE` — found by search, with its first refused
-//! neighbour asserted — forwarded and re-parsed.
+//! How deep a request may nest is the stack the parser has, and every bracket or brace
+//! the renderer writes is a level of its recursion. A renderer that brackets more than
+//! the grammar needs therefore turns an admitted body into text refused where the stack
+//! ends — and the forwarded text of a `SERVICE` is exactly such a rendering. These tests
+//! pin the property three ways: a proptest over generated expression and property-path
+//! trees, the named precedence cases (with the brackets they must and must not carry),
+//! and, for every construct family that nests or chains, the deepest body the parser
+//! admits inside a `SERVICE` on the test thread's stack — found by search, with its
+//! first refused neighbour asserted — forwarded and re-parsed on the same stack.
 
 use proptest::prelude::*;
 use purrdf_sparql_algebra::{
@@ -430,6 +428,9 @@ fn deepest_admitted(build: &dyn Fn(usize) -> String, ceiling: usize) -> usize {
         try_select(&build(hi)).is_err(),
         "the family must reach a refusal below {ceiling}"
     );
+    // The refusal is the stack's: nothing but the stack bounds how deep a body nests.
+    let refused = try_select(&build(hi)).expect_err("refused at the ceiling");
+    assert!(refused.contains("stack exhausted"), "{refused}");
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
         if try_select(&build(mid)).is_ok() {
@@ -489,32 +490,32 @@ fn expression_families_forward_at_their_deepest_admitted_body() {
     assert_family_forwards(
         "right-nested subtraction",
         &|n| filter(nest(n, "?o", |e| format!("?o - ({e})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "unary minus",
         &|n| filter(nest(n, "?o", |e| format!("-{e}"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "logical not",
         &|n| filter(nest(n, "?o", |e| format!("!{e}"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "built-in call",
         &|n| filter(nest(n, "?o", |e| format!("STR({e})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "IN list",
         &|n| filter(nest(n, "?o", |e| format!("?o IN ({e})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "not-equal operand",
         &|n| filter(nest(n, "?o", |e| format!("({e} != ?o) * ?o"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "EXISTS in an expression",
@@ -523,7 +524,7 @@ fn expression_families_forward_at_their_deepest_admitted_body() {
                 format!("?o && EXISTS {{ {TRIPLE} FILTER({e}) }}")
             }))
         },
-        600,
+        20_000,
     );
 }
 
@@ -532,7 +533,7 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
     assert_family_forwards(
         "nested OPTIONAL",
         &|n| nest(n, TRIPLE, |b| format!("{TRIPLE} OPTIONAL {{ {b} }}")),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested OPTIONAL sub-SELECT",
@@ -541,7 +542,7 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
                 format!("{TRIPLE} OPTIONAL {{ SELECT * WHERE {{ {b} }} }}")
             })
         },
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested sub-SELECT",
@@ -550,12 +551,12 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
                 format!("{TRIPLE} {{ SELECT * WHERE {{ {b} }} }}")
             })
         },
-        600,
+        20_000,
     );
     assert_family_forwards(
         "right-nested UNION",
         &|n| nest(n, TRIPLE, |b| format!("{{ {TRIPLE} }} UNION {{ {b} }}")),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "braced FILTER group before an OPTIONAL",
@@ -564,7 +565,7 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
                 format!("{{ {b} FILTER(?o) }} OPTIONAL {{ {TRIPLE} }}")
             })
         },
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested NOT EXISTS",
@@ -573,22 +574,22 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
                 format!("{TRIPLE} FILTER NOT EXISTS {{ {b} }}")
             })
         },
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested GRAPH",
         &|n| nest(n, TRIPLE, |b| format!("GRAPH <{EX}g> {{ {b} }}")),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested SERVICE",
         &|n| nest(n, TRIPLE, |b| format!("SERVICE <{EX}ep> {{ {b} }}")),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested MINUS",
         &|n| nest(n, TRIPLE, |b| format!("{TRIPLE} MINUS {{ {b} }}")),
-        600,
+        20_000,
     );
 }
 
@@ -605,7 +606,7 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 chain(n, |_| format!("OPTIONAL {{ {TRIPLE} }}"))
             )
         },
-        4096,
+        20_000,
     );
     assert_family_forwards(
         "OPTIONAL chain",
@@ -615,17 +616,17 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 chain(n, |_| format!("OPTIONAL {{ {TRIPLE} }}"))
             )
         },
-        4096,
+        20_000,
     );
     assert_family_forwards(
         "MINUS chain",
         &|n| format!("{TRIPLE} {}", chain(n, |_| format!("MINUS {{ {TRIPLE} }}"))),
-        4096,
+        20_000,
     );
     assert_family_forwards(
         "BIND chain",
         &|n| format!("{TRIPLE} {}", chain(n, |i| format!("BIND(?o AS ?v{i})"))),
-        4096,
+        20_000,
     );
     assert_family_forwards(
         "mixed OPTIONAL / BIND / MINUS chain",
@@ -639,12 +640,12 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 })
             )
         },
-        4096,
+        20_000,
     );
     assert_family_forwards(
         "FILTER chain",
         &|n| format!("{TRIPLE} {}", chain(n, |_| "FILTER(?o)".to_owned())),
-        4096,
+        20_000,
     );
 }
 
@@ -654,22 +655,22 @@ fn property_path_families_forward_at_their_deepest_admitted_body() {
     assert_family_forwards(
         "right-nested sequence",
         &|n| format!("?s {} ?o", nest(n, &a, |p| format!("{a}/({p})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "right-nested alternative",
         &|n| format!("?s {} ?o", nest(n, &a, |p| format!("{a}|({p})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested inverse",
         &|n| format!("?s {} ?o", nest(n, &a, |p| format!("^({p})"))),
-        600,
+        20_000,
     );
     assert_family_forwards(
         "nested quantifier",
         &|n| format!("?s {} ?o", nest(n, &a, |p| format!("({p})*"))),
-        600,
+        20_000,
     );
 }
 

@@ -517,9 +517,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `QueryDatasetSlot`: where a query's dataset clause is, or where one would go.
   `parse_update_split` returns an `UpdateSplit` giving each update operation's
   `WITH`/`USING`/`WHERE` positions (`UpdateDatasetSlot`). `parse_update_with` runs
-  through the same split. `MAX_NESTING_DEPTH` (128) is the one nesting budget every
-  recursive production shares, and `ParseError::StackExhausted` refuses a parse
-  that the thread's remaining stack cannot hold.
+  through the same split. `ParseError::StackExhausted` refuses a parse that the
+  thread's remaining stack cannot hold, and `GraphPattern::validate_height`
+  refuses, with the same error, a pattern too tall for the walks over it to fit
+  the calling thread's stack. `MAX_TRIPLE_TERM_NESTING` (128) is how deeply
+  triple terms nest; `WASM_HOST_STACK_BUDGET` (640 KiB) and
+  `WASM_GRAPH_PATTERN_DEPTH` (284) are the host call-stack bounds a `wasm32` build
+  applies to nesting.
 
 - **stack:** a new publishable crate, `purrdf-stack`, that measures how much stack
   the running thread has left. `remaining`, `is_low` and `replace_floor` read that
@@ -586,17 +590,37 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   enough anywhere else exhausted the parser's stack. About 950 nested parentheses
   trapped the wasm build, and every other recursive production overflowed a native
   stack at 10 000 levels. Every recursive production of the query and update
-  grammars now goes through one guard (`MAX_NESTING_DEPTH`, 128) and fails with the
-  typed parse error groups already produced. The guarded productions are groups,
-  `EXISTS` bodies, bracketed expressions, unary operators, function, built-in and
-  aggregate calls, `IN` lists, triple terms, reifiers, annotations, path groups,
-  blank-node property lists and collections. What loops build without recursion —
-  relational operators, `^`, path modifiers, `NOT EXISTS` — adds levels no recursion
-  guard saw, so every node's height is now charged against a bound of 512, the
-  height validation already admitted. Expression operator chains, `UNION` chains
-  and property-path sequences and alternatives are one node however long (see
-  Changed), so their length costs no height. The parser also checks the stack it
-  has left and refuses with `ParseError::StackExhausted` rather than overflowing.
+  grammars — groups, `EXISTS` bodies, bracketed expressions, unary operators,
+  function, built-in and aggregate calls, `IN` lists, triple terms, reifiers,
+  annotations, path groups, blank-node property lists and collections — now
+  measures the stack its thread has left and refuses with
+  `ParseError::StackExhausted` before it runs out, so how deep a request may nest
+  is the real capacity of the thread parsing it rather than a count. Natively an
+  8 MiB thread answers 2 180 nested built-in calls, 3 101 nested `-(`, 2 427
+  nested groups, 3 625 nested parentheses and 6 354 nested path groups; a 2 MiB
+  thread 514, 732, 573, 856 and 1 500. The 128-level group limit is gone:
+  `MAX_GRAPH_PATTERN_DEPTH` is deprecated and no longer enforced, and so is
+  `MAX_GRAPH_PATTERN_NODES`, whose 2 048-element count on a run of sibling
+  elements is now a measured height too. What loops build without recursion —
+  operators above their operands, `^`, path modifiers, `NOT EXISTS`, runs of
+  `OPTIONAL`/`MINUS`/`BIND`/`FILTER` siblings, projection, `GROUP BY` and `HAVING`
+  chains — is built only where every walk over the tree (its own `Drop`, `Clone`,
+  `PartialEq`, `Hash` and `Debug`, the serializer, the evaluator's analyses) fits
+  the stack left there, at a measured 512 bytes a level, so a tree the parser
+  returns can be dropped, copied, compared and formatted from the frame that
+  parsed it. Triple terms nest at most 128 deep (`MAX_TRIPLE_TERM_NESTING`),
+  because the evaluator copies, matches and instantiates terms with no stack check
+  wherever an evaluation stands; the dataset model holds at most 16 levels, so a
+  deeper pattern could match nothing, but a native build used to accept one. On
+  `wasm32` the host engine's own call stack, which wasm code cannot read, runs out
+  before the shadow stack for some constructs (path groups trapped V8 at about
+  2 000 levels), so there each level is also charged its measured V8 cost against
+  a 640 KiB budget (`WASM_HOST_STACK_BUDGET`, 65% of V8's stack), and tree height
+  is capped at 2 048 levels: the synchronous lane answers 637 nested parentheses,
+  537 `-(`, 283 groups, 1 133 path groups and 425 built-in calls, and refuses the
+  next level typed. A synchronous call nested between that budget and the depth
+  at which the shadow stack used to trap it (638 to about 950 parentheses) is now
+  refused rather than answered.
 
 - **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
   On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
@@ -604,17 +628,27 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   measures the stack it has left at every recursive step that can deepen without
   bound, and refuses with `native-sparql-evaluation-stack-exhausted` before the
   margin is spent. Walks that have no error channel run inside a scope that discards
-  the half-built result. A stack refusal inside an in-process `SERVICE` body cannot be
-  silenced by `SERVICE SILENT`.
+  the half-built result, and the serializer that renders a forwarded `SERVICE` body
+  asks at every level too. A stack refusal inside an in-process `SERVICE` body cannot
+  be silenced by `SERVICE SILENT`. The evaluator's 128-level graph-pattern count and
+  the 512-level expression height `Query::validate` admitted are gone with the
+  parser's counts: a plan is measured, whole and iteratively, against the stack its
+  evaluation starts on, and refused with `native-sparql-evaluation-stack-exhausted`
+  only where that stack cannot hold the walks over it, so a plan prepared on one
+  thread and run on another is judged by the stack it runs on. On `wasm32`, graph
+  patterns still nest at most 284 deep (`WASM_GRAPH_PATTERN_DEPTH`), for V8's call
+  stack.
 
 - **sparql-algebra, sparql-eval:** a `SERVICE` body the parser admitted could be
   forwarded as text the parser refuses. The serializer bracketed every binary
-  operator, so a chain of more than 127 operators exceeded the nesting budget. The
+  operator, so a chain of a few hundred operators was forwarded nested hundreds of
+  levels deeper than the body it rendered, which a count of 128 levels refused. The
   in-process resolver's re-parse then failed as a decode error, and under
   `SERVICE SILENT` that became the join identity: a 440-operator filter body
   answered every row unfiltered. The serializer now brackets only where precedence
   and associativity require it, writes `UNION` chains flat and
-  `OPTIONAL`/`MINUS`/`BIND`/`UNFOLD` chains unbraced, and never double-braces a
+  `OPTIONAL`/`MINUS`/`BIND`/`UNFOLD` chains unbraced, writes a `FILTER EXISTS` or
+  `FILTER NOT EXISTS` constraint without brackets, and never double-braces a
   sub-`SELECT`. The evaluator no longer forces a brace per group around a one-row
   `VALUES` block it joins beside a group's filters. The forwarded text of every
   admitted body re-parses. Remote endpoints may therefore receive different, and
@@ -2271,14 +2305,6 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   assignable on a `mut` value from outside the crate; only the struct-literal
   construction form is restricted.
 
-- **BREAKING** **sparql-algebra:** a query or update that nests any recursive
-  production more than `MAX_NESTING_DEPTH` (128) levels deep is now a parse error,
-  where only group patterns were bounded before. This refuses some text a native
-  build used to accept, such as 130 nested function calls or 200 nested
-  parentheses. The same constructs nested further trapped the wasm build (about
-  950 parentheses) or overflowed a native stack. Expression height stays bounded at
-  512, the bound validation already applied.
-
 - **BREAKING** **sparql-algebra:** an operator chain is one n-ary algebra node.
   `Expression::Or` and `Expression::And` hold their operands as a `Vec`.
   `Expression::Add`, `Subtract`, `Multiply` and `Divide` are replaced by
@@ -2293,8 +2319,8 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   level per operator, a generated `FILTER` of 513 `||` alternatives and a
   600-term `+` chain were refused as nesting, and a 600-branch `UNION` was
   refused by the evaluator's graph-pattern depth guard. A chain of any length now
-  parses and answers, and `MAX_GRAPH_PATTERN_NODES` charges a `UNION` as its
-  tallest arm. The serializer writes each chain flat, so a `SERVICE` body holding
+  parses and answers, and a `UNION` is as tall as its tallest arm. The serializer
+  writes each chain flat, so a `SERVICE` body holding
   one is forwarded as text that re-parses. A left operand in brackets extends the
   chain: `(a + b) * c` is one node. A `UNION` of three or more arms is one plan
   node, so the `EXPLAIN` ledger lists fewer nodes for it.

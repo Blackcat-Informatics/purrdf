@@ -67,8 +67,8 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     // Every node is one level of this recursion — an operator chain is one node, its
-    // operands folded by a loop — and the tree's height is bounded by the parser's
-    // expression budget, not by the stack it takes: see `crate::stack`.
+    // operands folded by a loop — and the tree is as tall as the stack that parsed it
+    // held, which is not the stack evaluating it takes: see `crate::stack`.
     crate::stack::check("expression")?;
     match expr {
         // ---- atoms ---------------------------------------------------------

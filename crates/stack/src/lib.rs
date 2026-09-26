@@ -64,7 +64,7 @@
 //!
 //! A recursion that has an error channel refuses by returning an error when [`is_low`]
 //! says so. One that has none — an infallible analysis, substitution or copy over a tree
-//! whose height only a level count bounds — runs inside a [`walk`] scope instead: each
+//! whose height nothing but the stack bounds — runs inside a [`walk`] scope instead: each
 //! level asks [`walk_is_low`], the first that finds the margin gone latches the refusal in
 //! the scope and installs [`EXHAUSTED`] so every later check refuses at once, and the
 //! scope discards whatever the walk built and reports the refusal. Which scope is open,
@@ -125,22 +125,22 @@ mod platform;
 /// reach itself again enters through, so what is left between two checks is one written
 /// level of one construct (at most a sub-`SELECT`'s 8.5 KiB), its leaves, and the walks
 /// over a finished operator or property-path chain — which a loop builds at no stack
-/// cost, and which is one n-ary node, so its validation and drop recurse once whatever
-/// its length (the sweep below predates that and measured chains as binary trees that
-/// recursed once per operator, the taller case). Swept the same way — the margin
-/// lowered, the stack left for a parse stepped by 2 KiB from 20 KiB, over the deepest
-/// form of every recursive production and 380- to 511-operator expression and path
-/// chains at the top and 120 levels down — a 48 KiB margin aborted on a 510-step
-/// property-path chain and a 64 KiB one answered or refused every run; at 128 KiB, a
-/// 4 KiB-step sweep from 32 KiB to 828 KiB left found no abort, and the deepest forms
-/// parse from 312 KiB (127 path groups) to 664 KiB (63 nested sub-`SELECT`s) left.
+/// cost, and which the parser builds only where a walk of its whole height fits the
+/// stack left past this margin. Swept the same way — the margin lowered, the stack left
+/// for a parse stepped by 2 KiB from 20 KiB, over every recursive production nested 127
+/// levels deep and 380- to 511-operator expression and path chains, when chains were
+/// still binary trees that recursed once per operator, at the top and 120 levels
+/// down — a 48 KiB margin aborted on a 510-step property-path chain and a 64 KiB one
+/// answered or refused every run; at 128 KiB, a 4 KiB-step sweep from 32 KiB to 828 KiB
+/// left found no abort. The parser's own tests sweep forms nested hundreds of levels
+/// deep the same way, and walk every tree they parse from the frame that parsed it.
 ///
 /// 128 KiB is eight times the evaluator's widest interval and twice the parser's. The
 /// rest is room for what the sweeps cannot see: host code a leaf calls (a registered
-/// function, relation or aggregate, a `SERVICE` transport), and the recursive drop of a
-/// correlated evaluation's per-row copy, whose height only the parser's expression
-/// budget bounds. It costs a thread little it could have used: a default 2 MiB thread
-/// keeps 94% of its stack, and a request refused here needed nearly all of it anyway.
+/// function, relation or aggregate, a `SERVICE` transport), and the derived copy and
+/// comparison of terms, which nest no deeper than the parser's triple-term limit. It
+/// costs a thread little it could have used: a default 2 MiB thread keeps 94% of its
+/// stack, and a request refused here needed nearly all of it anyway.
 #[cfg(not(target_arch = "wasm32"))]
 pub const MARGIN_BYTES: usize = 128 * 1024;
 
@@ -168,8 +168,9 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// evaluator's guard existed, is refused, where 63 nested `FILTER NOT EXISTS` used to
 /// trap and corrupt the instance — and it sits below an asynchronous job's poll-time
 /// guard band, so a job whose frames poll is stopped there first and a check stops the
-/// frames that never poll. Parsing the deepest request the parser admits reaches at most
-/// 236 KiB, so a parse on either lane never comes near it.
+/// frames that never poll. The parser checks against the same margin, so a parse deeper
+/// than a lane's shadow stack is refused there too; the host engine's own call stack,
+/// which this crate cannot read, the SPARQL parser bounds with a budget of its own.
 #[cfg(target_arch = "wasm32")]
 pub const MARGIN_BYTES: usize = 64 * 1024;
 
@@ -289,8 +290,8 @@ pub fn replace_context(context: Context) -> Context {
     }
 }
 
-/// Run `body` — an infallible recursive walk over a tree whose height only a level count
-/// bounds (an analysis, a substitution, a copy) — so that it can refuse when the stack
+/// Run `body` — an infallible recursive walk over a tree whose height nothing but the
+/// stack bounds (an analysis, a substitution, a copy) — so that it can refuse when the stack
 /// runs low.
 ///
 /// Such a walk has no error channel, so a level of it that finds less than

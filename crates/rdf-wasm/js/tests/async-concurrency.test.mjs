@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as packageRoot from "../index.mjs";
 import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
+import { NESTING_SHAPES, NUMBERS, attempt, realLimit } from "./fixtures/nesting.mjs";
 import { assertSurfacePoisoned } from "./fixtures/poisoned-surface.mjs";
 
 await ready();
@@ -327,7 +328,7 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   }
   assert.ok(overran instanceof Error, "the small region refuses the deep chain");
   assert.match(overran.message, EVALUATION_STACK_REFUSAL);
-  assert.match(overran.message, /expression was reached with less than 65536 bytes of stack left/);
+  assert.match(overran.message, /expression needs more stack than this thread has left above its 65536-byte reserve/);
   const overranPollDepth = overran.evidence.async.stackHighWaterBytes;
   assert.ok(
     overranPollDepth < SMALL_REGION - GUARD_BAND,
@@ -425,18 +426,15 @@ test("admitted nesting too deep for the smallest region is a typed error there, 
   }
 });
 
-// Nesting is bounded by the parser, not by the region. A FILTER nested 10 000
-// parentheses deep would recurse through the parser without a poll, far past any
-// region; the parser refuses the level past its limit with a typed syntax error first.
-const NESTING_LIMIT = 128;
-const PARENTHESIZED_REFUSAL = new RegExp(
-  `bracketted expression nesting exceeds the safety limit of ${NESTING_LIMIT}`,
-);
-/** A FILTER comparing `?o` with itself, the left operand wrapped in `depth` parentheses. */
+// Nesting is bounded by the stacks a job runs on, not by a count: its region's shadow
+// stack, which the parser and evaluator measure, and V8's own suspendable stack, which
+// the host-stack budget stands in for. A FILTER nested 10 000 parentheses deep would
+// recurse through the parser without a poll, far past any region; the parser refuses it
+// typed first, and the instance is not poisoned.
 const parenthesizedFilter = (depth) =>
   `SELECT ?s WHERE { ?s <${EX}p> ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
 
-test("a FILTER nested 10 000 parentheses deep is a typed parse error on the smallest region, and the instance is not poisoned", async () => {
+test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on the smallest region, and the instance is not poisoned", async () => {
   const engine = new QueryEngine();
   const chain = Dataset.parse(CHAIN, "nquads");
   // Twice: a trap or an overrun of the region's zone would poison the instance, and the
@@ -444,7 +442,7 @@ test("a FILTER nested 10 000 parentheses deep is a typed parse error on the smal
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
       engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes: SMALL_REGION }),
-      PARENTHESIZED_REFUSAL,
+      /SPARQL parse stack exhausted .*bracketted expression/,
     );
     assert.equal(stackPointer(), IDLE);
   }
@@ -454,21 +452,44 @@ test("a FILTER nested 10 000 parentheses deep is a typed parse error on the smal
   assert.equal(stackPointer(), IDLE);
 });
 
-test("the deepest parenthesised FILTER the parser admits answers on the smallest region", async () => {
+// Every shape at 128 levels answers on the default region and on the smallest, with the
+// value its nesting computes. The real limit of every shape on each region is found by
+// bisection — the deepest level that answers, and one level more a typed refusal — and on
+// the default 2 MiB region it is the host-stack budget's for every shape: 637 brackets,
+// 463 calls, 537 negations, 283 groups and 1 133 path groups. On the smallest region the
+// shadow stack ends first for the costlier levels, and every limit is still past 128.
+test("nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is a typed refusal past that", async () => {
   const engine = new QueryEngine();
-  const chain = Dataset.parse(CHAIN, "nquads");
-  // The WHERE group is the first nesting level, so a FILTER inside it holds one
-  // parenthesis fewer than the limit. `?o = ?o` holds on every chain edge.
-  const deepest = await engine.queryAsync(chain, parenthesizedFilter(NESTING_LIMIT - 1), {
-    stackBytes: SMALL_REGION,
-  });
-  assert.equal(deepest.rowCount, 200, "every chain edge passes the deepest admitted FILTER");
-  // The refused neighbour, one parenthesis deeper.
-  await assert.rejects(
-    engine.queryAsync(chain, parenthesizedFilter(NESTING_LIMIT), { stackBytes: SMALL_REGION }),
-    PARENTHESIZED_REFUSAL,
-  );
-  assert.equal(stackPointer(), IDLE);
+  const data = Dataset.parse(NUMBERS, "nquads");
+  for (const [region, options] of [
+    ["the default region", {}],
+    ["the smallest region", { stackBytes: SMALL_REGION }],
+  ]) {
+    const run = (query) => engine.queryAsync(data, query, options);
+    const limits = {};
+    for (const shape of NESTING_SHAPES) {
+      const [what, text, expected] = shape;
+      assert.deepEqual(
+        (await attempt(run, text(128), `${what} on ${region}`)).subjects,
+        expected,
+        `${what} 128 deep answers on ${region}`,
+      );
+      limits[what] = await realLimit(run, shape);
+      assert.ok(limits[what] >= 128, `${what} on ${region}: ${limits[what]}`);
+      assert.equal(stackPointer(), IDLE);
+    }
+    if (region === "the default region") {
+      assert.deepEqual(limits, {
+        "nested parentheses": 637,
+        "nested ABS(": 463,
+        "nested -(": 537,
+        "nested groups": 283,
+        "nested property-path groups": 1133,
+      });
+    }
+  }
+  // Not poisoned: the synchronous lane answers after all of it.
+  assert.equal(engine.select(Dataset.parse(CHAIN, "nquads"), nestedOptional(8)).rowCount, 200);
 });
 
 test("a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing", () => {
@@ -512,7 +533,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   // synchronous lane's stack is its own after the jobs above.
   for (const sync of [report.syncDeep, report.syncDeepAgain]) {
     assert.equal(sync.settled, "rejected");
-    assert.match(sync.message, /group graph pattern nesting exceeds the safety limit of 128/);
+    assert.match(sync.message, /SPARQL parse stack exhausted .*group graph pattern/);
   }
 
   // The trap: the job and the one in flight reject with the poison, and so does every

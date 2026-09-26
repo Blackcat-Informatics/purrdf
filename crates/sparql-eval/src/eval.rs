@@ -2321,9 +2321,9 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    // Every algebra node is one level of this recursion, and the parser's nesting budget
-    // bounds how many levels a request has, not how much stack they take: see
-    // `crate::stack`. The construct is named only on the refusal.
+    // Every algebra node is one level of this recursion, and the stack that parsed a
+    // request bounds how many levels it has, not how much stack evaluating them takes:
+    // see `crate::stack`. The construct is named only on the refusal.
     if crate::stack::is_low() {
         return Err(EvalError::StackExhausted {
             construct: pattern_construct(pattern),

@@ -812,28 +812,39 @@ where
     }
 }
 
-/// Refuse a manually constructed algebra whose nesting exceeds the parser's bound.
+/// Refuse an algebra too tall for the walks over it to fit the stack left here.
 ///
-/// Parsed queries have already passed the same limit. This iterative validation keeps
-/// the `eval(&GraphPattern, ..)` surface safe when a caller constructs algebra
-/// directly via [`crate::engine::PreparedQuery::rewritten`] instead of using
-/// [`purrdf_sparql_algebra::SparqlParser`].
+/// Every recursive step of the evaluation measures the stack it has left and refuses,
+/// typed, when it runs low; what this guards is the rest — the walks with no stack check
+/// that run once over the whole plan before its first operator (planning, blank-node
+/// scoping, the endpoint and parallel analyses), and the derived copies, comparisons and
+/// drops of the tree. So the whole tree is measured, iteratively, against the stack the
+/// evaluation starts on ([`GraphPattern::validate_height`], the parser's own per-level
+/// charge): a parsed query, a prepared one run on another thread and a pattern built
+/// through [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
+/// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
+/// where it does not.
+///
+/// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
+/// evaluation's recursion too, so graph patterns nested deeper than
+/// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well.
 pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
-    let mut stack = vec![(root, 1_usize)];
-    while let Some((node, depth)) = stack.pop() {
-        if depth > purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH {
-            return Err(crate::EvalError::unsupported_deferred(
-                crate::error::UnsupportedKind::GraphPatternDepthExceeded,
-                format!(
-                    "graph pattern nesting exceeds the safety limit of {}",
-                    purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH
-                ),
-            ));
+    root.validate_height().map_err(crate::EvalError::from)?;
+    if cfg!(target_arch = "wasm32") {
+        let limit = purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH;
+        let mut stack = vec![(root, 1_usize)];
+        while let Some((node, depth)) = stack.pop() {
+            if depth > limit {
+                return Err(crate::EvalError::unsupported_deferred(
+                    crate::error::UnsupportedKind::GraphPatternDepthExceeded,
+                    format!("graph pattern nesting exceeds the safety limit of {limit}"),
+                ));
+            }
+            visit_classified_children(node, &mut |child, _edge| {
+                stack.push((child, depth + 1));
+                false
+            });
         }
-        visit_classified_children(node, &mut |child, _edge| {
-            stack.push((child, depth + 1));
-            false
-        });
     }
     Ok(())
 }
@@ -2614,8 +2625,11 @@ mod tests {
         context
     }
 
+    /// Directly constructed algebra is held to the stack it would be walked on, not to a
+    /// count: a thousand nested nodes are admitted with room for them, and the same tree
+    /// is the typed stack refusal where the stack left cannot hold its walks.
     #[test]
-    fn directly_constructed_algebra_uses_the_parser_nesting_bound() {
+    fn directly_constructed_algebra_is_bounded_by_the_stack() {
         fn nested(depth: usize) -> GraphPattern {
             let mut pattern = bgp();
             for _ in 1..depth {
@@ -2626,14 +2640,40 @@ mod tests {
             }
             pattern
         }
+        fn on_thread<T: Send + 'static>(
+            bytes: usize,
+            body: impl FnOnce() -> T + Send + 'static,
+        ) -> T {
+            std::thread::Builder::new()
+                .stack_size(bytes)
+                .spawn(body)
+                .expect("spawn")
+                .join()
+                .expect("the thread returned")
+        }
 
-        validate_graph_pattern_depth(&nested(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH))
-            .expect("the documented maximum is admitted");
-        let error = validate_graph_pattern_depth(&nested(
-            purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH + 1,
-        ))
-        .expect_err("direct algebra cannot bypass the nesting limit");
-        assert!(matches!(error, crate::EvalError::Unsupported { .. }));
+        on_thread(64 * 1024 * 1024, || {
+            validate_graph_pattern_depth(&nested(1_000))
+                .expect("a thousand levels are admitted where the stack holds their walks");
+            // A hundred thousand levels need 51 MB of walks at the parser's 512-byte
+            // charge: more than any thread the C library hands a 256 KiB request, so
+            // the same tree, borrowed there, is refused typed. It is built and dropped
+            // here, where its own drop fits.
+            let tall = nested(100_000);
+            let error = std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .stack_size(256 * 1024)
+                    .spawn_scoped(scope, || validate_graph_pattern_depth(&tall))
+                    .expect("spawn")
+                    .join()
+                    .expect("the small thread returned")
+            })
+            .expect_err("direct algebra too tall for the stack is refused");
+            assert!(
+                matches!(error, crate::EvalError::StackExhausted { .. }),
+                "{error:?}"
+            );
+        });
     }
 
     // ---- prefix-monotone operators certify --------------------------------

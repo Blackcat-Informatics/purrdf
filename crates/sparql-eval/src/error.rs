@@ -309,10 +309,11 @@ pub enum EvalError {
     /// The request nests deeper than the stack of the thread evaluating it can hold:
     /// `construct` was about to be evaluated — or parsed a level deeper, when the parse
     /// is the one that ran out ([`ParseError::StackExhausted`]) — with less than
-    /// [`purrdf_stack::MARGIN_BYTES`] of stack left.
+    /// [`purrdf_stack::MARGIN_BYTES`] of stack left, or the plan (`"query algebra"`) is
+    /// too tall for the walks over it to fit the stack its evaluation starts on.
     ///
     /// Its own variant because nothing about the request is malformed and nothing about
-    /// the data is wrong: the parser's limits admit the request, and the same request answers
+    /// the data is wrong: the same request answers
     /// on a thread with a larger stack (a native thread spawned with more, or a wasm
     /// asynchronous job given a larger `stackBytes`). Refusing is what stands between an
     /// admitted request and a crash — natively an aborted process, on wasm32 a trapped
@@ -488,8 +489,8 @@ impl core::fmt::Display for EvalError {
             Self::StackExhausted { construct } => write!(
                 f,
                 "evaluation stack exhausted: the request's nesting exceeds what this host's \
-                 stack can evaluate ({construct} was reached with less than {} bytes of \
-                 stack left); run it on a thread with a larger stack",
+                 stack can evaluate ({construct} needs more stack than this thread has left \
+                 above its {}-byte reserve); run it on a thread with a larger stack",
                 purrdf_stack::MARGIN_BYTES
             ),
         }

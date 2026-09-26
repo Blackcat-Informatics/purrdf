@@ -11,22 +11,116 @@ use crate::{
     Variable,
 };
 
-// Unlike a flat graph-combinator spine, expressions, paths and RDF values are
-// recursively evaluated. Keep their own envelope within native-stack bounds: the
-// same height the parser's operator-chain accounting stops at.
-const MAX_VALUE_NESTING: usize = crate::parser::MAX_EXPRESSION_HEIGHT;
+/// The tallest tree admitted on `wasm32`, in every node kind: the parser's height count,
+/// with room for what a parsed tree holds that its count does not see — a triple term is
+/// one level of the parser's count and two here (its term and its triple), and each of
+/// the nested groups may carry up to eight wrapper nodes.
+const WASM_STRUCTURAL_LIMIT: usize = crate::parser::WASM_TREE_HEIGHT_LIMIT
+    + 2 * crate::MAX_TRIPLE_TERM_NESTING
+    + 8 * crate::WASM_GRAPH_PATTERN_DEPTH;
 
+/// The tallest run of expression, path and term nodes admitted on `wasm32`: the parser's
+/// height count, with a triple term's second level.
+const WASM_VALUE_LIMIT: usize =
+    crate::parser::WASM_TREE_HEIGHT_LIMIT + 2 * crate::MAX_TRIPLE_TERM_NESTING;
+
+/// How deep a node sits: in every node kind (`structural`, the height a walk over the
+/// tree descends), in expression, path and term nodes (`values`), and in triple terms
+/// (`terms`).
 #[derive(Clone, Copy)]
 struct Depth {
     structural: usize,
     values: usize,
+    terms: usize,
 }
 
 impl Depth {
     const ROOT: Self = Self {
         structural: 1,
         values: 0,
+        terms: 0,
     };
+
+    /// The depth of `node`'s children.
+    fn below(self, node: &Node<'_>) -> Self {
+        Self {
+            structural: self.structural + 1,
+            values: self.values + usize::from(!matches!(node, Node::Pattern(_))),
+            terms: self.terms
+                + usize::from(matches!(
+                    node,
+                    Node::Term(TermPattern::Triple(_)) | Node::Ground(GroundTerm::Triple(_))
+                )),
+        }
+    }
+
+    /// Admit a node this deep, or refuse the tree.
+    ///
+    /// A tree is admitted only if every walk over it — the evaluator's analyses, its
+    /// copies, its drop — fits the stack left here, at the per-level charge the parser
+    /// builds trees under ([`crate::parser::walkable`]): a compiler-built tree is held to
+    /// what a parsed one is, and the limit is the thread's real capacity. `fits` is the
+    /// tallest level already found to fit, so the stack is read once per level of
+    /// height rather than once per node.
+    ///
+    /// On `wasm32` the host engine's call stack, which no measurement reaches, also
+    /// bounds the walks: the parser's height count, applied to built trees (see
+    /// [`WASM_STRUCTURAL_LIMIT`]). Terms are walked by recursions with no stack check,
+    /// wherever an evaluation stands, so they nest no deeper than the parser lets them.
+    fn admit(self, fits: &mut usize) -> Result<()> {
+        if self.structural > *fits {
+            if !crate::parser::walkable(self.structural) {
+                return Err(ParseError::StackExhausted {
+                    construct: "query algebra",
+                    at: 0,
+                });
+            }
+            *fits = self.structural;
+        }
+        if cfg!(target_arch = "wasm32")
+            && (self.structural > WASM_STRUCTURAL_LIMIT || self.values > WASM_VALUE_LIMIT)
+        {
+            return Err(ParseError::StackExhausted {
+                construct: "query algebra",
+                at: 0,
+            });
+        }
+        if self.terms > crate::MAX_TRIPLE_TERM_NESTING {
+            return Err(invalid(format!(
+                "triple term nesting exceeds the safety limit of {}",
+                crate::MAX_TRIPLE_TERM_NESTING
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl GraphPattern {
+    /// Refuse this pattern when it is too tall for the walks over it: the height half of
+    /// [`Query::validate`], without its checks of IRIs, variables and literals, for a
+    /// pattern about to be evaluated where the stack left may differ from where it was
+    /// admitted — a raw pattern handed to the evaluator, a prepared query run on another
+    /// thread, a pre-bound copy.
+    ///
+    /// Walks borrowed nodes iteratively, so it needs no more stack than it measures.
+    ///
+    /// # Errors
+    ///
+    /// [`ParseError::StackExhausted`] when a walk as tall as the pattern (every node
+    /// kind counted: patterns, expressions, paths, terms) does not fit the stack left
+    /// on the calling thread past [`purrdf_stack::MARGIN_BYTES`], at the parser's
+    /// per-level charge (on `wasm32`, also past the parser's host-stack counts); a
+    /// typed [`ParseError::Syntax`] when triple terms nest past
+    /// [`crate::MAX_TRIPLE_TERM_NESTING`].
+    pub fn validate_height(&self) -> Result<()> {
+        let mut stack = vec![(Node::Pattern(self), Depth::ROOT)];
+        let mut fits = 0;
+        while let Some((node, depth)) = stack.pop() {
+            depth.admit(&mut fits)?;
+            node.children(&mut stack, depth.below(&node));
+        }
+        Ok(())
+    }
 }
 
 impl Query {
@@ -40,7 +134,10 @@ impl Query {
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
     /// collisions, malformed typed calls or ranges, empty property-path chains, and
-    /// unsafe recursive nesting.
+    /// triple terms nested past [`crate::MAX_TRIPLE_TERM_NESTING`]; and, with
+    /// [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
+    /// the stack the calling thread has left (on `wasm32`, also one past the parser's
+    /// host-stack counts).
     pub fn validate(&self) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
@@ -91,28 +188,13 @@ impl Query {
             }
             Self::Select { .. } | Self::Ask { .. } => {}
         }
+        // The tallest level whose walk has been found to fit the stack: every node no
+        // deeper than it needs no second look, so the stack is read once per level of
+        // height rather than once per node.
+        let mut fits = 0;
         while let Some((node, depth)) = stack.pop() {
-            // The parser's brace limit is not an algebra-depth limit: sibling
-            // operators can produce a spine as long as its combinator budget.
-            // Each nested SELECT may add uncharged query modifiers and leaf
-            // wrappers, so reserve eight additional nodes per braced group.
-            if depth.structural
-                > crate::MAX_GRAPH_PATTERN_NODES + 8 * crate::MAX_GRAPH_PATTERN_DEPTH
-            {
-                return Err(invalid(
-                    "query algebra exceeds the structural nesting limit",
-                ));
-            }
-            if depth.values > MAX_VALUE_NESTING {
-                return Err(invalid(
-                    "query expression, path or term nesting exceeds the safety limit",
-                ));
-            }
-            let child_depth = Depth {
-                structural: depth.structural + 1,
-                values: depth.values + usize::from(!matches!(node, Node::Pattern(_))),
-            };
-            node.check(&mut stack, child_depth)?;
+            depth.admit(&mut fits)?;
+            node.check(&mut stack, depth.below(&node))?;
         }
         Ok(())
     }
@@ -205,6 +287,7 @@ fn literal(value: &Literal) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
 enum Node<'a> {
     Pattern(&'a GraphPattern),
     Expr(&'a Expression),
@@ -522,5 +605,148 @@ impl<'a> Node<'a> {
             }
         }
         Ok(())
+    }
+}
+
+impl Node<'_> {
+    /// Push this node's children, as [`Self::check`] does, checking nothing.
+    fn children(self, stack: &mut Vec<(Self, Depth)>, depth: Depth) {
+        use Expression as E;
+        use GraphPattern as G;
+        use PropertyPathExpression as P;
+        match self {
+            Self::Pattern(pattern) => match pattern {
+                G::Bgp { patterns } => {
+                    stack.extend(patterns.iter().map(|t| (Self::Triple(t), depth)));
+                }
+                G::Path {
+                    subject,
+                    path,
+                    object,
+                } => stack.extend([
+                    (Self::Term(subject), depth),
+                    (Self::Path(path), depth),
+                    (Self::Term(object), depth),
+                ]),
+                G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
+                    stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
+                }
+                G::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } => {
+                    stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
+                    stack.extend(expression.iter().map(|e| (Self::Expr(e), depth)));
+                }
+                G::Union { arms } => stack.extend(arms.iter().map(|a| (Self::Pattern(a), depth))),
+                G::Filter { expr, inner } => {
+                    stack.extend([(Self::Expr(expr), depth), (Self::Pattern(inner), depth)]);
+                }
+                G::Extend {
+                    inner, expression, ..
+                }
+                | G::Unfold {
+                    inner, expression, ..
+                } => stack.extend([
+                    (Self::Pattern(inner), depth),
+                    (Self::Expr(expression), depth),
+                ]),
+                G::Values { bindings, .. } => stack.extend(
+                    bindings
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .map(|t| (Self::Ground(t), depth)),
+                ),
+                G::OrderBy { inner, expression } => {
+                    stack.push((Self::Pattern(inner), depth));
+                    order(expression, stack, depth);
+                }
+                G::Graph { inner, .. }
+                | G::Service { inner, .. }
+                | G::Project { inner, .. }
+                | G::Distinct { inner }
+                | G::Reduced { inner }
+                | G::Slice { inner, .. } => stack.push((Self::Pattern(inner), depth)),
+                G::Group {
+                    inner, aggregates, ..
+                } => {
+                    stack.push((Self::Pattern(inner), depth));
+                    for (_, value) in aggregates {
+                        stack.extend(value.args().iter().map(|e| (Self::Expr(e), depth)));
+                        order(value.order_by(), stack, depth);
+                    }
+                }
+                G::PropertyFunction(call) => stack.extend(
+                    call.subject_args
+                        .iter()
+                        .chain(&call.object_args)
+                        .map(|t| (Self::Term(t), depth)),
+                ),
+            },
+            Self::Expr(expr) => match expr {
+                E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => {}
+                E::Or(operands) | E::And(operands) | E::Coalesce(operands) => {
+                    stack.extend(operands.iter().map(|e| (Self::Expr(e), depth)));
+                }
+                E::Arithmetic(first, steps) => {
+                    stack.push((Self::Expr(first), depth));
+                    stack.extend(steps.iter().map(|(_, e)| (Self::Expr(e), depth)));
+                }
+                E::Equal(a, b)
+                | E::SameTerm(a, b)
+                | E::Greater(a, b)
+                | E::GreaterOrEqual(a, b)
+                | E::Less(a, b)
+                | E::LessOrEqual(a, b) => {
+                    stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]);
+                }
+                E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => {
+                    stack.push((Self::Expr(x), depth));
+                }
+                E::In(x, args) => {
+                    stack.push((Self::Expr(x), depth));
+                    stack.extend(args.iter().map(|e| (Self::Expr(e), depth)));
+                }
+                E::If(a, b, c) => stack.extend([
+                    (Self::Expr(a), depth),
+                    (Self::Expr(b), depth),
+                    (Self::Expr(c), depth),
+                ]),
+                E::FunctionCall(_, args) => {
+                    stack.extend(args.iter().map(|e| (Self::Expr(e), depth)));
+                }
+                E::Exists(pattern) => stack.push((Self::Pattern(pattern), depth)),
+            },
+            Self::Path(path) => match path {
+                P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
+                P::Reverse(x)
+                | P::ZeroOrMore(x)
+                | P::OneOrMore(x)
+                | P::ZeroOrOne(x)
+                | P::Range { inner: x, .. } => stack.push((Self::Path(x), depth)),
+                P::Sequence(elements) | P::Alternative(elements) => {
+                    stack.extend(elements.iter().map(|e| (Self::Path(e), depth)));
+                }
+            },
+            Self::Triple(triple) => stack.extend([
+                (Self::Term(&triple.subject), depth),
+                (Self::Term(&triple.object), depth),
+            ]),
+            Self::Term(term) => {
+                if let TermPattern::Triple(t) = term {
+                    stack.push((Self::Triple(t), depth));
+                }
+            }
+            Self::Ground(term) => {
+                if let GroundTerm::Triple(t) = term {
+                    stack.extend([
+                        (Self::Ground(&t.subject), depth),
+                        (Self::Ground(&t.object), depth),
+                    ]);
+                }
+            }
+        }
     }
 }

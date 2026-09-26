@@ -38,138 +38,174 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
-/// Maximum number of recursive constructs the parser nests, whatever mix of them a
-/// request writes.
+/// How much of the host engine's call stack recursive productions may spend on `wasm32`:
+/// 640 KiB, each level charged what it costs that stack (see below). Natively
+/// there is no such budget — see below.
+///
+/// # What bounds nesting
 ///
 /// The parser is recursive descent, so an input's nesting is an instruction about how
-/// much native stack to consume, and exhausting it is not an error: nothing unwinds, the
-/// process aborts, and on `wasm32-unknown-unknown` the shadow stack runs into linear
-/// memory and traps. Every production that can reach itself again is therefore entered
-/// through one guard that charges one level of this single budget:
-/// a group graph pattern (sub-`SELECT`, `OPTIONAL`, `MINUS`, `GRAPH`, `SERVICE`,
-/// `LATERAL` and `UNION` arms included), an `EXISTS`/`NOT EXISTS` body (one level for the
-/// keyword and one for its group), a bracketted expression, a unary `!`/`+`/`-`, a
-/// function or built-in argument list, an `IN` list, an aggregate call, an expression
-/// triple term, a property-path group, a blank-node property list, a collection, a
-/// triple term or reifying triple (pattern, template and `VALUES` forms), and an
-/// annotation block, in queries and updates alike. The level past the limit is refused
-/// with a typed [`ParseError::Syntax`] naming the construct and this limit.
+/// much stack to consume, and exhausting it is not an error: natively the process
+/// aborts, and on `wasm32-unknown-unknown` the instance traps. Every production that can
+/// reach itself again — a group graph pattern (sub-`SELECT`, `OPTIONAL`, `MINUS`,
+/// `GRAPH`, `SERVICE`, `LATERAL` and `UNION` arms included), an `EXISTS`/`NOT EXISTS`
+/// body, a bracketted expression, a unary `!`/`+`/`-`, a function or built-in argument
+/// list, an `IN` list, an aggregate call, an expression triple term, a property-path
+/// group, a blank-node property list, a collection, a triple term or reifying triple
+/// (pattern, template and `VALUES` forms), and an annotation block, in queries and
+/// updates alike — is entered through one guard. The guard measures the stack the
+/// thread has left through [`purrdf_stack`] and refuses the level with
+/// [`ParseError::StackExhausted`] once less than [`purrdf_stack::MARGIN_BYTES`] remain,
+/// so the limit is the real capacity of the thread the parse runs on: natively, 8 MiB
+/// main thread parses about two thousand nested built-in calls, a 2 MiB thread about
+/// five hundred, and the same text on a thread too small for it is the typed refusal
+/// rather than an abort.
 ///
-/// The limit bounds the stack a parse *needs*; the same guard also compares it with the
-/// stack the thread *has*, through [`purrdf_stack`], and refuses a level with
-/// [`ParseError::StackExhausted`] once less than [`purrdf_stack::MARGIN_BYTES`] are left
-/// — a request inside the limit, parsed on a small thread or deep inside an evaluation
-/// that re-parses a forwarded `SERVICE` body, is refused rather than overflowing.
+/// Levels a loop builds (an operator above its operands, `^` or a path modifier, a
+/// `NOT EXISTS`, a run of `OPTIONAL`/`MINUS`/`BIND` siblings) cost the parser no
+/// stack, but every walk over the finished tree — its own `Drop`, `Clone`, `PartialEq`,
+/// `Hash` and `Debug`, the serializer, the evaluator's analyses — recurses once per
+/// level. Such a node is built only where the stack left holds a walk of the whole
+/// subtree under it at 512 bytes a level (256 on `wasm32`, whose frames are smaller),
+/// past the margin, and is refused with the same typed error otherwise; so a tree the
+/// parser returns can be dropped, copied, compared, hashed and formatted from the frame
+/// that parsed it.
 ///
-/// # Why 128
+/// # Why a budget on `wasm32`
 ///
-/// One budget for every construct bounds the stack by 128 times the costliest single
-/// level, so the limit is sized from that level. Measured natively (x86_64, the
-/// workspace's opt-level-3 test profile), driving each construct to its refusal needs
-/// at most 544 KiB of stack: a sub-`SELECT` spends two levels and about 8.5 KiB per
-/// written level, a built-in call such as `STR(` about 3.9 KiB, an aggregate call
-/// 3.8 KiB, a group 3.3 KiB, a bracketted expression 2.4 KiB, an `IN` list or a
-/// property-path group 1.5 KiB, and every term and triple-term construct under
-/// 1.4 KiB. Before this guard, the same
-/// constructs aborted a 1 MiB native stack at 273 nested built-in calls, 398 nested
-/// function calls and 461 nested parentheses.
-///
-/// The smallest stacks PurRDF ships on are wasm32's: the synchronous lane's 1 MiB shadow
-/// stack (the linker default; nothing overrides it), where nested parentheses trapped at
-/// about 950 before this guard, and an asynchronous job's stack region, whose smallest
-/// size (512 KiB) leaves 384 KiB above its guard band. Measured on the shipped npm
-/// artifact by painting the shadow stack, a level costs 0.37–0.45 of its native size, and
-/// parsing every construct to its refusal at this limit reaches at most 231 KiB deep on
-/// the synchronous lane and 236 KiB in a job's region (which adds its runner's 6 KiB):
-/// a built-in call about 1.8 KiB per level, a sub-`SELECT` 3.2 KiB per written level, a
-/// group 1.2 KiB, a bracketted expression 1.0 KiB, and every term, triple-term and
-/// property-path construct at most 0.6 KiB. That is 4.4× inside the synchronous stack
-/// and 1.6× inside the smallest region. Written ten thousand deep, every construct is
-/// the typed refusal on both lanes, with V8's default 984 KiB native stack under a
-/// suspendable job, and the instance answers the next request.
-///
-/// 128 is also the number the rest of the workspace publishes for document nesting.
-pub const MAX_NESTING_DEPTH: usize = 128;
+/// A wasm instance runs on two stacks. The guard measures the shadow stack in linear
+/// memory, where address-taken locals live; every call also takes a frame on the host
+/// engine's own call stack, which no wasm code can read. Under V8 (Node.js, Chromium,
+/// Cloudflare Workers) that stack is about 984 KiB for the synchronous lane and for an
+/// asynchronous job's suspendable stack alike, whether the shadow region is 1 MiB or
+/// 64 MiB. Measured on the shipped npm artifact in a 16 MiB job region, where the shadow
+/// stack never binds, with no budget at all, V8's stack is exhausted — a trapped
+/// instance — past 272 written levels of `FILTER EXISTS`, 457 of `LATERAL`, 640 of
+/// `isTRIPLE(<<( … )>>)`, 716 of nested built-in calls, 891 of `-(`, 1 011 of bracketted
+/// expressions, 1 719 of `IN` lists, 1 909 of property-path groups, 2 358 of blank-node
+/// property lists, 2 864 of groups, 3 538 of reifying triples, 4 149 of collections,
+/// 4 454 of annotation blocks and 7 513 of `!`, parse and evaluation together. Dividing
+/// 984 KiB by those depths gives what a level costs V8, and the parser charges
+/// each construct that, rounded up (a group costs the most, because the evaluation of
+/// `EXISTS` and `LATERAL` recurses through it). The budget is 65% of the stack: nested
+/// alone, no construct reaches more than 65% of the depth that trapped — 170 written
+/// levels of `FILTER EXISTS` (62%), 284 of `LATERAL` (62%), 465 of built-in calls (65%),
+/// 538 of `-(` (60%), 640 of brackets (63%), 1 137 of path groups (60%) — which leaves
+/// at least a third of the stack to the JavaScript frames below the call. Past the budget
+/// the level is refused with the same [`ParseError::StackExhausted`]: it is a stack the
+/// host has not got, not a malformed request.
+pub const WASM_HOST_STACK_BUDGET: usize = 640 * 1024;
 
-/// Maximum number of nested group graph patterns accepted by the parser and evaluator.
-///
-/// This is a structural safety limit, not an execution governor: it rejects an algebra
-/// whose recursive evaluation would otherwise be able to exhaust the native stack before
-/// a fuel or stop check could run. A group is one of the constructs charged against the
-/// parser's single nesting budget, so this is [`MAX_NESTING_DEPTH`] itself; the evaluator
-/// sizes its own graph-pattern depth guard from this name.
-pub const MAX_GRAPH_PATTERN_DEPTH: usize = MAX_NESTING_DEPTH;
+/// How deeply graph patterns may nest on `wasm32`: as deep as [`WASM_HOST_STACK_BUDGET`]
+/// admits groups, 284 levels. The evaluator refuses a plan nested deeper there, built by
+/// the parser (a spine of sibling elements) or by a caller, for the host engine's call
+/// stack its recursion runs on.
+pub const WASM_GRAPH_PATTERN_DEPTH: usize =
+    WASM_HOST_STACK_BUDGET / host_stack_cost("group graph pattern");
 
-/// The tallest expression or property-path tree the parser builds, counted in levels
-/// from the outermost enclosing construct: four times [`MAX_NESTING_DEPTH`].
+/// How deeply triple terms may nest: 128 levels (`<<( <<( … )>> … )>>`, in pattern,
+/// template and `VALUES` positions alike), on every target.
 ///
-/// Some levels are not recursion of the parser, so [`MAX_NESTING_DEPTH`] never sees
-/// them: a relational operator (`!=` and `NOT IN` are two levels), an operator
-/// chain, a path chain, `^` or a path modifier, and `NOT EXISTS`. Each is charged here
-/// instead, through [`Parser::charge_height`], because the tree's height is the
-/// recursion depth of every walk over it, including its own `Drop`. An expression
-/// operator chain (`a || b || …`, `a && b && …`, `a + b - …`, `a * b / …`) and a
-/// property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) are each ONE n-ary node, one
-/// level above their tallest operand however long they are, so a generated
-/// `?x = <a> || ?x = <b> || …` of ten thousand alternatives is two levels tall and a
-/// five-thousand-step `p1 / p2 / …` path is one. What the budget still counts is
-/// nesting: brackets, unary and relational operators, `^`, path modifiers and
-/// argument lists. These levels cost no parser stack, only the walkers' much smaller
-/// frames (the parse of a 512-tall tree needs 48 KiB natively and 6 KiB on wasm32),
-/// so the budget is wider than the recursion budget. Evaluating the tallest tree it
-/// admits takes about 0.92 KiB of wasm32 shadow stack per level, 479 KiB in all: half
-/// the synchronous lane's stack, and inside the smallest asynchronous region, which it
-/// answers on. It is the same number [`crate::Query::validate`] admits for expression,
-/// path and term nesting.
-pub(crate) const MAX_EXPRESSION_HEIGHT: usize = 4 * MAX_NESTING_DEPTH;
+/// Unlike an expression or a graph pattern, a term is copied, compared, hashed, matched
+/// and instantiated by recursions that carry no stack check — the evaluator copies the
+/// terms of a correlated `EXISTS` body per row, matches a nested triple pattern level by
+/// level, and builds `CONSTRUCT` output from template terms — at whatever depth the
+/// evaluation has reached, where only [`purrdf_stack::MARGIN_BYTES`] are guaranteed.
+/// One level costs those walks at most about 500 bytes natively (the derived `Debug`
+/// of a triple-term chain, measured at 496 bytes a level; its `Clone` is 258), so 128
+/// levels take at most 64 KiB: half the margin. A deeper term could not be answered
+/// anyway: a dataset holds triple terms at most 16 deep, so a pattern nested deeper
+/// matches nothing and a template nested deeper builds a statement the dataset refuses.
+/// The level past the limit is refused with a typed [`ParseError::Syntax`] naming the
+/// construct and this limit.
+pub const MAX_TRIPLE_TERM_NESTING: usize = 128;
 
-/// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
-/// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
-/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct
-/// along any one run of arms: the arms of one `UNION` are charged from the
-/// same count, and the chain keeps the largest arm's charge, not their sum.
+/// The group-graph-pattern nesting limit this crate used to enforce.
 ///
-/// [`MAX_GRAPH_PATTERN_DEPTH`] bounds `{ … }` BRACE nesting only. It does
-/// nothing for a run of SIBLING operators at one brace depth — `OPTIONAL { }
-/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, or a run of non-BGP
-/// triples-block elements (e.g.
-/// complex property-path triples, which `join` cannot flatten the way it
-/// flattens adjacent `Bgp`s) — each of which grows the algebra tree by one
-/// level PER SIBLING while `{ … }` nesting stays at 1. A query built from N
-/// such siblings therefore produces a tree of height ~N with no brace ever
-/// nesting past depth 1, invisible to `MAX_GRAPH_PATTERN_DEPTH`. The SAME
-/// shape arises from a long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection
-/// list, a long `GROUP BY` expression-condition list, or a long `HAVING`
-/// condition list — each lowers to a chain of `Extend`/`Filter` nodes wrapped
-/// around the WHERE pattern, built by a loop with no brace at all.
+/// Nothing enforces it any more: group nesting is bounded by the stack the parse and the
+/// evaluation run on (see [`WASM_HOST_STACK_BUDGET`]), and a query nested deeper than 128
+/// groups parses and answers wherever the stack holds it.
+#[deprecated(
+    note = "not enforced: nesting is bounded by the measured stack, and on wasm32 by \
+            `WASM_HOST_STACK_BUDGET`"
+)]
+pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
+
+/// The stack one level of a parsed algebra tree is charged for the walks over it, in
+/// bytes: 512 natively, 256 on `wasm32`.
 ///
-/// This limit closes that gap at its source: every site in this module that
-/// can grow the algebra tree by repetition — the group-parsing loop, a
-/// triples block's non-BGP (`Path`/property-function) elements, and the three
-/// projection/grouping/having list loops above — charges one unit against
-/// this budget per node it is about to build, and the parse hard-fails with a
-/// typed [`ParseError`] the instant the budget is exhausted, rather than
-/// building the (N+1)-th node. A `UNION` chain is the exception that is not
-/// one: its arms are ONE `GraphPattern::Union` node, one level above them
-/// however many there are, so a run of arms is charged as its tallest arm and
-/// a generated chain of ten thousand branches parses. Because every node that
-/// could deepen the tree is charged, capping the count also caps the
-/// tree's maximum root-to-leaf HEIGHT by the same number — which is what
-/// actually matters: that height is the native-stack recursion depth of
-/// every downstream consumer that walks the parsed tree by ordinary
-/// recursion (`collect_vars`/`visible_variables`, `find_scope_conflict`,
-/// the tree's own recursive `Drop`), none of which can be rewritten to an
-/// explicit-stack walk without also rewriting `Drop`, which recursion alone
-/// cannot avoid. Bounding construction is therefore the one fix that covers
-/// every present AND future consumer at once, `Drop` included.
+/// Measured natively (x86_64, the workspace's opt-level-3 profile) by walking trees
+/// thousands of levels tall on threads of bisected size, the costliest per-level walk
+/// over any node kind the parser builds is the derived `Clone` of nested built-in calls,
+/// 401 bytes a level; the derived `Debug` of them is 369, a `LeftJoin` spine's `Clone`
+/// 320 and `Debug` 352, `Drop` and `Hash` at most 148, and `PartialEq` at most 61. The
+/// charge is about 1.3 times the costliest level: every level a loop builds is charged
+/// with the tallest subtree under it, so the one height a walk descends is the height
+/// that was checked. A `wasm32` level costs 0.37 to 0.45 of its native size on the
+/// shadow stack the guard measures.
+pub(crate) const LEVEL_WALK_BYTES: usize = if cfg!(target_arch = "wasm32") {
+    256
+} else {
+    512
+};
+
+/// The tallest tree the parser builds on `wasm32`, counted in levels from the outermost
+/// enclosing construct: 2 048, for the levels a loop
+/// builds — between two recursive constructs (a relational operator, `!=` and `NOT IN`
+/// being two, an operator chain, `^`, a path modifier and `NOT EXISTS`) and in a run of
+/// sibling group elements. A host-stack bound like [`WASM_HOST_STACK_BUDGET`], for the walks
+/// over the tree, which the host engine's call stack carries at well under half a
+/// kilobyte a level; natively the measured [`walkable`] check alone bounds height.
+pub(crate) const WASM_TREE_HEIGHT_LIMIT: usize = 2048;
+
+/// Whether a tree `height` levels tall can be walked from the calling frame: whether
+/// `height` levels at [`LEVEL_WALK_BYTES`] fit in the stack left above
+/// [`purrdf_stack::MARGIN_BYTES`].
 ///
-/// The value is chosen with a wide safety margin under the depth at which a
-/// left-deep tree of this shape has been observed to exhaust a 2&nbsp;MiB
-/// stack (the size `cargo test` gives each test thread) while still leaving
-/// several orders of magnitude of headroom over any query in this crate's
-/// corpus: a single query with `MAX_GRAPH_PATTERN_NODES` non-BGP siblings is
-/// already far outside anything a hand- or tool-written SPARQL query
-/// resembles.
+/// One multiplication and one [`purrdf_stack::remaining`] read. On a platform whose stack
+/// bound cannot be read, [`purrdf_stack::remaining`] reports the whole address range
+/// below the frame and every tree fits, as every guard of that crate is inactive there.
+#[must_use]
+pub(crate) fn walkable(height: usize) -> bool {
+    height.saturating_mul(LEVEL_WALK_BYTES)
+        <= purrdf_stack::remaining().saturating_sub(purrdf_stack::MARGIN_BYTES)
+}
+
+/// What one level of `construct` costs the host engine's call stack on `wasm32`, in
+/// bytes, charged against [`WASM_HOST_STACK_BUDGET`]: V8's stack divided by the depth at
+/// which that construct, nested alone, exhausted it (see the budget's documentation),
+/// rounded up. A group is charged for the `LATERAL` and `EXISTS` evaluations it nests
+/// under; a collection, an annotation block and an expression triple term, which cost V8
+/// less than a quarter of a kilobyte a level, are charged 256 bytes.
+const fn host_stack_cost(construct: &str) -> usize {
+    match construct.as_bytes() {
+        b"group graph pattern" => 2304,
+        b"EXISTS" | b"NOT EXISTS" => 1536,
+        b"function argument list" | b"aggregate" => 1408,
+        b"bracketted expression" => 1024,
+        b"IN list" => 640,
+        b"property path group" => 576,
+        b"blank node property list" => 512,
+        b"triple term" => 320,
+        b"unary operator" => 192,
+        _ => 256,
+    }
+}
+
+/// The graph-pattern combinator budget this crate used to enforce: at most 2 048
+/// group elements (and projection, `GROUP BY` and `HAVING` conditions) per parse.
+///
+/// Nothing enforces it any more. It stood in for the height of the spine a run of
+/// sibling elements builds — `OPTIONAL { } OPTIONAL { } …`, a run of `BIND`s or
+/// `FILTER`s, a long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list — which a loop builds, so
+/// no recursion guard sees it, and which every walk over the tree descends. That height
+/// is now measured and charged like every other level a loop builds: a spine is built
+/// only where the walks over it fit the stack left (see [`WASM_HOST_STACK_BUDGET`]), so a
+/// query of any number of elements parses wherever the stack holds it.
+#[deprecated(
+    note = "not enforced: a spine's height is charged against the measured stack, and on \
+            wasm32 against its host-stack height count"
+)]
 pub const MAX_GRAPH_PATTERN_NODES: usize = 2048;
 
 /// Parse-time configuration for the SPARQL front-end.
@@ -587,7 +623,8 @@ impl SparqlParser {
             group_counter: 0,
             nesting_depth: 0,
             nesting_peak: 0,
-            pattern_node_budget: 0,
+            host_units: 0,
+            term_depth: 0,
             exists_scope_stack: Vec::new(),
             dataset_at: None,
             dataset_slot: None,
@@ -663,17 +700,20 @@ struct Parser<'a, 'o> {
     /// The label prefix [`Parser::fresh_anon`] mints under — see [`anon_label_prefix`].
     anon_prefix: String,
     group_counter: usize,
-    /// How many recursive constructs enclose the cursor — the single count every
-    /// recursive production charges against [`MAX_NESTING_DEPTH`] through
-    /// [`Parser::nested`].
+    /// How many recursive constructs enclose the cursor, counted by [`Parser::nested`]:
+    /// the base every tree height is measured from.
     nesting_depth: usize,
+    /// What the enclosing recursive constructs cost the host engine's call stack, charged
+    /// against [`WASM_HOST_STACK_BUDGET`] on `wasm32` alone ([`host_stack_cost`]); zero on
+    /// every other target.
+    host_units: usize,
     /// The deepest level ([`Self::nesting_depth`] plus the height of an operator
     /// chain built there) reached since the innermost [`Parser::measured`] window
     /// opened; outside such a window its value is never read.
     nesting_peak: usize,
-    /// Running count of graph-pattern combinator nodes charged so far against
-    /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
-    pattern_node_budget: usize,
+    /// How many triple terms enclose the cursor — the count [`Parser::triple_term_level`]
+    /// charges against [`MAX_TRIPLE_TERM_NESTING`].
+    term_depth: usize,
     /// The `EXISTS`/`NOT EXISTS` in-scope-set stack (SEP-0007 Part 3) — see
     /// [`Parser::exists_scope`] for what "in scope" means here and
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
@@ -858,7 +898,8 @@ impl<'a> Parser<'a, '_> {
             group_counter: self.group_counter,
             nesting_depth: self.nesting_depth,
             nesting_peak: self.nesting_depth,
-            pattern_node_budget: self.pattern_node_budget,
+            host_units: self.host_units,
+            term_depth: self.term_depth,
             // A fork reparses only a bounded braced block for a template/quad
             // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
             // quad-pattern reading) — neither production can contain `EXISTS`,
@@ -898,72 +939,78 @@ impl<'a> Parser<'a, '_> {
         (self.agg_counter, self.anon_counter, self.group_counter) = counters;
     }
 
-    /// Charge `n` graph-pattern combinator nodes against
-    /// [`MAX_GRAPH_PATTERN_NODES`], hard-failing the instant the running total
-    /// would exceed it. Every call site that is ABOUT TO build one more
-    /// `Join`/`LeftJoin`/`Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/
-    /// `Minus` node calls this FIRST, so the budget is checked before the node
-    /// (and any input it borrows unboundedly, like a `LATERAL` right-hand
-    /// side) is built — never after.
-    fn charge_pattern_nodes(&mut self, n: usize) -> Result<()> {
-        self.pattern_node_budget += n;
-        if self.pattern_node_budget > MAX_GRAPH_PATTERN_NODES {
-            return Err(ParseError::syntax(
-                format!(
-                    "graph pattern combinator count exceeds the safety limit of \
-                     {MAX_GRAPH_PATTERN_NODES}"
-                ),
-                self.span(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Parse one recursive construct one nesting level deeper, refusing it with a
-    /// typed [`ParseError`] — naming `construct` and [`MAX_NESTING_DEPTH`] — when the
-    /// cursor is already that many constructs deep.
+    /// Parse one recursive construct one nesting level deeper, refusing it with
+    /// [`ParseError::StackExhausted`] — naming `construct` — when the thread has too
+    /// little stack left for another level.
     ///
     /// This is the parser's one recursion guard. Every production that can reach
     /// itself again (a group graph pattern, an `EXISTS` body, a bracketted
     /// expression, a unary operator, an argument or `IN` list, an aggregate call, an
     /// expression triple term, a property-path group, a blank-node property list, a
     /// collection, a triple term or reifying triple, an annotation block, a ground
-    /// triple term) enters through it, and every such production shares one count, so
-    /// the native stack the parser can consume is bounded by [`MAX_NESTING_DEPTH`]
-    /// times the costliest single level, whatever mix of constructs a request nests.
-    /// The count is restored on the error path too.
+    /// triple term) enters through it. Each level asks [`purrdf_stack::is_low`] and
+    /// refuses once less than [`purrdf_stack::MARGIN_BYTES`] remain: what runs between
+    /// two levels is one level of one construct and its leaves — the margin's
+    /// derivation names the figures — so the parser's frames never reach the floor,
+    /// on a small thread or deep inside an evaluation that re-parses a forwarded
+    /// `SERVICE` body alike. The test is one thread-local load and one comparison.
     ///
-    /// A level count bounds the stack a parse needs, not the stack it has: a request
-    /// admitted by the count can still be parsed where little is left — on a small
-    /// thread, or deep inside an evaluation that re-parses a forwarded `SERVICE` body.
-    /// So each level also asks [`purrdf_stack::is_low`] and refuses with
-    /// [`ParseError::StackExhausted`] once less than [`purrdf_stack::MARGIN_BYTES`]
-    /// remain, rather than overflowing. What runs between two levels is one level of
-    /// one construct and its leaves — the margin's derivation names the figures — so
-    /// the parser's frames never reach the floor. The count is tested first, so a
-    /// request that reaches the limit with stack to spare is refused by the limit; the
-    /// stack test is one thread-local load and one comparison.
+    /// On `wasm32` a level past [`WASM_HOST_STACK_BUDGET`] is the same refusal: the host
+    /// engine's call stack, which the measurement cannot see, is what runs out there. The
+    /// budget is compiled out of every other target.
+    ///
+    /// No walk over a tree built here needs a check of its own: a level of this
+    /// recursion costs the parser more stack than a level of any walk over the node it
+    /// builds (the cheapest, a `!`, is 414 bytes natively; the costliest walk over it,
+    /// its `Clone`, 242), so a tree built by recursion can be walked wherever it was
+    /// built. The depth is restored on the error path too.
     fn nested<T>(
         &mut self,
         construct: &'static str,
         parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        if self.nesting_depth >= MAX_NESTING_DEPTH {
-            return Err(ParseError::syntax(
-                format!("{construct} nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"),
-                self.span(),
-            ));
-        }
-        if purrdf_stack::is_low() {
+        let units = if cfg!(target_arch = "wasm32") {
+            host_stack_cost(construct)
+        } else {
+            0
+        };
+        if purrdf_stack::is_low()
+            || (cfg!(target_arch = "wasm32") && self.host_units + units > WASM_HOST_STACK_BUDGET)
+        {
             return Err(ParseError::StackExhausted {
                 construct,
                 at: self.span(),
             });
         }
         self.nesting_depth += 1;
+        self.host_units += units;
         self.nesting_peak = self.nesting_peak.max(self.nesting_depth);
         let result = parse(self);
         self.nesting_depth -= 1;
+        self.host_units -= units;
+        result
+    }
+
+    /// Parse the components of a triple term one level deeper in term nesting,
+    /// refusing it past [`MAX_TRIPLE_TERM_NESTING`] with a typed [`ParseError::Syntax`]
+    /// naming the limit.
+    ///
+    /// Runs inside the [`Self::nested`] level of the construct that opened the term, so
+    /// the stack is guarded as for every other level; this bounds only how deeply terms
+    /// nest, for the walks over terms that carry no stack check (see the limit's
+    /// documentation). The depth is restored on the error path too.
+    fn triple_term_level<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.term_depth >= MAX_TRIPLE_TERM_NESTING {
+            return Err(ParseError::syntax(
+                format!(
+                    "triple term nesting exceeds the safety limit of {MAX_TRIPLE_TERM_NESTING}"
+                ),
+                self.span(),
+            ));
+        }
+        self.term_depth += 1;
+        let result = parse(self);
+        self.term_depth -= 1;
         result
     }
 
@@ -980,8 +1027,8 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Charge a node about to be built `height` levels tall (counted from the current
-    /// depth) against [`MAX_EXPRESSION_HEIGHT`], refusing it with the same typed
-    /// nesting error [`Self::nested`] raises.
+    /// depth), refusing it with [`ParseError::StackExhausted`] — naming `construct` —
+    /// when a walk of that many levels does not fit the stack left here ([`walkable`]).
     ///
     /// Operators (`a = b`, `a || b || …`, `p1 / p2 / …`) are parsed by a loop, not by
     /// recursion, so [`Self::nested`] never sees them — yet a node built above an
@@ -989,14 +1036,19 @@ impl<'a> Parser<'a, '_> {
     /// everything that walks it afterwards, its own `Drop` included. Every node the
     /// expression and property-path productions build above an operand they measured
     /// is charged here before it is built: an n-ary expression or path chain as one
-    /// level above its tallest operand.
+    /// level above its tallest operand. A node refused here was never built, and the
+    /// operands already built were each admitted where they stand, so dropping them
+    /// on the way out fits too.
+    ///
+    /// On `wasm32` a node taller than [`WASM_TREE_HEIGHT_LIMIT`] from the outermost
+    /// construct is the same refusal, for the host call stack the walks run on.
     fn charge_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
         let reach = self.nesting_depth + height;
-        if reach > MAX_EXPRESSION_HEIGHT {
-            return Err(ParseError::syntax(
-                format!("{construct} nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"),
-                self.span(),
-            ));
+        if !walkable(height) || (cfg!(target_arch = "wasm32") && reach > WASM_TREE_HEIGHT_LIMIT) {
+            return Err(ParseError::StackExhausted {
+                construct,
+                at: self.span(),
+            });
         }
         self.nesting_peak = self.nesting_peak.max(reach);
         Ok(())
@@ -1550,9 +1602,8 @@ impl<'a> Parser<'a, '_> {
                     // A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list lowers to
                     // a chain of N `Extend` nodes wrapped around the WHERE
                     // pattern (below, near the query's assembly) — no brace
-                    // anywhere, so `MAX_GRAPH_PATTERN_DEPTH` never sees it.
-                    // Charged per condition, at the point each is parsed.
-                    self.charge_pattern_nodes(1)?;
+                    // anywhere, so no recursion guard sees it. Its height is
+                    // charged there, with the rest of the modifier chain.
                     select_exprs.push((var, expr));
                 } else {
                     break;
@@ -1816,6 +1867,17 @@ impl<'a> Parser<'a, '_> {
         } else {
             where_pat
         };
+
+        // The modifier chain is built by loops, one node per `GROUP BY`
+        // expression, `HAVING` condition and `(expr AS ?v)` target, and at most
+        // six more (`Group`, `OrderBy`, `Project`, `Distinct`/`Reduced`, `Slice`):
+        // levels no recursion guard sees, charged above the tallest thing built
+        // since this SELECT began — its WHERE pattern among them.
+        let chain = modifiers.group_extends.len() + modifiers.having.len() + select_exprs.len() + 6;
+        self.charge_height(
+            "graph pattern",
+            chain + self.nesting_peak.saturating_sub(self.nesting_depth),
+        )?;
 
         // Build the algebra (§18.2.4 ordering).
         let mut p = where_pat;
@@ -2859,6 +2921,14 @@ impl<'a> Parser<'a, '_> {
         // open: a `FILTER` or a `.` leaves it open, every other element closes it
         // (see [`Self::scoped_blank_label`]).
         let mut open_bgp: Option<usize> = None;
+        // The height of `g`, bounded above: the spine a run of elements builds —
+        // one level per element that can add a combinator above `g` (a `FILTER` is
+        // applied after the loop, a `.` builds nothing) — over the tallest element.
+        // No recursion guard sees the spine, since the loop builds it: each element's
+        // height is measured, and the whole is charged after every element, so a
+        // spine is built only where the walks over it fit the stack left here.
+        let mut spine = 0_usize;
+        let mut tallest = 0_usize;
 
         loop {
             if self.at(&Token::RBrace) {
@@ -2867,30 +2937,20 @@ impl<'a> Parser<'a, '_> {
             if self.block_boundary() && !self.peek_kw("FILTER") {
                 open_bgp = None;
             }
-            // A structural charge against `MAX_GRAPH_PATTERN_NODES`, once per
-            // group ELEMENT — the choke point that closes the sibling-spine
-            // gap `MAX_GRAPH_PATTERN_DEPTH` (brace nesting only) leaves open:
-            // every branch below builds (or, for a bracketed sub-group, is
-            // about to fold in) exactly one more combinator node onto `g`.
-            self.charge_pattern_nodes(1)?;
+            let builds_level = !(self.at(&Token::Dot) || self.peek_kw("FILTER"));
+            let outer_peak = std::mem::replace(&mut self.nesting_peak, self.nesting_depth);
             if self.at(&Token::LBrace) {
                 // Every arm joins the ONE `Union` node this element builds
                 // (`GraphPattern::union`), so a chain of any length is one
-                // combinator one level above its arms, and the per-element
-                // charge above already paid for it. The arms are siblings, so
-                // the tree is only as tall as the tallest of them: each arm is
-                // charged from the same starting count, and the element keeps
-                // the largest arm's charge rather than their sum.
-                let before_arms = self.pattern_node_budget;
+                // combinator one level above its arms, and the element's own
+                // level pays for it. The arms are siblings, so the tree is only as
+                // tall as the tallest of them, which the element's measured height
+                // already is.
                 let mut node = self.parse_group_graph_pattern()?;
-                let mut tallest_arm = self.pattern_node_budget - before_arms;
                 while self.eat_kw("UNION") {
-                    self.pattern_node_budget = before_arms;
                     let right = self.parse_group_graph_pattern()?;
-                    tallest_arm = tallest_arm.max(self.pattern_node_budget - before_arms);
                     node = GraphPattern::union(node, right);
                 }
-                self.pattern_node_budget = before_arms + tallest_arm;
                 // A bracketed sub-group (possibly a `{ SELECT ... }`, whose
                 // contribution is its OWN projection — `collect_vars`'s
                 // `Project` arm — not its inner WHERE pattern) or a chain of
@@ -3120,6 +3180,11 @@ impl<'a> Parser<'a, '_> {
                 self.note_exists_scope(&block);
                 g = join(g, block);
             }
+            let element_height = self.nesting_peak - self.nesting_depth;
+            self.nesting_peak = self.nesting_peak.max(outer_peak);
+            spine += usize::from(builds_level);
+            tallest = tallest.max(element_height);
+            self.charge_height("graph pattern", spine + filters.len() + tallest)?;
         }
 
         self.expect(&Token::RBrace)?;
@@ -3193,9 +3258,15 @@ impl<'a> Parser<'a, '_> {
         // property-path triples, which `join` cannot flatten the way it
         // flattens adjacent plain `Bgp` triples) that the group loop's own
         // per-element charge never sees, because the whole block is one
-        // element to it. Charged here, once per node `into_pattern` is about
-        // to build, before it builds any of them.
-        self.charge_pattern_nodes(sink.paths.len() + sink.prop_fns.len())?;
+        // element to it. Charged here, above the tallest path or term the block
+        // parsed, before `into_pattern` builds any of them.
+        let chain = sink.paths.len() + sink.prop_fns.len();
+        if chain > 0 {
+            self.charge_height(
+                "graph pattern",
+                chain + self.nesting_peak.saturating_sub(self.nesting_depth),
+            )?;
+        }
         Ok(sink.into_pattern())
     }
 
@@ -3476,7 +3547,17 @@ impl<'a> Parser<'a, '_> {
     fn parse_triple_node_body(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::TripleOpen)?;
         let is_triple_term = self.eat(&Token::LParen);
-        let inner = self.parse_inner_triple(sink)?;
+        let inner = if is_triple_term {
+            self.triple_term_level(|p| p.parse_inner_triple(sink))?
+        } else {
+            // A reifying triple's `s p o` becomes the triple term of the `rdf:reifies`
+            // statement it emits: one term level, whatever encloses the reifier, which
+            // is itself a flat blank node or IRI.
+            let enclosing = std::mem::replace(&mut self.term_depth, 0);
+            let inner = self.triple_term_level(|p| p.parse_inner_triple(sink));
+            self.term_depth = enclosing;
+            inner?
+        };
         if is_triple_term {
             self.expect(&Token::RParen)?;
             self.expect(&Token::TripleClose)?;
@@ -4003,7 +4084,9 @@ impl<'a> Parser<'a, '_> {
                 Ok(TermPattern::Literal(self.parse_literal()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.nested("triple term", Self::parse_quoted_triple)?;
+                let t = self.nested("triple term", |p| {
+                    p.triple_term_level(Self::parse_quoted_triple)
+                })?;
                 Ok(TermPattern::Triple(Box::new(t)))
             }
             other => Err(ParseError::syntax(
@@ -4215,7 +4298,9 @@ impl<'a> Parser<'a, '_> {
                 Ok(GroundTerm::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.nested("triple term", Self::parse_ground_triple)?;
+                let t = self.nested("triple term", |p| {
+                    p.triple_term_level(Self::parse_ground_triple)
+                })?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
             // Every other legal ground term — a string, a boolean, or a numeral
@@ -4324,9 +4409,7 @@ impl<'a> Parser<'a, '_> {
                     self.expect(&Token::RParen)?;
                     // An expression-valued `GROUP BY` condition list lowers to
                     // a chain of `Extend` nodes placed directly under `Group`
-                    // (§18.2.4) — see `MAX_GRAPH_PATTERN_NODES`'s doc for why
-                    // this list is charged the same as the group loop.
-                    self.charge_pattern_nodes(1)?;
+                    // (§18.2.4), whose height `parse_select` charges.
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else if self.at_bare_group_condition() {
@@ -4334,7 +4417,6 @@ impl<'a> Parser<'a, '_> {
                     // `GROUP BY STR(?x)` — lower to a synthetic-var Extend.
                     let expr = self.parse_expression()?;
                     let var = self.fresh_group_var();
-                    self.charge_pattern_nodes(1)?;
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else {
@@ -4346,11 +4428,10 @@ impl<'a> Parser<'a, '_> {
             loop {
                 let expr = self.parse_having_constraint(aggregates)?;
                 // A long `HAVING (c1) (c2) … (cN)` condition list lowers to a
-                // chain of `Filter` nodes — same class, same budget. Each
-                // `cN` is itself a `Constraint` (`BrackettedExpression |
+                // chain of `Filter` nodes, whose height `parse_select` charges.
+                // Each `cN` is itself a `Constraint` (`BrackettedExpression |
                 // BuiltInCall | FunctionCall`, §Constraint) — bracketed
                 // (`Token::LParen`) or bare (`Self::at_bare_constraint`).
-                self.charge_pattern_nodes(1)?;
                 m.having.push(expr);
                 if !(self.at(&Token::LParen) || self.at_bare_constraint()) {
                     break;
@@ -6643,27 +6724,57 @@ mod tests {
         }
     }
 
+    /// Run `body` on a thread with a `bytes`-sized stack, and hand back what it returned.
+    /// A stack overflow in `body` aborts the whole test process, so reaching an
+    /// assertion on either side of a refusal is itself the proof that nothing
+    /// overflowed.
+    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(bytes)
+            .spawn(body)
+            .expect("spawn a test thread")
+            .join()
+            .expect("the thread returned")
+    }
+
+    /// Plenty of stack: 512 MiB, far more than any shape below needs.
+    const LARGE_STACK: usize = 512 * 1024 * 1024;
+
+    /// A thousand nested groups parse; the brace count is no limit. A hundred thousand are
+    /// the typed stack refusal on a test thread, never an overflow.
     #[test]
-    fn group_graph_pattern_nesting_has_a_typed_limit() {
+    fn group_graph_pattern_nesting_is_bounded_by_the_stack_not_a_count() {
         fn nested_query(depth: usize) -> String {
             format!(
-                "SELECT * WHERE {} ?s ?p ?o {}",
+                "SELECT * WHERE {} ?s ?p ?innermost {}",
                 "{ ".repeat(depth),
                 "} ".repeat(depth)
             )
         }
 
-        SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
-            .expect("the documented maximum nesting depth parses");
-        let error = SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH + 1))
-            .expect_err("one group beyond the safety limit must be refused");
+        let parsed = on_thread(LARGE_STACK, || {
+            SparqlParser::new()
+                .parse_query(&nested_query(1_000))
+                .map(|q| format!("{q:?}"))
+        })
+        .expect("a thousand nested groups parse");
         assert!(
-            matches!(error, ParseError::Syntax { .. }),
-            "the nesting refusal remains a typed syntax error: {error}"
+            parsed.contains("?innermost"),
+            "the innermost triple survives"
         );
-        assert!(error.to_string().contains("nesting exceeds"));
+        let error = SparqlParser::new()
+            .parse_query(&nested_query(100_000))
+            .expect_err("a hundred thousand groups do not fit a test thread's stack");
+        assert!(
+            matches!(
+                error,
+                ParseError::StackExhausted {
+                    construct: "group graph pattern",
+                    ..
+                }
+            ),
+            "the refusal is the typed stack error: {error}"
+        );
     }
 
     /// `open`, repeated `levels` times, around `core`, closed by `close` as often.
@@ -6677,12 +6788,15 @@ mod tests {
         name: &'static str,
         /// The construct a refusal of this family names.
         refused_as: &'static str,
-        /// Budget levels the enclosing text charges before the first written level
+        /// Recursive levels the enclosing text opens before the first written level
         /// (a query's `WHERE` group; nothing for an update's `INSERT DATA` block or a
         /// projection, which are read outside any group).
         enclosing: usize,
-        /// Budget levels one written level charges.
+        /// Recursive levels one written level opens.
         per_level: usize,
+        /// Whether each written level nests a triple term, bounded by
+        /// [`MAX_TRIPLE_TERM_NESTING`] rather than by the stack.
+        terms: bool,
         /// Whether `text` is an update request rather than a query.
         update: bool,
         /// The request, written `levels` deep.
@@ -6695,9 +6809,10 @@ mod tests {
     }
 
     impl NestingFamily {
-        /// The deepest this family can be written and still parse.
-        const fn max_levels(&self) -> usize {
-            (MAX_NESTING_DEPTH - self.enclosing) / self.per_level
+        /// The deepest the removed 128-level count admitted this family: the floor every
+        /// stack-bounded family must still reach, even on a 1 MiB thread.
+        const fn former_limit(&self) -> usize {
+            (128 - self.enclosing) / self.per_level
         }
 
         fn parse(&self, levels: usize) -> Result<String> {
@@ -6713,27 +6828,57 @@ mod tests {
             }
         }
 
-        /// The refusal at `levels`, asserted to be the typed nesting error that names
-        /// this family's construct and the limit.
+        /// Assert the algebra parsed from `levels` written levels holds every one of
+        /// them: the oracle that tells an accepted request from a truncated one.
+        fn assert_complete(&self, algebra: &str, levels: usize) {
+            assert_eq!(
+                algebra.matches(self.marker).count(),
+                (self.occurrences)(levels),
+                "{}: the parsed algebra holds every one of its {levels} levels",
+                self.name
+            );
+        }
+
+        /// The refusal at `levels` on the calling thread: the typed stack error naming
+        /// this family's construct (or the height charge beside it), or — for a
+        /// triple-term family — the typed syntax error naming [`MAX_TRIPLE_TERM_NESTING`].
         fn assert_refused(&self, levels: usize) {
             let error = self.parse(levels).expect_err(&format!(
                 "{} written {levels} deep must be refused",
                 self.name
             ));
-            assert!(
-                matches!(error, ParseError::Syntax { .. }),
-                "{}: the nesting refusal is a typed syntax error: {error}",
-                self.name
-            );
-            let expected = format!(
-                "{} nesting exceeds the safety limit of {MAX_NESTING_DEPTH}",
-                self.refused_as
-            );
-            assert!(
-                error.to_string().contains(&expected),
-                "{}: expected `{expected}`, got: {error}",
-                self.name
-            );
+            if self.terms {
+                let expected = format!(
+                    "triple term nesting exceeds the safety limit of {MAX_TRIPLE_TERM_NESTING}"
+                );
+                assert!(
+                    matches!(error, ParseError::Syntax { .. })
+                        && error.to_string().contains(&expected),
+                    "{}: expected `{expected}`, got: {error}",
+                    self.name
+                );
+            } else {
+                // Where the stack runs out, the refusal is the level's own guard or the
+                // height charge of what the loop around it builds next: whichever the
+                // last few hundred bytes reach first.
+                // A written `EXISTS` level is two recursive levels, so its keyword's own
+                // guard can be the one that refuses.
+                let keyword = if self.name.contains("NOT EXISTS") {
+                    "NOT EXISTS"
+                } else if self.name.contains("EXISTS") {
+                    "EXISTS"
+                } else {
+                    self.refused_as
+                };
+                assert!(
+                    matches!(error, ParseError::StackExhausted { construct, .. }
+                        if [self.refused_as, keyword, "graph pattern", "expression", "property path"]
+                            .contains(&construct)),
+                    "{}: expected the stack refusal at the {}, got: {error}",
+                    self.name,
+                    self.refused_as
+                );
+            }
         }
     }
 
@@ -6748,6 +6893,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6763,6 +6909,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6778,6 +6925,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6793,6 +6941,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6808,6 +6957,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6823,6 +6973,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -6839,6 +6990,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "!".repeat(n)),
                 marker: "Not(",
                 occurrences: |n| n,
@@ -6849,6 +7001,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "- ".repeat(n)),
                 marker: "UnaryMinus(",
                 occurrences: |n| n,
@@ -6859,6 +7012,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "+ ".repeat(n)),
                 marker: "UnaryPlus(",
                 occurrences: |n| n,
@@ -6869,6 +7023,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -6884,6 +7039,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -6899,6 +7055,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -6914,6 +7071,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER(?x = {}) }}",
@@ -6929,6 +7087,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} ?o }}",
@@ -6946,6 +7105,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} ?o }}",
@@ -6966,6 +7126,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} }}",
@@ -6986,6 +7147,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {EX_P} {} }}",
@@ -7001,6 +7163,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: true,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
@@ -7016,6 +7179,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
@@ -7031,6 +7195,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {EX_P} ?o {} }}",
@@ -7048,6 +7213,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
+                terms: true,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
@@ -7068,6 +7234,7 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: false,
+                terms: false,
                 text: |n| {
                     format!(
                         "CONSTRUCT {{ ?s {EX_P} {} }} WHERE {{ ?s ?p ?innermost }}",
@@ -7083,6 +7250,7 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
+                terms: false,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ <http://example.org/s> {} }}",
@@ -7103,6 +7271,7 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
+                terms: false,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ <http://example.org/s> {EX_P} {} }}",
@@ -7118,6 +7287,7 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
+                terms: true,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ {} <http://example.org/q> 1 }}",
@@ -7138,6 +7308,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: true,
+                terms: false,
                 text: |n| {
                     format!(
                         "DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o FILTER({}?innermost) }}",
@@ -7153,6 +7324,7 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: true,
+                terms: false,
                 text: |n| {
                     format!(
                         "DELETE {{ ?s ?p ?o }} WHERE {{ {} }}",
@@ -7165,116 +7337,126 @@ mod tests {
         ]
     }
 
-    /// Every recursive production is bounded by the one nesting budget: written as deep
-    /// as the budget allows it parses — every level present in the algebra, which the
-    /// refused neighbour one level deeper cannot produce — and one level deeper it is
-    /// refused with the typed error naming the construct and the limit.
+    /// Every recursive production parses a thousand written levels deep — ten times past
+    /// the removed 128-level count, which refused them — with every level present in
+    /// the algebra. A triple-term family parses at [`MAX_TRIPLE_TERM_NESTING`] with
+    /// every level present and is refused one level past it.
     #[test]
-    fn every_recursive_production_parses_at_the_nesting_limit_and_is_refused_one_past_it() {
-        for family in nesting_families() {
-            let max = family.max_levels();
-            assert!(
-                max > 0,
-                "{}: the budget admits at least one level",
-                family.name
-            );
-            let algebra = family.parse(max).unwrap_or_else(|error| {
-                panic!(
-                    "{} written {max} deep (the limit) must parse: {error}",
-                    family.name
-                )
-            });
-            assert_eq!(
-                algebra.matches(family.marker).count(),
-                (family.occurrences)(max),
-                "{}: the accepted neighbour holds every one of its {max} levels",
-                family.name
-            );
-            family.assert_refused(max + 1);
-        }
-    }
-
-    /// A request nested ten thousand deep is the typed refusal, never a stack overflow
-    /// (which would abort this test process rather than fail an assertion).
-    #[test]
-    fn every_recursive_production_ten_thousand_deep_is_a_typed_refusal() {
-        for family in nesting_families() {
-            family.assert_refused(10_000);
-        }
-    }
-
-    /// The bound the limit's documentation states: driving every recursive production to
-    /// its refusal fits a 1 MiB stack — the size of wasm32's shadow stack — even at
-    /// native frame sizes, which are larger than wasm32's.
-    #[test]
-    fn every_recursive_production_is_refused_inside_a_one_mebibyte_stack() {
-        std::thread::Builder::new()
-            .stack_size(1024 * 1024)
-            .spawn(|| {
-                for family in nesting_families() {
-                    family.assert_refused(10_000);
+    fn every_recursive_production_parses_a_thousand_levels_deep() {
+        on_thread(LARGE_STACK, || {
+            for family in nesting_families() {
+                let levels = if family.terms {
+                    MAX_TRIPLE_TERM_NESTING
+                } else {
+                    1_000
+                };
+                let algebra = family.parse(levels).unwrap_or_else(|error| {
+                    panic!("{} written {levels} deep must parse: {error}", family.name)
+                });
+                family.assert_complete(&algebra, levels);
+                if family.terms {
+                    family.assert_refused(levels + 1);
                 }
-            })
-            .expect("spawn a 1 MiB thread")
-            .join()
-            .expect("every family is refused on a 1 MiB stack");
+            }
+        });
+    }
+
+    /// A request nested a hundred thousand deep is the typed refusal on a test thread,
+    /// never a stack overflow (which would abort this test process rather than fail an
+    /// assertion).
+    #[test]
+    fn every_recursive_production_a_hundred_thousand_deep_is_a_typed_refusal() {
+        for family in nesting_families() {
+            family.assert_refused(100_000);
+        }
+    }
+
+    /// Where the stack ends is where each production is refused, and it is far past the
+    /// removed count even on a 1 MiB thread. The deepest level that parses there is
+    /// found by bisection; it holds every level, the next is the typed stack refusal
+    /// naming the construct, and it is at least as deep as the removed 128-level count
+    /// admitted.
+    #[test]
+    fn every_recursive_production_is_refused_where_a_one_mebibyte_stack_ends() {
+        on_thread(1024 * 1024, || {
+            for family in nesting_families().into_iter().filter(|f| !f.terms) {
+                let (mut parses, mut refused) = (1_usize, 100_000_usize);
+                assert!(
+                    family.parse(parses).is_ok(),
+                    "{}: one level parses",
+                    family.name
+                );
+                while refused - parses > 1 {
+                    let mid = parses.midpoint(refused);
+                    if family.parse(mid).is_ok() {
+                        parses = mid;
+                    } else {
+                        refused = mid;
+                    }
+                }
+                let algebra = family.parse(parses).expect("the bisected limit parses");
+                family.assert_complete(&algebra, parses);
+                family.assert_refused(refused);
+                assert!(
+                    parses >= family.former_limit(),
+                    "{}: {parses} levels parse on a 1 MiB thread, fewer than the {} the \
+                     removed count admitted",
+                    family.name,
+                    family.former_limit()
+                );
+            }
+        });
     }
 
     /// Aggregates cannot nest in a valid query, but the parser still recurses through a
-    /// nested aggregate call before it can say so: ten thousand of them are the typed
-    /// nesting refusal. The valid neighbour — an aggregate over function calls filling the
-    /// rest of the budget — parses with every level present, and one level more is refused.
+    /// nested aggregate call before it can say so: a hundred thousand of them are the
+    /// typed stack refusal. The valid neighbour — an aggregate over a thousand nested
+    /// function calls — parses with every level present.
     #[test]
-    fn aggregate_calls_share_the_nesting_budget() {
+    fn nested_aggregate_calls_are_bounded_by_the_stack() {
         let over_calls = |calls: usize| {
             format!(
                 "SELECT (SUM({}) AS ?total) WHERE {{ ?s ?p ?x }}",
                 wrapped("<http://example.org/fn>(", "?x", ")", calls)
             )
         };
-        // A projection is read before any group, so the aggregate is the first level.
-        let parsed = SparqlParser::new()
-            .parse_query(&over_calls(MAX_NESTING_DEPTH - 1))
-            .expect("an aggregate over calls filling the budget parses");
+        let parsed = on_thread(LARGE_STACK, move || {
+            SparqlParser::new()
+                .parse_query(&over_calls(1_000))
+                .map(|q| format!("{q:?}"))
+        })
+        .expect("an aggregate over a thousand nested calls parses");
         assert_eq!(
-            format!("{parsed:?}")
-                .matches("Custom(<http://example.org/fn>)")
-                .count(),
-            MAX_NESTING_DEPTH - 1
-        );
-        let error = SparqlParser::new()
-            .parse_query(&over_calls(MAX_NESTING_DEPTH))
-            .expect_err("one call past the budget is refused");
-        assert!(
-            error.to_string().contains(&format!(
-                "function argument list nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
-            )),
-            "{error}"
+            parsed.matches("Custom(<http://example.org/fn>)").count(),
+            1_000
         );
         for (open, close) in [("SUM(", ")"), ("AGG(<http://example.org/agg>, ", ")")] {
             let text = format!(
                 "SELECT ({} AS ?total) WHERE {{ ?s ?p ?x }}",
-                wrapped(open, "?x", close, 10_000)
+                wrapped(open, "?x", close, 100_000)
             );
             let error = SparqlParser::new()
                 .parse_query(&text)
-                .expect_err("ten thousand nested aggregates are refused");
+                .expect_err("a hundred thousand nested aggregates are refused");
             assert!(
-                matches!(error, ParseError::Syntax { .. })
-                    && error.to_string().contains(&format!(
-                        "aggregate nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
-                    )),
+                matches!(
+                    error,
+                    ParseError::StackExhausted {
+                        construct: "aggregate",
+                        ..
+                    }
+                ),
                 "{open}: {error}"
             );
         }
     }
 
-    /// Constructs of different kinds draw on ONE budget: a group, a bracketted expression,
-    /// a call, a negation and an `EXISTS` body interleaved stop at the same total as any
-    /// one of them alone.
+    /// Constructs of different kinds interleave freely: a call, brackets, a negation, an
+    /// `EXISTS` body and its group, five recursive levels a written level, parse a
+    /// thousand written levels deep with every level present, and a hundred thousand are
+    /// the typed stack refusal.
     #[test]
-    fn mixed_constructs_draw_on_one_nesting_budget() {
-        // Each written level charges five: argument list, brackets, `!`, EXISTS, group.
+    fn mixed_constructs_nest_as_deep_as_the_stack_allows() {
         let mixed = |levels: usize| {
             format!(
                 "SELECT * WHERE {{ {} }}",
@@ -7286,18 +7468,18 @@ mod tests {
                 )
             )
         };
-        let max = (MAX_NESTING_DEPTH - 1) / 5;
-        let parsed = SparqlParser::new()
-            .parse_query(&mixed(max))
-            .expect("interleaved constructs within the budget parse");
-        assert_eq!(format!("{parsed:?}").matches("Exists(").count(), max);
+        let parsed = on_thread(LARGE_STACK, move || {
+            SparqlParser::new()
+                .parse_query(&mixed(1_000))
+                .map(|q| format!("{q:?}"))
+        })
+        .expect("a thousand interleaved levels parse");
+        assert_eq!(parsed.matches("Exists(").count(), 1_000);
         let error = SparqlParser::new()
-            .parse_query(&mixed(max + 1))
-            .expect_err("interleaved constructs past the budget are refused");
+            .parse_query(&mixed(100_000))
+            .expect_err("a hundred thousand interleaved levels are refused");
         assert!(
-            error.to_string().contains(&format!(
-                "nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
-            )),
+            matches!(error, ParseError::StackExhausted { .. }),
             "{error}"
         );
     }
@@ -7494,101 +7676,128 @@ mod tests {
         );
     }
 
-    /// What an expression really nests is still bounded by its total height. Each
-    /// bracket level below spells `?x || ?x && ?x != ?x + ?x * ( … )` — six operator
-    /// levels (`!=` is two) under one bracket, seven levels a bracket — so the tree
-    /// outgrows the height budget long before the brackets reach the recursion
-    /// budget. Seventy levels (490 tall) parse; seventy-five (525) are the typed
-    /// refusal, with only 76 brackets open. A flat chain of the same operators beside
-    /// it, as long as all of them together, parses: a neighbour that differs only in
-    /// nesting nothing.
+    /// What an expression really nests is bounded by the walks over it, not only by the
+    /// parser's recursion. Each bracket level below spells
+    /// `?x || ?x && ?x != ?x + ?x * ( … )` — six operator levels (`!=` is two) under one
+    /// bracket, seven levels a bracket — built by loops the recursion guard never sees.
+    /// A thousand levels parse where the stack holds them. On a 1 MiB thread the deepest
+    /// that parses, found by bisection, holds every level and can be copied, compared,
+    /// formatted and dropped right there; one level more is the typed stack refusal at
+    /// the operator whose subtree would not fit a walk. A flat chain of the same
+    /// operators, as long as all of them together, parses on the same thread: a
+    /// neighbour that differs only in nesting nothing.
     #[test]
-    fn nested_chains_are_bounded_by_their_total_height() {
-        let nested = |levels: usize| {
-            let mut expression = String::from("?x");
+    fn nested_chains_are_bounded_by_the_stack_their_walks_need() {
+        fn nested(levels: usize) -> String {
+            let mut expression = String::from("?innermost");
             for _ in 0..levels {
                 expression = format!("(?x || ?x && ?x != ?x + ?x * {expression})");
             }
             format!("SELECT * WHERE {{ FILTER({expression}) }}")
-        };
-        SparqlParser::new()
-            .parse_query(&nested(70))
-            .expect("70 nested levels, 490 tall, parse");
-        let error = SparqlParser::new()
-            .parse_query(&nested(75))
-            .expect_err("nested levels past the height budget are refused");
-        assert!(
-            matches!(error, ParseError::Syntax { .. })
-                && error.to_string().contains(&format!(
-                    "expression nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
-                )),
-            "{error}"
-        );
-        let flat = format!(
-            "SELECT * WHERE {{ FILTER(?x{}) }}",
-            " || ?x && ?x != ?x + ?x * ?x".repeat(75)
-        );
-        let Expression::Or(operands) = filter_expr(&flat) else {
-            panic!("expected Or");
-        };
-        assert_eq!(operands.len(), 76);
+        }
+        let parse = |levels: usize| SparqlParser::new().parse_query(&nested(levels));
+        let thousand = on_thread(LARGE_STACK, move || parse(1_000).map(|q| format!("{q:?}")))
+            .expect("a thousand nested levels, seven thousand tall, parse");
+        assert_eq!(thousand.matches("Or(").count(), 1_000);
+
+        on_thread(1024 * 1024, move || {
+            let (mut parses, mut refused) = (1_usize, 10_000_usize);
+            while refused - parses > 1 {
+                let mid = parses.midpoint(refused);
+                if parse(mid).is_ok() {
+                    parses = mid;
+                } else {
+                    refused = mid;
+                }
+            }
+            let deepest = parse(parses).expect("the bisected limit parses");
+            let copy = deepest.clone();
+            assert_eq!(copy, deepest);
+            assert_eq!(format!("{copy:?}").matches("Or(").count(), parses);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&copy, &mut hasher);
+            drop(copy);
+            drop(deepest);
+            let error = parse(refused).expect_err("one level more is refused");
+            assert!(
+                matches!(
+                    error,
+                    ParseError::StackExhausted {
+                        construct: "expression",
+                        ..
+                    }
+                ),
+                "{error}"
+            );
+            assert!(
+                parses >= 128,
+                "{parses} levels parse on a 1 MiB thread; the removed height budget admitted 73"
+            );
+            let flat = format!(
+                "SELECT * WHERE {{ FILTER(?x{}) }}",
+                " || ?x && ?x != ?x + ?x * ?x".repeat(refused)
+            );
+            let Expression::Or(operands) = filter_expr(&flat) else {
+                panic!("expected Or");
+            };
+            assert_eq!(operands.len(), refused + 1);
+        });
     }
 
-    /// Locate the EXACT repetition count at which a monotonic spine generator
-    /// — one more repetition of `spine` only ever charges MORE combinator
-    /// nodes, never fewer, true of every generator this helper is applied to
-    /// below — stops parsing, then assert the transition is exactly what
-    /// [`MAX_GRAPH_PATTERN_NODES`] demands: one repetition short of it parses
-    /// clean, and the very next repetition is refused with a typed
-    /// [`ParseError`] naming the limit — never an abort (reaching this
-    /// assertion at all, on either side, already demonstrates that this test
-    /// PROCESS did not crash; a real stack overflow would have taken the
-    /// whole process down before any assertion could run).
-    fn assert_spine_bound(spine: impl Fn(usize) -> String) {
-        assert!(
-            SparqlParser::new().parse_query(&spine(1)).is_ok(),
-            "the smallest spine must parse"
-        );
-        let (mut lo, mut hi) = (1usize, 2usize);
-        while SparqlParser::new().parse_query(&spine(hi)).is_ok() {
-            lo = hi;
-            hi *= 2;
-            assert!(
-                hi < 1_000_000,
-                "spine never reaches the safety limit up to {hi} repetitions"
-            );
-        }
-        while hi - lo > 1 {
-            let mid = lo + (hi - lo) / 2;
-            if SparqlParser::new().parse_query(&spine(mid)).is_ok() {
-                lo = mid;
-            } else {
-                hi = mid;
+    /// Assert a spine generator — one more repetition of `spine` only ever builds a
+    /// taller spine, never a shorter one — is bounded by the stack its walks need, not
+    /// by a count: ten thousand repetitions parse where the stack holds them, and on a
+    /// 2 MiB thread (the size `cargo test` gives each test) the deepest that parses,
+    /// found by bisection, is longer than the 2 048 the removed combinator budget
+    /// admitted, is copied, compared, formatted and dropped right there, and one
+    /// repetition more is the typed stack refusal at the spine — never an abort
+    /// (reaching the assertion at all already shows the process did not crash).
+    fn assert_spine_bound(spine: fn(usize) -> String) {
+        let parse = move |n: usize| SparqlParser::new().parse_query(&spine(n));
+        on_thread(LARGE_STACK, move || {
+            parse(10_000).expect("ten thousand repetitions parse on a large stack");
+        });
+        on_thread(2 * 1024 * 1024, move || {
+            let (mut lo, mut hi) = (1_usize, 100_000_usize);
+            assert!(parse(lo).is_ok(), "the smallest spine must parse");
+            while hi - lo > 1 {
+                let mid = lo.midpoint(hi);
+                if parse(mid).is_ok() {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
             }
-        }
-        SparqlParser::new()
-            .parse_query(&spine(lo))
-            .expect("one repetition short of the safety limit must parse");
-        let error = SparqlParser::new().parse_query(&spine(hi)).expect_err(
-            "one repetition past the safety limit must be a typed refusal, never an abort",
-        );
-        assert!(
-            matches!(error, ParseError::Syntax { .. }),
-            "the spine refusal remains a typed syntax error: {error}"
-        );
-        assert!(
-            error.to_string().contains("combinator count exceeds"),
-            "the refusal should name the combinator-count limit, got: {error}"
-        );
+            let longest = parse(lo).expect("the bisected limit parses");
+            let copy = longest.clone();
+            assert_eq!(copy, longest);
+            assert_ne!(format!("{copy:?}"), "");
+            drop(copy);
+            drop(longest);
+            assert!(
+                lo > 2_048,
+                "only {lo} repetitions parse on a 2 MiB thread; the removed budget admitted 2 048"
+            );
+            let error = parse(hi).expect_err("one repetition more is refused");
+            assert!(
+                matches!(
+                    error,
+                    ParseError::StackExhausted {
+                        construct: "graph pattern",
+                        ..
+                    }
+                ),
+                "the spine refusal is the typed stack error: {error}"
+            );
+        });
     }
 
     /// A run of SIBLING `OPTIONAL { }` elements at ONE brace depth: each
     /// keyword adds one `LeftJoin` level to a left-deep spine while
-    /// `nesting_depth` never exceeds 1 — the exact shape
-    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, and the shape
-    /// [`MAX_GRAPH_PATTERN_NODES`] exists to bound instead.
+    /// `nesting_depth` never exceeds 1 — the exact shape the recursion guard cannot
+    /// see, so its height is charged as the loop builds it.
     #[test]
-    fn sibling_spine_length_is_bounded_by_a_typed_error() {
+    fn sibling_spine_length_is_bounded_by_the_stack() {
         assert_spine_bound(|n| {
             let mut body = String::from("SELECT * WHERE { ?s <https://example.org/p> ?o ");
             for _ in 0..n {
@@ -7609,7 +7818,7 @@ mod tests {
     /// onto the block with its own `Join` — entirely inside what the
     /// group-parsing loop counts as ONE element.
     #[test]
-    fn dot_separated_path_spine_length_is_bounded_by_a_typed_error() {
+    fn dot_separated_path_spine_length_is_bounded_by_the_stack() {
         use std::fmt::Write as _;
         assert_spine_bound(|n| {
             let mut body = String::from("SELECT * WHERE { ");
@@ -7656,11 +7865,10 @@ mod tests {
     }
 
     /// What a `UNION` arm builds inside itself still deepens the tree, and is still
-    /// charged: a sibling spine of `OPTIONAL`s in ONE arm of a hundred is bounded by
-    /// the same typed error as the spine alone, so the arms' charges are compared, not
-    /// discarded.
+    /// charged: a sibling spine of `OPTIONAL`s in ONE arm of a hundred is bounded like
+    /// the spine alone, so the arms' heights are compared, not discarded.
     #[test]
-    fn a_union_arm_s_own_spine_is_bounded_by_a_typed_error() {
+    fn a_union_arm_s_own_spine_is_bounded_by_the_stack() {
         assert_spine_bound(|n| {
             let mut body = String::from("SELECT * WHERE { { ?s <https://example.org/p> ?o }");
             for arm in 0..100 {
@@ -7678,9 +7886,9 @@ mod tests {
     /// A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection list lowers to a
     /// chain of `Extend` nodes with no brace involved at all — a THIRD shape
     /// (alongside the group loop and a `UNION` arm's own spine) that
-    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, closed by the same budget.
+    /// the recursion guard cannot see, charged the same way.
     #[test]
-    fn select_expression_list_length_is_bounded_by_a_typed_error() {
+    fn select_expression_list_length_is_bounded_by_the_stack() {
         use std::fmt::Write as _;
         assert_spine_bound(|n| {
             let mut body = String::from("SELECT ");
@@ -10728,25 +10936,38 @@ mod tests {
     }
 
     #[test]
-    fn lateral_right_hand_side_inherits_the_depth_limit() {
-        // The RHS parses via `parse_group_graph_pattern` (not `_inner`), so it
-        // counts toward `MAX_GRAPH_PATTERN_DEPTH` exactly like every other
-        // braced construct.
+    fn lateral_right_hand_side_is_guarded_like_every_group() {
+        // The RHS parses via `parse_group_graph_pattern` (not `_inner`), so it enters
+        // the recursion guard exactly like every other braced construct: deep nesting
+        // through it parses where the stack holds it and is the typed stack refusal
+        // where it does not.
         fn nested_query(extra_depth: usize) -> String {
             format!(
-                "SELECT * WHERE {{ ?s ?p ?o LATERAL {} ?x ?y ?z {} }}",
+                "SELECT * WHERE {{ ?s ?p ?o LATERAL {} ?x ?y ?innermost {} }}",
                 "{ ".repeat(extra_depth),
                 "} ".repeat(extra_depth)
             )
         }
-        SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH - 1))
-            .expect("depth budget reached exactly through a LATERAL right-hand side must parse");
+        let parsed = on_thread(LARGE_STACK, || {
+            SparqlParser::new()
+                .parse_query(&nested_query(1_000))
+                .map(|q| format!("{q:?}"))
+        })
+        .expect("a thousand groups under a LATERAL right-hand side parse");
+        assert!(parsed.contains("Lateral {") && parsed.contains("?innermost"));
         let error = SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
-            .expect_err("one level beyond the limit through a LATERAL right-hand side must fail");
-        assert!(matches!(error, ParseError::Syntax { .. }));
-        assert!(error.to_string().contains("nesting exceeds"));
+            .parse_query(&nested_query(100_000))
+            .expect_err("a hundred thousand groups under a LATERAL do not fit a test thread");
+        assert!(
+            matches!(
+                error,
+                ParseError::StackExhausted {
+                    construct: "group graph pattern",
+                    ..
+                }
+            ),
+            "{error}"
+        );
     }
 
     #[test]

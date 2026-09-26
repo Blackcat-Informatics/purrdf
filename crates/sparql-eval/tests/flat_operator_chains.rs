@@ -388,8 +388,7 @@ fn grouped(depth: usize) -> String {
 }
 
 /// `levels` bracket levels of `(?v = 9999 || ?v = 1 && ?v != 2 + 3 * …)`: seven levels
-/// of operator tree per bracket, so the tree is taller than the height budget long
-/// before the brackets reach the recursion budget.
+/// of operator tree per bracket, built by loops no recursion guard sees.
 fn tall(levels: usize) -> String {
     let mut expression = String::from("?v");
     for _ in 0..levels {
@@ -398,30 +397,31 @@ fn tall(levels: usize) -> String {
     format!("SELECT ?s WHERE {{ ?s <{EX}p> ?v FILTER({expression}) }}")
 }
 
-/// Assert `result` is the parser's typed nesting refusal naming `limit`.
-fn assert_nesting_refusal(result: Result<SparqlResult, RdfDiagnostic>, limit: usize, what: &str) {
+/// Assert `result` is a typed stack refusal: the parser's, or the evaluator's.
+fn assert_stack_refusal(result: Result<SparqlResult, RdfDiagnostic>, what: &str) {
     let diagnostic = result.expect_err(&format!("{what} is refused"));
     assert!(
-        diagnostic
-            .message
-            .contains(&format!("nesting exceeds the safety limit of {limit}")),
+        diagnostic.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+            || diagnostic.message.contains("SPARQL parse stack exhausted"),
         "{what}: {diagnostic:?}"
     );
 }
 
-/// What really nests is still the typed refusal: brackets and groups past the recursion
-/// budget, and an operator tree past the height budget. One step under each answers —
-/// with the one subject its innermost condition names, not the whole dataset.
+/// What really nests is bounded by the stack, not by a count: brackets and groups
+/// past the removed 128-level recursion budget, and an operator tree past the removed
+/// 512-level height budget, answer on a test thread — with the one subject its
+/// innermost condition names, not the whole dataset — and nested ten thousand deep they
+/// are the typed stack refusal.
 #[test]
-fn true_nesting_past_the_budgets_is_still_refused() {
-    assert_nesting_refusal(run(&bracketed(200)), 128, "200 nested brackets");
-    assert_eq!(sorted_rows(run(&bracketed(100))), vec![row(&[("s", "a")])]);
+fn true_nesting_is_bounded_by_the_stack() {
+    assert_eq!(sorted_rows(run(&bracketed(200))), vec![row(&[("s", "a")])]);
+    assert_stack_refusal(run(&bracketed(10_000)), "10 000 nested brackets");
 
-    assert_nesting_refusal(run(&grouped(200)), 128, "200 nested groups");
-    assert_eq!(sorted_rows(run(&grouped(100))), vec![row(&[("s", "b")])]);
+    assert_eq!(sorted_rows(run(&grouped(200))), vec![row(&[("s", "b")])]);
+    assert_stack_refusal(run(&grouped(10_000)), "10 000 nested groups");
 
-    assert_nesting_refusal(run(&tall(75)), 512, "a 525-level operator tree");
-    assert_eq!(sorted_rows(run(&tall(70))), vec![row(&[("s", "a")])]);
+    assert_eq!(sorted_rows(run(&tall(75))), vec![row(&[("s", "a")])]);
+    assert_stack_refusal(run(&tall(10_000)), "a 70 000-level operator tree");
 }
 
 /// A `SERVICE` forwards its body as text the in-process endpoint re-parses. A body

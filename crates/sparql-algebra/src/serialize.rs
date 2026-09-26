@@ -21,11 +21,10 @@
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
 //!   body underneath it).
-//! * **Admitted in, admitted out.** The parser bounds how deeply a request may
-//!   nest (`MAX_NESTING_DEPTH`) and how tall an operator tree may grow
-//!   (`MAX_EXPRESSION_HEIGHT`), and a bracket or brace is a level of both. So
-//!   the rendering spends a bracket or a brace only where the grammar needs one
-//!   to rebuild the same tree: expressions follow the grammar's precedence and
+//! * **Admitted in, admitted out.** A bracket or a brace is a level of the
+//!   parser's recursion, which the stack bounds, and of the tree whose height the
+//!   walks over it are measured against. So the rendering spends a bracket or a
+//!   brace only where the grammar needs one to rebuild the same tree: expressions follow the grammar's precedence and
 //!   associativity (`a + b + c` bare, `a - (b - c)` and `(a + b) * c`
 //!   bracketted — see `Level`), property paths do the same
 //!   ([`crate::algebra::PropertyPathExpression`]'s `Display`), a `UNION` chain
@@ -57,6 +56,16 @@ use crate::ast::{
     BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
     TermPattern, TriplePattern, Variable, XSD_STRING,
 };
+
+/// What a level of the serializer names when it stops for want of stack.
+///
+/// Every recursive level of the rendering asks [`purrdf_stack::walk_is_low`] first. Inside
+/// a [`purrdf_stack::walk`] scope — the evaluator renders a `SERVICE` body inside one, at
+/// whatever depth the evaluation has reached — a level that finds less than
+/// [`purrdf_stack::MARGIN_BYTES`] left stops descending and the scope discards the
+/// truncated text and reports the refusal. Outside a scope the check never fires, and the
+/// rendering is exactly what it always was.
+const SERIALIZATION: &str = "algebra serialization";
 
 /// A `GROUP BY` key + its `(output var, aggregate)` pairs, borrowed from a
 /// [`GraphPattern::Group`] node during sub-`SELECT` reconstruction.
@@ -201,6 +210,9 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
 /// text parses to a `Project`-wrapped pattern, not a bare `Extend`/`Group` chain — so
 /// this predicate cannot mistake an ordinary body element for this shape.
 fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return false;
+    }
     match p {
         GraphPattern::Group { .. } => true,
         // `HAVING (a) (b) …` lifts to a CHAIN of `Filter`s, one per condition
@@ -233,6 +245,9 @@ fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
 /// second pattern-to-text renderer is deliberate: see `algebra.rs`'s `Display for
 /// GraphUpdateOperation` doc.
 pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return;
+    }
     if is_subselect_node(p) {
         s.push_str("{ ");
         fmt_subselect(s, p);
@@ -269,9 +284,9 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
                 // own even when it is a sub-`SELECT`.
                 s.push_str("{ ");
                 fmt_group_body(s, right);
-                s.push_str(" FILTER(");
-                fmt_expr(s, expr);
-                s.push_str(") }");
+                s.push_str(" FILTER");
+                fmt_constraint(s, expr);
+                s.push_str(" }");
             } else {
                 fmt_braced_group(s, right);
             }
@@ -311,9 +326,8 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             } else {
                 fmt_flattened_left(s, inner);
             }
-            s.push_str(" FILTER(");
-            fmt_expr(s, expr);
-            s.push(')');
+            s.push_str(" FILTER");
+            fmt_constraint(s, expr);
         }
         GraphPattern::Union { arms } => fmt_union(s, arms),
         GraphPattern::Graph { name, inner } => {
@@ -435,6 +449,9 @@ fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
 /// arm is the empty sequence, written as an empty `VALUES` block, and one arm is
 /// that arm, written as a group.
 fn fmt_union(s: &mut String, arms: &[GraphPattern]) {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return;
+    }
     let Some((first, rest)) = arms.split_first() else {
         fmt_values(s, &[], &[]);
         return;
@@ -457,6 +474,9 @@ fn fmt_union(s: &mut String, arms: &[GraphPattern]) {
 /// group structure it renders inline (it does not descend into `Expression`s,
 /// which are always emitted inside their own braces)?
 fn contains_property_function(p: &GraphPattern) -> bool {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return false;
+    }
     match p {
         GraphPattern::PropertyFunction(_) => true,
         GraphPattern::Join { left, right }
@@ -538,6 +558,9 @@ fn parser_rebuilds_the_lateral(left: &GraphPattern, right: &GraphPattern) -> boo
 /// PropertyFunction}` (the PF call itself) — so both recurse on their own
 /// `left`/`prior` operand.
 fn is_pf_reabsorbable_left(p: &GraphPattern) -> bool {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return false;
+    }
     match p {
         GraphPattern::Bgp { .. } => true,
         GraphPattern::Join { left, right } => {
@@ -720,6 +743,9 @@ fn fmt_bgp(s: &mut String, patterns: &[TriplePattern]) {
 /// `SELECT [DISTINCT|REDUCED] <vars|*> WHERE { <body> } [GROUP BY] [HAVING]
 /// [ORDER BY] [LIMIT] [OFFSET]`.
 fn fmt_subselect(s: &mut String, p: &GraphPattern) {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return;
+    }
     // Peel outer modifiers, recording each, until we reach the WHERE body.
     let mut cur = p;
     let mut distinct = false;
@@ -1113,10 +1139,9 @@ impl core::fmt::Display for VarRef<'_> {
 ///
 /// An operand whose own level is looser than its position demands is the one
 /// shape that needs brackets; every other operand is written bare. That is what
-/// keeps the forwarded text within the parser's nesting budget: a bracket is one
-/// nesting level (`MAX_NESTING_DEPTH`) and one level of tree height
-/// (`MAX_EXPRESSION_HEIGHT`), so bracketing every operator turned a
-/// 440-operator chain the parser admitted into text it refused. Bracketing only
+/// keeps the forwarded text inside what the parser admitted: a bracket is one level
+/// of the parser's recursion and one level of tree height, so bracketing every
+/// operator turned a 440-operator chain the parser admitted into text it refused. Bracketing only
 /// where the grammar would otherwise build a different tree writes no bracket
 /// the source text did not also need, so the rendering of an admitted tree is
 /// admitted again.
@@ -1164,6 +1189,9 @@ impl Level {
 /// A variable standing for an aggregate's synthetic output renders as the
 /// aggregate call, a primary — the same level the bare variable has.
 fn expr_level(e: &Expression) -> Level {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return Level::Primary;
+    }
     match e {
         // An empty chain is its identity, the literal `false`/`true`.
         Expression::Or(operands) | Expression::And(operands) if operands.is_empty() => {
@@ -1196,6 +1224,29 @@ fn expr_level(e: &Expression) -> Level {
         | Expression::Coalesce(_)
         | Expression::FunctionCall(..)
         | Expression::Exists(_) => Level::Primary,
+    }
+}
+
+/// Emit a `FILTER`'s constraint: an `EXISTS` or `NOT EXISTS` bare, as the built-in call
+/// the grammar lets a constraint be, and anything else bracketted.
+///
+/// The source text of a nest of `FILTER NOT EXISTS { … }` has no bracket at any level,
+/// and a bracket is a level of the parser's recursion, so bracketting the constraint
+/// would make the forwarded text of such a body cost the parser a level more per level
+/// than the body it renders — refused, where the stack ends, when the body was not.
+fn fmt_constraint(s: &mut String, expr: &Expression) {
+    let bare = match expr {
+        Expression::Exists(_) => true,
+        Expression::Not(inner) => matches!(**inner, Expression::Exists(_)),
+        _ => false,
+    };
+    if bare {
+        s.push(' ');
+        fmt_expr(s, expr);
+    } else {
+        s.push('(');
+        fmt_expr(s, expr);
+        s.push(')');
     }
 }
 
@@ -1260,6 +1311,9 @@ fn fmt_expr_at(s: &mut String, e: &Expression, min: Level, group: Option<GroupSp
 
 /// Emit `e` at its own level ([`expr_level`]), with no bracket around it.
 fn fmt_expr_bare(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
+    if purrdf_stack::walk_is_low(SERIALIZATION) {
+        return;
+    }
     if let Expression::Variable(v) = e
         && let Some((_, aggs)) = group
         && let Some((_, agg)) = aggs.iter().find(|(ov, _)| ov == v)
