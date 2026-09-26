@@ -65,21 +65,17 @@ fn load(ttl: &str) -> (Shapes, ShaclData) {
     )
 }
 
-fn bench(c: &mut Criterion) {
-    let mut refuse = c.benchmark_group("rules_divergence/refuse");
-    refuse.sample_size(10);
-    for (name, ttl) in [
+/// Time to refusal: every input is loaded before the group opens, so the group lives
+/// only across its measurements.
+fn bench_refuse(c: &mut Criterion) {
+    let loaded: Vec<(&str, (Shapes, ShaclData))> = [
         ("fresh_iri", FRESH_IRI.to_owned()),
         ("concat", format!("{PREFIXES}{CONCAT}")),
         ("counter", format!("{PREFIXES}{COUNTER}")),
-    ] {
-        let (shapes, data) = load(&ttl);
-        refuse.bench_function(name, |b| {
-            b.iter(|| {
-                infer(black_box(&data), &shapes, &RuleOptions::default()).expect_err("diverges")
-            });
-        });
-    }
+    ]
+    .into_iter()
+    .map(|(name, ttl)| (name, load(&ttl)))
+    .collect();
     let document = srl::parse_and_check(
         "PREFIX : <http://example.org/>\nRULE { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }",
         None,
@@ -91,24 +87,44 @@ fn bench(c: &mut Criterion) {
         None,
     )
     .expect("parses");
+
+    let mut refuse = c.benchmark_group("rules_divergence/refuse");
+    refuse.sample_size(10);
+    for (name, (shapes, data)) in &loaded {
+        refuse.bench_function(*name, |b| {
+            b.iter(|| {
+                infer(black_box(data), shapes, &RuleOptions::default()).expect_err("diverges")
+            });
+        });
+    }
     refuse.bench_function("srl_nest", |b| {
         b.iter(|| {
             srl::infer(&document, black_box(&base), &InferOptions::default()).expect_err("diverges")
         });
     });
     refuse.finish();
+}
+
+/// Completion of the convergent neighbour: a data-bounded counter deeper than the floor.
+fn bench_complete(c: &mut Criterion) {
+    let loaded: Vec<(usize, (Shapes, ShaclData))> = DEPTHS
+        .iter()
+        .map(|&length| {
+            let mut ttl = format!("{PREFIXES}{DEPTH_RULE}\nex:n0 ex:depth 0 .\n");
+            for index in 0..length {
+                writeln!(ttl, "ex:n{index} ex:next ex:n{} .", index + 1).expect("write to String");
+            }
+            (length, load(&ttl))
+        })
+        .collect();
 
     let mut complete = c.benchmark_group("rules_divergence/complete/depth");
     complete.sample_size(10);
-    for &length in DEPTHS {
-        let mut ttl = format!("{PREFIXES}{DEPTH_RULE}\nex:n0 ex:depth 0 .\n");
-        for index in 0..length {
-            writeln!(ttl, "ex:n{index} ex:next ex:n{} .", index + 1).expect("write to String");
-        }
-        let (shapes, data) = load(&ttl);
-        complete.bench_with_input(BenchmarkId::from_parameter(length), &data, |b, data| {
+    for (length, (shapes, data)) in &loaded {
+        let length = *length;
+        complete.bench_with_input(BenchmarkId::from_parameter(length), data, |b, data| {
             b.iter(|| {
-                let inference = infer(black_box(data), &shapes, &RuleOptions::default())
+                let inference = infer(black_box(data), shapes, &RuleOptions::default())
                     .expect("a data-bounded counter completes");
                 assert_eq!(inference.inferred().len(), length);
                 inference
@@ -118,5 +134,5 @@ fn bench(c: &mut Criterion) {
     complete.finish();
 }
 
-criterion_group!(benches, bench);
+criterion_group!(benches, bench_refuse, bench_complete);
 criterion_main!(benches);

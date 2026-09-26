@@ -7,6 +7,7 @@
 //!
 //! Every refusal is paired with a valid neighbour whose observable differs.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
@@ -452,7 +453,7 @@ fn a_closure_deeper_than_the_floor_completes() {
     const LENGTH: usize = 300;
     let mut ttl = String::new();
     for index in 0..LENGTH {
-        ttl.push_str(&format!(":n{index} :link :n{} .\n", index + 1));
+        writeln!(ttl, ":n{index} :link :n{} .", index + 1).expect("write to String");
     }
     let inferred = infer(
         "RULE { ?x :connected ?y } WHERE { ?x :link ?y }
