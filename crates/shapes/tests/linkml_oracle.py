@@ -401,6 +401,52 @@ def _assert_renamed(payload: dict[str, Any]) -> None:
     _assert_reverse(payload, ["<https://example.org/Carrier>"])
 
 
+def _assert_lists(payload: dict[str, Any]) -> None:
+    """The SHACL list components through the official LinkML generator.
+
+    The @list slot states the members' cardinality (minimum/maximum
+    cardinality), uniqueness (list_elements_unique) and range, so the
+    generated JSON Schema must agree with the SHACL verdict of every projected
+    instance.
+    """
+    losses = payload["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("list-component fixture contains an unregistered loss")
+    schema = _load(payload["yaml"])
+    view = SchemaView(schema)
+    # sh:uniqueMembers is stated as list_elements_unique on the @list slot. The
+    # official 1.11.1 JSON Schema generator does not translate that field to
+    # uniqueItems, so the one probe it decides is checked against the LinkML
+    # statement itself, and the generator's omission is pinned: a generator
+    # that starts translating it makes this oracle demand the probe agree.
+    unique_carriers = [
+        name
+        for name, cls in schema.classes.items()
+        if "@list" in (cls.attributes or {})
+        and view.induced_slot("@list", name).list_elements_unique
+    ]
+    if len(unique_carriers) != 1:
+        raise AssertionError(f"expected one unique @list carrier: {unique_carriers!r}")
+    generated = _generate(schema)
+    _assert_reference_closure(generated)
+    generator_translates_unique = "uniqueItems" in json.dumps(
+        generated["$defs"][unique_carriers[0]]
+    )
+    holder = payload["element_names"]["Holder"]
+    for probe in payload["probes"]:
+        actual = _is_valid(generated, holder, probe["value"])
+        if probe["label"] == "unique-repeated" and not generator_translates_unique:
+            if actual is not True or probe["conforms"] is not False:
+                raise AssertionError("the generator's list_elements_unique omission drifted")
+            continue
+        if actual != probe["conforms"]:
+            raise AssertionError(
+                f"list-component probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"LinkML={actual}\n"
+                f"generated={json.dumps(generated['$defs'], indent=2, sort_keys=True)}"
+            )
+
+
 def main() -> None:
     if importlib.metadata.version("linkml") != LINKML_PACKAGE_VERSION:
         raise AssertionError("linkml package version is not locked to 1.11.1")
@@ -411,10 +457,12 @@ def main() -> None:
     _assert_exact(payload["exact"])
     _assert_lossy(payload["lossy"])
     _assert_renamed(payload["renamed"])
+    _assert_lists(payload["lists"])
     print(
         "LinkML oracle: exact $defs and 16 instance probes agree; "
         "18 located losses, 7 verified slot renames, reverse SHACL imports, "
-        "and representable widening probes pass"
+        "and representable widening probes pass; "
+        f"{len(payload['lists']['probes'])} SHACL list-component probes agree"
     )
 
 
