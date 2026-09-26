@@ -75,7 +75,7 @@ pub struct TurtleDocument {
     ///
     /// It is the document's own statement of where it lives, which is what an
     /// `owl:imports` of the document's own IRI names — so the shapes lanes pass it to
-    /// `purrdf_entail::entails::imports::unresolved_imports` as a loaded document IRI.
+    /// `purrdf_core::imports` as a loaded document IRI (see [`crate::imports`]).
     pub base: Option<String>,
     /// The document's prefix map, as the Turtle codec itself recorded it
     /// ([`::purrdf::ParseOutcome::document_prefixes`]): one `(label, namespace)` pair

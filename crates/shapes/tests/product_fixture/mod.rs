@@ -130,8 +130,13 @@ pub(crate) const GOLDEN: &[u8] = include_bytes!("../fixtures/prepared-shapes-cor
 /// *independent* parses, each with its own tables.
 pub(crate) fn prepared() -> PreparedShapes {
     let vocab = BoxRoleVocab::for_namespace(ROLE_NS);
-    let shapes =
-        parse_shapes_with_config(SHAPES, None, Some(vocab)).expect("the fixture shapes parse");
+    let shapes = parse_shapes_with_config(
+        SHAPES,
+        None,
+        Some(vocab),
+        &purrdf_shapes::ShapesImports::new(),
+    )
+    .expect("the fixture shapes parse");
     PreparedShapes::new(Arc::new(shapes))
 }
 

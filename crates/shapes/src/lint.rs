@@ -34,6 +34,17 @@
 //!
 //! A report is CLEAN exactly when the loader accepted the graph and every `shacl-shacl`
 //! result is superseded.
+//!
+//! # An incomplete `owl:imports` closure is not a report
+//!
+//! A shapes graph IS its `owl:imports` closure (see [`crate::imports`]), so [`lint`]
+//! resolves the closure against the caller's import table first and certifies the MERGED
+//! graph: an imported document's shapes are loaded and validated against `shacl-shacl.ttl`
+//! like the importing document's. A closure that is not in hand is refused with
+//! [`ShapesError::Imports`] — the same refusal every validation entry point raises — and
+//! never folded into the `load` section: a report about the importing document alone would
+//! certify a shapes graph nobody asked about, and would say `clean` about a graph that
+//! validation refuses.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -41,9 +52,11 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 
 use crate::engine::validate_dataset_with_shapes_graph;
+use crate::error::ShapesError;
 use crate::function_resolution::FunctionResolution;
+use crate::imports::{ShapesImports, resolve_shapes_imports};
 use crate::model::BoxRoleVocab;
-use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
+use crate::shapes::{Shapes, from_dataset_with_base, from_resolved_dataset};
 use crate::term::Term;
 
 /// The W3C shapes graph for shapes graphs, vendored byte-exact.
@@ -333,22 +346,33 @@ impl LintReport {
 /// Certify the shapes graph `dataset`: load it exactly as validation would, validate it
 /// as data against `shacl-shacl.ttl`, and report which implementation every function
 /// call binds to. `doc_prefixes`, `box_role_vocab` and `shapes_graph` are the loader's
-/// own configuration — see [`from_dataset_with_config_and_graph`].
+/// own configuration — see [`from_dataset_with_base`]; `imports` is the shapes graph's
+/// `owl:imports` table, with the IRIs the shapes document was read under declared loaded.
 ///
 /// A malformed shapes graph is not an `Err`: its refusal is the report's `load` section.
 ///
 /// # Errors
 ///
-/// Only when the vendored `shacl-shacl.ttl` itself fails to load or to validate — an
-/// internal defect, never a verdict about `dataset`.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used (see the [module documentation](self)); otherwise only when
+/// the vendored `shacl-shacl.ttl` itself fails to load or to validate — an internal defect,
+/// never a verdict about `dataset`.
 pub fn lint(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
-) -> Result<LintReport, String> {
-    let loaded =
-        from_dataset_with_config_and_graph(dataset, doc_prefixes, box_role_vocab, shapes_graph);
+    imports: &ShapesImports,
+) -> Result<LintReport, ShapesError> {
+    let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
+    let dataset = &resolved.dataset;
+    let loaded = from_resolved_dataset(
+        dataset,
+        None,
+        &resolved.prefixes,
+        box_role_vocab,
+        shapes_graph,
+    );
     let oracle = shacl_shacl()?;
     let report = validate_dataset_with_shapes_graph(dataset, &oracle, None)
         .map_err(|e| format!("shacl-shacl.ttl failed to validate the shapes graph: {e}"))?;
@@ -407,9 +431,33 @@ pub fn lint(
 }
 
 /// `shacl-shacl.ttl`, loaded as a shapes graph.
+///
+/// It `owl:imports <http://www.w3.org/ns/shacl#>`, which it does not itself declare, so it
+/// is loaded like any other shapes graph with an import: the vendored `shacl.ttl` — the
+/// document whose header declares that ontology — is supplied for it. Merging the SHACL
+/// vocabulary into a shapes graph adds no shape and changes no report
+/// (`tests/vocabulary_import_invariance.rs`).
 fn shacl_shacl() -> Result<Shapes, String> {
     let document = crate::text_ingest::parse_turtle_document(SHACL_SHACL, None)
         .map_err(|errors| format!("shacl-shacl.ttl does not parse: {}", errors.join("; ")))?;
-    from_dataset_with_config_and_graph(&document.dataset, &document.prefixes, None, None)
-        .map_err(|e| format!("shacl-shacl.ttl does not load as a shapes graph: {e}"))
+    let mut imports = ShapesImports::new();
+    imports
+        .insert_turtle(SH_NAMESPACE, SHACL_VOCABULARY)
+        .map_err(|e| format!("shacl.ttl does not load as shacl-shacl.ttl's import: {e}"))?;
+    from_dataset_with_base(
+        &document.dataset,
+        None,
+        &document.prefixes,
+        None,
+        None,
+        &imports,
+    )
+    .map_err(|e| format!("shacl-shacl.ttl does not load as a shapes graph: {e}"))
 }
+
+/// The ontology IRI `shacl-shacl.ttl` imports.
+const SH_NAMESPACE: &str = "http://www.w3.org/ns/shacl#";
+
+/// The W3C SHACL vocabulary, vendored byte-exact: the document that declares
+/// [`SH_NAMESPACE`] an ontology.
+const SHACL_VOCABULARY: &str = include_str!("../spec/shacl.ttl");

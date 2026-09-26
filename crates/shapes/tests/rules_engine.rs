@@ -50,7 +50,7 @@ fn int(value: i64) -> Term {
 }
 
 fn shapes(body: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}\n{body}"), None)
+    parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)
 }
 
 fn data(ttl: &str) -> ShaclData {

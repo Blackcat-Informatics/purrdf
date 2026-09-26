@@ -1084,11 +1084,37 @@ mod tests {
         Term::Literal(Literal::new_simple_literal(s))
     }
 
+    /// DASH, the TopBraid test vocabulary the W3C `validator-001` case imports.
+    const DASH: &str = "http://datashapes.org/dash";
+
     fn validate_fixture(ttl: &str, base_iri: &str) -> crate::report::ValidationReport {
         let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
         let dataset = document.dataset;
-        let shapes = crate::shapes::from_dataset_with_prefixes(&dataset, &document.prefixes)
-            .expect("shapes parse");
+        // `validator-001` imports DASH, which is not vendored and which nothing it asserts
+        // reads: a stand-in declaring the ontology resolves the import, as a caller would.
+        let mut imports = crate::imports::ShapesImports::new();
+        if purrdf_core::imports::imported_iris(&dataset)
+            .iter()
+            .any(|iri| iri == DASH)
+        {
+            imports
+                .insert_turtle(
+                    DASH,
+                    "<http://datashapes.org/dash> \
+                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                     <http://www.w3.org/2002/07/owl#Ontology> .\n",
+                )
+                .expect("the DASH stand-in parses");
+        }
+        let shapes = crate::shapes::from_dataset_with_base(
+            &dataset,
+            Some(base_iri),
+            &document.prefixes,
+            None,
+            None,
+            &imports,
+        )
+        .expect("shapes parse");
         crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates")
     }
 
@@ -1145,7 +1171,9 @@ mod tests {
             ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
                 ex:required ex:a, ex:b ; ex:other ex:c .
         "#;
-        let error = crate::engine::parse_shapes(ttl, None).unwrap_err();
+        let error = crate::engine::parse_shapes(ttl, None)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("only one is allowed"), "{error}");
     }
 

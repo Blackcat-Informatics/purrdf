@@ -583,14 +583,15 @@ fn explain_conclusion(
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
 
-/// Borrow a Python-supplied import table as the boundary's [`ImportList`].
+/// Borrow a Python-supplied import table as the boundary's [`ImportList`] — or, for the
+/// SHACL module's shapes-graph functions, its `ShapesImportList`, which has the same shape.
 ///
-/// The three services below all take `imports` as a `Sequence[tuple[str, str]]`, which PyO3
+/// Every service that takes `imports` takes it as a `Sequence[tuple[str, str]]`, which PyO3
 /// materializes as owned `String`s; the boundary takes borrowed pairs. This is that one
-/// re-borrow, written once so the three call sites cannot drift, and it preserves the
-/// caller's ORDER — the boundary's table is a list rather than a map precisely so the same
-/// input always produces the same run.
-fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
+/// re-borrow, written once so the call sites cannot drift, and it preserves the caller's
+/// ORDER — the boundary's table is a list rather than a map precisely so the same input
+/// always produces the same run.
+pub(crate) fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
     imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))

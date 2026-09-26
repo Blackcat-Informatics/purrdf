@@ -34,12 +34,14 @@ pub mod constraints;
 pub mod data;
 pub mod data_view;
 pub mod engine;
+mod error;
 pub mod expression;
 pub mod extension_usage;
 pub(crate) mod footprint;
 pub mod free_expression;
 pub mod function_resolution;
 pub mod graphql;
+pub mod imports;
 pub mod instance;
 pub mod json_schema;
 pub mod linkml;
@@ -69,11 +71,13 @@ pub mod text_ingest;
 pub mod typescript;
 pub(crate) mod unique_values;
 
+pub use error::ShapesError;
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
     emit_graphql, import_graphql_package,
 };
+pub use imports::{ResolvedShapesGraph, ShapesImportError, ShapesImports, resolve_shapes_imports};
 pub use json_schema::{
     Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
     SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,

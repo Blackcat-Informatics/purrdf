@@ -1574,7 +1574,16 @@ class _Shapes:
     # `base` is the shapes document's own base IRI, resolving its relative IRI
     # references. Omitted, only an in-document `@base` can establish one and a
     # relative reference raises ValueError rather than being silently unresolved.
-    def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
+    # `imports` is the shapes graph's owl:imports table (see `shapes.validate`): the
+    # parsed shapes are the whole closure, and one not in hand raises
+    # ShapesImportError.
+    def __init__(
+        self,
+        shapes_ttl: str,
+        *,
+        base: str | None = None,
+        imports: Sequence[tuple[str, str]] = (),
+    ) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
     # a frozen dataset behind their copy-on-write overlay, so neither is serialized
@@ -1617,6 +1626,20 @@ class _ShapesProductError(ValueError):
     """
 
     dimension: str | None
+
+class _ShapesImportError(ValueError):
+    """A shapes graph's `owl:imports` closure is not in hand, or the `imports` table
+    cannot be used — the one refusal every shapes-graph entry point raises, on every
+    PurRDF host alike.
+
+    `kind` is `unresolved-import` (pass the named documents in `imports`),
+    `unreached-import` (a table entry no import names) or `invalid-import` (a key that
+    is not an absolute IRI, a key named twice, or a document that is not Turtle);
+    `iris` are the IRIs it names. Branch on `kind`, never on `str(exc)`.
+    """
+
+    kind: str
+    iris: list[str]
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as
@@ -1720,10 +1743,17 @@ class shapes:
     ChangeValidation: TypeAlias = _ChangeValidation
     ShapesProduct: TypeAlias = _ShapesProduct
     ShapesProductError: TypeAlias = _ShapesProductError
+    ShapesImportError: TypeAlias = _ShapesImportError
     # Compile a Turtle shapes graph into a prepared product in one call — the
-    # composition of `Shapes(...).prepare().to_product()`.
+    # composition of `Shapes(...).prepare().to_product()`. The product carries the
+    # merged owl:imports closure; one not in hand raises ShapesImportError.
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None = None) -> bytes: ...
+    def pack_product(
+        shapes_ttl: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = (),
+    ) -> bytes: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
     # `shapes_base` is the base IRI the SHAPES document's relative IRI references
@@ -1740,6 +1770,15 @@ class shapes:
     # "direction" / "datatype" when present}; a result carrying SHACL-SPARQL result
     # annotations (sh:resultAnnotation) also has "annotations", a list of
     # (property IRI, value in N-Triples syntax) tuples.
+    #
+    # `imports` is the shapes graph's owl:imports table: (ontology IRI, Turtle
+    # document) pairs, each document parsed under its IRI. Every shapes-graph function
+    # here takes it. An owl:imports is resolved by a table entry, by `shapes_base` (or
+    # the document's own @base) naming the imported document, or by the closure
+    # declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
+    # owl:versionIRI is `<X>`); anything else — or a table entry no import names —
+    # raises ShapesImportError. PurRDF fetches nothing; the default `()` still
+    # enforces the rule.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1747,6 +1786,7 @@ class shapes:
         *,
         shapes_base: str | None = None,
         conformance_disallows: Sequence[str] | None = None,
+        imports: Sequence[tuple[str, str]] = (),
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -1758,7 +1798,11 @@ class shapes:
     # every inferred triple as a canonical N-Triples string.
     @staticmethod
     def entail(
-        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+        shapes_ttl: str,
+        data_nt: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = (),
     ) -> str: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
@@ -1780,6 +1824,7 @@ class shapes:
         srl_base: str | None = None,
         explain: bool = False,
         max_term_generating_rounds: int | None = None,
+        imports: Sequence[tuple[str, str]] = (),
     ) -> dict[str, str | None]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
     # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
@@ -1797,16 +1842,22 @@ class shapes:
         *,
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = (),
     ) -> list[str]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
     # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None),
     # "calls" (each function call site's "binding" / "function" / "owner", None when
     # the loader refused the graph), "report" (the deterministic text every host
-    # prints)}. Raises ValueError only when the document is not Turtle.
+    # prints)}. The report certifies the whole owl:imports closure; one not in hand
+    # raises ShapesImportError, never a report about the importing document alone.
+    # Otherwise raises ValueError only when the document is not Turtle.
     @staticmethod
     def lint_shapes(
-        shapes_ttl: str, *, shapes_base: str | None = None
+        shapes_ttl: str,
+        *,
+        shapes_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = (),
     ) -> dict[str, builtins.object]: ...
 
 # Back-compat alias for the native submodule's own name.

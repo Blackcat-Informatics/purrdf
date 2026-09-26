@@ -43,11 +43,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf::{RdfDataset, SerializeGraph, serialize_dataset};
+use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
 use purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED;
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::Severity;
-use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
+use purrdf_shapes::shapes::{Shapes, from_dataset_with_base};
 use purrdf_shapes::text_ingest::parse_turtle_document;
 
 use shacl_corpora::shacl12::{Body, shacl12_cases};
@@ -211,13 +212,16 @@ fn inputs() -> Vec<Input> {
 
 /// PurRDF's parser: `Err` is a refusal, with its message.
 fn purrdf_refusal(input: &Input) -> Option<String> {
-    from_dataset_with_config_and_graph(
+    from_dataset_with_base(
         &input.dataset,
+        None,
         &input.prefixes,
         input.box_vocab.clone(),
         input.graph_iri.clone(),
+        &shacl_corpora::w3c_case_imports(&input.dataset),
     )
     .err()
+    .map(String::from)
 }
 
 /// One `sh:Violation` result of `shacl-shacl.ttl`: `(component, result path, source
@@ -555,9 +559,23 @@ const MUTANT_INPUTS: usize = 724;
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     let oracle_document = parse_turtle_document(SHACL_SHACL, None).expect("shacl-shacl.ttl parses");
     let oracle_dataset = oracle_document.dataset;
-    let oracle =
-        from_dataset_with_config_and_graph(&oracle_dataset, &oracle_document.prefixes, None, None)
-            .expect("shacl-shacl.ttl loads as a shapes graph");
+    // `shacl-shacl.ttl` imports `sh:`, which the vendored `shacl.ttl` declares.
+    let mut oracle_imports = ShapesImports::new();
+    oracle_imports
+        .insert_turtle(
+            "http://www.w3.org/ns/shacl#",
+            include_str!("../spec/shacl.ttl"),
+        )
+        .expect("shacl.ttl parses");
+    let oracle = from_dataset_with_base(
+        &oracle_dataset,
+        None,
+        &oracle_document.prefixes,
+        None,
+        None,
+        &oracle_imports,
+    )
+    .expect("shacl-shacl.ttl loads as a shapes graph");
 
     let mut unexplained: Vec<String> = Vec::new();
     let mut stricter: BTreeMap<&str, usize> = BTreeMap::new();

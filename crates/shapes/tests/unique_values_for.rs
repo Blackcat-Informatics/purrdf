@@ -43,7 +43,7 @@ const UNIQUE: &str = "http://www.w3.org/ns/shacl#UniqueValuesForConstraintCompon
 const NODE: &str = "http://www.w3.org/ns/shacl#NodeConstraintComponent";
 
 fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
 }
 
 #[track_caller]

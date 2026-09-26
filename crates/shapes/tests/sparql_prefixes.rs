@@ -22,6 +22,7 @@
 //! none. Each treatment sits beside a control whose report differs from it.
 
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
+use purrdf_shapes::{ShapesError, ShapesImportError};
 
 const PREFIXES: &str = "
 @prefix ex:   <http://example.org/ns#> .
@@ -85,7 +86,7 @@ fn target_violation() -> Vec<String> {
 fn load_error(shapes: &str) -> String {
     match parse_shapes(shapes, None) {
         Ok(_) => panic!("the shapes graph must be refused:\n{shapes}"),
-        Err(error) => error,
+        Err(error) => error.to_string(),
     }
 }
 
@@ -190,13 +191,32 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
 /// names is navigated back to its graph, whose imports are followed.
 #[test]
 fn the_prefixes_path_follows_version_iris_and_imports() {
-    let shapes = format!(
-        "{PREFIXES}{}\nex:G owl:versionIRI ex:V1 ; owl:imports ex:Q .\n\
-         ex:Q owl:imports ex:R .\nex:R sh:declare {} .\n",
-        shape("sh:prefixes ex:V1 ;"),
-        declare_t(TARGET)
+    let graph = |headers: &str| {
+        format!(
+            "{PREFIXES}{}\nex:G owl:versionIRI ex:V1 ; owl:imports ex:Q .\n\
+             ex:Q owl:imports ex:R .\nex:R sh:declare {} .\n{headers}",
+            shape("sh:prefixes ex:V1 ;"),
+            declare_t(TARGET)
+        )
+    };
+    // `ex:Q` and `ex:R` are ontologies this document holds, so the imports along the
+    // path are resolved in place.
+    assert_eq!(
+        violations(&graph("ex:Q a owl:Ontology .\nex:R a owl:Ontology .\n")),
+        target_violation()
     );
-    assert_eq!(violations(&shapes), target_violation());
+    // The neighbour: without their headers the imports name ontologies nothing in hand
+    // declares, and the shapes graph is refused rather than read without them.
+    let Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) =
+        parse_shapes(&graph(""), None)
+    else {
+        panic!("an import of an ontology the shapes graph does not hold is refused");
+    };
+    assert_eq!(
+        iris,
+        ["http://example.org/ns#Q", "http://example.org/ns#R"],
+        "every unresolved import is named, in walk order"
+    );
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────
@@ -208,7 +228,8 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
 fn a_conflicting_prefix_is_refused_and_an_agreeing_one_loads() {
     let explicit = |second: &str| {
         format!(
-            "{PREFIXES}{}\nex:P sh:declare {} ; owl:imports ex:Q .\nex:Q sh:declare {} .\n",
+            "{PREFIXES}{}\nex:P sh:declare {} ; owl:imports ex:Q .\n\
+             ex:Q a owl:Ontology ; sh:declare {} .\n",
             shape("sh:prefixes ex:P ;"),
             declare_t(TARGET),
             declare_t(second)

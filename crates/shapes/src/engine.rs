@@ -16,6 +16,8 @@ use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
 use crate::data::{DatasetIdentity, GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
+use crate::error::ShapesError;
+use crate::imports::ShapesImports;
 use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
 use crate::report::{ConformanceDisallows, ValidationReport};
@@ -2856,6 +2858,11 @@ fn build_sparql_view(
 /// shapes graph as a named graph to SHACL-SPARQL paths.
 ///
 /// `shapes_graph_iri` overrides [`Shapes::shapes_graph`] when both are present.
+///
+/// The shapes graph's `owl:imports` closure was decided when `shapes` was built: every
+/// [`Shapes`] constructor resolves it through [`crate::imports::resolve_shapes_imports`]
+/// against the caller's import table and refuses an incomplete one, so a `Shapes` value
+/// is the whole closure and the graph exposed here is the merged one.
 pub fn validate_dataset_with_shapes_graph(
     data: &RdfDataset,
     shapes: &Shapes,
@@ -2944,30 +2951,45 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// `@base` can still establish one, and with neither, a relative reference is a hard
 /// `iri-relative-no-base` — but it is now an answer somebody gave.
 ///
+/// # `owl:imports`
+///
+/// The shapes graph must hold its own `owl:imports` closure: this overload supplies no
+/// imported document, so a shapes graph that imports one it does not contain is refused
+/// with [`ShapesError::Imports`] — see [`crate::imports`].
+/// [`parse_shapes_with_config`] takes the import table.
+///
 /// # Errors
 ///
-/// Returns an error string if the shapes Turtle fails to parse (including a relative
+/// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand;
+/// [`ShapesError::Invalid`] if the shapes Turtle fails to parse (including a relative
 /// IRI reference with no base in scope) or contains unsupported SHACL constructs.
-pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, String> {
-    parse_shapes_with_config(shapes_ttl, base, None)
+pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, ShapesError> {
+    parse_shapes_with_config(shapes_ttl, base, None, &ShapesImports::new())
 }
 
 /// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
-/// (`crate::model::BoxRoleVocab`) threaded through.
+/// (`crate::model::BoxRoleVocab`) and the shapes graph's `owl:imports` table threaded
+/// through.
 ///
 /// PurRDF mints no vocabulary IRIs, so the box-role annotation feature has no
 /// default vocabulary: with `box_role_vocab = None` it is INACTIVE (shapes
 /// parse fine, but no role annotations are collected or stamped).
 ///
+/// `imports` supplies the documents the shapes graph's `owl:imports` name (see
+/// [`crate::imports`]). `base`, and a base the document's own `@base` establishes, are the
+/// IRIs the document was read under, so an import of either names this document.
+///
 /// # Errors
 ///
-/// Returns an error string if the shapes Turtle fails to parse or contains
-/// unsupported SHACL constructs.
+/// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand or `imports`
+/// cannot be used; [`ShapesError::Invalid`] if the shapes Turtle fails to parse or
+/// contains unsupported SHACL constructs.
 pub fn parse_shapes_with_config(
     shapes_ttl: &str,
     base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
-) -> Result<Shapes, String> {
+    imports: &ShapesImports,
+) -> Result<Shapes, ShapesError> {
     // Parse the shapes graph via the native purrdf codecs. The document's prefix map
     // comes back from the SAME parse — the codec's own record of its `@prefix` /
     // `PREFIX` directives, never a scan of the text — because SHACL-SPARQL queries
@@ -2976,7 +2998,7 @@ pub fn parse_shapes_with_config(
     let crate::text_ingest::TurtleDocument {
         dataset: shapes_dataset,
         prefixes: doc_prefixes,
-        ..
+        base: document_base,
     } = crate::text_ingest::parse_turtle_document(shapes_ttl, base)
         .map_err(|errors| errors.join("\n"))?;
 
@@ -2986,12 +3008,26 @@ pub fn parse_shapes_with_config(
     // baked into every SHACL-AF query body below). A `Shapes` that could not report
     // them would force any consumer needing its identity to accept that identity as
     // an argument, which makes it a caller's claim instead of a fact about the parse.
+    //
+    // A base the document's own `@base` established is a second IRI it was read under,
+    // so an `owl:imports` of it names this document too.
+    let declared_base;
+    let imports = match document_base {
+        Some(document_base) if Some(document_base.as_str()) != base => {
+            let mut widened = imports.clone();
+            widened.declare_loaded(document_base);
+            declared_base = widened;
+            &declared_base
+        }
+        _ => imports,
+    };
     crate::shapes::from_dataset_with_base(
         &shapes_dataset,
         base,
         &doc_prefixes,
         box_role_vocab,
         None,
+        imports,
     )
 }
 
@@ -3008,73 +3044,92 @@ pub fn parse_shapes_with_config(
 /// on those lexical forms; lenient parsing keeps RDF ingestion separate from the
 /// SHACL conformance decision.
 ///
+/// The shapes graph must hold its own `owl:imports` closure; [`validate_graphs_with_config`]
+/// and [`validate_graphs_with_options`] take the import table.
+///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand;
+/// [`ShapesError::Invalid`] if either graph fails to parse.
 pub fn validate_graphs(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<ValidationReport, String> {
-    validate_graphs_with_config(data_nt, shapes_ttl, shapes_base, None)
+) -> Result<ValidationReport, ShapesError> {
+    validate_graphs_with_config(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        None,
+        &ShapesImports::new(),
+    )
 }
 
 /// [`validate_graphs`] under a validation request's `options` — its
-/// conformance-disallow set.
+/// conformance-disallow set — with the shapes graph's `owl:imports` table (see
+/// [`crate::imports`]).
 ///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse or validation
-/// hard-fails.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse or
+/// validation hard-fails.
 pub fn validate_graphs_with_options(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     options: &ValidationOptions,
-) -> Result<ValidationReport, String> {
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let mut shapes = parse_shapes(shapes_ttl, shapes_base)?;
+    let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
     shapes.set_validation_options(options.clone());
-    validate_dataset(data.as_ref(), &shapes)
+    Ok(validate_dataset(data.as_ref(), &shapes)?)
 }
 
 /// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
 /// (`crate::model::BoxRoleVocab`) threaded through to shape parsing and
-/// validation. `None` leaves the box-role feature inactive.
+/// validation, and the shapes graph's `owl:imports` table (see [`crate::imports`]).
+/// `None` leaves the box-role feature inactive.
 ///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse.
 pub fn validate_graphs_with_config(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
-) -> Result<ValidationReport, String> {
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
     // Parse the data graph via the native codecs. Every independently malformed
     // N-Triples line is reported in one pass, matching `parse_shapes`' complete
     // syntax-diagnostic contract.
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
-    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab)?;
-    validate_dataset(data.as_ref(), &shapes)
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, imports)?;
+    Ok(validate_dataset(data.as_ref(), &shapes)?)
 }
 
-/// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph.
+/// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph, with
+/// the shapes graph's `owl:imports` table (see [`crate::imports`]).
 ///
 /// # Errors
 ///
-/// Returns an error string if the shapes graph fails to parse or if the SHACL
-/// projection cannot be frozen.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if the shapes graph fails to parse
+/// or if the SHACL projection cannot be frozen.
 pub fn validate_dataset_graphs(
     data: &RdfDataset,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<ValidationReport, String> {
-    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
-    validate_dataset(data, &shapes)
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    Ok(validate_dataset(data, &shapes)?)
 }
 
 /// Entail data (N-Triples) under shapes (Turtle), returning the materialized
@@ -3087,20 +3142,25 @@ pub fn validate_dataset_graphs(
 /// The returned [`Arc<RdfDataset>`] is a NEW frozen dataset of base ⊎ inferred
 /// triples the caller serializes however its surface emits RDF.
 ///
+/// `imports` is the shapes graph's `owl:imports` table (see [`crate::imports`]): an
+/// imported document's rules are rules of the shapes graph.
+///
 /// # Errors
 ///
-/// Returns an error string if either graph fails to parse or if rule application
-/// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
-/// does not reach a fixpoint — see [`crate::apply_rules`]).
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
+/// or `imports` cannot be used; [`ShapesError::Invalid`] if either graph fails to parse or
+/// if rule application fails (an illegal head term, an unresolvable `sh:condition`, or a
+/// rule set that does not reach a fixpoint — see [`crate::apply_rules`]).
 pub fn entail_graphs(
     data_nt: &str,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
-) -> Result<Arc<RdfDataset>, String> {
+    imports: &ShapesImports,
+) -> Result<Arc<RdfDataset>, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
-    crate::rules::entail_dataset(data.as_ref(), &shapes)
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -3438,7 +3498,9 @@ mod tests {
             "ex:b ex:q ex:c .\n",           // valid, between the two errors
             "ex:d ex:r ex:s ex:t ex:u .\n", // too many terms → recoverable error
         );
-        let err = parse_shapes(bad, None).expect_err("malformed Turtle must error");
+        let err = parse_shapes(bad, None)
+            .expect_err("malformed Turtle must error")
+            .to_string();
         let n = err.matches("Turtle parse error").count();
         assert!(
             n >= 2,
@@ -3455,7 +3517,9 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> .\n",
             "neither is this\n",
         );
-        let err = validate_graphs(bad_data, "", None).expect_err("malformed N-Triples must error");
+        let err = validate_graphs(bad_data, "", None)
+            .expect_err("malformed N-Triples must error")
+            .to_string();
         let n = err.matches("N-Triples parse error").count();
         assert!(
             n >= 2,
@@ -3504,7 +3568,8 @@ mod tests {
         // parse into shapes that quietly match nothing: a validator built from those
         // would report `conforms true` over a constraint it never evaluated.
         let err = parse_shapes(RELATIVE_SHAPES, None)
-            .expect_err("a relative IRI with no base must be refused");
+            .expect_err("a relative IRI with no base must be refused")
+            .to_string();
         assert!(
             err.contains("iri-relative-no-base"),
             "the refusal must name the actionable condition: {err}"
@@ -3592,8 +3657,9 @@ mod tests {
                     sh:minCount 1 ;
                 ] ."
         );
-        let report = validate_dataset_graphs(dataset.as_ref(), &shapes_ttl, None)
-            .expect("GTS-backed store should validate");
+        let report =
+            validate_dataset_graphs(dataset.as_ref(), &shapes_ttl, None, &ShapesImports::new())
+                .expect("GTS-backed store should validate");
         assert!(!report.conforms, "missing property must violate the shape");
         assert_eq!(report.results.len(), 1);
     }
@@ -5691,6 +5757,7 @@ mod tests {
                     Some(crate::model::BoxRoleVocab::for_namespace(
                         "https://example.org/meta/",
                     )),
+                    &ShapesImports::new(),
                 )
                 .unwrap_or_else(|error| panic!("{case_name}: validation failed: {error}"))
                 .to_ntriples()

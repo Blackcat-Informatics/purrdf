@@ -3258,7 +3258,8 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 /// ([`purrdf_entail::ImportMap::declare_loaded`]) rather than refused as missing. So is an
 /// import of an ontology the premise already declares (`<X> a owl:Ontology`, or an
 /// `owl:versionIRI` naming it), with no argument needed:
-/// `purrdf_entail::entails::imports::unresolved_imports` is the one rule.
+/// `purrdf_core::imports` is the one rule, the same one every shapes-graph entry point
+/// applies.
 ///
 /// # Errors
 ///

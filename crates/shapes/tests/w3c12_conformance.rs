@@ -454,6 +454,7 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         &doc_prefixes,
         None,
         std::slice::from_ref(&tc.expr),
+        &shacl_corpora::w3c_case_imports(&tc.dataset),
     )
     .map_err(|e| format!("shapes/node-expression parse error: {e}"))?;
     let expr = exprs
@@ -515,11 +516,13 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         ..
     } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = shapes::from_dataset_with_config_and_graph(
+    let shapes = shapes::from_dataset_with_base(
         &shapes_dataset,
+        None,
         &doc_prefixes,
         None,
         Some(tc.shapes_graph_iri.clone()),
+        &shacl_corpora::w3c_case_imports(&shapes_dataset),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data_dataset = if tc.data_path == tc.shapes_path {
@@ -1452,6 +1455,7 @@ fn engine_emits_the_canonical_decimal_lexical_form() {
         &[],
         None,
         std::slice::from_ref(&root),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .expect("the expression parses");
     let projected = engine::project_dataset(dataset.as_ref()).expect("projection");

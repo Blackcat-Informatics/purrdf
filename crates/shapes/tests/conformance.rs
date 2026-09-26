@@ -47,6 +47,7 @@ fn conformance_corpus() {
             &shapes_ttl,
             None,
             Some(first_party_box_role_vocab()),
+            &purrdf_shapes::ShapesImports::new(),
         ) {
             Ok(r) => r,
             Err(e) => {

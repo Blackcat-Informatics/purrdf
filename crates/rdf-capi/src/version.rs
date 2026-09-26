@@ -104,6 +104,18 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// and `out_answer`. A host built against `0.7.0` must recompile; the bump they ride is
 /// the one that already says so, rather than a second export for the same job.
 ///
+/// The same unshipped bump carries the shapes graph's `owl:imports` table, too. Seven
+/// shapes-graph entry points — `purrdf_shacl_validate_to_sarif`,
+/// `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`,
+/// `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`, `purrdf_shacl_lint_shapes`
+/// and `purrdf_shapes_product_encode` — each gained `import_iris` / `import_documents` /
+/// `import_count` before their out-parameters (incompatible: a `0.7.0` host passes its
+/// out-pointer into `import_iris`); `PurrdfStatus::ShapesImportError = 12` is APPENDED;
+/// and three accessors are added, `purrdf_shapes_import_error_kind`,
+/// `purrdf_shapes_import_error_iri_count` and `purrdf_shapes_import_error_iri`. Every host
+/// now refuses a shapes graph whose `owl:imports` closure is not in hand with the same
+/// typed refusal, where the C surface used to validate the importing document alone.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

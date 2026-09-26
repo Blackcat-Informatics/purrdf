@@ -1405,7 +1405,10 @@ impl<'a> ShapesProductView<'a> {
         self.refuse_ungovernable_decode()?;
 
         let dataset = dataset::open_dataset(self.section(SECTION_DATASET)?)?;
-        let shapes = crate::shapes::from_dataset_with_base(
+        // The carried dataset IS the shapes graph's resolved `owl:imports` closure — the
+        // packer resolved it before it wrote this product — so it re-derives without
+        // resolving again.
+        let shapes = crate::shapes::from_resolved_dataset(
             &dataset,
             self.provenance.base(),
             self.provenance.doc_prefixes(),

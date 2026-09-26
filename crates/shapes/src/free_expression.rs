@@ -19,7 +19,9 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads};
+use crate::error::ShapesError;
 use crate::expression::{Binding, RecursionGuard, Scope, eval_node_expr_in_scope};
+use crate::imports::ShapesImports;
 use crate::term::Term;
 
 /// One standalone node-expression evaluation. See the [module docs](self).
@@ -41,6 +43,10 @@ pub struct FreeExpression<'a> {
     /// The scope's variable bindings, `(name, node)`, each readable through
     /// `shnex:var "name"`.
     pub scope: &'a [(String, Term)],
+    /// The shapes graph's `owl:imports` table, resolved exactly as every other shapes-graph
+    /// entry point resolves it (see [`crate::imports`]); declare the IRIs the shapes
+    /// document was read under with [`ShapesImports::declare_loaded`].
+    pub imports: &'a ShapesImports,
 }
 
 /// Evaluate `request`: the output nodes of its expression, in the order the expression's
@@ -52,23 +58,24 @@ pub struct FreeExpression<'a> {
 /// otherwise evaluate as the empty expression); a scope binding named `focusNode`, which
 /// SHACL 1.2 Node Expressions §4.1.2 resolves against the focus node before the scope is
 /// searched, so the binding could never be read; two bindings of one name, of which only
-/// one could ever be read; anything the shapes parser refuses; and any evaluation error.
-pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, String> {
+/// one could ever be read; anything the shapes parser refuses — an incomplete `owl:imports`
+/// closure as [`ShapesError::Imports`] — and any evaluation error.
+pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, ShapesError> {
     let mut names: Vec<&str> = Vec::with_capacity(request.scope.len());
     for (name, _) in request.scope {
         if name == "focusNode" {
-            return Err(
+            return Err(ShapesError::Invalid(
                 "scope variable \"focusNode\" can never be read: SHACL 1.2 Node Expressions \
                  §4.1.2 resolves shnex:var \"focusNode\" to the focus node before the scope \
                  is searched. Pass the node as the focus node instead"
                     .to_owned(),
-            );
+            ));
         }
         if names.contains(&name.as_str()) {
-            return Err(format!(
+            return Err(ShapesError::Invalid(format!(
                 "scope variable \"{name}\" is bound twice; only one binding could ever be \
                  read, so bind each name once"
-            ));
+            )));
         }
         names.push(name);
     }
@@ -90,11 +97,11 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, String> {
             )
             .is_empty();
         if !mentioned {
-            return Err(format!(
+            return Err(ShapesError::Invalid(format!(
                 "the shapes graph mentions no blank node _:{label}, so there is no \
                  expression to evaluate; name the expression node by the label the shapes \
                  document gives it, or by its IRI"
-            ));
+            )));
         }
     }
     let (shapes, mut exprs) = crate::shapes::from_dataset_with_node_expressions(
@@ -102,6 +109,7 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, String> {
         request.prefixes,
         None,
         std::slice::from_ref(request.root),
+        request.imports,
     )?;
     let expr = exprs
         .pop()
@@ -120,6 +128,7 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, String> {
         request.scope,
         Scope::EMPTY,
     )
+    .map_err(ShapesError::Invalid)
 }
 
 /// Push `bindings` onto `scope`, first binding outermost, and evaluate.

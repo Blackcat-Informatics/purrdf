@@ -67,11 +67,13 @@ fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     )
     .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
     let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
-    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
+    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         &shapes_dataset,
+        None,
         &doc_prefixes,
         None,
         shapes_graph_iri.map(ToOwned::to_owned),
+        &super::w3c_case_imports(&shapes_dataset),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
 

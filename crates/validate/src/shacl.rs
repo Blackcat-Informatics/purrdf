@@ -22,20 +22,26 @@ use purrdf_core::DatasetMut;
 use purrdf_core::ir::{MutableDataset, ViewLimits};
 use purrdf_shapes::engine::{self, ChangeScope, PreparedShapes};
 
-use crate::{SarifOptions, report_to_sarif_string};
+use purrdf_shapes::{ShapesError, ShapesImports};
+
+use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// resulting SHACL report to a SARIF 2.1.0 JSON string.
 ///
 /// This is the single entry point every language binding shares: it parses the
-/// two graphs via the SHACL engine and serializes the report, returning a
-/// `String` error (the engine's own parse/validation error) so callers can map
-/// it to whatever their platform expects.
+/// two graphs via the SHACL engine and serializes the report, returning the
+/// engine's own [`ShapesError`] so callers can map it to whatever their platform
+/// expects.
+///
+/// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]); the
+/// empty list still refuses a shapes graph that imports a document it does not hold.
 ///
 /// # Errors
 ///
-/// Returns the SHACL engine's error string if either the shapes graph (Turtle)
-/// or the data graph (N-Triples) fails to parse or validate.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
+/// hand or `imports` cannot be used; [`ShapesError::Invalid`] if either the shapes
+/// graph (Turtle) or the data graph (N-Triples) fails to parse or validate.
 ///
 /// # Examples
 ///
@@ -52,7 +58,7 @@ use crate::{SarifOptions, report_to_sarif_string};
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
 ///     <http://example.org/alice> <http://example.org/age> \"nope\" .\n";
 ///
-/// let sarif = validate_to_sarif_string(shapes, None, data, &SarifOptions::default())
+/// let sarif = validate_to_sarif_string(shapes, None, data, &SarifOptions::default(), &[])
 ///     .expect("sarif produced");
 /// assert!(sarif.contains("\"version\": \"2.1.0\""));
 /// ```
@@ -61,12 +67,14 @@ pub fn validate_to_sarif_string(
     shapes_base: Option<&str>,
     data_nt: &str,
     options: &SarifOptions,
-) -> Result<String, String> {
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
     let report = engine::validate_graphs_with_options(
         data_nt,
         shapes_ttl,
         shapes_base,
         &options.validation,
+        &ShapesImports::from_turtle(imports)?,
     )?;
     Ok(report_to_sarif_string(&report, options))
 }
@@ -102,11 +110,15 @@ pub fn validate_to_sarif_string(
 /// three documents, branching the base into a copy-on-write mutation, and
 /// rendering the report.
 ///
+/// `imports` is the shapes graph's `owl:imports` table, exactly as
+/// [`validate_to_sarif_string`] takes it.
+///
 /// # Errors
 ///
-/// Returns the engine's own error string when the shapes graph (Turtle) or any of
-/// the three N-Triples documents fails to parse, when a change row cannot be
-/// admitted, or when constraint evaluation hard-fails.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
+/// hand or `imports` cannot be used; [`ShapesError::Invalid`] when the shapes graph
+/// (Turtle) or any of the three N-Triples documents fails to parse, when a change row
+/// cannot be admitted, or when constraint evaluation hard-fails.
 ///
 /// # Examples
 ///
@@ -131,6 +143,7 @@ pub fn validate_to_sarif_string(
 ///     Some(added),
 ///     None,
 ///     &SarifOptions::default(),
+///     &[],
 /// )
 /// .expect("the change validates");
 /// assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
@@ -143,7 +156,9 @@ pub fn validate_changes_to_sarif_string(
     added_nt: Option<&str>,
     removed_nt: Option<&str>,
     options: &SarifOptions,
-) -> Result<(String, ChangeScope), String> {
+    imports: &ShapesImportList<'_>,
+) -> Result<(String, ChangeScope), ShapesError> {
+    let table = ShapesImports::from_turtle(imports)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
     if let Some(added) = added_nt {
@@ -164,7 +179,7 @@ pub fn validate_changes_to_sarif_string(
             .map_err(|error| error.to_string())?,
     );
 
-    let mut shapes = engine::parse_shapes(shapes_ttl, shapes_base)?;
+    let mut shapes = engine::parse_shapes_with_config(shapes_ttl, shapes_base, None, &table)?;
     shapes.set_validation_options(options.validation.clone());
     let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
         Arc::clone(&snapshot),
@@ -211,7 +226,7 @@ mod tests {
 
     #[test]
     fn validate_to_sarif_string_emits_2_1_0_error() {
-        let sarif = validate_to_sarif_string(SHAPES, None, DATA, &SarifOptions::default())
+        let sarif = validate_to_sarif_string(SHAPES, None, DATA, &SarifOptions::default(), &[])
             .expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
@@ -228,7 +243,7 @@ mod tests {
             "sh:path ex:age ; sh:severity sh:Warning ;",
         );
         let conforms = |options: &SarifOptions| -> (Value, Value) {
-            let sarif = validate_to_sarif_string(&shapes, None, DATA, options).expect("sarif");
+            let sarif = validate_to_sarif_string(&shapes, None, DATA, options, &[]).expect("sarif");
             let log: Value = serde_json::from_str(&sarif).expect("json");
             let properties = log["runs"][0]["properties"].clone();
             (
@@ -265,7 +280,7 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(
-            validate_to_sarif_string("@@@ not turtle", None, DATA, &SarifOptions::default())
+            validate_to_sarif_string("@@@ not turtle", None, DATA, &SarifOptions::default(), &[])
                 .is_err()
         );
     }
@@ -331,11 +346,11 @@ mod tests {
             );
             for present in 0..=2 {
                 let sarif =
-                    validate_to_sarif_string(&shapes, None, &data, &SarifOptions::default())
+                    validate_to_sarif_string(&shapes, None, &data, &SarifOptions::default(), &[])
                         .expect("repeated parameters are independent conjunctive constraints");
                 assert_eq!(
                     sarif,
-                    validate_to_sarif_string(&reversed, None, &data, &SarifOptions::default())
+                    validate_to_sarif_string(&reversed, None, &data, &SarifOptions::default(), &[])
                         .expect("reversing parameter values preserves validation"),
                 );
                 let document: Value = serde_json::from_str(&sarif).expect("SARIF JSON");
@@ -412,11 +427,11 @@ mod tests {
         let imported = format!("{shapes}\n{DECLARATION}");
         for (input, results) in [("", expected), (data.as_str(), Vec::new())] {
             let options = SarifOptions::default();
-            let sarif = validate_to_sarif_string(&imported, None, input, &options)
+            let sarif = validate_to_sarif_string(&imported, None, input, &options, &[])
                 .expect("standard component declarations permit repeated sh:property");
             assert_eq!(
                 sarif,
-                validate_to_sarif_string(&shapes, None, input, &options)
+                validate_to_sarif_string(&shapes, None, input, &options, &[])
                     .expect("native property constraints validate"),
                 "importing the vocabulary preserves the exact report",
             );
@@ -467,6 +482,7 @@ mod tests {
             Some(added),
             None,
             &options,
+            &[],
         )
         .expect("the change validates");
 
@@ -477,7 +493,8 @@ mod tests {
         let merged = format!("{CHANGE_BASE}{added}");
         assert_eq!(
             sarif,
-            validate_to_sarif_string(SHAPES, None, &merged, &options).expect("full validation"),
+            validate_to_sarif_string(SHAPES, None, &merged, &options, &[])
+                .expect("full validation"),
         );
         assert!(sarif.contains("DatatypeConstraintComponent"));
     }
@@ -503,6 +520,7 @@ mod tests {
             None,
             Some(removed),
             &options,
+            &[],
         )
         .expect("the retraction validates");
 
@@ -511,7 +529,7 @@ mod tests {
         let reduced = CHANGE_BASE.replace(removed, "");
         assert_eq!(
             sarif,
-            validate_to_sarif_string(MIN_COUNT_SHAPES, None, &reduced, &options)
+            validate_to_sarif_string(MIN_COUNT_SHAPES, None, &reduced, &options, &[])
                 .expect("full validation of the reduced graph"),
         );
     }
@@ -531,6 +549,7 @@ mod tests {
             Some(added),
             None,
             &options,
+            &[],
         )
         .expect("the change validates");
 
@@ -541,7 +560,7 @@ mod tests {
         let merged = format!("{CHANGE_BASE}{added}");
         assert_eq!(
             sarif,
-            validate_to_sarif_string(SPARQL_SHAPES, None, &merged, &options)
+            validate_to_sarif_string(SPARQL_SHAPES, None, &merged, &options, &[])
                 .expect("full validation"),
             "the fallback report must BE the full validation's report",
         );
@@ -557,7 +576,7 @@ mod tests {
     fn an_empty_change_expands_to_nothing() {
         let options = SarifOptions::default();
         let (sarif, scope) =
-            validate_changes_to_sarif_string(SHAPES, None, CHANGE_BASE, None, None, &options)
+            validate_changes_to_sarif_string(SHAPES, None, CHANGE_BASE, None, None, &options, &[])
                 .expect("an empty change validates");
         assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 0 });
         assert!(!sarif.contains("\"level\": \"error\""), "{sarif}");
@@ -571,6 +590,7 @@ mod tests {
             Some(added),
             None,
             &options,
+            &[],
         )
         .expect("a real change validates");
         assert_eq!(moved, ChangeScope::Bounded { focus_nodes: 1 });
@@ -589,7 +609,7 @@ mod tests {
             (SHAPES, CHANGE_BASE, None, Some("@@@ not n-triples")),
         ] {
             assert!(
-                validate_changes_to_sarif_string(shapes, None, data, added, removed, &options)
+                validate_changes_to_sarif_string(shapes, None, data, added, removed, &options, &[])
                     .is_err(),
                 "a malformed document must not validate",
             );
@@ -604,6 +624,7 @@ mod tests {
                 ^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
             ),
             &options,
+            &[],
         )
         .expect("well-formed documents on every leg still validate");
     }
@@ -618,9 +639,12 @@ mod tests {
             ex:RequiredValue sh:path ex:value ; sh:minCount 1, 2 .
         ";
         let engine_error = engine::validate_graphs("", shapes, None)
-            .expect_err("multiple sh:minCount values are malformed");
-        let boundary_error = validate_to_sarif_string(shapes, None, "", &SarifOptions::default())
-            .expect_err("malformed constraints must not produce a SARIF report");
+            .expect_err("multiple sh:minCount values are malformed")
+            .to_string();
+        let boundary_error =
+            validate_to_sarif_string(shapes, None, "", &SarifOptions::default(), &[])
+                .expect_err("malformed constraints must not produce a SARIF report")
+                .to_string();
         assert_eq!(boundary_error, engine_error);
         assert!(boundary_error.contains("minCount"), "{boundary_error}");
         assert!(boundary_error.contains("RequiredValue"), "{boundary_error}");

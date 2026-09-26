@@ -617,7 +617,7 @@ pub fn entail_explain_conclusion(
 ///
 /// Two arrays of different lengths are a caller error and are REFUSED, never truncated to
 /// the shorter one: a silently dropped tail is an import the caller believes was supplied.
-fn import_pairs<'a>(
+pub(crate) fn import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
 ) -> Result<Vec<(&'a str, &'a str)>, String> {

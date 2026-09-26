@@ -23,7 +23,7 @@ fn dataset(body: &str) -> Arc<RdfDataset> {
 }
 
 fn shapes(body: &str) -> Result<Shapes, String> {
-    from_dataset(&dataset(body))
+    from_dataset(&dataset(body)).map_err(String::from)
 }
 
 #[test]

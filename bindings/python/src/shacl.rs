@@ -15,6 +15,19 @@
 //! Only this file imports pyo3. All engine modules (`engine`, `shapes`,
 //! `constraints`, `path`, `report`, `model`) are PyO3-free so the rlib links
 //! into the future Rust compiler without any Python dependency.
+//!
+//! # The shapes graph's `owl:imports`
+//!
+//! Every function here that takes a Turtle shapes graph takes an `imports` keyword: the
+//! shapes graph's `owl:imports` table, a sequence of `(ontology IRI, Turtle document)`
+//! pairs — the same shape `purrdf.entail`'s `imports` takes — each document parsed with its
+//! ontology IRI as its base. An `owl:imports` in the shapes graph is resolved by one of
+//! these, by a document the shapes graph was read under (`shapes_base`, or its own
+//! `@base`), or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+//! ontology whose `owl:versionIRI` is `<X>`). Anything else — or an entry no import names
+//! — raises `ShapesImportError` rather than validating a smaller shapes graph than the one
+//! named, exactly as the Rust API, the command line, WebAssembly and C refuse it. The
+//! default `()` imports nothing and still enforces the rule. PurRDF fetches nothing.
 
 use std::sync::Arc;
 
@@ -57,14 +70,18 @@ use crate::py_store::PyStore;
 /// not an absolute IRI raises `ValueError`. The dict's `"conformance_disallows"` key
 /// lists the set the report was judged against. A result's `"severity"` is its IRI,
 /// `sh:Debug` and `sh:Trace` included.
+///
+/// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new()))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn validate(
     py: Python<'_>,
     shapes_ttl: &str,
     data_nt: &str,
     shapes_base: Option<&str>,
     conformance_disallows: Option<Vec<String>>,
+    imports: Vec<(String, String)>,
 ) -> PyResult<Py<PyAny>> {
     let options = match conformance_disallows {
         None => engine::ValidationOptions::default(),
@@ -75,9 +92,13 @@ fn validate(
     };
     // Parse + validation run detached (GIL released); the result dicts are
     // built after the GIL is reacquired.
+    let pairs = crate::py_entail::import_list(&imports);
     let report = py
-        .detach(|| engine::validate_graphs_with_options(data_nt, shapes_ttl, shapes_base, &options))
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        .detach(|| {
+            let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
+            engine::validate_graphs_with_options(data_nt, shapes_ttl, shapes_base, &options, &table)
+        })
+        .map_err(|error| shapes_error(py, error))?;
 
     let out = PyDict::new(py);
     out.set_item("conforms", report.conforms)?;
@@ -198,17 +219,24 @@ fn messages_list<'py>(
 /// left a third copy free to drift. Everything Python-specific — releasing the
 /// GIL, mapping the error string to `ValueError` — stays here; the RDF work does
 /// not.
+///
+/// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, imports=Vec::new()))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn entail(
     py: Python<'_>,
     shapes_ttl: &str,
     data_nt: &str,
     shapes_base: Option<&str>,
+    imports: Vec<(String, String)>,
 ) -> PyResult<String> {
+    let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
-    py.detach(|| purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt))
-        .map_err(pyo3::exceptions::PyValueError::new_err)
+    py.detach(|| {
+        purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt, &pairs)
+    })
+    .map_err(|error| shapes_error(py, error))
 }
 
 /// Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH — the
@@ -229,6 +257,10 @@ fn entail(
 /// rule set reaches the engine's fixed arena and join ceilings only slowly under the
 /// default, and the limit is what bounds the time it can take.
 ///
+/// `imports` is the SHACL shapes graph's `owl:imports` table — see the [module documentation](self); an
+/// imported document's rules run. A SPARQL 1.2 RL rule set reads no table, so passing one
+/// beside `srl` raises `ValueError`.
+///
 /// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
 /// C-ABI bindings call.
 #[pyfunction]
@@ -241,8 +273,10 @@ fn entail(
     srl_base=None,
     explain=false,
     max_term_generating_rounds=None,
+    imports=Vec::new(),
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn apply_rules(
     py: Python<'_>,
     data_nt: &str,
@@ -252,20 +286,23 @@ fn apply_rules(
     srl_base: Option<&str>,
     explain: bool,
     max_term_generating_rounds: Option<u64>,
+    imports: Vec<(String, String)>,
 ) -> PyResult<Py<PyAny>> {
+    let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
         .detach(|| {
             purrdf_validate::apply_rules_to_ntriples(&purrdf_validate::RulesRequest {
                 data_nt,
                 shapes_ttl,
                 shapes_base,
+                shapes_imports: &pairs,
                 srl,
                 srl_base,
                 explain,
                 max_term_generating_rounds,
             })
         })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        .map_err(|error| shapes_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
@@ -282,8 +319,13 @@ fn apply_rules(
 /// maps each `shnex:var` name to a term spelled as `focus` is; the name `focusNode`
 /// (resolved to the focus node before the scope is searched) raises `ValueError`, as do a
 /// label the shapes document never wrote and any parse or evaluation failure.
+///
+/// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self); an
+/// imported document's functions and shapes are in scope.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, scope=None, shapes_base=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, scope=None, shapes_base=None, imports=Vec::new()))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn eval_node_expr(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -292,7 +334,9 @@ fn eval_node_expr(
     focus: &str,
     scope: Option<std::collections::BTreeMap<String, String>>,
     shapes_base: Option<&str>,
+    imports: Vec<(String, String)>,
 ) -> PyResult<Vec<String>> {
+    let pairs = crate::py_entail::import_list(&imports);
     let scope = scope.unwrap_or_default();
     let bindings: Vec<(&str, &str)> = scope
         .iter()
@@ -306,9 +350,10 @@ fn eval_node_expr(
             expr,
             focus,
             scope: &bindings,
+            imports: &pairs,
         })
     })
-    .map_err(pyo3::exceptions::PyValueError::new_err)
+    .map_err(|error| shapes_error(py, error))
 }
 
 /// Certify a shapes graph (Turtle), COLD: the loader's verdict, every result of validating
@@ -327,14 +372,26 @@ fn eval_node_expr(
 ///   loader refused the graph;
 /// - `"report"` — the deterministic text every PurRDF host prints.
 ///
-/// Raises `ValueError` only when the document is not Turtle; a malformed shapes graph is a
-/// report, not an exception.
+/// The report certifies the shapes graph's whole `owl:imports` closure, resolved against
+/// `imports` (see the [module documentation](self)). A closure that is not in hand raises
+/// `ShapesImportError` — never a report about the importing document alone, which would
+/// call a shapes graph `clean` that validation refuses.
+///
+/// Otherwise raises `ValueError` only when the document is not Turtle; a malformed shapes
+/// graph is a report, not an exception.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, *, shapes_base=None))]
-fn lint_shapes(py: Python<'_>, shapes_ttl: &str, shapes_base: Option<&str>) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new()))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn lint_shapes(
+    py: Python<'_>,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    imports: Vec<(String, String)>,
+) -> PyResult<Py<PyAny>> {
+    let pairs = crate::py_entail::import_list(&imports);
     let report = py
-        .detach(|| purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base))
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        .detach(|| purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base, &pairs))
+        .map_err(|error| shapes_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("clean", report.is_clean())?;
     out.set_item("findings", report.findings())?;
@@ -395,18 +452,32 @@ impl PyShapes {
 
 #[pymethods]
 impl PyShapes {
-    /// `Shapes(shapes_ttl, *, base=None)`.
+    /// `Shapes(shapes_ttl, *, base=None, imports=())`.
     ///
     /// `base` is the shapes document's own base IRI, used to resolve its relative IRI
     /// references (RFC-3986 §5.1.2). Omitted, only an in-document `@base` can establish
     /// one and a relative reference otherwise raises `ValueError`.
+    ///
+    /// `imports` is the shapes graph's `owl:imports` table (see the [module documentation](self)): the
+    /// parsed shapes are the whole closure, and a closure that is not in hand raises
+    /// `ShapesImportError`.
     #[new]
-    #[pyo3(signature = (shapes_ttl, *, base=None))]
-    fn new(py: Python<'_>, shapes_ttl: &str, base: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new()))]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    fn new(
+        py: Python<'_>,
+        shapes_ttl: &str,
+        base: Option<&str>,
+        imports: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        let pairs = crate::py_entail::import_list(&imports);
         // Shapes-graph parsing runs detached (GIL released).
         let inner = py
-            .detach(|| engine::parse_shapes(shapes_ttl, base))
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            .detach(|| {
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
+                engine::parse_shapes_with_config(shapes_ttl, base, None, &table)
+            })
+            .map_err(|error| shapes_error(py, error))?;
         Ok(Self { inner })
     }
 
@@ -1182,19 +1253,71 @@ impl PyShapesProduct {
 /// resolve against, RECORDED in the product so a restore resolves them identically
 /// without the document.
 ///
-/// Raises `ShapesProductError`; `.dimension` is `None` when the shapes document
-/// itself did not parse.
+/// `imports` is the shapes graph's `owl:imports` table (see the [module documentation](self)); the
+/// product carries the merged closure, so a restore needs no documents.
+///
+/// Raises `ShapesImportError` — the same refusal `validate` raises — when the shapes
+/// graph's `owl:imports` closure is not in hand; otherwise `ShapesProductError`, whose
+/// `.dimension` is `None` when the shapes document itself did not parse.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, *, shapes_base=None))]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new()))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn pack_product<'py>(
     py: Python<'py>,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
+    imports: Vec<(String, String)>,
 ) -> PyResult<Bound<'py, PyBytes>> {
+    let pairs = crate::py_entail::import_list(&imports);
     let bytes = py
-        .detach(|| purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base))
-        .map_err(|refusal| product_error(py, &refusal))?;
+        .detach(|| purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base, &pairs))
+        .map_err(|refusal| match refusal.import_error() {
+            Some(error) => import_error(py, error),
+            None => product_error(py, &refusal),
+        })?;
     Ok(PyBytes::new(py, &bytes))
+}
+
+// ── The shapes graph's owl:imports ──────────────────────────────────────────
+
+create_exception!(
+    shacl,
+    ShapesImportError,
+    pyo3::exceptions::PyValueError,
+    "A shapes graph's `owl:imports` closure is not in hand, or the `imports` table \
+     cannot be used — the one refusal every shapes-graph entry point raises, on every \
+     PurRDF host alike.\n\
+     \n\
+     Carries `.kind`: `unresolved-import` (the closure imports ontologies nothing in \
+     hand resolves — pass their documents in `imports`), `unreached-import` (the table \
+     supplies documents no import names, which would be read and never used) or \
+     `invalid-import` (a key that is not an absolute IRI, a key named twice, or a \
+     document that is not Turtle); and `.iris`, the IRIs it names. PurRDF fetches \
+     nothing. Branch on `.kind`, never on `str(exc)`.\n\
+     \n\
+     Subclasses `ValueError`, so code that already catches the SHACL surface's \
+     `ValueError` keeps working."
+);
+
+/// Raise a shapes-graph refusal: [`ShapesImportError`] for the import refusal, with
+/// `.kind` and `.iris` always present, and `ValueError` for anything else.
+fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
+    match error {
+        purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
+        purrdf_validate::ShapesError::Invalid(message) => {
+            pyo3::exceptions::PyValueError::new_err(message)
+        }
+    }
+}
+
+/// Raise `error` as [`ShapesImportError`].
+fn import_error(py: Python<'_>, error: &purrdf_validate::ShapesImportError) -> PyErr {
+    let raised = ShapesImportError::new_err(error.to_string());
+    // Setting an attribute on a Python-level exception instance cannot fail; a failure
+    // is ignored rather than replacing a precise refusal with a vaguer one.
+    let _ = raised.value(py).setattr("kind", error.kind());
+    let _ = raised.value(py).setattr("iris", error.iris());
+    raised
 }
 
 /// Register the `purrdf-shapes` surface on a Python module.
@@ -1221,5 +1344,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ShapesProductError",
         m.py().get_type::<ShapesProductError>(),
     )?;
+    m.add("ShapesImportError", m.py().get_type::<ShapesImportError>())?;
     Ok(())
 }
