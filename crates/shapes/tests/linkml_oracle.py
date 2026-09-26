@@ -447,6 +447,36 @@ def _assert_lists(payload: dict[str, Any]) -> None:
             )
 
 
+def _assert_temporal(payload: dict[str, Any]) -> None:
+    """The temporal range bounds through the official LinkML generator.
+
+    A bound is the negation of the values it rejects: a none_of over the typed
+    literals of another datatype and those whose lexical form fails the order
+    and lexical patterns. The generated JSON Schema must agree with the SHACL
+    verdict of every projected instance, and no loss may be located on the
+    bounded properties.
+    """
+    losses = payload["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("temporal fixture contains an unregistered loss")
+    holder_losses = [
+        entry for entry in losses if "subject=#/$defs/Holder/" in entry["location"]
+    ]
+    if holder_losses:
+        raise AssertionError(f"temporal bounds recorded a loss: {holder_losses!r}")
+    schema = _load(payload["yaml"])
+    generated = _generate(schema)
+    _assert_reference_closure(generated)
+    holder = payload["element_names"]["Holder"]
+    for probe in payload["probes"]:
+        actual = _is_valid(generated, holder, probe["value"])
+        if actual != probe["conforms"]:
+            raise AssertionError(
+                f"temporal probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"LinkML={actual}"
+            )
+
+
 def main() -> None:
     if importlib.metadata.version("linkml") != LINKML_PACKAGE_VERSION:
         raise AssertionError("linkml package version is not locked to 1.11.1")
@@ -458,11 +488,13 @@ def main() -> None:
     _assert_lossy(payload["lossy"])
     _assert_renamed(payload["renamed"])
     _assert_lists(payload["lists"])
+    _assert_temporal(payload["temporal"])
     print(
         "LinkML oracle: exact $defs and 16 instance probes agree; "
         "18 located losses, 7 verified slot renames, reverse SHACL imports, "
         "and representable widening probes pass; "
-        f"{len(payload['lists']['probes'])} SHACL list-component probes agree"
+        f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
+        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree"
     )
 
 

@@ -377,6 +377,7 @@ try {
   const exactResults = compileFixture("exact", manifest.exact, directory);
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);
   const listResults = compileFixture("lists", manifest.lists, directory);
+  const temporalResults = compileFixture("temporal", manifest.temporal, directory);
   assertFixture("exact", manifest.exact, exactResults);
   assertFixture("lossy", manifest.lossy, lossyResults);
   // The SHACL list components over projected instances: every probe agrees
@@ -387,6 +388,17 @@ try {
   assertFixture("lists", manifest.lists, listResults);
   const listDivergences = listResults.filter(({ probe, valid }) => valid !== probe.sourceValid);
   assert.equal(listDivergences.length, 2, "lists fixture divergences drifted");
+  // The temporal range bounds over projected instances: a bound is a negation
+  // TypeScript has no type for, so every non-conforming probe diverges at its
+  // located loss.
+  assertFixture("temporal", manifest.temporal, temporalResults);
+  assert.equal(
+    temporalResults.filter(
+      ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
+    ).length,
+    manifest.temporal.probes.filter((probe) => !probe.sourceValid).length,
+    "temporal fixture divergences drifted",
+  );
   const divergenceCount = lossyResults.filter(
     ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
   ).length;
@@ -398,9 +410,10 @@ try {
       `${manifest.exact.probes.length} exact boon probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
       `${divergenceCount} divergences map to the complete ${CLOSED_PROFILE.size}-code loss profile; ` +
-      `${manifest.exact.proofs.length + manifest.lossy.proofs.length} compiler facts behind the ` +
-      "distinct-sequence limit and the numeric and uniqueness losses hold; " +
+      `${manifest.exact.proofs.length + manifest.lossy.proofs.length + manifest.temporal.proofs.length} compiler facts behind the ` +
+      "distinct-sequence limit and the numeric, uniqueness and temporal losses hold; " +
       `${manifest.lists.probes.length} SHACL list-component probes agree but for 2 located losses; ` +
+      `${manifest.temporal.probes.length} temporal range-bound probes agree or diverge at their located negation; ` +
       "verified reverse SHACL import passes",
   );
 } finally {

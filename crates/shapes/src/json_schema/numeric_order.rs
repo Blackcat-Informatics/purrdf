@@ -27,7 +27,7 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 /// The `whiteSpace` `collapse` facet's trim (the four code points XSD names).
-const WS: &str = "[\\t\\n\\r ]*";
+pub(super) const WS: &str = "[\\t\\n\\r ]*";
 
 /// A pattern matching no string at all.
 pub(super) const NOTHING: &str = "[^\\u{0}-\\u{10ffff}]";
@@ -444,9 +444,18 @@ impl Ieee {
 /// with `integer`, the `xsd:integer` ones) — around the `collapse` trim —
 /// whose value is in `threshold`.
 pub(super) fn order_pattern(threshold: &Threshold, integer: bool) -> String {
-    let body = match threshold {
+    match order_body(threshold, integer) {
+        Some(body) => format!("^{WS}(?:{body}){WS}$"),
+        None => NOTHING.to_owned(),
+    }
+}
+
+/// The unanchored alternatives of [`order_pattern`], without the trim; `None`
+/// when no lexical form is in `threshold`.
+pub(super) fn order_body(threshold: &Threshold, integer: bool) -> Option<String> {
+    match threshold {
         Threshold::All => signed(&[(Sign::Any, Magnitude::Any)], integer),
-        Threshold::None => return NOTHING.to_owned(),
+        Threshold::None => None,
         Threshold::Cmp(rel, bound) => {
             let b = bound.magnitude();
             let arms: Vec<(Sign, Magnitude)> = match (rel, bound.negative, bound.is_zero()) {
@@ -479,10 +488,6 @@ pub(super) fn order_pattern(threshold: &Threshold, integer: bool) -> String {
             };
             signed(&arms, integer)
         }
-    };
-    match body {
-        Some(body) => format!("^{WS}(?:{body}){WS}$"),
-        None => NOTHING.to_owned(),
     }
 }
 
@@ -526,7 +531,7 @@ struct IntPart {
 
 /// Which raw fraction digit strings (trailing zeros included, possibly empty)
 /// a condition admits, as alternatives; `""` stands for the empty fraction.
-type FracPart = Vec<String>;
+pub(super) type FracPart = Vec<String>;
 
 const ANY_POSITIVE: &str = "[1-9][0-9]*";
 
@@ -605,7 +610,7 @@ fn int_part(rel: Option<Rel>, bound: &str) -> IntPart {
 
 /// `R > F`, `R == F`, `R < F` over raw fraction digit strings `R`, against the
 /// trailing-zero-free `F`.
-fn frac_part(rel: Option<Rel>, bound: &str) -> FracPart {
+pub(super) fn frac_part(rel: Option<Rel>, bound: &str) -> FracPart {
     let bytes = bound.as_bytes();
     match rel {
         None => {

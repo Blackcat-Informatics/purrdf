@@ -412,8 +412,17 @@ compile time, and a bare integer's numeral length as an integer range.
 Numeric datatypes are told apart over their lexical and value spaces. A range
 bound compares a typed integer-family or decimal literal by an order pattern on
 its lexical form, with SPARQL's numeric promotion against a double or float
-bound. A node shape's node kind, `sh:in`, `sh:hasValue` and lexical
-constraints judge the focus node's `@id`.
+bound. A temporal bound on `xsd:dateTime`, `xsd:date` or `xsd:time` compares a
+typed literal of its datatype on the XSD timeline, by order patterns on the
+lexical form. A timezone makes the value an instant, and `24:00:00` is the next
+day's midnight. A zoned value and a local bound, or the reverse, compare only
+when they are more than 14 hours apart. Closer than that they are incomparable,
+which the component reports as a violation. A value of any other datatype
+violates the bound. A dateTime or time bound's pattern states each of the
+1,681 minutes within ±14:00 of it, so it is large: about 100 KB, and more
+for a bound with fractional seconds. A node shape's
+node kind, `sh:in`, `sh:hasValue` and lexical constraints judge the focus
+node's `@id`.
 
 What remains is recorded on the forward ledger, each case with its reason:
 
@@ -427,7 +436,6 @@ What remains is recorded on the forward ledger, each case with its reason:
   classes `minimum`, `maximum` and `multipleOf` state.
 - A range bound over `xsd:double` or `xsd:float` lexical forms is not judged.
   Those forms on one side of a bound are no regular language.
-- A temporal range bound is not projected.
 - A node shape's class membership is not judged. It runs through
   `rdfs:subClassOf*` triples on other nodes.
 
@@ -442,6 +450,12 @@ the member shape's alternatives, so member types are checked. GraphQL list types
 have no length or uniqueness constraint and its numeric types have no bound, so
 those are recorded where they stand. Each emitter oracle runs these components
 over projected instances of real data.
+
+Each emitter oracle also runs the temporal bounds over projected instances.
+Pydantic and LinkML agree with validation on each of them. TypeScript and
+GraphQL record the bound's negation where it stands. Neither has a complement
+type. TypeScript cannot write the admitted lexical forms positively either,
+because the dates of four-digit years alone exceed its union limit.
 
 ## Ontology-complete developer schemas
 
@@ -540,6 +554,14 @@ generated code and checks the live reverse/schema surface.
 `import_pydantic_package` separately verifies the retained source schema,
 generated files, model map, dialect, and forward ledger before importing SHACL.
 
+A JSON Schema `not` has no annotation equivalent. The package checks it at run
+time instead: a before-validator evaluates the negated schema over the raw JSON
+input. The check follows JSON Schema's own semantics. Numbers compare by exact
+value, string lengths count code points, and `pattern` runs through Pydantic's
+own regex engine. The check covers a closed keyword table, `$ref` included. A
+negated schema that uses any other keyword, such as `propertyNames`, a format,
+or a pattern outside the common grammar, stays a recorded loss.
+
 The optional caller-owned `PydanticPackageTopology` is a total partition of
 `$defs` entries into portable dotted leaf modules. Each route carries the class
 docstring and a sorted, vocabulary-neutral `json_schema_extra` map suitable for
@@ -613,7 +635,8 @@ The fixed declaration dialect uses `strict` plus
 literals, required versus optional fields, explicit `null`, local recursive
 references, unions, intersections, arrays and tuples. There are no runtime
 enums, mergeable interfaces, branded pseudo-validators, or `any` escape
-hatches.
+hatches. Invalid keywords, open/dangling references, and name collisions fail
+before bytes are emitted.
 
 Array length bounds are exact at any size. A tuple element states each
 position-specific item. A length beyond those positions is stated as an element
@@ -626,8 +649,7 @@ the distinct sequences as a union of tuple types. The enumeration stops at the
 compiler's limits: an instantiation depth of 100 (TS2589), and 100,000 members
 in a union that the compiler spreads into a tuple or distributes an
 intersection over (TS2590). Numeric keywords over a finite `const` or `enum`
-leave out the numbers that fail them. Invalid keywords, open/dangling references, and name
-collisions fail before bytes are emitted.
+leave out the numbers that fail them.
 
 Runtime assertions outside TypeScript structural assignability are never
 silently erased: integer, numeric/string predicate, closure, pattern-property,

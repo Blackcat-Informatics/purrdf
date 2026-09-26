@@ -78,7 +78,12 @@
 //!   and a typed literal of an integer-family or decimal datatype by an order
 //!   pattern on its lexical form (see `numeric_order`), with SPARQL's numeric
 //!   promotion against a double or float bound, and rejects every value that
-//!   is not comparable with a number.
+//!   is not comparable with a number. A temporal bound (`xsd:dateTime`,
+//!   `xsd:date`, `xsd:time`) holds a typed literal of its datatype to order and
+//!   lexical patterns on the XSD timeline (see `temporal_order`) — a timezone
+//!   makes the value an instant, and a zoned value and a local bound (or the
+//!   reverse) compare only beyond ±14:00 of each other — and rejects every
+//!   other value.
 //! * The SHACL 1.2 list components judge a list value's `@list`:
 //!   `sh:minListLength`/`sh:maxListLength` as `minItems`/`maxItems`,
 //!   `sh:uniqueMembers true` as `uniqueItems` (a member list carries its head
@@ -112,8 +117,7 @@
 //! * a range bound against an `xsd:double` or `xsd:float` literal: its lexical
 //!   forms on one side of a bound are no regular language (among `0.0…01E<n>`
 //!   the value is at least 1 exactly when `n` exceeds the count of zeros), so no
-//!   pattern states it (unless `sh:in` makes those values finite); and a
-//!   temporal bound, which is not projected;
+//!   pattern states it (unless `sh:in` makes those values finite);
 //! * a node shape's `sh:class`: membership runs through `rdfs:subClassOf*`
 //!   triples on other `@graph` nodes.
 //!
@@ -160,6 +164,7 @@ use crate::shapes::{
 use crate::term::{NamedNode, Term};
 
 mod numeric_order;
+mod temporal_order;
 
 use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 
@@ -4359,8 +4364,9 @@ impl Admits {
 enum RangeBound {
     /// A number (see [`numeric_order`]).
     Number(BoundNumberValue),
-    /// An `xsd:dateTime`, `xsd:date` or `xsd:time` bound.
-    Temporal,
+    /// An `xsd:dateTime`, `xsd:date` or `xsd:time` bound (see
+    /// [`temporal_order`]).
+    Temporal(temporal_order::Bound),
     /// Anything else: no value compares with it, so every value violates.
     Incomparable,
 }
@@ -4402,7 +4408,11 @@ fn range_bound(term: &Term) -> RangeBound {
         "float" => purrdf_xsd::parse_float_xsd10(lexical)
             .ok()
             .map(BoundNumberValue::Float),
-        "dateTime" | "date" | "time" => return RangeBound::Temporal,
+        "dateTime" | "date" | "time" => {
+            let kind = temporal_order::Kind::from_local(local).expect("a temporal local name");
+            return temporal_order::Bound::parse(kind, lexical)
+                .map_or(RangeBound::Incomparable, RangeBound::Temporal);
+        }
         _ => INTEGER_DATATYPES
             .iter()
             .find(|(name, _, _)| *name == local)
@@ -4453,7 +4463,10 @@ fn datatype_lexical_patterns(local: &str) -> Vec<String> {
     patterns
 }
 
-/// A string schema requiring every pattern of `patterns`.
+/// A string schema requiring every pattern of `patterns`. Each conjunct
+/// restates `"type": "string"`, which its string context already implies, so
+/// a target that reads a conjunct on its own (a LinkML slot expression) gives
+/// it its string carrier rather than a fallback.
 fn patterns_schema(mut patterns: Vec<String>) -> Value {
     if patterns.len() == 1 {
         json!({ "type": "string", "pattern": patterns.remove(0) })
@@ -4462,7 +4475,7 @@ fn patterns_schema(mut patterns: Vec<String>) -> Value {
             "type": "string",
             "allOf": patterns
                 .into_iter()
-                .map(|pattern| json!({ "pattern": pattern }))
+                .map(|pattern| json!({ "type": "string", "pattern": pattern }))
                 .collect::<Vec<_>>()
         })
     }
@@ -4495,8 +4508,9 @@ fn numeric_datatypes() -> impl Iterator<Item = &'static str> {
 /// backreferences, which repeat a captured substring, cannot make it either. So
 /// no pattern states the bound; the loss is recorded (unless `sh:in` makes the
 /// admissible doubles finite, when each is judged as a constant). A temporal
-/// bound is dropped, its loss recorded; a bound that is neither numeric nor
-/// temporal compares with nothing, so every value violates it.
+/// bound is judged exactly ([`temporal_bound_rejections`]); a bound that is
+/// neither numeric nor temporal, or an ill-typed one, compares with nothing, so
+/// every value violates it.
 #[allow(clippy::too_many_arguments)]
 fn compile_bounds(
     bounds: &[(Facet, &Term)],
@@ -4516,20 +4530,13 @@ fn compile_bounds(
     let mut typed: Vec<Value> = Vec::new();
     let mut numbers: Vec<(Facet, BoundNumberValue)> = Vec::new();
     for &(facet, term) in bounds {
-        let term_name = match facet {
-            Facet::MinInclusive => "sh:minInclusive",
-            Facet::MinExclusive => "sh:minExclusive",
-            Facet::MaxInclusive => "sh:maxInclusive",
-            Facet::MaxExclusive => "sh:maxExclusive",
-        };
         match range_bound(term) {
-            RangeBound::Temporal => {
-                let note = "a temporal bound is not projected: no JSON Schema keyword compares \
-                            dates, and the schema states no pattern for the order";
-                ctx.record(term_name, shape_iri, note);
-                comments.push(format!(
-                    "a {term_name} constraint on property {key}: {note}"
-                ));
+            RangeBound::Temporal(bound) => {
+                for rejection in temporal_bound_rejections(facet, &bound, ctx.ns) {
+                    if !rejected.contains(&rejection) {
+                        rejected.push(rejection);
+                    }
+                }
             }
             RangeBound::Incomparable => {
                 numeric = true;
@@ -4601,6 +4608,41 @@ fn compile_bounds(
         ));
     }
     comments.dedup();
+}
+
+/// The values one temporal bound rejects: every value that is not a typed
+/// literal of the bound's datatype (another datatype's, a string, a number, a
+/// node, a list — none compares with it), and each of that datatype whose
+/// lexical form is ill-typed or on the wrong side of the bound, as the order
+/// pattern states it (see [`temporal_order`]).
+fn temporal_bound_rejections(
+    facet: Facet,
+    bound: &temporal_order::Bound,
+    ns: &Namespaces,
+) -> Vec<Value> {
+    let datatype = ns.compact_iri(&format!("{XSD_NS}{}", bound.kind().local()));
+    let mut patterns = temporal_order::lexical_patterns(bound.kind());
+    patterns.push(temporal_order::order_pattern(facet, bound));
+    vec![
+        json!({
+            "not": {
+                "type": "object",
+                "properties": {
+                    "@type": { "const": datatype },
+                    "@value": { "type": "string" }
+                },
+                "required": ["@value", "@type"]
+            }
+        }),
+        json!({
+            "type": "object",
+            "properties": {
+                "@type": { "const": datatype },
+                "@value": { "type": "string", "not": patterns_schema(patterns) }
+            },
+            "required": ["@value", "@type"]
+        }),
+    ]
 }
 
 /// The typed literals of an integer-family or decimal datatype one bound

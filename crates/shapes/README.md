@@ -478,6 +478,13 @@ the topology and version stamp retains the original flat package byte-for-byte.
 Version stamping is independently available in either layout; in the flat
 layout it adds `__about__.py` and updates the `__init__.py` exports.
 
+A JSON Schema `not` has no annotation equivalent. The generated package checks
+it with a before-validator that evaluates the negated schema over the raw JSON
+input. The check covers a closed keyword table, `$ref` included, with JSON
+Schema's semantics, and runs `pattern` through Pydantic's own regex engine. A
+negated schema outside that table stays a located `negation-validation-dropped`
+loss.
+
 Generated classes validate the representable JSON Schema subset and expose the
 originating definition through Pydantic v2's standard
 `model_json_schema(by_alias=True)` surface. Assertions without an exact

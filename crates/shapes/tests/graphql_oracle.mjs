@@ -352,7 +352,16 @@ for (const label of ["member-not-integer", "bounded-not-a-list"]) {
   const agreed = listResults.find(({ probe }) => probe.label === label);
   assert.ok(agreed !== undefined && !agreed.valid, `${label} must be rejected by GraphQL.js`);
 }
-const outputCount = [manifest.exact, manifest.lossy, manifest.lists]
+// The temporal range bounds over projected instances: each bounded property is
+// the delegated custom scalar (GraphQL has no input complement), so every
+// non-conforming probe diverges at its located negation.
+const temporalResults = await executeFixture("temporal", manifest.temporal);
+assert.equal(
+  temporalResults.filter(({ probe, valid }) => valid !== probe.sourceValid).length,
+  manifest.temporal.probes.filter((probe) => !probe.sourceValid).length,
+  "temporal fixture divergences drifted",
+);
+const outputCount = [manifest.exact, manifest.lossy, manifest.lists, manifest.temporal]
   .flatMap((fixture) => fixture.probes)
   .filter((probe) => probe.output !== undefined).length;
 const codecCount = [...manifest.exact.probes, ...manifest.lossy.probes].filter(
@@ -366,5 +375,6 @@ console.log(
     `${listResults.length} SHACL list-component probes agree or diverge at a located loss ` +
     `(${listDivergences.length} divergences); ` +
     `${outputCount} valid values serialize unchanged through output types and unions; ` +
+    `${temporalResults.length} temporal range-bound probes agree or diverge at their located negation; ` +
     "verified reverse SHACL import passes",
 );

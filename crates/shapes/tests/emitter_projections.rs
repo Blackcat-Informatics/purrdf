@@ -1115,10 +1115,6 @@ fn pydantic_projects_node_list() {
                 "intersection-validation-widened",
                 "#/$defs/Holder/allOf/0/anyOf/0/properties/rdf:first/allOf"
             ),
-            (
-                "negation-validation-dropped",
-                "#/$defs/Holder/allOf/0/anyOf/0/not"
-            ),
         ])
     );
     assert_pydantic_keeps_comments(&emitted);
@@ -1944,15 +1940,11 @@ fn pydantic_projects_single_line() {
     let emitted = emit(SINGLE_LINE);
     assert_eq!(
         py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: StrictStr = Field(default=None, alias=\"ex:subject\")")
+        Some(
+            "    subject: Annotated[StrictStr, BeforeValidator(_purrdf_rejects({\"pattern\": \"[\\\\n\\\\r\\\\u000B\\\\u000C]\", \"type\": \"string\"}, _PURRDF_DEFS))] = Field(default=None, alias=\"ex:subject\")"
+        )
     );
-    assert_eq!(
-        holder_losses(&emitted.pydantic_losses),
-        owned2(&[(
-            "negation-validation-dropped",
-            "#/$defs/Holder/properties/ex:subject/not"
-        ),])
-    );
+    assert_eq!(holder_losses(&emitted.pydantic_losses), owned2(&[]));
     assert_pydantic_keeps_comments(&emitted);
     assert_eq!(source_codes(&emitted), owned2(&[]));
 }
@@ -3470,6 +3462,79 @@ mod observed {
             &[("1.5", true), ("0.5", false), ("12.25", false)],
         );
         assert!(emit(&decimals).compiled.losses.is_empty());
+    }
+
+    /// A temporal range bound judges a typed literal of the bound's datatype by
+    /// an order pattern on its lexical form, as validation compares it on the
+    /// XSD timeline: a timezone makes the value an instant, a value and a
+    /// bound of which one has a timezone compare only beyond ±14:00 of each
+    /// other (incomparable, so a violation, within it), `24:00:00` is the next
+    /// day's midnight, and every other value — another datatype's, a string,
+    /// a number, an IRI, an ill-typed date — violates.
+    #[test]
+    fn json_schema_temporal_bounds_agree_with_validation() {
+        let dates = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:minInclusive \"2020-03-01\"^^xsd:date ;
+                          sh:maxExclusive \"2021-01-01Z\"^^xsd:date ] .";
+        agree(
+            dates,
+            &[
+                (r#""2020-03-01"^^xsd:date"#, true),
+                (r#""2020-02-29"^^xsd:date"#, false),
+                (r#""2020-12-31"^^xsd:date"#, true),
+                (r#""2021-01-01"^^xsd:date"#, false),
+                (r#""2021-01-01Z"^^xsd:date"#, false),
+                (r#""2020-12-31-14:00"^^xsd:date"#, true),
+                (r#""2020-12-31-14:01"^^xsd:date"#, false),
+                (r#""2020-12-31+14:00"^^xsd:date"#, true),
+                (r#""2020-03-01Z"^^xsd:date"#, false),
+                (r#""2020-03-02Z"^^xsd:date"#, true),
+                (r#"" 2020-06-01 "^^xsd:date"#, true),
+                (r#""2021-02-29"^^xsd:date"#, false),
+                (r#""2020-06-01T00:00:00"^^xsd:dateTime"#, false),
+                (r#""2020-06-01""#, false),
+                ("42", false),
+                ("ex:elsewhere", false),
+            ],
+        );
+        assert!(emit(dates).compiled.losses.is_empty());
+        let instants = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ;
+                          sh:minExclusive \"2020-03-01T12:00:00Z\"^^xsd:dateTime ] .";
+        agree(
+            instants,
+            &[
+                (r#""2020-03-01T12:00:00Z"^^xsd:dateTime"#, false),
+                (r#""2020-03-01T12:00:00.5Z"^^xsd:dateTime"#, true),
+                (r#""2020-03-01T17:30:01+05:30"^^xsd:dateTime"#, true),
+                (r#""2020-03-01T17:30:00+05:30"^^xsd:dateTime"#, false),
+                (r#""2020-03-02T02:00:00"^^xsd:dateTime"#, false),
+                (r#""2020-03-02T02:00:01"^^xsd:dateTime"#, true),
+                (r#""2020-03-01T24:00:00Z"^^xsd:dateTime"#, true),
+                (r#""2020-02-29T24:00:00-12:00"^^xsd:dateTime"#, false),
+                (r#""2020-02-29T24:00:00-12:01"^^xsd:dateTime"#, true),
+            ],
+        );
+        let times = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+            sh:property [ sh:path ex:subject ; sh:maxInclusive \"12:00:00\"^^xsd:time ] .";
+        agree(
+            times,
+            &[
+                (r#""12:00:00"^^xsd:time"#, true),
+                (r#""12:00:00.001"^^xsd:time"#, false),
+                (r#""00:00:00Z"^^xsd:time"#, false),
+                (r#""15:00:00+14:00"^^xsd:time"#, false),
+                (r#""15:00:00-12:00"^^xsd:time"#, false),
+                (r#""23:00:00+14:00"^^xsd:time"#, false),
+                (r#""01:59:59+14:00"^^xsd:time"#, true),
+                (r#""24:00:00"^^xsd:time"#, false),
+            ],
+        );
+        // An ill-typed bound compares with nothing.
+        agree(
+            &dates.replace("2020-03-01", "2020-02-30"),
+            &[(r#""2020-06-01"^^xsd:date"#, false)],
+        );
     }
 
     /// `sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers` and
