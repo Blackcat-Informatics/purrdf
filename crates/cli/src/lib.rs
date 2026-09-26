@@ -122,7 +122,9 @@ use std::io::Read as _;
 use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
-use crate::cli::{Cli, Command, PackCommand, ReportTarget, ShaclCommand, ShapesCommand};
+use crate::cli::{
+    Cli, CliRdfFormat, Command, PackCommand, ReportTarget, ShaclCommand, ShapesCommand,
+};
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
 
@@ -505,6 +507,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         Command::Shacl { command } => match command {
             ShaclCommand::Pack {
                 shapes,
+                shapes_from,
                 base,
                 import,
                 shapes_graph,
@@ -512,6 +515,10 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 out,
             } => shacl::pack(
                 shapes,
+                shapes_from.map_or(
+                    purrdf_rdf::SourceFormat::Native(purrdf_rdf::NativeRdfFormat::Turtle),
+                    CliRdfFormat::to_source_format,
+                ),
                 base.as_deref(),
                 import,
                 shapes_graph.as_deref(),

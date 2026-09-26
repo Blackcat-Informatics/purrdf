@@ -55,10 +55,11 @@ retrieval IRI is derived — the same base `validate --shapes` parses it under, 
 packing and direct validation cannot disagree about what a relative reference
 resolves to.
 
-Turtle is the accepted shapes syntax because it is the one syntax carrying a
-`@prefix`/`PREFIX` map recoverable from source text, and that map is the
-fallback prefix environment every SHACL-AF `sh:select` body resolves against.
-The product records it.
+The shapes document is read as Turtle unless `--shapes-from` names another RDF
+syntax. The prefix map its codec reports (Turtle's and TriG's
+`@prefix`/`PREFIX`, RDF/XML's `xmlns`) is the fallback prefix environment every
+SHACL-SPARQL and SHACL-AF query resolves against, and the product records it.
+The same shapes graph in any of those syntaxes packs to the same verdicts.
 
 ### `owl:imports` is folded at pack time, the same way `validate --shapes` folds it
 

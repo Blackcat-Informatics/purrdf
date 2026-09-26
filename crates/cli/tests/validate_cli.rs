@@ -2620,6 +2620,229 @@ fn cli_validate_conformance_disallows() {
     assert!(stderr(&refused).contains("--conformance-disallows"));
 }
 
+// ── One shapes graph, three syntaxes ─────────────────────────────────────────────
+
+/// A SHACL-SPARQL constraint whose `sh:select` uses the `ex:` prefix the shapes DOCUMENT
+/// declares and no `sh:prefixes` declares: `ex:a ex:bad 1` violates it.
+const PREFIXED_SPARQL_TTL: &str = r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ;
+  sh:targetNode ex:a ;
+  sh:sparql [ sh:select "SELECT $this WHERE { $this ex:bad ?x }" ] .
+"#;
+
+/// [`PREFIXED_SPARQL_TTL`], spelled as TriG.
+const PREFIXED_SPARQL_TRIG: &str = r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+{
+  ex:S a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:sparql [ sh:select "SELECT $this WHERE { $this ex:bad ?x }" ] .
+}
+"#;
+
+/// [`PREFIXED_SPARQL_TTL`], spelled as RDF/XML: the `ex:` prefix is an `xmlns` declaration.
+const PREFIXED_SPARQL_RDF: &str = r#"<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:sh="http://www.w3.org/ns/shacl#"
+         xmlns:ex="http://example.org/ns#">
+  <sh:NodeShape rdf:about="http://example.org/ns#S">
+    <sh:targetNode rdf:resource="http://example.org/ns#a"/>
+    <sh:sparql rdf:parseType="Resource">
+      <sh:select>SELECT $this WHERE { $this ex:bad ?x }</sh:select>
+    </sh:sparql>
+  </sh:NodeShape>
+</rdf:RDF>
+"#;
+
+/// A shapes document that `owl:imports` its OWN IRI, which it establishes with an
+/// in-document base, and whose one shape requires `ex:p` on `ex:a`.
+const SELF_IMPORT_TTL: &str = r"@base <http://example.org/shapes> .
+@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+<#doc> owl:imports <> .
+ex:S a sh:NodeShape ;
+  sh:targetNode ex:a ;
+  sh:property [ sh:path ex:p ; sh:minCount 1 ] .
+";
+
+/// [`SELF_IMPORT_TTL`], spelled as TriG.
+const SELF_IMPORT_TRIG: &str = r"@base <http://example.org/shapes> .
+@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+{
+  <#doc> owl:imports <> .
+  ex:S a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:property [ sh:path ex:p ; sh:minCount 1 ] .
+}
+";
+
+/// [`SELF_IMPORT_TTL`], spelled as RDF/XML: the document's IRI is its root `xml:base`.
+const SELF_IMPORT_RDF: &str = r##"<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:sh="http://www.w3.org/ns/shacl#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xml:base="http://example.org/shapes">
+  <rdf:Description rdf:about="#doc">
+    <owl:imports rdf:resource=""/>
+  </rdf:Description>
+  <sh:NodeShape rdf:about="http://example.org/ns#S">
+    <sh:targetNode rdf:resource="http://example.org/ns#a"/>
+    <sh:property rdf:parseType="Resource">
+      <sh:path rdf:resource="http://example.org/ns#p"/>
+      <sh:minCount rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1</sh:minCount>
+    </sh:property>
+  </sh:NodeShape>
+</rdf:RDF>
+"##;
+
+/// The verdict lines of a run's stderr, without the `shapes-provenance` line — which names
+/// the ROUTE the shapes graph took (parsed, or a restored product's identity), not the
+/// verdict.
+fn verdict_lines(out: &Output) -> String {
+    stderr(out)
+        .lines()
+        .filter(|line| !line.starts_with("shacl shapes-provenance "))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// Validate `data` against the same shapes graph written as Turtle, TriG and RDF/XML, on
+/// `validate --shapes` and through a `shacl pack` product, and return the Turtle run.
+fn validate_in_three_syntaxes(dir: &Path, stem: &str, data: &str, spellings: [&str; 3]) -> Output {
+    let data = write_file(dir, &format!("{stem}-data.ttl"), data);
+    let mut runs: Vec<(String, Output)> = Vec::new();
+    for (extension, shapes) in ["ttl", "trig", "rdf"].into_iter().zip(spellings) {
+        let path = write_file(dir, &format!("{stem}.{extension}"), shapes);
+        runs.push((
+            format!("validate {extension}"),
+            run(&["validate", "--shapes", &path, &data]),
+        ));
+        let product = dir.join(format!("{stem}-{extension}.purrshp"));
+        let product = product.to_str().expect("utf8 path");
+        let from = match extension {
+            "ttl" => "turtle",
+            "trig" => "trig",
+            _ => "rdfxml",
+        };
+        let packed = run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            &path,
+            "--shapes-from",
+            from,
+            "--out",
+            product,
+        ]);
+        assert_eq!(code(&packed), 0, "pack {extension}: {}", stderr(&packed));
+        runs.push((
+            format!("product {extension}"),
+            run(&["validate", "--shapes-product", product, &data]),
+        ));
+    }
+    let (_, turtle) = &runs[0];
+    assert_eq!(code(turtle), 0, "{}", stderr(turtle));
+    for (label, other) in &runs[1..] {
+        assert_eq!(code(other), 0, "{label}: {}", stderr(other));
+        assert_eq!(
+            stdout(other),
+            stdout(turtle),
+            "{label}: the identical report"
+        );
+        assert_eq!(
+            verdict_lines(other),
+            verdict_lines(turtle),
+            "{label}: the identical verdict"
+        );
+    }
+    runs.swap_remove(0).1
+}
+
+/// The shapes DOCUMENT's prefix map is the SHACL-SPARQL fallback whatever syntax declared
+/// it: Turtle's `@prefix`, TriG's `@prefix` and RDF/XML's `xmlns:ex` all let the constraint
+/// resolve `ex:bad`, so all three report the one violation — a constraint dropped or refused
+/// over an undeclared prefix would report `conforms true` or fail.
+#[test]
+fn a_shapes_document_prefix_map_is_carried_by_every_syntax() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let turtle = validate_in_three_syntaxes(
+        dir.path(),
+        "prefixed",
+        "@prefix ex: <http://example.org/ns#> .\nex:a ex:bad 1 .\n",
+        [
+            PREFIXED_SPARQL_TTL,
+            PREFIXED_SPARQL_TRIG,
+            PREFIXED_SPARQL_RDF,
+        ],
+    );
+    assert!(
+        stderr(&turtle).contains("shacl conforms false\n"),
+        "{}",
+        stderr(&turtle)
+    );
+    assert_eq!(
+        stdout(&turtle).matches("sh:ValidationResult").count()
+            + stdout(&turtle)
+                .matches("<http://www.w3.org/ns/shacl#ValidationResult>")
+                .count(),
+        1,
+        "exactly the one violation:\n{}",
+        stdout(&turtle)
+    );
+
+    // The valid neighbour: data the constraint does not select conforms under every
+    // spelling, so the violation above is the constraint's verdict, not the prefix's.
+    let clean = validate_in_three_syntaxes(
+        dir.path(),
+        "prefixed-clean",
+        "@prefix ex: <http://example.org/ns#> .\nex:a ex:good 1 .\n",
+        [
+            PREFIXED_SPARQL_TTL,
+            PREFIXED_SPARQL_TRIG,
+            PREFIXED_SPARQL_RDF,
+        ],
+    );
+    assert!(
+        stderr(&clean).contains("shacl conforms true\n"),
+        "{}",
+        stderr(&clean)
+    );
+}
+
+/// A shapes document that imports its own IRI — the IRI its `@base` (Turtle, TriG) or root
+/// `xml:base` (RDF/XML) establishes — resolves that import in place in every syntax, so
+/// all three validate to the one `sh:minCount` violation instead of an unresolved import.
+#[test]
+fn a_shapes_document_base_resolves_its_self_import_in_every_syntax() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let turtle = validate_in_three_syntaxes(
+        dir.path(),
+        "selfimport",
+        "@prefix ex: <http://example.org/ns#> .\nex:a ex:q 1 .\n",
+        [SELF_IMPORT_TTL, SELF_IMPORT_TRIG, SELF_IMPORT_RDF],
+    );
+    assert!(
+        stderr(&turtle).contains("shacl conforms false\n"),
+        "{}",
+        stderr(&turtle)
+    );
+    let clean = validate_in_three_syntaxes(
+        dir.path(),
+        "selfimport-clean",
+        "@prefix ex: <http://example.org/ns#> .\nex:a ex:p 1 .\n",
+        [SELF_IMPORT_TTL, SELF_IMPORT_TRIG, SELF_IMPORT_RDF],
+    );
+    assert!(
+        stderr(&clean).contains("shacl conforms true\n"),
+        "{}",
+        stderr(&clean)
+    );
+}
+
 /// A shapes-graph blank node (the property shape) and a data-graph blank node (the value
 /// that is not an IRI) are two nodes in the report and in its SARIF projection, although
 /// each document labels its first blank node alike; the one data node is one label in

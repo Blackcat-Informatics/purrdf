@@ -139,6 +139,7 @@ use crate::{sink, source};
 /// product format cannot carry.
 pub(crate) fn pack(
     shapes: &str,
+    shapes_format: SourceFormat,
     base: Option<&str>,
     imports: &[String],
     shapes_graph: Option<&str>,
@@ -167,7 +168,7 @@ pub(crate) fn pack(
 
     let root = crate::shapes_source::read_shapes_document(
         shapes,
-        SourceFormat::Native(NativeRdfFormat::Turtle),
+        shapes_format,
         effective_base.as_deref(),
         "--shapes",
     )?;

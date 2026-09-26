@@ -869,12 +869,14 @@ pub(crate) enum Command {
         #[arg(long)]
         rebuild: bool,
         /// Shapes-graph format override; inferred from the shapes path's extension when
-        /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
-        /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's
-        /// `@prefix`/`PREFIX` map as the fallback prefix environment for SHACL-AF `sh:select`
-        /// queries. Every other syntax is parsed by the native codec into the same IR and
-        /// carries no such fallback (it is a recovery from Turtle source text), so a SHACL-AF
-        /// query in a non-Turtle shapes graph must declare its own `sh:prefixes`.
+        /// omitted. Whatever the syntax, the shapes DOCUMENT's own declarations travel with
+        /// its graph: the prefix map its codec recorded — Turtle's and TriG's
+        /// `@prefix`/`PREFIX`, RDF/XML's `xmlns` — is the fallback prefix environment for
+        /// SHACL-SPARQL and SHACL-AF queries, and the base it declares (`@base`, a root
+        /// `xml:base`, a JSON-LD `@base`) is its own IRI for `owl:imports`. So the same
+        /// shapes graph written in Turtle, TriG or RDF/XML validates identically. A syntax
+        /// that declares no prefixes (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD,
+        /// a pack, GTS) has no fallback, and its queries declare their own `sh:prefixes`.
         #[arg(long = "shapes-from", value_enum)]
         shapes_from: Option<CliRdfFormat>,
         /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
@@ -1539,8 +1541,8 @@ pub(crate) enum PackCommand {
 /// back what one says it was compiled from.
 #[derive(Subcommand, Debug)]
 pub(crate) enum ShaclCommand {
-    /// Parse a Turtle shapes graph, fold its `owl:imports` closure, prepare the result, and
-    /// write the prepared product.
+    /// Parse a shapes graph, fold its `owl:imports` closure, prepare the result, and write
+    /// the prepared product.
     ///
     /// The product carries the compiled model AND the shapes dataset it was derived from —
     /// the ROOT graph merged with every document `--import` resolved — both under the
@@ -1554,12 +1556,17 @@ pub(crate) enum ShaclCommand {
     /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
     /// writer.
     Pack {
-        /// The Turtle shapes graph `FILE`. Turtle because it is the one syntax carrying a
-        /// `@prefix`/`PREFIX` map recoverable from source text, which is the fallback
-        /// prefix environment every SHACL-AF `sh:select` body resolves against and which
-        /// the product records.
+        /// The shapes graph `FILE`, read as Turtle unless `--shapes-from` names another
+        /// syntax. Its prefix map — the fallback prefix environment every SHACL-SPARQL and
+        /// SHACL-AF query resolves against — is recorded in the product.
         #[arg(long, value_name = "FILE", required = true)]
         shapes: String,
+        /// The shapes document's syntax; Turtle when omitted. The prefix map its codec
+        /// records — Turtle's and TriG's `@prefix`/`PREFIX`, RDF/XML's `xmlns` — and the
+        /// base it declares travel with it exactly as they do on `validate --shapes`, so
+        /// one shapes graph packs to the same product whichever of those it is spelled in.
+        #[arg(long = "shapes-from", value_enum)]
+        shapes_from: Option<CliRdfFormat>,
         /// Base IRI the shapes document's relative IRI references resolve against, RECORDED
         /// in the product so a restore resolves them identically without the document.
         /// Omitted, the document's own `file://` retrieval IRI is derived — the same base

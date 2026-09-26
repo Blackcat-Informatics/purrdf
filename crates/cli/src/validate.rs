@@ -133,19 +133,16 @@
 //! beside it, live in [`crate::shapes_source`] rather than here, because `shacl pack` needs
 //! the identical sequence — a product packed with an `--import` table must resolve the same
 //! closure `validate --shapes --import` does, or the two commands would disagree about what
-//! the shapes graph even is. Turtle
-//! additionally carries its own `@prefix`/`PREFIX` map, recovered from the source text, as the
-//! fallback prefix environment for SHACL-AF `sh:select` queries. Every other syntax is parsed
-//! by the native codec into the same IR and carries no such fallback, because the fallback is
-//! a recovery from Turtle SOURCE TEXT and there is none to recover from. That difference is
-//! stated on `--shapes-from`'s help rather than discovered.
+//! the shapes graph even is. Every syntax carries the prefix map its codec recorded —
+//! Turtle's and TriG's `@prefix`/`PREFIX`, RDF/XML's `xmlns` — as the fallback prefix
+//! environment for SHACL-SPARQL and SHACL-AF queries, and the base the document declares as
+//! one of the IRIs it was loaded under, so the same shapes graph spelled in Turtle, TriG or
+//! RDF/XML yields the same report. A syntax that declares no prefixes has no fallback; that
+//! difference is stated on `--shapes-from`'s help rather than discovered.
 //!
-//! The prefix fallback is the ONLY difference between the two routes. Both derive the
-//! shapes document's own `file://` retrieval IRI and resolve relative IRI references
-//! against it, so `<PersonShape>` in a shapes graph means the same term whether the file
-//! is read as Turtle or as TriG. It did not always: the Turtle route reached a
-//! `parse_shapes` that took no base at all, so the one document in this command that
-//! could not resolve a relative IRI was the one describing the constraints.
+//! Every route derives the shapes document's own `file://` retrieval IRI and resolves
+//! relative IRI references against it, so `<PersonShape>` in a shapes graph means the same
+//! term whether the file is read as Turtle or as TriG.
 //!
 //! `owl:imports` are resolved by the engine, not here: [`crate::shapes_source::shapes_imports`]
 //! reads the `--import IRI=FILE` documents into the shapes graph's import table — PurRDF

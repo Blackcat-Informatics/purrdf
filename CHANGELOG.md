@@ -768,6 +768,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `ValidationReport::with_report_blank_labels` returns the relabelled report
   and a `ReportBlankLabels` map back to each node's graph and original label.
   Report bytes that carried blank nodes change.
+- **cli:** a shapes document in TriG or RDF/XML now keeps the prefixes and base
+  its codec reports, just as a Turtle document does. Its SHACL-SPARQL queries
+  can use the document's prefixes, and an `owl:imports` of its own `@base` or
+  `xml:base` resolves. `shacl pack` gains `--shapes-from`, so it can read the
+  shapes document in any RDF syntax.
 - **shapes:** a SELECT-based validator of a SPARQL-based constraint component
   on a node shape reports the focus node as `sh:value` when its solution does
   not bind `?value`, as for a SPARQL-based constraint ("The value node"); the

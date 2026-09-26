@@ -69,7 +69,7 @@ use crate::error::CliError;
 use crate::{format, source};
 
 /// A shapes document READ but not yet parsed into `Shapes`: the frozen graph plus the
-/// `@prefix`/`PREFIX` map recovered from its source text.
+/// prefix map its syntax declared.
 ///
 /// The two travel together because they are only jointly meaningful. SHACL-AF `sh:select`
 /// bodies may use prefixed names, the frozen IR does not retain a document's prefix map, and
@@ -78,13 +78,17 @@ use crate::{format, source};
 pub(crate) struct ShapesDocument {
     /// The document's quads.
     pub(crate) dataset: Arc<RdfDataset>,
-    /// Its own prefix declarations, empty for any non-Turtle syntax (the recovery is a scan
-    /// of Turtle source text, which no other syntax offers).
+    /// Its own prefix declarations, as the codec that parsed it recorded them
+    /// (`purrdf_rdf::ParseOutcome::document_prefixes`): Turtle's and TriG's
+    /// `@prefix`/`PREFIX` directives, RDF/XML's `xmlns` declarations. Empty for a syntax
+    /// that declares none (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD, a pack or
+    /// a GTS container).
     pub(crate) prefixes: Vec<(String, String)>,
     /// The IRIs this document was read FROM: the base it was parsed under (its `file://`
-    /// retrieval IRI, `--base`, or the ontology IRI an `--import` pair named) and, for
-    /// Turtle, the base an in-document `@base` established. An `owl:imports` of one of
-    /// these names a document already loaded, so it is resolved in place.
+    /// retrieval IRI, `--base`, or the ontology IRI an `--import` pair named) and the base
+    /// the document itself established — a Turtle or TriG `@base`, an RDF/XML root
+    /// `xml:base`, a JSON-LD `@context` `@base`. An `owl:imports` of one of these names a
+    /// document already loaded, so it is resolved in place.
     pub(crate) loaded: Vec<String>,
 }
 
@@ -97,15 +101,27 @@ pub(crate) struct ShapesDocument {
 /// `parse_turtle_document` (the dataset and the codec's own prefix map, from one parse),
 /// then `from_dataset_with_config(…, None)` —
 /// so a single document with no imports parses to exactly the `Shapes` it did before this
-/// seam existed. `what` names the flag for the diagnostic, since this reads `--shapes` and
-/// `--import` alike.
+/// seam existed. Every other RDF syntax takes the same one-parse route through the codec
+/// (`purrdf_rdf::parse_dataset_with`), so a TriG or RDF/XML shapes document carries its
+/// prefixes and its own base exactly as the Turtle spelling of the same graph does. `what`
+/// names the flag for the diagnostic, since this reads `--shapes` and `--import` alike.
 pub(crate) fn read_shapes_document(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
     what: &str,
 ) -> Result<ShapesDocument, CliError> {
-    if format == SourceFormat::Native(NativeRdfFormat::Turtle) {
+    let native = match format {
+        SourceFormat::Native(native) => native,
+        SourceFormat::Pack | SourceFormat::Gts => {
+            return Ok(ShapesDocument {
+                dataset: source::load_dataset(path, format, base)?,
+                prefixes: Vec::new(),
+                loaded: base.into_iter().map(str::to_owned).collect(),
+            });
+        }
+    };
+    let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
         let bytes = source::read_bytes(path)?;
         let text = String::from_utf8(bytes).map_err(|error| {
             CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}"))
@@ -116,23 +132,22 @@ pub(crate) fn read_shapes_document(
             prefixes,
         } = purrdf::shapes::text_ingest::parse_turtle_document(&text, base)
             .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
-        let mut loaded: Vec<String> = base.into_iter().map(str::to_owned).collect();
-        if let Some(document_base) = document_base
-            && !loaded.contains(&document_base)
-        {
-            loaded.push(document_base);
-        }
-        return Ok(ShapesDocument {
-            dataset,
-            prefixes,
-            loaded,
-        });
+        (dataset, document_base, prefixes)
+    } else {
+        let outcome = source::load_native_document(path, native, base)?;
+        let document_base = outcome.document_base_iri().map(str::to_owned);
+        (outcome.dataset, document_base, outcome.document_prefixes)
+    };
+    let mut loaded: Vec<String> = base.into_iter().map(str::to_owned).collect();
+    if let Some(document_base) = document_base
+        && !loaded.contains(&document_base)
+    {
+        loaded.push(document_base);
     }
-
     Ok(ShapesDocument {
-        dataset: source::load_dataset(path, format, base)?,
-        prefixes: Vec::new(),
-        loaded: base.into_iter().map(str::to_owned).collect(),
+        dataset,
+        prefixes,
+        loaded,
     })
 }
 
