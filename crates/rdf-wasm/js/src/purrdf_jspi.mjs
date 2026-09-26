@@ -5,11 +5,12 @@
 // wasm module calls, and the per-instance scheduler that drives asynchronous jobs.
 //
 // The wasm-bindgen glue imports this module by relative path (`./purrdf_jspi.mjs`) and
-// hands `purrdf_jspi_suspend` to the instance as a raw import, so this file ships next
-// to the glue in `pkg/`. It imports nothing: the package root passes the instance's
+// hands `purrdf_jspi_suspend` (and `purrdf_jspi_panicked`, which the panic hook calls)
+// to the instance as raw imports, so this file ships next to the glue in `pkg/`. It imports nothing: the package root passes the instance's
 // exports in through `installAsync` once `ready()` has instantiated it. The glue itself
 // hands this module its handle on those exports (`purrdf_jspi_bind_glue`, which
-// `make wasm-pkg` wires into the glue), so a trap can bar every entry point at once.
+// `make wasm-pkg` wires into the glue), so a trap or a panic can bar every entry point
+// at once.
 //
 // # The protocol (the Rust side is `crates/rdf-wasm/src/async_query.rs`)
 //
@@ -194,6 +195,36 @@ export function purrdf_jspi_bind_glue(exports, retarget) {
   }
   glue = { exports, retarget };
   return exports;
+}
+
+/**
+ * The raw import the instance's panic hook calls (`crates/rdf-wasm/src/panic_poison.rs`)
+ * before a Rust panic aborts: `reason` points at `len` bytes of UTF-8 describing the
+ * panic. The panic's trap is about to unwind the call — a synchronous call as much as an
+ * asynchronous job — and leave the instance's state half-changed, so the instance is
+ * poisoned here, naming the panic, before the trap reaches any JavaScript that could call
+ * in again.
+ *
+ * This runs inside the panicking wasm frame, so it never calls into the instance and
+ * never throws: an exception thrown into that frame would unwind it instead of the trap,
+ * and a failure to read the reason still poisons.
+ */
+export function purrdf_jspi_panicked(reason, len) {
+  let text = "a Rust panic";
+  try {
+    const memory = glue?.exports.memory;
+    if (memory instanceof WebAssembly.Memory) {
+      text = new TextDecoder().decode(new Uint8Array(memory.buffer, reason >>> 0, len >>> 0).slice());
+    }
+  } catch {
+    // Keep the generic reason: the poisoning is what matters.
+  }
+  try {
+    if (glue !== null) poison(text);
+  } catch {
+    // Nothing may cross the panicking frame; the trap that follows still reaches the
+    // caller.
+  }
 }
 
 /**
@@ -982,8 +1013,9 @@ function setSp(value) {
 /**
  * A trap out of a run leaves the instance in an unknown state: the job's stack context is
  * still in place of the caller's, every `RefCell` its frames borrowed stays borrowed, and
- * linear memory may hold a half-applied mutation. Nothing repairs that, so the instance
- * is dead: the glue's exports are retargeted at an object that refuses every call —
+ * linear memory may hold a half-applied mutation. A Rust panic in any call — synchronous
+ * or asynchronous — leaves the same state behind it, and its hook poisons before its trap
+ * unwinds (`purrdf_jspi_panicked`). Nothing repairs that, so the instance is dead: the glue's exports are retargeted at an object that refuses every call —
  * synchronous calls, constructors, and objects created before the trap included — every
  * in-flight job is rejected, and every later call refuses with the same error. Suspended
  * runs are never resumed.

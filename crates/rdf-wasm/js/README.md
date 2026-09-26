@@ -530,6 +530,25 @@ new page, Worker isolate or process) can load the package again. `free()` is the
 call that does not throw: it releases nothing, because the instance's memory is
 abandoned whole.
 
+A Rust panic poisons the instance the same way, in an asynchronous job or in a
+synchronous call alike. A panic aborts on wasm32 and leaves whatever it interrupted
+half-changed, so the panic hook PurRDF installs when the instance starts poisons the
+instance, naming the panic's location and message, before the panic's trap unwinds. The
+call that panicked throws the engine's `WebAssembly.RuntimeError` (`unreachable`), or the
+poison error itself when the glue touches the instance again on its way out; every call
+after it throws the poison error. PurRDF is written not to panic on any input, so a
+poison that names a panic is a PurRDF defect to report.
+
+A trap that is not a panic poisons the instance when it comes out of an asynchronous job,
+whose run the runtime drives and so sees fail. Out of a synchronous call it does not: the
+engine throws its `WebAssembly.RuntimeError` (or V8's `RangeError`) from the export
+straight to the glue's caller, and no code sits between them that could see it without
+wrapping every call. PurRDF's parser and evaluator refuse nesting before either stack runs
+out, and every PurRDF failure is a typed error or a panic, so the trap left is memory
+exhaustion, which aborts without running the panic hook. If a synchronous call throws a
+`WebAssembly.RuntimeError`, treat the instance as dead and load the package in a fresh
+realm.
+
 ### The Cloudflare adapter
 
 `@blackcatinformatics/purrdf/cloudflare` builds a SPARQL 1.1 Protocol endpoint from these

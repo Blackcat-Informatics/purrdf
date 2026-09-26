@@ -16,12 +16,15 @@ every one of those entry points at once. This step rewrites the assignment into
 
     wasm = <alias>.purrdf_jspi_bind_glue(instance.exports, (gated) => { wasm = gated; });
 
-where `<alias>` is the namespace the glue already imports `./purrdf_jspi.mjs` as.
+where `<alias>` is a namespace the glue already imports `./purrdf_jspi.mjs` as.
+wasm-bindgen imports the module once per raw import the instance declares
+(`purrdf_jspi_suspend`, `purrdf_jspi_panicked`); every one of those namespaces is the
+same module instance, so the first serves.
 The runtime keeps the reassigning closure and, on poisoning, points `wasm` at an
 object that refuses every call; a live instance pays nothing per call.
 
-The rewrite is exact or the build fails: the glue must import the runtime exactly
-once and assign `wasm = instance.exports;` exactly once, inside
+The rewrite is exact or the build fails: the glue must import the runtime (at least
+once) and assign `wasm = instance.exports;` exactly once, inside
 `__wbg_finalize_init`. A glue layout this does not recognize is a wasm-bindgen
 change to review, never something to skip.
 
@@ -46,8 +49,8 @@ class GlueError(Exception):
 def bind(source: str) -> str:
     """Return `source` with its exports assignment bound to the poison gate."""
     aliases = IMPORT.findall(source)
-    if len(aliases) != 1:
-        raise GlueError(f"expected one `import * as <name> from \"./purrdf_jspi.mjs\"`, found {len(aliases)}")
+    if not aliases:
+        raise GlueError("expected `import * as <name> from \"./purrdf_jspi.mjs\"`, found none")
     assignments = list(ASSIGNMENT.finditer(source))
     if len(assignments) != 1:
         raise GlueError(f"expected one `wasm = instance.exports;`, found {len(assignments)}")
@@ -83,6 +86,15 @@ def self_test() -> None:
     assert expected in bound, bound
     assert "wasm = instance.exports;" not in bound
     assert bound.replace(expected, "    wasm = instance.exports;") == GLUE
+    # One namespace import per raw import: the first alias is bound, and the rest of the
+    # glue is untouched.
+    twice = GLUE.replace(
+        'import * as import1 from "./purrdf_jspi.mjs"\n',
+        'import * as import1 from "./purrdf_jspi.mjs"\nimport * as import2 from "./purrdf_jspi.mjs"\n',
+    )
+    bound_twice = bind(twice)
+    assert expected in bound_twice, bound_twice
+    assert bound_twice.replace(expected, "    wasm = instance.exports;") == twice
     refusals = {
         "no runtime import": GLUE.replace('import * as import1 from "./purrdf_jspi.mjs"\n', ""),
         "already bound": bound,

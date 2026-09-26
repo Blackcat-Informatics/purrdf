@@ -1003,10 +1003,11 @@ export class QueryEngine {
   // stack region — is an `Error` with the fault's text. Errors built by the twin carry
   // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
   // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
-  // traps (or runs past its stack region's guard zone) poisons the instance: every job in
-  // flight rejects with the poison error, and from then on every call into the package —
-  // synchronous or asynchronous, on objects created before the trap too — throws it;
-  // `free()` releases nothing and does not throw. The instance cannot be used again, and
+  // traps (or runs past its stack region's guard zone) poisons the instance, and so does a
+  // Rust panic in any call, synchronous ones included: every job in flight rejects with
+  // the poison error, and from then on every call into the package — synchronous or
+  // asynchronous, on objects created before the trap too — throws it; `free()` releases
+  // nothing and does not throw. The instance cannot be used again, and
   // only a fresh JavaScript realm (a new page, Worker isolate or process) can load the
   // package again.
 
@@ -1605,9 +1606,10 @@ export function provenanceFromXml(xml: string, prefix: string, iri: string): Pro
  * compiled `WebAssembly.Module` (or omit it to fetch the colocated `.wasm`). Must be
  * awaited once before any other API is used.
  *
- * @throws {Error} Once a trap has poisoned the instance (see the asynchronous twins on
- *   `QueryEngine`): the instance cannot be used again, and only a fresh JavaScript realm
- *   (a new page, Worker isolate or process) can load the package again.
+ * @throws {Error} Once a trap or a Rust panic has poisoned the instance (see the
+ *   asynchronous twins on `QueryEngine`): the instance cannot be used again, and only a
+ *   fresh JavaScript realm (a new page, Worker isolate or process) can load the package
+ *   again.
  */
 export function ready(
   wasmBytesOrUrl?: BufferSource | URL | string | WebAssembly.Module,

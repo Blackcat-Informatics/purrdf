@@ -21,6 +21,7 @@
 // Prints one JSON line; the parent test asserts on it.
 
 import * as purrdf from "../../index.mjs";
+import { enumerateSurface, settle, settleSync } from "./poisoned-surface.mjs";
 
 const { DataFactory, Dataset, QueryEngine, ready, version } = purrdf;
 
@@ -40,33 +41,6 @@ function nested(depth) {
   return `SELECT ?s WHERE ${pattern}`;
 }
 const TOO_DEEP = nested(129);
-
-const describe = (error) => ({ name: error?.name, message: error?.message });
-const subjects = (result) =>
-  result.rows
-    .toArray()
-    .map((row) => row.s.value)
-    .sort();
-
-/** Settle a call — synchronous or asynchronous — into a comparable record. */
-async function settle(call) {
-  try {
-    const value = await call();
-    return { settled: "resolved", ...(value?.rows === undefined ? {} : { subjects: subjects(value) }) };
-  } catch (error) {
-    return { settled: "rejected", ...describe(error) };
-  }
-}
-
-/** Settle a synchronous call without awaiting anything. */
-function settleSync(call) {
-  try {
-    const value = call();
-    return { settled: "returned", value: typeof value === "object" ? typeof value : value };
-  } catch (error) {
-    return { settled: "threw", ...describe(error) };
-  }
-}
 
 const report = {};
 
@@ -137,44 +111,9 @@ report.readyAfter = await settle(() => ready());
 // abandoned whole, and a finalizer has no caller to report an error to.
 report.freeAfter = settleSync(() => data.free());
 
-// The whole package root, enumerated: every free function called, every class
-// constructed and every static called. A class the glue gives no constructor builds an
-// empty handle without touching the instance, before the trap as after it; one with a
-// constructor must refuse. Called without arguments: every one of them reaches the
-// instance before it could validate any.
-const surface = {};
-const isClass = (value) => /^class\b/.test(Function.prototype.toString.call(value));
-const hasConstructor = (value) => /\n\s*constructor\(/.test(Function.prototype.toString.call(value));
-const GLUE_INTERNALS = new Set(["length", "name", "prototype", "__wrap"]);
-for (const [name, value] of Object.entries(purrdf)) {
-  if (typeof value !== "function") {
-    surface[name] = { settled: "not a function", type: typeof value };
-    continue;
-  }
-  if (!isClass(value)) {
-    surface[name] = await settle(() => value());
-    continue;
-  }
-  if (hasConstructor(value)) surface[`new ${name}`] = await settle(() => new value());
-  for (const key of Object.getOwnPropertyNames(value)) {
-    if (GLUE_INTERNALS.has(key) || typeof value[key] !== "function") continue;
-    surface[`${name}.${key}`] = await settle(() => value[key]());
-  }
-}
-// Every method and getter of the objects created before the trap.
-for (const [label, object] of [
-  ["dataset", Dataset.prototype],
-  ["engine", QueryEngine.prototype],
-]) {
-  const held = label === "dataset" ? data : engine;
-  for (const key of Object.getOwnPropertyNames(object)) {
-    if (key === "constructor" || key === "free" || key === "__destroy_into_raw" || key.startsWith("__purrdf")) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (descriptor.get !== undefined) surface[`${label}.${key}`] = await settle(() => held[key]);
-    else if (typeof descriptor.value === "function") surface[`${label}.${key}()`] = await settle(() => held[key]());
-  }
-}
-report.surface = surface;
+// The whole package root, enumerated, and every method and getter of the objects created
+// before the trap.
+report.surface = await enumerateSurface(purrdf, data, engine);
 
 process.stdout.write(`${JSON.stringify(report)}\n`);
 // The in-flight job's host promise never settles; nothing else is pending.

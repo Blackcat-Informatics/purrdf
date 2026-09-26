@@ -1178,18 +1178,17 @@ msgid ""
 "`sh:SPARQLTarget`; a constraint query that uses `SERVICE` is refused when "
 "the shapes graph loads, on either lane."
 msgstr ""
-"SHACL 验证同样会对 SPARQL 求值：`sh:SPARQLTarget` 查询、"
-"SHACL-SPARQL 约束，以及 SHACL-AF 的节点表达式与规则。"
-"因此，SHACL 函数也有孪生方法：`shaclValidateToSarifAsync`、"
-"`shaclValidateChangesToSarifAsync`、`shaclEntailAsync`，"
-"以及 `shaclProductValidateToSarifAsync` 与它的 `Rebuild`、"
-"`Expecting` 和 `RebuildExpecting` 形式。每个孪生方法依次接受其同步孪生方法的参数和宿主选项，"
-"并返回与同步孪生方法完全相同的结果；被拒绝的预编译形状产物（prepared shapes product）"
-"会以同一个 `ShaclProductRefusal` 拒绝。`signal` 既在查询内部轮询，"
-"也在焦点节点之间轮询，因此即使一次验证中没有任何 SPARQL，它也会让出事件循环，"
-"并在信号触发时停止。SHACL 只允许在不预绑定任何变量的查询（例如 `sh:SPARQLTarget`）"
-"中使用 `SERVICE`；使用 `SERVICE` 的约束查询会在加载形状图时被拒绝，"
-"两条通道都是如此。"
+"SHACL 验证同样会对 SPARQL 求值：`sh:SPARQLTarget` 查询、SHACL-SPARQL 约束，以"
+"及 SHACL-AF 的节点表达式与规则。因此，SHACL 函数也有孪生方法："
+"`shaclValidateToSarifAsync`、`shaclValidateChangesToSarifAsync`、"
+"`shaclEntailAsync`，以及 `shaclProductValidateToSarifAsync` 与它的 "
+"`Rebuild`、`Expecting` 和 `RebuildExpecting` 形式。每个孪生方法依次接受其同步"
+"孪生方法的参数和宿主选项，并返回与同步孪生方法完全相同的结果；被拒绝的预编译"
+"形状产物（prepared shapes product）会以同一个 `ShaclProductRefusal` 拒绝。"
+"`signal` 既在查询内部轮询，也在焦点节点之间轮询，因此即使一次验证中没有任何 "
+"SPARQL，它也会让出事件循环，并在信号触发时停止。SHACL 只允许在不预绑定任何变"
+"量的查询（例如 `sh:SPARQLTarget`）中使用 `SERVICE`；使用 `SERVICE` 的约束查询"
+"会在加载形状图时被拒绝，两条通道都是如此。"
 
 #: src/getting-started/javascript.md:138
 msgid ""
@@ -1366,22 +1365,24 @@ msgid ""
 "default); `evidence.async.stackHighWaterBytes` reports how deep it went, and "
 "a request too deep for the region fails with a typed error. A job that "
 "traps, or whose frames run past the region's guard zone, poisons the "
-"instance: from then on every call into the package — synchronous ones and "
-"objects created before the trap included — throws, and only a fresh "
-"JavaScript realm (a new page, Worker isolate or process) can load it again."
+"instance, and so does a Rust panic in any call, synchronous or asynchronous: "
+"from then on every call into the package — synchronous ones and objects "
+"created before the trap included — throws, and only a fresh JavaScript realm "
+"(a new page, Worker isolate or process) can load it again."
 msgstr ""
 "每个作业在自己的栈区域上求值，其大小为 `stackBytes` 字节（默认 2 MiB）；"
 "`evidence.async.stackHighWaterBytes` 报告它用到了多深，而嵌套深度超出该区域的"
 "请求会以带类型的错误失败。若某个作业触发 trap，或其栈帧越过了区域下方的保护"
-"区，该实例即被毒化：此后对本包的每一次调用——包括同步调用，以及对 trap 之前创"
-"建的对象的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker "
-"isolate 或进程）才能再次加载本包。"
+"区，该实例即被毒化；任何调用（无论同步还是异步）中发生的 Rust panic 也会同样"
+"毒化该实例：此后对本包的每一次调用——包括同步调用，以及对 trap 之前创建的对象"
+"的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker isolate "
+"或进程）才能再次加载本包。"
 
-#: src/getting-started/javascript.md:238
+#: src/getting-started/javascript.md:239
 msgid "Cloudflare Workers"
 msgstr ""
 
-#: src/getting-started/javascript.md:240
+#: src/getting-started/javascript.md:241
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1426,7 +1427,7 @@ msgstr ""
 "在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 "
 "`maxRedirects`（默认 5）。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:264
+#: src/getting-started/javascript.md:265
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1471,7 +1472,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:303
+#: src/getting-started/javascript.md:304
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1500,7 +1501,7 @@ msgstr ""
 "`deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一"
 "次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:318
+#: src/getting-started/javascript.md:319
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1510,11 +1511,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:322
+#: src/getting-started/javascript.md:323
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:324
+#: src/getting-started/javascript.md:325
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1526,7 +1527,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则"
 "会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:329
+#: src/getting-started/javascript.md:330
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1538,26 +1539,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:338
+#: src/getting-started/javascript.md:339
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:340
+#: src/getting-started/javascript.md:341
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:345
+#: src/getting-started/javascript.md:346
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:346
+#: src/getting-started/javascript.md:347
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:349
+#: src/getting-started/javascript.md:350
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."

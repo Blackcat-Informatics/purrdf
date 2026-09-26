@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as packageRoot from "../index.mjs";
 import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
+import { assertSurfacePoisoned } from "./fixtures/poisoned-surface.mjs";
 
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
@@ -539,19 +540,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
 
   // The enumerated surface: every entry refuses with the poison, and the enumeration
   // reached every function the package root exports, so it cannot pass by being empty.
-  const { surface } = report;
-  for (const [name, outcome] of Object.entries(surface)) {
-    assert.deepEqual(outcome, REJECTED, name);
-  }
-  for (const [name, value] of Object.entries(packageRoot)) {
-    if (typeof value !== "function") continue;
-    const source = Function.prototype.toString.call(value);
-    if (!/^class\b/.test(source)) assert.ok(name in surface, `${name} was not called`);
-    else if (/\n\s*constructor\(/.test(source)) assert.ok(`new ${name}` in surface, `new ${name} was not called`);
-  }
-  for (const name of ["new QueryEngine", "new Dataset", "Dataset.parse", "version", "ready", "dataset.size", "engine.query()"]) {
-    assert.ok(name in surface, `${name} is missing from the enumerated surface`);
-  }
+  assertSurfacePoisoned(report.surface, packageRoot, POISON);
 });
 
 test("beginAsync beyond maxConcurrentJobs is refused", async () => {

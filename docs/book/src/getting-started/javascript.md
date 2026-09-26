@@ -230,10 +230,11 @@ network error, which the handler above reports as a transport failure. Write
 - Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by
   default); `evidence.async.stackHighWaterBytes` reports how deep it went, and a
   request too deep for the region fails with a typed error. A job that traps,
-  or whose frames run past the region's guard zone, poisons the instance: from
-  then on every call into the package — synchronous ones and objects created
-  before the trap included — throws, and only a fresh JavaScript realm (a new
-  page, Worker isolate or process) can load it again.
+  or whose frames run past the region's guard zone, poisons the instance, and so
+  does a Rust panic in any call, synchronous or asynchronous: from then on every
+  call into the package — synchronous ones and objects created before the trap
+  included — throws, and only a fresh JavaScript realm (a new page, Worker
+  isolate or process) can load it again.
 
 ### Cloudflare Workers
 

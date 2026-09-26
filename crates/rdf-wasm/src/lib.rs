@@ -78,6 +78,8 @@ use wasm_bindgen::prelude::*;
 //   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
 //                 an HTTP request read into an operation, its dataset parameters
 //                 applied, its response format negotiated
+//   * `panic_poison` — the panic hook that poisons the instance before a panic's trap
+//                 unwinds, so no later call runs on the state the panic left behind
 mod async_query;
 mod codec;
 mod convert;
@@ -85,6 +87,7 @@ mod dataset;
 pub mod entail;
 mod factory;
 mod jsonld;
+mod panic_poison;
 mod projection;
 mod protocol;
 mod query;
@@ -121,10 +124,10 @@ unsafe extern "C" {
 
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
 /// in [`purrdf_stack`], the measurement the SPARQL parser's and evaluator's stack guards
-/// refuse against.
+/// refuse against, and the panic hook that poisons the instance (the `panic_poison` module).
 ///
-/// Its default is address 0, the floor rustc's `--stack-first` layout gives the stack;
-/// this reads the linker's own record of it instead, so the guards measure against
+/// The floor's default is address 0, the floor rustc's `--stack-first` layout gives the
+/// stack; this reads the linker's own record of it instead, so the guards measure against
 /// wherever the stack really ends however this module was linked. The
 /// asynchronous lane switches away from this floor onto each job's region and back
 /// (`async_query`), and puts this value back whenever a job suspends or returns.
@@ -135,6 +138,32 @@ pub fn install_stack_floor() {
     // address the compiler assumes is not null.
     let low = core::hint::black_box(&raw const __stack_low) as usize;
     purrdf_stack::replace_floor(low);
+    panic_poison::install();
+}
+
+/// Test-only: panics when the host has armed it, so the Node lane can prove that a panic
+/// out of a synchronous call poisons the instance. Returns 0, doing nothing, otherwise.
+///
+/// Every PurRDF entry point is written not to panic, so no input reaches one; this is
+/// the one way a test can raise a genuine Rust panic through a synchronous export. It is
+/// a raw export, not a `#[wasm_bindgen]` one: the glue generates no wrapper for it and
+/// the package root does not export it, so it is reachable only through the instance's
+/// raw exports. And it is inert unless the JavaScript global
+/// `__purrdfArmTestPanic` is `true` when it is called — a flag only the test fixture that
+/// exercises it sets.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __purrdf_test_panic() -> u32 {
+    let armed = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str(panic_poison::TEST_PANIC_FLAG),
+    )
+    .is_ok_and(|flag| flag.as_bool() == Some(true));
+    if armed {
+        panic!("the armed test panic fired");
+    }
+    0
 }
 
 /// The purrdf engine version (the crate's SemVer), exposed to JS as `version()`.
