@@ -28,10 +28,11 @@
 //!   `{"@list": [ <members> ]}` (JSON-LD 1.1 §4.3.2), members projected
 //!   recursively and in list order, and its cells are not `@graph` nodes;
 //!   `rdf:nil` is `{"@list": []}`. A list that is a member of a list also
-//!   carries its head cell's label as `@index` (see `project_list_or_value`). Which lists convert is decided exactly by
-//!   the list conversion of JSON-LD 1.1 Processing Algorithms and API §8.4.2
-//!   (Serialize RDF as JSON-LD, step 6.4) — see [`ListIndex`] — so a branching,
-//!   cyclic, shared, IRI-named or annotated list keeps the node-graph form.
+//!   carries its head cell's label as `@index` (see `project_list_or_value`).
+//!   Which lists convert is decided exactly by the list conversion of JSON-LD
+//!   1.1 Processing Algorithms and API §8.4.2 (Serialize RDF as JSON-LD, step
+//!   6.4) — see the crate-private `ListIndex` — so a branching, cyclic, shared,
+//!   IRI-named or annotated list keeps the node-graph form.
 //! * **Typed literal** — `{"@value": "<lexical>", "@type": "<compacted-datatype>"}`,
 //!   except for the two literal kinds a JSON scalar denotes without loss
 //!   (JSON-LD 1.1 §8.6, Object to RDF Conversion, maps them back to exactly the
