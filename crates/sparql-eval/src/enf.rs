@@ -428,8 +428,8 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
 /// [`crate::governor::soundness::walk_spine`] used to assign `original`'s own
 /// ordinals). This also walks into any `EXISTS` pattern nested inside an expression the
 /// clone carries, so a doubly-nested `EXISTS` reached this way gets its own entry too —
-/// which is what lets [`crate::eval::EvalCtx::prepared_exists`] resolve a nested site's
-/// cache key back to a stable address instead of rebuilding every outer row.
+/// which is what lets a nested site read from this preparation carry its own map on to
+/// the plan (`crate::deferred_exists`).
 ///
 /// Declines to track — returning the map unchanged, with no entry for that node — for
 /// `normalize`'s two SYNTHESIZING cases, `Project` and `Union`: their own root is a

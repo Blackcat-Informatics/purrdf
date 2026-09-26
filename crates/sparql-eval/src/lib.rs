@@ -90,6 +90,7 @@ mod construct;
 mod contain;
 mod convert;
 mod dataset_spec;
+mod deferred_exists;
 mod describe_query;
 mod enf;
 pub mod engine;
@@ -108,6 +109,10 @@ pub mod interned;
 pub mod knn;
 mod list_fn;
 mod modifier;
+#[cfg(test)]
+mod nested_exists_gate;
+#[cfg(test)]
+mod op_count;
 pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;

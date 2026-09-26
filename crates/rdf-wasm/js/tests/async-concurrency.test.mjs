@@ -375,7 +375,8 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
 
 // Nesting the parser admits can need more stack than a region holds: 63 nested
 // `FILTER NOT EXISTS` or 126 nested `LATERAL` trapped the synchronous lane's 1 MiB stack
-// before the evaluator guarded its own recursion. On the smallest region both are the
+// before the evaluator guarded its own recursion (the synchronous lane now answers the
+// first — see `query.test.mjs` — but a 512 KiB region still cannot). On the smallest region both are the
 // region's typed exhaustion — their frames poll at every algebra node, so the guard band
 // stops them before the evaluator's own check would — and the instance is not poisoned;
 // on a 16 MiB region both answer, with the rows their semantics give.

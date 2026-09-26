@@ -121,44 +121,84 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     mu: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     // Before the substitution walk copies `pattern` for this row, and before the copy is
-    // evaluated: both recurse over the whole correlated subtree. See `crate::stack`.
+    // evaluated: both recurse over the correlated subtree. See `crate::stack`.
     crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    eval_substituted(pattern, &row, source, ctx)
+}
+
+/// [`eval_correlated`] with the row already in substitution form: substitute `row` into
+/// `pattern` and evaluate the copy in a substituted window.
+///
+/// The walk copies `pattern`'s own nodes and leaves every `EXISTS` body in it as a
+/// placeholder owed the row (see [`crate::deferred_exists`]): the bodies' sites are
+/// prepared first — on the first substitution of `pattern`, and kept where `source` says
+/// for every later one — and the placeholders are installed as the window's
+/// [`EvalCtx::deferred_exists`] for as long as the copy is evaluated.
+///
+/// # Errors
+///
+/// As [`eval_correlated`].
+pub(crate) fn eval_substituted<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &crate::expr::SubstitutionRow,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    #[cfg(test)]
+    if crate::deferred_exists::eager_forced() {
+        let substituted = crate::expr::substitute_pattern(pattern, row)?;
+        let mut guard = ctx.enter_substituted_exists(None, None);
+        return eval_evaluated(&substituted, &mut guard);
+    }
+    let sites = crate::deferred_exists::nested_sites(pattern, source, ctx)?;
+    let enclosing_placeholders = ctx.deferred_exists.clone();
+    let mut deferral = crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites);
     // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
     // another `LATERAL`'s substituted RHS, its already-installed enclosing map) resolves
-    // to a ledger ordinal — a `LATERAL` right operand, never a correlated `EXISTS` inner
-    // (which is not walked by `walk_spine` even unsubstituted; see the ledger module
-    // doc's "Attribution of work that is not a plan node"). Only then is the substitution
-    // walk worth tracking: every node it copies 1:1 keeps its own ledger identity across
-    // the per-row substituted copy instead of folding into the enclosing node.
+    // to a ledger ordinal — a `LATERAL` right operand, or a correlated `EXISTS` inner
+    // whose preparation's map the caller pushed. Only then is the substitution walk worth
+    // tracking: every node it copies 1:1 keeps its own ledger identity across the per-row
+    // substituted copy instead of folding into the enclosing node.
     let source_addr = std::ptr::from_ref(pattern) as usize;
     let (substituted, ledger_map) = if ctx.resolve_ledger_ordinal(source_addr).is_some() {
         // The immediately enclosing window's map, when THIS window is itself substituting a
-        // subtree an enclosing `LATERAL` window already substituted (`pattern` is then one
-        // of that window's own synthetic copies, not a real plan address) — read before
-        // this call's own map is pushed below, so it names exactly the one window `pattern`
+        // subtree an enclosing window already substituted (`pattern` is then one of that
+        // window's own synthetic copies, not a real plan address) — read before this
+        // call's own map is pushed below, so it names exactly the one window `pattern`
         // came from. `substitute_pattern_tracked` uses it to resolve past that window's
         // scaffolding straight to the real plan address, and to arbitrate `counts_rows` so
         // nesting never mints more than one counting node per real ordinal — see
         // `crate::expr::SubstitutionSource`'s doc.
         let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
-        let substituted =
-            crate::expr::substitute_pattern_tracked(pattern, &row, &mut map, enclosing)?;
+        let substituted = crate::expr::substitute_pattern_tracked(
+            pattern,
+            row,
+            &mut map,
+            enclosing,
+            &mut deferral,
+        )?;
         (substituted, Some(map))
     } else {
-        (crate::expr::substitute_pattern(pattern, &row)?, None)
+        (
+            crate::expr::substitute_pattern_deferring(pattern, row, &mut deferral)?,
+            None,
+        )
     };
+    let placeholders = deferral.into_placeholders();
     // `substituted` is a per-row heap temporary whose node addresses do not
     // outlive this call; the guard flags the window so address-keyed
-    // memoization is bypassed while it is evaluated, and restores the prior
-    // flag (and pops `ledger_map`, when one was pushed) on drop — even on the
-    // `?` this function's caller applies to its result — so nested correlated
-    // evaluations compose correctly.
-    let mut guard = ctx.enter_substituted_exists(ledger_map);
+    // memoization is bypassed while it is evaluated, installs its placeholders, and
+    // restores the prior flag and placeholders (and pops `ledger_map`, when one was
+    // pushed) on drop — even on the `?` this function's caller applies to its result —
+    // so nested correlated evaluations compose correctly.
+    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders);
     eval_evaluated(&substituted, &mut guard)
 }
 
@@ -269,7 +309,18 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
     for mu in &l.rows {
-        let evaluated = eval_correlated(right, mu, &left_schema, ctx)?;
+        // `right` is a plan node unless this `LATERAL` is itself part of a substituted
+        // copy; only a plan node's nested `EXISTS` sites may be kept by its address.
+        let sites = if ctx.in_substituted_exists {
+            crate::deferred_exists::SiteSlot::Transient
+        } else {
+            crate::deferred_exists::SiteSlot::Plan
+        };
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites,
+            plan_map: None,
+        };
+        let evaluated = eval_correlated(right, mu, &left_schema, source, ctx)?;
         let r = match evaluated {
             Evaluated::Complete(seq) => seq,
             truncated @ Evaluated::Truncated(_) => {
@@ -379,7 +430,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         || !ctx.may_fork_sibling_patterns()
         || !arms
             .iter()
-            .all(|arm| crate::parallel::is_parallel_safe_pattern(arm, ctx.safety_registries()))
+            .all(|arm| ctx.pattern_is_parallel_safe(arm))
     {
         // Inline for the two arms nearly every `UNION` has, so the common case spends no
         // allocation on holding its arms' results.

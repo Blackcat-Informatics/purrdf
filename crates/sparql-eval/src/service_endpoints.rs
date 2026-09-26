@@ -132,9 +132,12 @@ enum Scope<'a> {
 /// The endpoint variables of `right` this module can serve from the enclosing operator's
 /// left operand: those of a `SERVICE ?v` reached only in direct positions (see the module
 /// doc for why only those).
-fn served_endpoint_variables(right: &GraphPattern) -> Vec<Variable> {
+fn served_endpoint_variables(
+    right: &GraphPattern,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
+) -> Vec<Variable> {
     let mut uses = Vec::new();
-    classify(right, true, &mut Vec::new(), &mut uses);
+    classify(right, true, &mut Vec::new(), &mut uses, placeholders);
     uses.into_iter()
         .filter(|u| u.direct && !u.conflict)
         .map(|u| u.variable)
@@ -178,6 +181,7 @@ fn classify<'a>(
     direct: bool,
     scopes: &mut Vec<Scope<'a>>,
     uses: &mut Vec<EndpointUse>,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
 ) {
     // A walk over an operand that may be deep; run inside a `crate::stack::walk` scope,
     // which discards the partial answer when a level refuses.
@@ -197,12 +201,12 @@ fn classify<'a>(
             }
         }
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            classify(left, direct, scopes, uses);
-            classify(right, direct, scopes, uses);
+            classify(left, direct, scopes, uses, placeholders);
+            classify(right, direct, scopes, uses, placeholders);
         }
         GraphPattern::Union { arms } => {
             for arm in arms {
-                classify(arm, direct, scopes, uses);
+                classify(arm, direct, scopes, uses, placeholders);
             }
         }
         GraphPattern::LeftJoin {
@@ -210,19 +214,19 @@ fn classify<'a>(
             right,
             expression,
         } => {
-            classify(left, direct, scopes, uses);
-            classify(right, false, scopes, uses);
+            classify(left, direct, scopes, uses, placeholders);
+            classify(right, false, scopes, uses, placeholders);
             if let Some(expression) = expression {
-                classify_expression(expression, scopes, uses);
+                classify_expression(expression, scopes, uses, placeholders);
             }
         }
         GraphPattern::Minus { left, right } => {
-            classify(left, direct, scopes, uses);
-            classify(right, false, scopes, uses);
+            classify(left, direct, scopes, uses, placeholders);
+            classify(right, false, scopes, uses, placeholders);
         }
         GraphPattern::Filter { expr, inner } => {
-            classify(inner, direct, scopes, uses);
-            classify_expression(expr, scopes, uses);
+            classify(inner, direct, scopes, uses, placeholders);
+            classify_expression(expr, scopes, uses, placeholders);
         }
         GraphPattern::Extend {
             inner, expression, ..
@@ -230,26 +234,26 @@ fn classify<'a>(
         | GraphPattern::Unfold {
             inner, expression, ..
         } => {
-            classify(inner, direct, scopes, uses);
-            classify_expression(expression, scopes, uses);
+            classify(inner, direct, scopes, uses, placeholders);
+            classify_expression(expression, scopes, uses, placeholders);
         }
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner } => classify(inner, direct, scopes, uses),
+        | GraphPattern::Reduced { inner } => classify(inner, direct, scopes, uses, placeholders),
         GraphPattern::OrderBy { inner, expression } => {
-            classify(inner, direct, scopes, uses);
+            classify(inner, direct, scopes, uses, placeholders);
             for key in expression {
                 match key {
                     purrdf_sparql_algebra::OrderExpression::Asc(e)
                     | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                        classify_expression(e, scopes, uses);
+                        classify_expression(e, scopes, uses, placeholders);
                     }
                 }
             }
         }
         GraphPattern::Project { inner, variables } => {
             scopes.push(Scope::Project(variables));
-            classify(inner, direct, scopes, uses);
+            classify(inner, direct, scopes, uses, placeholders);
             scopes.pop();
         }
         // A slice keeps a positional selection of its input, and which rows it keeps
@@ -261,7 +265,7 @@ fn classify<'a>(
             length,
         } => {
             let identity = *start == 0 && length.is_none();
-            classify(inner, direct && identity, scopes, uses);
+            classify(inner, direct && identity, scopes, uses, placeholders);
         }
         GraphPattern::Group {
             inner,
@@ -269,7 +273,7 @@ fn classify<'a>(
             aggregates,
         } => {
             scopes.push(Scope::Group(variables));
-            classify(inner, direct, scopes, uses);
+            classify(inner, direct, scopes, uses, placeholders);
             scopes.pop();
             for (_, aggregate) in aggregates {
                 for e in aggregate.args().iter().chain(
@@ -278,7 +282,7 @@ fn classify<'a>(
                         .iter()
                         .map(crate::modifier::order_sort_key),
                 ) {
-                    classify_expression(e, scopes, uses);
+                    classify_expression(e, scopes, uses, placeholders);
                 }
             }
         }
@@ -291,14 +295,29 @@ fn classify_expression<'a>(
     expr: &'a Expression,
     scopes: &mut Vec<Scope<'a>>,
     uses: &mut Vec<EndpointUse>,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
 ) {
     if crate::stack::walk_is_low("SERVICE endpoint analysis") {
         return;
     }
     crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
         match part {
-            ExpressionPart::Sub(sub) => classify_expression(sub, scopes, uses),
-            ExpressionPart::Exists(pattern) => classify(pattern, false, scopes, uses),
+            ExpressionPart::Sub(sub) => classify_expression(sub, scopes, uses, placeholders),
+            // A substituted copy's placeholder stands for a body the walk cannot see: its
+            // site lists the body's `SERVICE ?v` clauses, and the substitution it is owed
+            // decides which of them are still variable endpoints.
+            ExpressionPart::Exists(pattern) => match placeholders
+                .and_then(|map| map.get(&(std::ptr::from_ref(pattern) as usize)))
+            {
+                Some(slot) => {
+                    for (variable, silent) in &slot.site.service_uses {
+                        if !slot.env.resolves_endpoint(variable, *silent) {
+                            record(variable, false, scopes, uses);
+                        }
+                    }
+                }
+                None => classify(pattern, false, scopes, uses, placeholders),
+            },
             ExpressionPart::Call(_) => {}
         }
         false
@@ -376,7 +395,8 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     if ctx.endpoint_scan == EndpointScan::Absent {
         return eval_evaluated(right, ctx);
     }
-    let served = crate::stack::walk(|| served_endpoint_variables(right))?;
+    let placeholders = ctx.deferred_exists.clone();
+    let served = crate::stack::walk(|| served_endpoint_variables(right, placeholders.as_deref()))?;
     if served.is_empty() {
         return eval_evaluated(right, ctx);
     }

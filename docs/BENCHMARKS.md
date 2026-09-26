@@ -84,7 +84,9 @@ simply not narrated here:
   intermediate rows) and by the differential corpus test in
   `crates/sparql-conformance/tests/cost_planner_corpus.rs`.
 - `crates/sparql-eval/benches/exists_decorrelation.rs` — `FILTER NOT EXISTS`
-  anti-join cost with and without the `exists_memo` decorrelation path.
+  anti-join cost with and without the `exists_memo` decorrelation path, and
+  nested correlated `FILTER EXISTS` at increasing depths (the per-row cost is
+  pinned by operation counts in `nested_exists_gate`, not by these timings).
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
@@ -147,7 +149,7 @@ here.
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
-| `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization. |
+| `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization; nested correlated `FILTER EXISTS` cost by nesting depth. |
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |

@@ -97,6 +97,8 @@ pub(crate) fn pattern(node: &GraphPattern) -> GraphPattern {
     if walk_is_low("copy of a graph pattern") {
         return placeholder_pattern();
     }
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Cloned);
     let boxed = |child: &GraphPattern| Box::new(pattern(child));
     match node {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {

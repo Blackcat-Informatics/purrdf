@@ -37,6 +37,12 @@
 //!     three shapes measure: many outer rows share few distinct correlated-variable
 //!     restrictions, so the memo turns `N` per-row substituted `LeftJoin`
 //!     evaluations into `k`.
+//!   - `nested_correlated_depth` — `d` nested `FILTER EXISTS`, every level correlated
+//!     with the one around it, over 100 outer rows, at several depths. One outer row
+//!     substitutes each level's own body once (the nested bodies are substituted when
+//!     they are evaluated, not copied into the level around them), so the time per depth
+//!     should grow about linearly; the operation counts that pin this are
+//!     `nested_exists_gate`'s tests, not these timings.
 //!
 //! Report-only, `make bench` lane only — excluded from `make check`.
 
@@ -150,6 +156,16 @@ const OPTIONAL_INSIDE_EXISTS_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/know
        FILTER(?w != <http://ex/nobody>) \
      } }";
 
+/// `d` nested `FILTER EXISTS`, every level correlated with the one around it through
+/// `?s` and `?o`.
+fn nested_correlated_query(depth: usize) -> String {
+    let mut body = "?s <http://ex/knows> ?o".to_owned();
+    for _ in 0..depth {
+        body = format!("?s <http://ex/knows> ?o FILTER EXISTS {{ {body} }}");
+    }
+    format!("SELECT ?s WHERE {{ {body} }}")
+}
+
 fn run(ds: &RdfDataset, query: &str, memo: bool) {
     let parsed = SparqlParser::new().parse_query(query).expect("parse");
     let mut ctx = EvalCtx::new(ds);
@@ -225,5 +241,25 @@ fn bench_exists_decorrelation(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_exists_decorrelation);
+fn bench_nested_correlated_depth(c: &mut Criterion) {
+    // 100 outer rows, each restricting the outermost `EXISTS` differently, so its memo
+    // shares nothing and every row descends every level.
+    let ds = knows_dataset(100);
+    let mut group = c.benchmark_group("exists_nested_correlated_depth");
+    for depth in [8_usize, 16, 32, 64] {
+        let query = nested_correlated_query(depth);
+        group.bench_with_input(
+            criterion::BenchmarkId::from_parameter(depth),
+            &query,
+            |bencher, query| bencher.iter(|| run(&ds, query, true)),
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_exists_decorrelation,
+    bench_nested_correlated_depth
+);
 criterion_main!(benches);

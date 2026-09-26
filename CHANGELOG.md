@@ -579,6 +579,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **sparql-eval:** nested correlated `FILTER EXISTS` / `NOT EXISTS` cost time and
+  memory cubic in the nesting depth: each level's per-row substitution copied every
+  level below it, walked that copy again for its variables at every `FILTER`, and
+  prepared the nested body afresh. A nested body is now substituted when it is
+  evaluated, from a preparation made once per evaluation, so one more outer row costs
+  work proportional to the depth. Counted per extra outer row at depths 20, 40 and 80:
+  26,773 / 315,343 / 4,205,883 tree nodes before, 78 / 158 / 318 after. Answers are
+  unchanged.
+
+- **sparql-eval:** EXPLAIN evaluated a nested `EXISTS` that reads an outer variable
+  with the first outer row's value for every row, and could report rows the query does
+  not return.
+
 - **sparql-eval:** the default HTTP federation user agent named version 0.1. It is
   now `purrdf-sparql-eval/<crate version> (SERVICE federation)`.
 

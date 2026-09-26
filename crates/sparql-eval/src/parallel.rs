@@ -367,7 +367,23 @@ pub(crate) fn should_parallelize(work_items: usize) -> bool {
 /// [`Function::Custom`] call ([`function_is_unsafe`]) or, inside an `EXISTS` pattern, a
 /// property-function node ([`property_function_is_unsafe`]).
 pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
-    !expr_reaches_unsafe_builtin(expr, registries)
+    !expr_reaches_unsafe_builtin(expr, registries, &|_| None)
+}
+
+/// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
+/// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
+/// [`is_parallel_safe_with`].
+pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
+
+/// [`is_parallel_safe`], with every `EXISTS` body first offered to `verdict`: a
+/// substituted copy's placeholder stands for a body the walk cannot see, and `verdict`
+/// answers for it (`crate::eval::EvalCtx::may_fork_row_loop`).
+pub(crate) fn is_parallel_safe_with(
+    expr: &Expression,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    !expr_reaches_unsafe_builtin(expr, registries, verdict)
 }
 
 /// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
@@ -433,7 +449,16 @@ pub(crate) fn is_parallel_safe_pattern(
     pattern: &GraphPattern,
     registries: SafetyRegistries<'_>,
 ) -> bool {
-    !pattern_reaches_unsafe_builtin(pattern, registries)
+    !pattern_reaches_unsafe_builtin(pattern, registries, &|_| None)
+}
+
+/// [`is_parallel_safe_pattern`] with [`is_parallel_safe_with`]'s `verdict`.
+pub(crate) fn is_parallel_safe_pattern_with(
+    pattern: &GraphPattern,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    !pattern_reaches_unsafe_builtin(pattern, registries, verdict)
 }
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
@@ -448,7 +473,11 @@ pub(crate) fn is_parallel_safe_pattern(
 /// the moment this closure returns `true` — so the answer is identical to the
 /// `||` chain this replaces, including for expressions whose later arms would
 /// have been skipped.
-fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
+fn expr_reaches_unsafe_builtin(
+    expr: &Expression,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
     // Out of stack for the walk (see `crate::stack`): answer "unsafe", the conservative
     // side — a sequential fallback is always correct, and the evaluation that follows
     // refuses at its own next check.
@@ -458,9 +487,10 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
-            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries),
+            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries, verdict),
             ExpressionPart::Call(f) => function_is_unsafe(f, registries.functions),
-            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registries),
+            ExpressionPart::Exists(pattern) => verdict(pattern)
+                .unwrap_or_else(|| pattern_reaches_unsafe_builtin(pattern, registries, verdict)),
         };
         found
     });
@@ -662,6 +692,7 @@ fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
     registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
 ) -> bool {
     // A property-function node is a LEAF for the shared decomposition — it has neither
     // a child pattern nor an attached expression — so the visitor yields nothing for
@@ -678,8 +709,10 @@ fn pattern_reaches_unsafe_builtin(
     let mut found = false;
     visit_pattern_parts(pattern, &mut |part| {
         found |= match part {
-            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registries),
-            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries),
+            PatternPart::Child(child, _edge) => {
+                pattern_reaches_unsafe_builtin(child, registries, verdict)
+            }
+            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries, verdict),
         };
         found
     });

@@ -1541,6 +1541,8 @@ pub(crate) fn analyze_pattern(
     if crate::stack::walk_is_low("EXISTS analysis") {
         return NodeAnalysis::default();
     }
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Analyzed);
     let addr = std::ptr::from_ref(pattern) as usize;
     if let Some(existing) = table.get(&addr) {
         return existing.clone();
