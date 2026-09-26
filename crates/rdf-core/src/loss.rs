@@ -1564,12 +1564,6 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
          value schema is widened.",
     ),
     (
-        "array-cardinality-validation-widened",
-        "A JSON Schema minItems/maxItems assertion exceeds the declaration emitter's fixed \
-         tuple-expansion budget. Item and tuple-prefix carriers remain, while exact length \
-         validation is widened to keep declaration size bounded deterministically.",
-    ),
-    (
         "array-contains-validation-dropped",
         "JSON Schema contains/minContains/maxContains assertions quantify matching array \
          elements and have no TypeScript assignability equivalent. Item and cardinality \
@@ -1607,11 +1601,13 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "numeric-validation-dropped",
-        "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric \
-         predicates with no exact TypeScript number-type expression; integer const/enum values \
-         outside the IEEE-754 safe range also have no exact TypeScript number literal. The \
-         numeric carrier or closest literal remains while the predicate or excess precision is \
-         omitted.",
+        "JSON Schema minimum/maximum/exclusive bounds and multipleOf over infinitely many \
+         numbers have no TypeScript expression: the only proper subtypes of number are unions of \
+         numeric literals, and TypeScript has no complement of a literal within number. (Over a \
+         finite const/enum the numbers that fail are left out, exactly.) Integer const/enum \
+         values outside the IEEE-754 safe range also have no exact TypeScript number literal. \
+         The numeric carrier or closest literal remains while the predicate or excess precision \
+         is omitted.",
     ),
     (
         "object-literal-validation-widened",
@@ -1649,12 +1645,6 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
          remains while the predicate is omitted.",
     ),
     (
-        "tuple-array-validation-widened",
-        "A JSON Schema prefixItems tuple exceeds the declaration emitter's fixed tuple-expansion \
-         budget. The common item carrier remains while position-specific validation beyond the \
-         budget is widened deterministically.",
-    ),
-    (
         "unevaluated-validation-dropped",
         "JSON Schema unevaluatedProperties/unevaluatedItems depends on applicator evaluation state \
          that TypeScript's structural type system does not expose. Representable local \
@@ -1662,8 +1652,12 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "unique-items-validation-dropped",
-        "JSON Schema uniqueItems compares runtime array values for equality; TypeScript array and \
-         tuple declarations cannot require pairwise-distinct elements. Item and length \
+        "JSON Schema uniqueItems compares runtime array values for equality. A TypeScript tuple \
+         type constrains each position independently, so its pairs form a product of two item \
+         sets, and the pairwise-distinct pairs over infinitely many items are no finite union of \
+         products (among 3^n + 1 distinct items two share their membership in n products, and \
+         their pair lies in none). Over finitely many scalar items the distinct sequences are \
+         enumerated exactly, up to the compiler's union limit; otherwise item and length \
          declarations remain while uniqueness is omitted.",
     ),
 ];

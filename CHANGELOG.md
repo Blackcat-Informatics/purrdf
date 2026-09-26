@@ -39,6 +39,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `GraphqlPackage` gains `decode_input` and `encode_output` beside
   `encode_input` and `decode_output`. The GraphQL oracle serializes every valid
   value through its output type with GraphQL.js.
+- **shapes:** the TypeScript emitter states array length bounds exactly at any
+  size, with no tuple-expansion cap. Prefix positions are tuple elements.
+  Lengths beyond them are element properties (`minItems: m` is a required
+  `"m-1"`, `maxItems: n` an optional `never` `"n"`), which tuple-like
+  contextual typing makes exact. `uniqueItems` over finitely many scalar items
+  is enumerated by a generated `JsonDistinct` helper up to the compiler's
+  instantiation-depth and union limits. Numeric keywords over a finite
+  `const`/`enum` leave out the failing numbers. The
+  `array-cardinality-validation-widened` and `tuple-array-validation-widened`
+  codes leave the `json-schema` → `typescript-7.0` profile. The TypeScript
+  oracle compiles the facts the remaining numeric and uniqueness losses rest
+  on, and its scratch directory moves beside the build output.
 - **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
   pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
   it: each normal character and character range gains its variants, and every

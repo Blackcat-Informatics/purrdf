@@ -19,9 +19,8 @@ use purrdf_shapes::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-const CLOSED_PROFILE: [&str; 18] = [
+const CLOSED_PROFILE: [&str; 16] = [
     "additional-properties-validation-widened",
-    "array-cardinality-validation-widened",
     "array-contains-validation-dropped",
     "conditional-validation-dropped",
     "dependency-validation-dropped",
@@ -35,7 +34,6 @@ const CLOSED_PROFILE: [&str; 18] = [
     "property-count-validation-dropped",
     "property-name-validation-dropped",
     "string-validation-dropped",
-    "tuple-array-validation-widened",
     "unevaluated-validation-dropped",
     "unique-items-validation-dropped",
 ];
@@ -69,6 +67,18 @@ struct CompilerProbe {
     expected_typescript_valid: bool,
 }
 
+/// A compiler fact a recorded loss rests on: a whole source file, beside the
+/// declaration, that the compiler must accept or reject (with `code`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Proof {
+    label: String,
+    source: String,
+    expected_typescript_valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_code: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Fixture {
@@ -77,6 +87,7 @@ struct Fixture {
     losses: Value,
     probes: Vec<Probe>,
     compiler_probes: Vec<CompilerProbe>,
+    proofs: Vec<Proof>,
 }
 
 fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
@@ -169,6 +180,47 @@ fn exact_schema() -> Value {
                 ]
             },
             "JsonAny": true,
+            "Cardinality": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 40
+            },
+            "DistinctChoice": {
+                "type": "array",
+                "items": { "enum": ["a", "b", "c"] },
+                "uniqueItems": true
+            },
+            "DistinctBoundedSeven": {
+                "type": "array",
+                "items": { "enum": literal_items(7) },
+                "minItems": 1,
+                "maxItems": 5,
+                "uniqueItems": true
+            },
+            "DistinctChain": {
+                "type": "array",
+                "prefixItems": pair_chain(24),
+                "items": false,
+                "uniqueItems": true
+            },
+            "DistinctEight": {
+                "type": "array",
+                "items": { "enum": literal_items(8) },
+                "uniqueItems": true
+            },
+
+            "LargeBounds": {
+                "type": "array",
+                "items": { "const": "x" },
+                "minItems": 20_000,
+                "maxItems": 20_001
+            },
+            "LongTuple": {
+                "type": "array",
+                "prefixItems": long_prefix(),
+                "items": false
+            },
+            "NumericChoice": { "enum": [1, 2, 3], "minimum": 2 },
             "Nothing": false,
             "Person": {
                 "type": "object",
@@ -210,8 +262,27 @@ fn exact_schema() -> Value {
     })
 }
 
-fn lossy_schema() -> Value {
-    let long_prefix = (0..33)
+/// `count` string literals `v0`, `v1`, ….
+fn literal_items(count: usize) -> Vec<Value> {
+    (0..count).map(|index| json!(format!("v{index}"))).collect()
+}
+
+/// `count` positions, position `i` admitting `v{i}` or `x`: its distinct
+/// sequences reach every length, and `x` may repeat only against uniqueness.
+fn pair_chain(count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|index| json!({ "enum": [format!("v{index}"), "x"] }))
+        .collect()
+}
+
+/// The `pair_chain` values `v0`, `v1`, … of `count` positions.
+fn pair_values(count: usize) -> Value {
+    Value::Array((0..count).map(|index| json!(format!("v{index}"))).collect())
+}
+
+/// Thirty-three alternating string and number positions.
+fn long_prefix() -> Vec<Value> {
+    (0..33)
         .map(|index| {
             if index % 2 == 0 {
                 json!({ "type": "string" })
@@ -219,16 +290,23 @@ fn lossy_schema() -> Value {
                 json!({ "type": "number" })
             }
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// A tuple value for [`long_prefix`] of `length` positions.
+fn long_tuple(length: usize) -> Value {
+    Value::Array(
+        (0..length)
+            .map(|index| if index % 2 == 0 { json!("s") } else { json!(1) })
+            .collect(),
+    )
+}
+
+fn lossy_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://example.org/schema/typescript-lossy.json",
         "$defs": {
-            "Cardinality": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 40
-            },
             "ClosedNamed": {
                 "type": "object",
                 "additionalProperties": false,
@@ -261,11 +339,6 @@ fn lossy_schema() -> Value {
                 "dependentRequired": { "a": ["b"] }
             },
             "IntegerRule": { "type": "integer" },
-            "LongTuple": {
-                "type": "array",
-                "prefixItems": long_prefix,
-                "items": false
-            },
             "Negated": { "not": { "type": "boolean" } },
             "NestedObjectLiteral": {
                 "const": [{ "state": "open" }]
@@ -309,6 +382,23 @@ fn lossy_schema() -> Value {
             "UniqueItems": {
                 "type": "array",
                 "items": { "type": "string" },
+                "uniqueItems": true
+            },
+            "UniqueBoundedEight": {
+                "type": "array",
+                "items": { "enum": literal_items(8) },
+                "minItems": 1,
+                "uniqueItems": true
+            },
+            "UniqueChainTooDeep": {
+                "type": "array",
+                "prefixItems": pair_chain(25),
+                "items": false,
+                "uniqueItems": true
+            },
+            "UniqueNineItems": {
+                "type": "array",
+                "items": { "enum": literal_items(9) },
                 "uniqueItems": true
             },
             "UnsafeIntegerLiteral": {
@@ -666,6 +756,189 @@ fn exact_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
             None,
         )?,
     ];
+    let mut probes = probes;
+    let strings = |length: usize, value: &str| Value::Array(vec![json!(value); length]);
+    for (label, definition, value, mode, valid) in [
+        (
+            "cardinality-below",
+            "Cardinality",
+            strings(39, "s"),
+            "variable",
+            false,
+        ),
+        (
+            "cardinality-at",
+            "Cardinality",
+            strings(40, "s"),
+            "fresh",
+            true,
+        ),
+        (
+            "large-below",
+            "LargeBounds",
+            strings(19_999, "x"),
+            "fresh",
+            false,
+        ),
+        (
+            "large-at-minimum",
+            "LargeBounds",
+            strings(20_000, "x"),
+            "fresh",
+            true,
+        ),
+        (
+            "large-at-maximum",
+            "LargeBounds",
+            strings(20_001, "x"),
+            "variable",
+            true,
+        ),
+        (
+            "large-above",
+            "LargeBounds",
+            strings(20_002, "x"),
+            "fresh",
+            false,
+        ),
+        (
+            "long-tuple-full",
+            "LongTuple",
+            long_tuple(33),
+            "fresh",
+            true,
+        ),
+        (
+            "long-tuple-short",
+            "LongTuple",
+            long_tuple(20),
+            "variable",
+            true,
+        ),
+        (
+            "long-tuple-position",
+            "LongTuple",
+            json!([7]),
+            "variable",
+            false,
+        ),
+        (
+            "long-tuple-too-long",
+            "LongTuple",
+            long_tuple(34),
+            "fresh",
+            false,
+        ),
+        (
+            "distinct-all",
+            "DistinctChoice",
+            json!(["c", "a", "b"]),
+            "fresh",
+            true,
+        ),
+        (
+            "distinct-empty",
+            "DistinctChoice",
+            json!([]),
+            "variable",
+            true,
+        ),
+        (
+            "distinct-repeated",
+            "DistinctChoice",
+            json!(["a", "b", "a"]),
+            "fresh",
+            false,
+        ),
+        (
+            "distinct-outside",
+            "DistinctChoice",
+            json!(["a", "d"]),
+            "variable",
+            false,
+        ),
+        (
+            "numeric-choice-kept",
+            "NumericChoice",
+            json!(3),
+            "fresh",
+            true,
+        ),
+        (
+            "distinct-eight-all",
+            "DistinctEight",
+            Value::Array(literal_items(8)),
+            "fresh",
+            true,
+        ),
+        (
+            "distinct-eight-repeated",
+            "DistinctEight",
+            json!(["v1", "v0", "v1"]),
+            "fresh",
+            false,
+        ),
+        (
+            "distinct-chain-short",
+            "DistinctChain",
+            json!(["v0", "x", "v2"]),
+            "fresh",
+            true,
+        ),
+        (
+            "distinct-chain-full",
+            "DistinctChain",
+            pair_values(24),
+            "variable",
+            true,
+        ),
+        (
+            "distinct-chain-repeated",
+            "DistinctChain",
+            json!(["x", "x"]),
+            "variable",
+            false,
+        ),
+        (
+            "distinct-bounded-empty",
+            "DistinctBoundedSeven",
+            json!([]),
+            "fresh",
+            false,
+        ),
+        (
+            "distinct-bounded-five",
+            "DistinctBoundedSeven",
+            json!(["v6", "v0", "v1", "v2", "v3"]),
+            "fresh",
+            true,
+        ),
+        (
+            "distinct-bounded-six",
+            "DistinctBoundedSeven",
+            json!(["v6", "v0", "v1", "v2", "v3", "v4"]),
+            "fresh",
+            false,
+        ),
+        (
+            "distinct-bounded-repeated",
+            "DistinctBoundedSeven",
+            json!(["v2", "v2"]),
+            "variable",
+            false,
+        ),
+        (
+            "numeric-choice-left-out",
+            "NumericChoice",
+            json!(1),
+            "fresh",
+            false,
+        ),
+    ] {
+        probes.push(probe(
+            schema, &package, label, definition, value, mode, valid, None,
+        )?);
+    }
     let person = package.type_names["Person"].clone();
     let compiler_probes = vec![
         CompilerProbe {
@@ -695,7 +968,112 @@ fn exact_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
         losses,
         probes,
         compiler_probes,
+        proofs: distinct_limit_proofs(),
     })
+}
+
+/// The compiler facts the `JsonDistinct` limits rest on. Each level of the
+/// enumeration adds three instantiations, four when its candidates are a
+/// union, and TypeScript refuses depth 100 (TS2589): a chain of 32 single-value
+/// positions (3 × 32 + 3 = 99) enumerates and 33 do not; 24 two-value positions
+/// (4 × 24 + 3 = 99) do and 25 do not; 31 single and one two-value position
+/// (3 + 3 × 30 + 4 + 3 = 100) do not, which pins the last level's three; the
+/// levels after the prefix cost the same (29 positions and a two-value rest
+/// do, 30 do not). A union spread or intersected over 100,000 members is
+/// refused (TS2590): after a first element eight literal items leave 13,700
+/// sequences and nine 109,601; intersecting length bounds with the 13,700 of
+/// seven items holds and with the 109,601 of eight does not.
+fn distinct_limit_proofs() -> Vec<Proof> {
+    let literals = |prefix: &str, count: usize| {
+        (0..count)
+            .map(|index| format!("\"{prefix}{index}\""))
+            .collect::<Vec<_>>()
+    };
+    let source = |distinct: &str, value: &str| {
+        format!(
+            "import type {{ JsonDistinct }} from \"./index.js\";\n\
+             const value: {distinct} = {value};\n\
+             void value;\n\
+             export {{}};\n"
+        )
+    };
+    let chain = |singles: usize, pairs: usize, rest: &str| {
+        let mut positions = literals("s", singles);
+        positions.extend((0..pairs).map(|index| format!("\"p{index}\" | \"x\"")));
+        let mut value = literals("s", singles);
+        value.extend(literals("p", pairs));
+        source(
+            &format!("JsonDistinct<readonly [{}], {rest}>", positions.join(", ")),
+            &format!("[{}]", value.join(", ")),
+        )
+    };
+    let pool = |count: usize, bounded: bool| {
+        let items = literals("v", count).join(" | ");
+        let distinct = format!("JsonDistinct<readonly [], {items}>");
+        let distinct = if bounded {
+            format!("({distinct} & {{ readonly \"0\": {items} }})")
+        } else {
+            distinct
+        };
+        source(&distinct, "[\"v0\", \"v1\"]")
+    };
+    let proof = |label: &str, source: String, code: Option<u32>| Proof {
+        label: label.to_owned(),
+        source,
+        expected_typescript_valid: code.is_none(),
+        expected_code: code,
+    };
+    vec![
+        proof("chain-of-32-single-values", chain(32, 0, "never"), None),
+        proof(
+            "chain-of-33-single-values",
+            chain(33, 0, "never"),
+            Some(2589),
+        ),
+        proof("chain-of-24-two-values", chain(0, 24, "never"), None),
+        proof("chain-of-25-two-values", chain(0, 25, "never"), Some(2589)),
+        proof(
+            "chain-of-31-single-and-1-two-values",
+            chain(31, 1, "never"),
+            Some(2589),
+        ),
+        proof(
+            "chain-of-29-then-two-rest-values",
+            chain(29, 0, "\"r0\" | \"r1\""),
+            None,
+        ),
+        proof(
+            "chain-of-30-then-two-rest-values",
+            chain(30, 0, "\"r0\" | \"r1\""),
+            Some(2589),
+        ),
+        proof("eight-items-spread-13700", pool(8, false), None),
+        proof("nine-items-spread-109601", pool(9, false), Some(2590)),
+        proof("seven-items-bounded-13700", pool(7, true), None),
+        proof("eight-items-bounded-109601", pool(8, true), Some(2590)),
+    ]
+}
+
+/// Why the recorded numeric and uniqueness losses are the language's: a type
+/// cannot take a literal out of `number` or `string` (`Exclude` leaves them
+/// whole), so no type states "not -1" or "not the other element's value".
+fn complement_proofs() -> Vec<Proof> {
+    let source =
+        |declaration: &str| format!("const value: {declaration};\nvoid value;\nexport {{}};\n");
+    vec![
+        Proof {
+            label: "number-has-no-literal-complement".to_owned(),
+            source: source("Exclude<number, -1> = -1"),
+            expected_typescript_valid: true,
+            expected_code: None,
+        },
+        Proof {
+            label: "string-has-no-literal-complement".to_owned(),
+            source: source("Exclude<string, \"same\"> = \"same\""),
+            expected_typescript_valid: true,
+            expected_code: None,
+        },
+    ]
 }
 
 fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, Box<dyn Error>> {
@@ -743,19 +1121,6 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
             Some((
                 "additional-properties-validation-widened",
                 "#/$defs/ClosedNamed/additionalProperties",
-            )),
-        )?,
-        probe(
-            schema,
-            &package,
-            "cardinality-minimum",
-            "Cardinality",
-            json!([]),
-            "variable",
-            false,
-            Some((
-                "array-cardinality-validation-widened",
-                "#/$defs/Cardinality/minItems",
             )),
         )?,
         probe(
@@ -922,19 +1287,6 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
         probe(
             schema,
             &package,
-            "long-tuple-position",
-            "LongTuple",
-            json!([7]),
-            "variable",
-            false,
-            Some((
-                "tuple-array-validation-widened",
-                "#/$defs/LongTuple/prefixItems",
-            )),
-        )?,
-        probe(
-            schema,
-            &package,
             "unevaluated-array",
             "UnevaluatedArray",
             json!(["first", 2]),
@@ -974,6 +1326,45 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
         probe(
             schema,
             &package,
+            "unique-chain-too-deep",
+            "UniqueChainTooDeep",
+            json!(["x", "x"]),
+            "fresh",
+            false,
+            Some((
+                "unique-items-validation-dropped",
+                "#/$defs/UniqueChainTooDeep/uniqueItems",
+            )),
+        )?,
+        probe(
+            schema,
+            &package,
+            "unique-bounded-eight",
+            "UniqueBoundedEight",
+            json!(["v3", "v3"]),
+            "fresh",
+            false,
+            Some((
+                "unique-items-validation-dropped",
+                "#/$defs/UniqueBoundedEight/uniqueItems",
+            )),
+        )?,
+        probe(
+            schema,
+            &package,
+            "unique-nine-items",
+            "UniqueNineItems",
+            json!(["v8", "v8"]),
+            "fresh",
+            false,
+            Some((
+                "unique-items-validation-dropped",
+                "#/$defs/UniqueNineItems/uniqueItems",
+            )),
+        )?,
+        probe(
+            schema,
+            &package,
             "unsafe-integer-literal",
             "UnsafeIntegerLiteral",
             json!(9_007_199_254_740_992_u64),
@@ -1003,14 +1394,16 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
         losses,
         probes,
         compiler_probes: Vec::new(),
+        proofs: complement_proofs(),
     })
 }
 
 /// The SHACL list-component fixture (see `support/shacl_lists.rs`): the
 /// projected instances of real data, whose verdicts are SHACL validation's.
-/// TypeScript expresses the length bounds as tuple types and the member type as
-/// the element type; it has no type for distinct elements or for an integer
-/// minimum, so exactly those two probes diverge, at their located losses.
+/// TypeScript expresses the length bounds on element properties and the member
+/// type as the element type; distinct elements of an unconstrained item type
+/// and an integer minimum have no type (see [`complement_proofs`]), so exactly
+/// those two probes diverge, at their located losses.
 fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_lists::compiled()?;
     let schema: Value = serde_json::from_str(&compiled.schema_json)?;
@@ -1054,6 +1447,7 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
         losses: ledger_json(&package)?,
         probes,
         compiler_probes: Vec::new(),
+        proofs: Vec::new(),
     })
 }
 
