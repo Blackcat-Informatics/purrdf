@@ -64,6 +64,34 @@ python3 scripts/check-simd-asm.py --self-test      # every refusal and its valid
 python3 scripts/check-simd-asm.py --probe 'REGEX' [--config NAME] [--crate NAME] [--dump]
 ```
 
+The gate retains separate Cargo build contexts for each compiler, target configuration
+and build graph. Every run asks Cargo to check freshness, verifies the assembly's
+recorded compiler arguments and content digest, and reevaluates the current manifest.
+Parsed functions can be reused; a previous pass verdict cannot. Missing or changed
+assembly evidence fails explicitly and can be reconstructed with `--fresh`.
+
+Two configurations run concurrently by default, sharing the effective Cargo job
+budget. `--jobs` changes the number of configuration workers, not the total compiler
+budget. The Stage Cargo shim recognizes the gate's explicit assembly context, retains
+its lease through analysis, and keeps these artifacts out of normal release outputs.
+Other Cargo invocations retain their usual directory, cache and publication policies.
+
+```sh
+make simd-asm SIMD_ASM_ARGS="--config x86_64 --jobs 1"  # checked partial shard
+make simd-asm SIMD_ASM_ARGS="--fresh"                  # new Cargo/reader contexts
+make simd-asm SIMD_ASM_ARGS="--report target/asm-report.json"
+```
+
+`--fresh` leaves the external compiler cache enabled. The per-configuration timing
+summary separates Cargo execution, lease waiting and assembly analysis, and reports
+compiler invocations, Cargo-fresh artifacts and parsed/reused units. Cargo's detailed
+timings and stdout/stderr logs remain in the private context, including on failure.
+
+CI runs seven independent configuration jobs. The required `simd-asm` aggregate accepts
+exactly one successful report for every configuration, with matching source, manifest
+and compiler identities, then checks complete document parity. A partial shard cannot
+write the audit document or stand in for the complete matrix.
+
 Each configuration is a release build with LTO off and one codegen unit, with
 `--emit=asm` added through `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`:
 

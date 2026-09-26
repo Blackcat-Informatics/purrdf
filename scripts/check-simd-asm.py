@@ -126,6 +126,22 @@ Static checks
 * The multiplier scan: no speedup multiplier or percentage in the audit document or
   the unreleased CHANGELOG section. Evidence is an instruction count.
 
+Build reuse and parallel execution
+----------------------------------
+
+The driver keeps a separate persistent Cargo context for each compiler, target and
+build graph. Cargo validates freshness on every invocation; assembly digests and
+verified compiler-command receipts bind reused output to its configuration. Parsed
+functions are cached by assembly content, reader version and selectors; verdicts are
+always recomputed. Context leases cover both Cargo and the reader. On Stage the shim
+recognizes the explicit assembly context and preserves the lease and private outputs.
+
+``--jobs`` bounds concurrent configurations within one total Cargo job budget.
+``--config`` runs a checked partial shard; only a full matrix may write the document.
+``--fresh`` allocates new contexts (the external compiler cache remains enabled).
+``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
+matching reports and checks the full document without compiling again.
+
 Document mode (``--doc``)
 -------------------------
 
@@ -159,18 +175,21 @@ import os
 import re
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tomllib
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import simd_asm_runtime as runtime
+
+RUN_OPTIONS = argparse.Namespace(jobs=2, fresh=False, probe=None)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "scripts" / "simd-asm-manifest.toml"
 DOC = REPO_ROOT / "docs" / "design" / "purrdf-simd.md"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
-BUILD_SCRATCH = REPO_ROOT / "scripts" / "build-scratch.sh"
 
 
 # --------------------------------------------------------------------------- configs
@@ -763,6 +782,10 @@ def is_vector_work(inst: Instruction, arch: str) -> bool:
                 return False
         return True
     if arch == "aarch64":
+        # SHA1H is a crypto instruction with scalar SIMD-register operands.
+        # Its architectural spelling is `sha1h sD, sN`, not vN/qN.
+        if m == "sha1h":
+            return len(inst.operands) == 2 and all(re.fullmatch(r"s(?:[12]?[0-9]|3[01])", op) for op in inst.operands)
         if m not in VECTOR_ARM or not any(_ARM_VREG.search(op) for op in inst.operands):
             return False
         if m in _IDIOM_ARM and len(inst.operands) == 3 and inst.operands[1] == inst.operands[2]:
@@ -1367,49 +1390,6 @@ def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tup
     return cmds
 
 
-def build_config(config: Config, manifest: Manifest, scratch: Path, host: str, chooser) -> list[Function]:
-    """Build one configuration and return the emitted functions ``chooser`` selects."""
-    print(f"== {config.name}: cargo build --target {config.triple} ({config.rustflags()})", flush=True)
-    env = config_env(config, dict(os.environ), host, log=lambda line: print(line, flush=True))
-    env["CARGO_TARGET_DIR"] = str(scratch)
-    paths: dict[Path, int] = {}
-    for graph, cmd in enumerate(build_commands(config, manifest.packages, manifest.rlib_packages)):
-        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            raise GateError(f"{config.name}: `{' '.join(cmd[:2])}` failed (exit {proc.returncode}):\n{failure_tail(proc.stderr)}")
-        problems = verify_command_lines(proc.stderr, config)
-        if problems:
-            raise GateError("the build was not the configuration it claims:\n  " + "\n  ".join(problems))
-        # A unit an earlier graph already emitted (same crate, same hash) is that graph's.
-        for p in asm_paths(proc.stdout, config):
-            paths.setdefault(p, graph)
-    units = ((str(p), p.read_text(encoding="utf-8", errors="replace"), graph) for p, graph in paths.items())
-    return collect_functions(units, config.arch, chooser.keep, chooser.select)
-
-
-class Scratch:
-    """A scratch build directory from ``scripts/build-scratch.sh``, removed on every exit path."""
-
-    def __enter__(self) -> Path:
-        out = subprocess.run(
-            ["bash", "-c", f'source "{BUILD_SCRATCH}" && build_scratch_dir simd-asm'],
-            capture_output=True, text=True, check=False,
-        )
-        if out.returncode != 0 or not out.stdout.strip():
-            raise GateError(f"build_scratch_dir failed: {out.stderr.strip()}")
-        self.path = Path(out.stdout.strip())
-        self._previous = signal.signal(signal.SIGTERM, self._terminate)
-        return self.path
-
-    @staticmethod
-    def _terminate(_signum, _frame):
-        raise SystemExit(143)
-
-    def __exit__(self, *_exc) -> None:
-        signal.signal(signal.SIGTERM, self._previous)
-        shutil.rmtree(self.path, ignore_errors=True)
-
-
 @dataclasses.dataclass(frozen=True)
 class Chooser:
     """Which emitted functions one configuration's reader parses (``select``) and keeps."""
@@ -1419,23 +1399,19 @@ class Chooser:
 
 
 def measure_all(manifest: Manifest, configs: tuple[Config, ...], keep_for) -> dict[str, list[Function]]:
-    """Build every configuration; ``keep_for(config)`` is its ``Chooser``."""
-    refuse_overriding_env(dict(os.environ))
-    require_targets(configs)
-    host = host_triple()
-    out: dict[str, list[Function]] = {}
-    with Scratch() as scratch:
-        for config in configs:
-            out[config.name] = build_config(config, manifest, scratch, host, keep_for(config))
-    return out
+    """Build independent configurations in persistent, leased contexts."""
+    return runtime.measure_all(sys.modules[__name__], manifest, configs, keep_for, RUN_OPTIONS)
 
 
 def manifest_keep(manifest: Manifest):
     """For each configuration, parse exactly the functions some measure on it can match."""
     def keep_for(config: Config) -> Chooser:
         measures = [m for site in manifest.sites for m in site.measures if config.name in m.configs]
+        patterns: dict[str, set[str]] = {}
+        for measure in measures:
+            patterns.setdefault(measure.crate, set()).add(measure.symbol)
         return Chooser(
-            select=lambda d: any(d.crate == m.crate and m.symbol in d.path for m in measures),
+            select=lambda d: any(symbol in d.path for symbol in patterns.get(d.crate, ())),
             keep=None,
         )
     return keep_for
@@ -1588,7 +1564,7 @@ def workspace_world() -> DocWorld:
     return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs)
 
 
-def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld) -> list[str]:
+def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, configs=CONFIG_NAMES, compare=True) -> list[str]:
     """Parity and coverage between the document, the manifest and the measured cells.
 
     ``cells`` maps ``(site id, config name)`` to the generated cell text.
@@ -1635,7 +1611,7 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld) -> li
                     f"crate-level row `{rid}`: `{cite}` exists, so `{crate}` has a hot path to "
                     f"measure -- give it a function row with a manifest entry"
                 )
-        for name in CONFIG_NAMES:
+        for name in configs if compare else ():
             expected = cells.get((rid, name), "—")
             if row[col[name]] != expected:
                 problems.append(
@@ -1721,8 +1697,26 @@ def run(args: argparse.Namespace) -> int:
     problems: list[str] = []
     problems += identity_scan(rust_sources())
     problems += multiplier_scan("CHANGELOG.md [Unreleased]", unreleased_changelog(CHANGELOG.read_text(encoding="utf-8")))
-    if args.doc or args.write_doc:
+    if args.doc or args.write_doc or args.merge_reports:
         require_doc(DOC)
+        problems += doc_checks(DOC.read_text(), manifest, {}, workspace_world(), compare=False)
+    if problems:
+        raise GateError("\n".join(problems))
+    wanted = tuple(c for c in CONFIGS if not args.config or c.name in args.config)
+    if args.write_doc and wanted != CONFIGS:
+        raise GateError("--write-doc requires all seven configurations")
+    if args.report and args.probe:
+        raise GateError("a probe is not gate evidence and cannot write a report")
+    identity = runtime.report_identity(sys.modules[__name__]) if not args.probe else None
+    if args.report:
+        runtime.atomic_json(args.report, dict(identity=identity, status="incomplete", cells={}))
+    if args.merge_reports:
+        cells = runtime.merge_reports(sys.modules[__name__], manifest, args.merge_reports, identity)
+        problems = doc_checks(DOC.read_text(), manifest, cells, workspace_world())
+        if problems:
+            raise GateError("\n".join(problems))
+        print(f"OK: {len(manifest.sites)} sites; seven matching, successful assembly reports")
+        return 0
 
     if args.probe:
         wanted = tuple(CONFIG_BY_NAME[c] for c in (args.config or CONFIG_NAMES))
@@ -1754,22 +1748,26 @@ def run(args: argparse.Namespace) -> int:
                         print(f"{'':24}{inst.mnemonic} {', '.join(inst.operands)}")
         return 0
 
-    functions = measure_all(manifest, CONFIGS, manifest_keep(manifest))
+    functions = measure_all(manifest, wanted, manifest_keep(manifest))
     results: list[Result] = []
-    for config in CONFIGS:
+    for config in wanted:
         results += evaluate_config(manifest, config, functions[config.name])
     for r in results:
         problems.extend(r.problems)
     cells = {}
     for site in manifest.sites:
-        for config in CONFIGS:
+        for config in wanted:
             cells[(site.id, config.name)] = render_cell([r for r in results if r.site == site.id and r.config == config.name])
 
     width = max(len(s.id) for s in manifest.sites)
-    print(f"\n{'site'.ljust(width)}  " + "  ".join(CONFIG_NAMES))
+    print(f"\n{'site'.ljust(width)}  " + "  ".join(c.name for c in wanted))
     for site in manifest.sites:
-        print(f"{site.id.ljust(width)}  " + "  ".join(cells[(site.id, c)].replace("<br>", " / ") for c in CONFIG_NAMES))
+        print(f"{site.id.ljust(width)}  " + "  ".join(cells[(site.id, c)].replace("<br>", " / ") for c in (config.name for config in wanted)))
 
+    if problems:
+        raise GateError("\n".join(problems))
+    if identity != runtime.report_identity(sys.modules[__name__]):
+        raise GateError("source/compiler changed during measurement; evidence refused")
     if args.write_doc:
         text = DOC.read_text(encoding="utf-8")
         updated = write_doc(text, cells)
@@ -1777,7 +1775,7 @@ def run(args: argparse.Namespace) -> int:
             DOC.write_text(updated, encoding="utf-8")
             print(f"wrote the measured cells into {DOC.relative_to(REPO_ROOT)}")
     if args.doc or args.write_doc:
-        problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world())
+        problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world(), configs=tuple(c.name for c in wanted))
     else:
         print("document parity and coverage: not requested (`--doc`)")
 
@@ -1786,7 +1784,14 @@ def run(args: argparse.Namespace) -> int:
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
-    print(f"\nOK: {len(manifest.sites)} site(s) measured on {len(CONFIGS)} configurations")
+    if args.report:
+        if identity != runtime.report_identity(sys.modules[__name__]):
+            raise GateError("source/compiler changed during measurement; report refused")
+        runtime.atomic_json(args.report, dict(identity=identity, status="passed",
+            cells={c.name: {site.id: cells[(site.id, c.name)] for site in manifest.sites} for c in wanted},
+            timings=args.timings))
+    coverage = "complete gate" if wanted == CONFIGS else "partial configuration shard"
+    print(f"\nOK: {len(manifest.sites)} site(s) measured on {len(wanted)} configurations ({coverage})")
     return 0
 
 
@@ -2161,6 +2166,15 @@ def self_test() -> int:
     noisy = "     Running `rustc --crate-name demo`\n       Fresh memchr v2\n   Compiling demo v1\nerror: linking with `cc` failed\n"
     expect(failure_tail(noisy) == "error: linking with `cc` failed", f"progress lines are dropped, the error kept: {failure_tail(noisy)!r}")
 
+    # SHA1H uses scalar views of the SIMD registers; scalar floating-point
+    # arithmetic must still not count as vector work.
+    sha1h = Instruction("sha1h", ("s18", "s0"))
+    expect(is_vector_work(sha1h, "aarch64"), "sha1h scalar SIMD operands count as crypto work")
+    expect(not is_vector_work(Instruction("fadd", ("s0", "s1", "s2")), "aarch64"), "scalar fadd stays scalar")
+    expect(not is_vector_work(Instruction("sha1h", ("w0", "w1")), "aarch64"), "sha1h needs architectural SIMD operands")
+    crypto = Function("fixture", "fixture", "demo", "fixture.s", [sha1h], 0)
+    expect(satisfies(crypto, "sha1h", "aarch64"), "the emitted sha1h satisfies its manifest requirement")
+
     # -- identity scan
     expect(bool(identity_scan({"crates/rdf-core/src/canon.rs": "let s = a.algebraic_add(b);"})), "algebraic_add in canon.rs must fail")
     expect(not identity_scan({"crates/rdf-core/src/distance/exact.rs": "let s = a.algebraic_add(b);"}), "algebraic_add under distance/ must pass")
@@ -2256,6 +2270,9 @@ def self_test() -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
+    from test_simd_asm_runtime import run_tests
+    if not run_tests(sys.modules[__name__]):
+        return 1
     print("OK: simd-asm self-test -- every refusal fires and every valid neighbour passes")
     return 0
 
@@ -2269,8 +2286,20 @@ def main() -> int:
     parser.add_argument("--probe-operands", action="store_true", help="with --probe: match PATH against instruction operands (call targets) instead of function paths")
     parser.add_argument("--dump", action="store_true", help="with --probe: print every instruction of each match")
     parser.add_argument("--crate", help="with --probe: only this crate")
-    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="with --probe: only these configurations")
+    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="measure only these configurations (partial gate evidence)")
+    parser.add_argument("--jobs", type=int, default=2, help="concurrent configurations sharing Cargo's total job budget (default: 2)")
+    parser.add_argument("--fresh", action="store_true", help="use new isolated build contexts and reparse assembly")
+    parser.add_argument("--report", type=Path, help="atomically write this run's checked evidence as JSON")
+    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and check complete document parity; builds nothing")
     args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
+    if args.write_doc and args.report:
+        parser.error("write the document first, then produce reports for the resulting source identity")
+    if args.merge_reports and (args.config or args.probe or args.write_doc or args.report):
+        parser.error("--merge-reports cannot be combined with measurement/writing options")
+    global RUN_OPTIONS
+    RUN_OPTIONS = args
     if args.self_test:
         return self_test()
     try:
@@ -2278,6 +2307,9 @@ def main() -> int:
     except GateError as err:
         print(f"FAIL: {err}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("FAIL: assembly run interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

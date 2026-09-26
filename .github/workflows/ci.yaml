@@ -461,43 +461,75 @@ jobs:
       - name: GraphQL emitter schema oracle
         run: node crates/shapes/tests/graphql_oracle.mjs
 
-  # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
-  # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
-  # (baseline, +simd128) -- in release with one codegen unit and LTO off, and counts
-  # the vector work each manifest site compiled to. It is its own job because those
-  # builds are most of its run time; each configuration is a cold build of the graph.
-  simd-asm:
+  # One configuration per runner; the stable aggregate requires every shard.
+  simd-asm-config:
     runs-on: ubuntu-latest
-    # Seven configurations at roughly seven minutes each, with margin.
-    timeout-minutes: 75
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [x86_64, x86_64-v3, x86_64-v4, aarch64, aarch64-neoverse-v1, wasm32, wasm32-simd128]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
-
-      - name: Install the C cross toolchain the asm gate's build scripts compile with
-        # blake3's build script compiles C for aarch64 (its NEON backend). The asm gate
-        # never measures that object, but the build script must succeed. The gate names
-        # clang + llvm-ar for every cross target; clang finds the aarch64 C library
-        # headers through the Ubuntu cross installation, which is why the aarch64 gcc
-        # and libc packages are installed beside it.
+      - name: Identify the actual compiler
+        id: compiler
+        run: echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Restore assembly build contexts and evidence
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: target/simd-asm
+          key: simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Install the C cross toolchain
+        if: startsWith(matrix.config, 'aarch64') || startsWith(matrix.config, 'wasm32')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Measure and check this configuration
+        run: make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
+      - name: Upload checked evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: simd-asm-${{ matrix.config }}
+          path: target/asm-reports/*.json
+          if-no-files-found: error
 
-      - name: Count the vector work in emitted asm on seven target configurations
-        # Every manifest site must still compile to the vector instructions that prove
-        # its shape, with no fused multiply-add where the arithmetic is exact and no
-        # relaxed-simd anywhere.
-        run: make simd-asm
+  simd-asm:
+    needs: simd-asm-config
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every configuration to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.simd-asm-config.result }}
+        run: test "$MATRIX_RESULT" = success
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+      - name: Download all configuration reports
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: simd-asm-*
+          merge-multiple: true
+          path: target/asm-reports
+      - name: Check complete matrix and document parity
+        run: make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
 
   # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
   # exact law pins one summation order in source, so its results must be the same

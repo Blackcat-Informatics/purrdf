@@ -598,7 +598,7 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # file is covered. `--doc` hard-fails when the document is missing; it never skips.
 # `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
-	python3 scripts/check-simd-asm.py --doc
+	python3 scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
