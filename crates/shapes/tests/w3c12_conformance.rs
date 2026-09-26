@@ -15,8 +15,9 @@
 //!   sourceShape)` tuples, blank nodes normalized, every `sh:resultMessage` the expected report
 //!   mentions, every `sh:detail` it states (recursively), and — where the expected report states `sh:conformanceDisallows`
 //!   — validation under exactly that set, echoed back in the report. `sht:Failure` expects an error at load or
-//!   validation. The only departure from the approved expectation is
-//!   [`EXPECTATION_DEFECTS`].
+//!   validation. An approved (manifest-listed) entry is graded against its
+//!   approved expectation and nothing else; [`UNLISTED_FILE_DELTAS`] amends only
+//!   entries of vendored files no upstream manifest includes.
 //! * **`sht:EvalNodeExpr`** — the `sht:nodeExpr` node is parsed by the shapes
 //!   parser itself ([`purrdf_shapes::shapes::from_dataset_with_node_expressions`],
 //!   so custom functions and shape references bind exactly as they do in a
@@ -40,6 +41,14 @@
 //! one, so such an entry is evaluated from [`ABSENT_FOCUS`], a blank node the
 //! harness proves occurs nowhere in the test graph: it has no path values, is an
 //! instance of nothing and conforms to nothing the graph could say about it.
+//!
+//! ## What is counted, and under which label
+//!
+//! [`w3c_shacl12_conformance`] grades the APPROVED suite — every entry an
+//! upstream manifest lists — and only those entries count as its passes. The
+//! entries of vendored files no upstream manifest includes are graded by
+//! [`w3c_shacl12_unlisted_vendored_files`] and reported under their own label,
+//! never added to the pass count.
 //!
 //! ## Ledger
 //!
@@ -183,7 +192,7 @@ fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<Term>, Strin
     Ok(out)
 }
 
-// ── Expectation defects ───────────────────────────────────────────────────────
+// ── Unlisted vendored files ───────────────────────────────────────────────────
 
 /// One compared result tuple, spelled as the comparison spells it (see
 /// `shacl_corpora::norm`): an IRI in angle brackets, a literal or triple term in
@@ -224,25 +233,33 @@ struct Amendment {
 const XONE_PROPERTY_SHAPE: &str =
     "<http://www.w3.org/ns/shacl-shacl#xoneSubjectsShapeXonePropertyShape>";
 
-/// Approved W3C SHACL 1.2 expectations that contradict normative SHACL 1.2 Core
-/// text: `(test id, the normative sentence quoted with its section, the exact
-/// delta)`.
+/// Deltas for the entries of vendored files that NO upstream manifest includes
+/// (`shacl12::W3C12_UNINCLUDED_MANIFESTS`), where the file's own expectation
+/// contradicts normative SHACL 1.2 Core text: `(test id, the normative sentence
+/// quoted with its section, the exact delta)`.
+///
+/// Such an entry is not part of the approved suite — no manifest lists it — so it
+/// is never counted among the suite's passes: the harness grades and reports it
+/// under its own label (see [`w3c_shacl12_unlisted_vendored_files`]). A LISTED
+/// entry can never be named here; [`graded_expectation`] refuses it, so no
+/// approved test is ever graded against anything but its approved expectation.
 ///
 /// An entry is not an expected failure. The harness grades the engine's report
-/// against the approved expected report WITH the delta applied, and against
+/// against the file's expected report WITH the delta applied, and against
 /// nothing else: a report that lacks the delta, carries a different one, or
 /// differs anywhere else fails exactly as an unamended comparison would. Each
-/// delta must apply to a result the approved report really contains, or the
-/// entry is stale and the harness says so. [`expectation_defects_are_exact`]
+/// delta must apply to a result the file's report really contains, or the
+/// entry is stale and the harness says so. [`unlisted_file_deltas_are_exact`]
 /// proves both directions on the engine's real report, and pins the table by
 /// count.
 ///
-/// * `core/node/xone-003` — the result is produced by
+/// * `core/node/xone-003` (`core/node/xone-003.ttl`, which
+///   `core/node/manifest.ttl` does not include) — the result is produced by
 ///   `shsh:xoneSubjectsShapeXonePropertyShape`, a property shape whose `sh:path`
 ///   is `sh:xone`, through `sh:minListLength`, whose definition states no
-///   exception to §6.7.2.2. The approved report omits `sh:resultPath`; the
-///   quoted sentence makes it the shape's `sh:path`.
-const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[(
+///   exception to §6.7.2.2. The file's report omits `sh:resultPath`; the quoted
+///   sentence makes it the shape's `sh:path`, and the engine keeps it.
+const UNLISTED_FILE_DELTAS: &[(&str, &str, &[Amendment])] = &[(
     "core/node/xone-003",
     "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
          property path is equivalent to the value of sh:path of the shape, unless stated \
@@ -267,9 +284,9 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[(
     }],
 )];
 
-/// [`EXPECTATION_DEFECTS`] pinned by count, so an entry cannot be added or
+/// [`UNLISTED_FILE_DELTAS`] pinned by count, so an entry cannot be added or
 /// dropped without this number moving with it.
-const EXPECTATION_DEFECTS_COUNT: usize = 1;
+const UNLISTED_FILE_DELTAS_COUNT: usize = 1;
 
 /// The approved expected results of `id` with `deltas` applied. A delta whose
 /// approved result the approved report does not contain is a stale entry and an
@@ -285,7 +302,7 @@ fn amend(id: &str, results: &Multiset, deltas: &[Amendment]) -> Result<Multiset,
             }
             None => {
                 return Err(format!(
-                    "EXPECTATION_DEFECTS amends {id} at {approved:?}, which is not among its \
+                    "UNLISTED_FILE_DELTAS amends {id} at {approved:?}, which is not among its \
                      approved expected results — stale entry"
                 ));
             }
@@ -295,10 +312,18 @@ fn amend(id: &str, results: &Multiset, deltas: &[Amendment]) -> Result<Multiset,
     Ok(amended)
 }
 
-/// The expectation a validation case is graded against: the approved one, or the
-/// approved one amended by its [`EXPECTATION_DEFECTS`] entry.
-fn graded_expectation(id: &str, tc: &W3cCase) -> Result<Expected, String> {
-    let Some((_, _, deltas)) = EXPECTATION_DEFECTS.iter().find(|(entry, ..)| *entry == id) else {
+/// The expectation a validation case is graded against: the file's own, or — for
+/// an unlisted entry only — the file's own amended by its [`UNLISTED_FILE_DELTAS`]
+/// entry. A listed (approved-suite) entry named in that table is an error.
+fn graded_expectation(id: &str, listed: bool, tc: &W3cCase) -> Result<Expected, String> {
+    let entry = UNLISTED_FILE_DELTAS.iter().find(|(entry, ..)| *entry == id);
+    if listed && entry.is_some() {
+        return Err(format!(
+            "UNLISTED_FILE_DELTAS names {id}, which an upstream manifest lists — an approved \
+             test is graded against its approved expectation only"
+        ));
+    }
+    let Some((_, _, deltas)) = entry else {
         return Ok(match &tc.expected {
             Expected::Failure => Expected::Failure,
             Expected::Report { conforms, results } => Expected::Report {
@@ -309,7 +334,7 @@ fn graded_expectation(id: &str, tc: &W3cCase) -> Result<Expected, String> {
     };
     let Expected::Report { conforms, results } = &tc.expected else {
         return Err(format!(
-            "EXPECTATION_DEFECTS names {id}, whose approved result is sht:Failure — a result \
+            "UNLISTED_FILE_DELTAS names {id}, whose approved result is sht:Failure — a result \
              delta cannot amend it"
         ));
     };
@@ -320,8 +345,8 @@ fn graded_expectation(id: &str, tc: &W3cCase) -> Result<Expected, String> {
 }
 
 /// Grade one `sht:Validate` entry against its graded expectation.
-fn run_validate(id: &str, tc: &W3cCase) -> Result<(), String> {
-    grade_against(tc, &graded_expectation(id, tc)?)
+fn run_validate(id: &str, listed: bool, tc: &W3cCase) -> Result<(), String> {
+    grade_against(tc, &graded_expectation(id, listed, tc)?)
 }
 
 // ── Term-level comparison ─────────────────────────────────────────────────────
@@ -672,7 +697,7 @@ fn srl_stage(error: &SrlError) -> &'static str {
 /// Grade one entry.
 fn run(case: &Case12) -> Result<(), String> {
     match &case.body {
-        Body::Validate(tc) => run_validate(&case.id, tc),
+        Body::Validate(tc) => run_validate(&case.id, case.listed, tc),
         Body::NodeExpr(tc) => run_node_expr(&case.id, tc),
         Body::Infer(tc) => run_infer(tc),
         Body::Srl(tc) => run_srl(tc),
@@ -713,7 +738,13 @@ fn w3c_shacl12_conformance() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
 
+    let mut unlisted = 0usize;
     for case in &cases {
+        if !case.listed {
+            // Graded and reported by `w3c_shacl12_unlisted_vendored_files`.
+            unlisted += 1;
+            continue;
+        }
         let section = sections.entry(case.section.as_str()).or_insert((0, 0));
         let ty = types.entry(case.type_label()).or_insert((0, 0));
         match (run(case), xfail.get(case.id.as_str())) {
@@ -738,8 +769,9 @@ fn w3c_shacl12_conformance() {
     std::panic::set_hook(default_hook);
 
     println!(
-        "W3C SHACL 1.2 conformance scoreboard ({} tests):",
-        cases.len()
+        "W3C SHACL 1.2 conformance scoreboard ({} approved tests; {unlisted} entries of \
+         unlisted vendored files reported apart):",
+        cases.len() - unlisted
     );
     for (section, (passed, xfailed)) in &sections {
         println!("  {section:<36} passed {passed:>3}  xfailed {xfailed:>3}");
@@ -765,10 +797,99 @@ fn w3c_shacl12_conformance() {
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        total_passed + total_xfailed,
-        W3C12_TOTAL_CASES,
-        "every discovered test must be a pass or a ledgered xfail"
+        unlisted, W3C12_UNLISTED_ENTRIES,
+        "entries of unlisted vendored files"
     );
+    assert_eq!(
+        total_passed + total_xfailed,
+        W3C12_TOTAL_CASES - W3C12_UNLISTED_ENTRIES,
+        "every approved test must be a pass or a ledgered xfail"
+    );
+}
+
+// ── Unlisted vendored files ───────────────────────────────────────────────────
+
+/// The number of entries in vendored files that no upstream manifest includes
+/// (`shacl12::W3C12_UNINCLUDED_MANIFESTS`): `core/node/xone-002`,
+/// `core/node/xone-003` and `inference-rules/rdfs/rectangle-condition`.
+const W3C12_UNLISTED_ENTRIES: usize = 3;
+
+/// The entries of vendored files that no upstream manifest includes, graded
+/// exactly against their own file — `core/node/xone-003` with the one proven
+/// delta in [`UNLISTED_FILE_DELTAS`], every other one as written — and reported
+/// under their own label. They are not the approved suite and are never counted
+/// among its passes. Every one must pass; there is no ledger here.
+#[test]
+fn w3c_shacl12_unlisted_vendored_files() {
+    let cases = shacl12_cases();
+    let unlisted: Vec<&Case12> = cases.iter().filter(|c| !c.listed).collect();
+    assert_eq!(unlisted.len(), W3C12_UNLISTED_ENTRIES, "unlisted entries");
+    for (id, ..) in UNLISTED_FILE_DELTAS {
+        assert!(
+            unlisted.iter().any(|c| c.id == *id),
+            "UNLISTED_FILE_DELTAS names {id}, which is not an entry of an unlisted file"
+        );
+    }
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut errors: Vec<String> = Vec::new();
+    let (mut exact, mut with_delta) = (0usize, 0usize);
+    for case in &unlisted {
+        match run(case) {
+            Ok(()) if UNLISTED_FILE_DELTAS.iter().any(|(id, ..)| *id == case.id) => {
+                with_delta += 1;
+            }
+            Ok(()) => exact += 1,
+            Err(e) => errors.push(format!("FAIL [{id}]: {e}", id = case.id)),
+        }
+    }
+    std::panic::set_hook(default_hook);
+
+    println!("W3C SHACL 1.2 entries of unlisted vendored files:");
+    for case in &unlisted {
+        println!("  {:<44} {}", case.id, case.type_label());
+    }
+    println!(
+        "  W3C12 UNLISTED: passed {}, exact {exact}, with-delta {with_delta}, total {}",
+        exact + with_delta,
+        unlisted.len()
+    );
+    assert!(
+        errors.is_empty(),
+        "w3c_shacl12_unlisted_vendored_files: {} error(s):\n{}",
+        errors.len(),
+        errors.join("\n\n")
+    );
+    assert_eq!(
+        with_delta, UNLISTED_FILE_DELTAS_COUNT,
+        "entries graded with a delta"
+    );
+}
+
+/// No approved entry is graded against an amended expectation: naming a LISTED
+/// entry in the delta table is refused, and the neighbouring unlisted entry the
+/// table really names is graded through its delta.
+#[test]
+fn a_listed_entry_is_never_amended() {
+    let cases = shacl12_cases();
+    let (id, ..) = UNLISTED_FILE_DELTAS[0];
+    let case = cases
+        .iter()
+        .find(|c| c.id == id)
+        .expect("the delta's entry is discovered");
+    let Body::Validate(tc) = &case.body else {
+        panic!("{id} is an sht:Validate test");
+    };
+    assert!(!case.listed, "{id} is an entry of an unlisted file");
+    assert!(
+        graded_expectation(id, false, tc).is_ok(),
+        "the unlisted entry is graded through its delta"
+    );
+    let error = graded_expectation(id, true, tc)
+        .err()
+        .expect("the same entry, were it listed, is refused");
+    assert!(error.contains("an upstream manifest lists"), "{error}");
 }
 
 // ── The completion gate ───────────────────────────────────────────────────────
@@ -788,9 +909,11 @@ fn xfail_ledger_is_empty() {
 /// Every entry the engine was measured failing before the SHACL 1.2 work, by
 /// its discovered id. Each must be discovered under exactly this id (a name that
 /// is not discovered fails, so a typo cannot hide an entry) and must pass under
-/// the harness's grading — which applies [`EXPECTATION_DEFECTS`] and
-/// [`NON_CANONICAL_EXPECTATIONS`], so an entry graded through either table still
-/// counts, as it does in [`w3c_shacl12_conformance`].
+/// the harness's grading — which applies [`UNLISTED_FILE_DELTAS`] (to an entry
+/// of an unlisted file) and [`NON_CANONICAL_EXPECTATIONS`]. Passing here is a
+/// grading verdict, not a count: which category each entry is REPORTED under is
+/// [`w3c_shacl12_conformance`]'s and [`w3c_shacl12_unlisted_vendored_files`]'s
+/// business.
 const INVENTORY: &[&str] = &[
     // Core list components.
     "core/node/minListLength-001",
@@ -1026,11 +1149,11 @@ fn non_canonical_expectations_are_really_non_canonical() {
 
 // ── The expectation-defect table ──────────────────────────────────────────────
 
-/// Both directions of [`EXPECTATION_DEFECTS`], plus its count pin.
+/// Both directions of [`UNLISTED_FILE_DELTAS`], plus its count pin.
 ///
-/// For every entry: the test exists, is an `sht:Validate` entry with an
-/// approved expected report, is not also ledgered in [`XFAIL`], and the clause
-/// quotes SHACL 1.2 Core. Then, on the ENGINE'S REAL REPORT:
+/// For every entry: the test exists, is an entry of a file no upstream manifest
+/// includes, is an `sht:Validate` entry with an expected report, is not also
+/// ledgered in [`XFAIL`], and the clause quotes SHACL 1.2 Core. Then, on the ENGINE'S REAL REPORT:
 ///
 /// * it agrees with the amended expectation (the delta is exactly what the
 ///   engine does differently);
@@ -1048,14 +1171,14 @@ fn non_canonical_expectations_are_really_non_canonical() {
 /// * a report carrying the delta PLUS an extra, different amendment of another
 ///   result fails.
 #[test]
-fn expectation_defects_are_exact() {
+fn unlisted_file_deltas_are_exact() {
     assert_eq!(
-        EXPECTATION_DEFECTS.len(),
-        EXPECTATION_DEFECTS_COUNT,
-        "EXPECTATION_DEFECTS count pin"
+        UNLISTED_FILE_DELTAS.len(),
+        UNLISTED_FILE_DELTAS_COUNT,
+        "UNLISTED_FILE_DELTAS count pin"
     );
     let cases = shacl12_cases();
-    for (id, clause, deltas) in EXPECTATION_DEFECTS {
+    for (id, clause, deltas) in UNLISTED_FILE_DELTAS {
         assert!(
             clause.starts_with("SHACL 1.2 Core §") && clause.contains('"'),
             "{id}: the clause must quote SHACL 1.2 Core, got {clause:?}"
@@ -1069,6 +1192,10 @@ fn expectation_defects_are_exact() {
             .iter()
             .find(|c| c.id == *id)
             .unwrap_or_else(|| panic!("{id}: no such test"));
+        assert!(
+            !case.listed,
+            "{id}: a delta amends only an entry of a file no upstream manifest includes"
+        );
         let Body::Validate(tc) = &case.body else {
             panic!("{id}: not an sht:Validate test");
         };
@@ -1270,7 +1397,7 @@ fn held_field_variants(delta: &Amendment) -> Vec<(&'static str, ResultTuple)> {
 /// stale entry rather than amending a result into existence; the neighbouring
 /// delta that names a real result applies.
 #[test]
-fn a_stale_expectation_defect_is_refused() {
+fn a_stale_unlisted_file_delta_is_refused() {
     let focus = "<http://example.org/ns#focus>";
     let component = "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>";
     let severity = "<http://www.w3.org/ns/shacl#Violation>";

@@ -622,11 +622,13 @@ way the matrix stays honest:
   isomorphism) and 203 SPARQL 1.2 RL tests across seven test types, each
   negative test required to fail at the stage its type names. Discovery
   refuses to lose a test: an unknown test type, an unreached manifest, an
-  unlisted test node or a duplicate id stops the run. One approved
-  expectation contradicts normative SHACL 1.2 Core text and is graded against
-  the spec-corrected report, the amendment quoting its clause and proven exact
-  against controls: `core/node/xone-003` (§6.7.2.2, the result path of a
-  property shape's result). `core/property/reifierShape-001` and `-002` are
+  unlisted test node or a duplicate id stops the run. Three vendored files
+  that no upstream manifest includes (`core/node/xone-002.ttl`,
+  `core/node/xone-003.ttl`, `inference-rules/rdfs/rdfs1.ttl`) are graded by a
+  test of their own and reported apart from the approved suite, never counted
+  among its passes: two exactly as written, and `core/node/xone-003` against
+  its file's report with one amendment quoting its clause and proven exact
+  against controls (§6.7.2.2, the result path of a property shape's result). `core/property/reifierShape-001` and `-002` are
   graded as approved: §7.8.5's textual definition names both the triple term
   and the reifier `t`, and PurRDF follows the approved tests' reading, the value
   node as `sh:value`. Six node-expression expectations spell an integer-valued

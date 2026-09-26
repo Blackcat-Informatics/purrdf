@@ -92,7 +92,9 @@ pub(crate) const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
 /// The SHACL 1.0 harness documents its one such file (`nodeValidator-001.ttl`)
 /// and leaves it out; here the files are run, because a test that exists and is
 /// approved but runs nowhere is exactly the silent coverage loss the reachability
-/// guard exists to stop.
+/// guard exists to stop. Running them is not counting them: their entries are
+/// discovered with `listed == false`, and the harness grades and reports them in
+/// a category of their own, never among the approved suite's passes.
 pub(crate) const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[
     (
         "core/node/xone-002.ttl",
@@ -253,6 +255,11 @@ pub(crate) struct Case12 {
     /// The id's directory, e.g. `core/node`.
     pub(crate) section: String,
     pub(crate) body: Body,
+    /// Whether an upstream manifest lists the entry. `false` for the entries of
+    /// [`W3C12_UNINCLUDED_MANIFESTS`], which no upstream manifest includes: they
+    /// are graded, but they are not the approved suite, and a harness reports
+    /// them apart from it.
+    pub(crate) listed: bool,
 }
 
 impl Case12 {
@@ -276,17 +283,18 @@ pub(crate) fn shacl12_root() -> PathBuf {
         .expect("vectors/shacl12/tests corpus directory must exist")
 }
 
-/// The manifest roots, in walk order: the suite's two top-level manifests, then
-/// [`W3C12_UNINCLUDED_MANIFESTS`].
-fn manifest_roots(root: &Path) -> Vec<PathBuf> {
+/// The manifest roots, in walk order, each with whether it is one of the suite's
+/// own: the two top-level manifests (`true`), then [`W3C12_UNINCLUDED_MANIFESTS`]
+/// (`false`).
+fn manifest_roots(root: &Path) -> Vec<(PathBuf, bool)> {
     let mut roots = vec![
-        root.join("manifest.ttl"),
-        root.join("sparql-rl/manifest-sparql-rl.ttl"),
+        (root.join("manifest.ttl"), true),
+        (root.join("sparql-rl/manifest-sparql-rl.ttl"), true),
     ];
     for (relative, _) in W3C12_UNINCLUDED_MANIFESTS {
         let path = root.join(relative);
         assert!(path.is_file(), "{relative} is not a vendored file");
-        roots.push(path);
+        roots.push((path, false));
     }
     roots
 }
@@ -298,9 +306,11 @@ fn manifest_roots(root: &Path) -> Vec<PathBuf> {
 pub(crate) fn shacl12_cases() -> Vec<Case12> {
     let root = shacl12_root();
     let mut cases: Vec<Case12> = Vec::new();
-    for manifest in manifest_roots(&root) {
+    for (manifest, listed) in manifest_roots(&root) {
         walk_manifest(&manifest, &mut |g, entry, manifest_path| {
-            cases.push(parse_case(g, entry, manifest_path, &root));
+            let mut case = parse_case(g, entry, manifest_path, &root);
+            case.listed = listed;
+            cases.push(case);
         });
     }
 
@@ -408,7 +418,12 @@ fn parse_case(g: &Arc<RdfDataset>, entry: &Term, manifest_path: &Path, root: &Pa
     } else {
         panic!("{id}: unknown SHACL 1.2 test type <{ty}> — grade it, do not skip it");
     };
-    Case12 { id, section, body }
+    Case12 {
+        id,
+        section,
+        body,
+        listed: true,
+    }
 }
 
 /// The single object of `(subject, predicate, ?)`, panicking on none or several.
@@ -592,7 +607,7 @@ fn reachable_manifests(manifest: &Path, out: &mut BTreeMap<PathBuf, Arc<RdfDatas
 /// manifest types as a SHACL 1.2 / SPARQL 1.2 RL test is a discovered entry.
 fn every_manifest_and_every_test_is_reached(root: &Path, discovered_ids: &BTreeSet<&str>) {
     let mut reached: BTreeMap<PathBuf, Arc<RdfDataset>> = BTreeMap::new();
-    for manifest in manifest_roots(root) {
+    for (manifest, _) in manifest_roots(root) {
         reachable_manifests(&manifest, &mut reached);
     }
 
