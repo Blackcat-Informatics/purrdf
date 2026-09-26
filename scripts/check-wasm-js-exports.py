@@ -93,6 +93,14 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                 nested = _JS_NAME_RE.search(lines[j])
                 if nested:
                     js_name = nested.group(1)
+                # An attribute may span lines (`#[allow(\n    lint,\n    reason = …\n)]`):
+                # its continuation lines are part of it, so consume them until its
+                # brackets balance rather than mistaking the first one for the item.
+                if lines[j].startswith("#["):
+                    depth = lines[j].count("[") - lines[j].count("]")
+                    while depth > 0 and j + 1 < n:
+                        j += 1
+                        depth += lines[j].count("[") - lines[j].count("]")
                 j += 1
             if j < n:
                 fn_match = _PUB_FN_RE.match(lines[j])
