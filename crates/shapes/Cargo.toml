@@ -162,6 +162,12 @@ name = "schema_surface"
 harness = false
 
 [[bench]]
+# The JSON-LD instance projection with and without RDF lists (the list index is
+# built only where some `rdf:rest` is `rdf:nil`). Report-only; `make bench` lane.
+name = "instance_projection"
+harness = false
+
+[[bench]]
 name = "pydantic_package"
 harness = false
 
