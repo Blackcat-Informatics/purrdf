@@ -142,9 +142,8 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
 /// * `path-valued-property-pair`: the W3C suite's own equals-002, disjoint-002,
 ///   lessThan-003 and lessThanOrEquals-002.
 /// * `node-expression-target-node`: a blank-node sh:targetNode that is the subject of
-///   no triple, and targetNode-select-001; 1 until a
-///   structured sh:targetNode became evaluated and targetNode-select-001 stopped being
-///   refused at load.
+///   no triple, and targetNode-select-001, whose structured sh:targetNode PurRDF
+///   evaluates.
 /// * `sequence-path-with-other-values`: core/path/path-strange-002, whose sequence-path
 ///   node also carries sh:inversePath; the exact count keeps this pattern from absorbing
 ///   any other input.
@@ -492,84 +491,54 @@ const BASE_INPUTS: usize = 376;
 /// non-integer counts, 157 lists-for-single-values, 35 non-boolean flags and 235
 /// misspelled predicates.
 ///
-/// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
-/// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
-/// load, so each is a base both sides accept and is mutated. All three gain a
-/// misspelled predicate (+3). The literal-for-IRI kind, which now also rewrites
-/// `sh:rootClass`, rewrites `rootClass-001`'s root class and the `sh:class` inside
-/// `someValue-001`'s `sh:someValue` shape (+2). The list-for-single-value kind
-/// rewrites `singleLine-001`'s `sh:datatype` (+1), and the non-boolean-flag kind,
-/// which now also rewrites `sh:singleLine`, rewrites its `sh:singleLine` (+1).
+/// # What some bases contribute
 ///
-/// Moved from 690 to 692 when `sh:subsetOf` became evaluated: `subsetOf-001` and
-/// `subsetOf-002` now load, so each is a base both sides accept, and each gains a
-/// misspelled predicate (+2). No other kind finds a statement to rewrite in
-/// either. The path-valued `equals-002`, `disjoint-002`, `lessThan-003` and
-/// `lessThanOrEquals-002` also load now, but `shacl-shacl.ttl` still flags each
-/// (see `path-valued-property-pair`), so none is a base both sides accept and
-/// none is mutated.
+/// * `singleLine-001`, `rootClass-001` and `someValue-001` each gain a misspelled
+///   predicate (3). The literal-for-IRI kind, which also rewrites `sh:rootClass`,
+///   rewrites `rootClass-001`'s root class and the `sh:class` inside
+///   `someValue-001`'s `sh:someValue` shape (2). The list-for-single-value kind
+///   rewrites `singleLine-001`'s `sh:datatype` (1), and the non-boolean-flag kind,
+///   which also rewrites `sh:singleLine`, rewrites its `sh:singleLine` (1).
+/// * `subsetOf-001` and `subsetOf-002` each gain a misspelled predicate (2); no other
+///   kind finds a statement to rewrite in either.
+/// * `uniqueValuesFor-001` to `-005`: the literal-for-IRI kind rewrites each one's
+///   `sh:targetClass` or `sh:targetSubjectsOf`, the first matching statement in
+///   canonical order (5). None has a property shape, so none gains a misspelled
+///   predicate.
+/// * `deactivated-003`, whose property shape carries `sh:minCount`, gains a
+///   non-integer count, a list-for-single-value, a non-boolean flag (its reifier
+///   `sh:deactivated`, refused under `reifier-annotation-value`) and a misspelled
+///   predicate (4); `severity-003`, `-004` and `-005` each gain a literal-for-IRI
+///   (for `severity-003` its reifier `sh:severity`, refused under
+///   `reifier-annotation-value`) and a list-for-single-value (6); `message-002`
+///   gains a list-for-single-value (1).
+/// * `targetWhere-001` gains a literal-for-IRI (its first `sh:class`), a non-integer
+///   count and a list-for-single-value (its first `sh:minCount`) and a misspelled
+///   predicate (4); `targetClassImplicit-002`, whose one shape is a `sh:ShapeClass`
+///   carrying only `sh:in`, has no statement any mutation rewrites.
+/// * `property-select-001` and `property-sparqlExpr-001`: the list-for-single-value
+///   kind rewrites each one's `sh:datatype` (2), the literal-for-IRI kind
+///   `property-select-001`'s `sh:targetClass` (1), and each property shape gains a
+///   misspelled predicate (2); `property-sparqlExpr-001` targets by
+///   `sh:targetNode`, which no kind rewrites.
+/// * `sparql/functions/instanceCount-example`: the literal-for-IRI kind rewrites its
+///   SPARQL constraint's `sh:severity` (1, refused under
+///   `sparql-constraint-severity`), and its shape gains a misspelled predicate (1,
+///   refused under `unknown-term`).
+/// * `73-expr-if-list-true`: the literal-for-IRI kind rewrites its `sh:targetClass`
+///   (1). Its one shape is a node shape with no property shape, so it gains no
+///   misspelled predicate.
+/// * `inference-rules/rules-entailment-validation`: the literal-for-IRI kind
+///   rewrites its `sh:targetClass` (1), the non-integer-count and
+///   list-for-single-value kinds its property shape's `sh:minCount` (2), and the
+///   property shape gains a misspelled predicate (1, refused under `unknown-term`).
 ///
-/// Moved from 692 to 697 when `sh:uniqueValuesFor` became evaluated:
-/// `uniqueValuesFor-001` to `-005` now load, so each is a base both sides accept.
-/// The literal-for-IRI kind rewrites each one's `sh:targetClass` or
-/// `sh:targetSubjectsOf`, the first matching statement in canonical order (+5).
-/// None has a property shape, so none gains a misspelled predicate.
-///
-/// Moved from 697 to 708 when per-constraint reifier annotations and the
-/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
-/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load, so
-/// each is a base both sides accept. `deactivated-003`, whose property shape
-/// carries `sh:minCount`, gains a non-integer count, a list-for-single-value, a
-/// non-boolean flag (its reifier `sh:deactivated`, refused under
-/// `reifier-annotation-value`) and a misspelled predicate (+4); `severity-003`,
-/// `-004` and `-005` each gain a literal-for-IRI (for `severity-003` its reifier
-/// `sh:severity`, refused under `reifier-annotation-value`) and a
-/// list-for-single-value (+6); `message-002` gains a list-for-single-value (+1).
-///
-/// Moved from 708 to 712 when implicit class targets, `sh:ShapeClass` and
-/// `sh:targetWhere` became evaluated: `targetClassImplicit-002` and
-/// `targetWhere-001` now load, so each is a base both sides accept.
-/// `targetWhere-001` gains a literal-for-IRI (its first `sh:class`), a non-integer
-/// count and a list-for-single-value (its first `sh:minCount`) and a misspelled
-/// predicate (+4); `targetClassImplicit-002`, whose one shape is a `sh:ShapeClass`
-/// carrying only `sh:in`, has no statement any mutation rewrites.
-/// `targetNode-select-001` loads too, but `shacl-shacl.ttl` flags its structured
-/// `sh:targetNode` (see `node-expression-target-node`), so it is not a base both
-/// sides accept and is not mutated.
-///
-/// Moved from 712 to 717 when `sh:values` and `sh:defaultValue` became
-/// evaluated: `property-select-001` and `property-sparqlExpr-001` now load, so
-/// each is a base both sides accept. The list-for-single-value kind rewrites each
-/// one's `sh:datatype` (+2), the literal-for-IRI kind `property-select-001`'s
-/// `sh:targetClass` (+1), and each property shape gains a misspelled predicate
-/// (+2); `property-sparqlExpr-001` targets by `sh:targetNode`, which no kind
-/// rewrites.
-///
-/// Moved from 717 to 719 when `shnex:instancesOf` took a node-expression
-/// argument: `sparql/functions/instanceCount-example` now loads, so it is a base
-/// both sides accept. The literal-for-IRI kind rewrites its SPARQL constraint's
-/// `sh:severity` (+1, refused under `sparql-constraint-severity`), and its shape
-/// gains a misspelled predicate (+1, refused under `unknown-term`).
-///
-/// Moved from 719 to 720 when the first-party corpus gained
-/// `73-expr-if-list-true`, a base both sides accept: the literal-for-IRI kind
-/// rewrites its `sh:targetClass` (+1). Its one shape is a node shape with no
-/// property shape, so it gains no misspelled predicate.
-///
-/// Moved from 720 to 724 when the `sh:RulesEntailment` regime became supported:
-/// `inference-rules/rules-entailment-validation` now loads, so it is a base both
-/// sides accept. The literal-for-IRI kind rewrites its `sh:targetClass` (+1), the
-/// non-integer-count and list-for-single-value kinds its property shape's
-/// `sh:minCount` (+2), and the property shape gains a misspelled predicate (+1,
-/// refused under `unknown-term`).
-///
-/// Moved from 724 to 720 when `sparql/component/validator-001`, once in each
-/// vendored suite, stopped loading against a fabricated stand-in for the DASH
-/// document it imports: PurRDF refuses the unresolved import (see
-/// `unresolved-import`), so neither copy is a base both sides accept any more.
-/// Each had gained a list-for-single-value (its first `sh:datatype`) and a
-/// misspelled predicate on the node carrying its first `sh:path`, refused under
-/// `unknown-term` (−4, and `unknown-term` went from 236 inputs to 234).
+/// Some bases are not mutated because they are not a base both sides accept:
+/// `equals-002`, `disjoint-002`, `lessThan-003` and `lessThanOrEquals-002` (see
+/// `path-valued-property-pair`) and `targetNode-select-001` (see
+/// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags;
+/// and `sparql/component/validator-001`, once in each vendored suite, whose import
+/// of the DASH document no one supplies PurRDF refuses (see `unresolved-import`).
 const MUTANT_INPUTS: usize = 720;
 
 #[test]

@@ -83,7 +83,7 @@ The terms the SHACL vocabularies define and the engine refuses by name are:
   would otherwise be silently ignored. A resource that is only such an executable, and
   that no shape reads, loads.
 
-Two terms the engine used to refuse are now evaluated:
+Two of the terms the engine evaluates need a note:
 
 - **SHACL-SPARQL result annotations.** A `sh:resultAnnotation` on a
   SPARQL-based constraint or on a validator of a SPARQL-based constraint

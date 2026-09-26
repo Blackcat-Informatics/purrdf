@@ -5,9 +5,10 @@
 //! `node-expr` and `shapes lint` — driving the BUILT `purrdf` binary.
 //!
 //! Every shapes graph carries the W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`
-//! verbatim — the declaration that used to be refused as a bodiless custom function —
-//! beside shapes that call `sh:sparqlExpr` with `sh:prefixes`, so each command is
-//! exercised over exactly the graph that was once unloadable.
+//! verbatim — a built-in declared as a `sh:NamedParameterExpressionFunction` with no
+//! `sh:bodyExpression`, which is not a bodiless custom function — beside shapes that
+//! call `sh:sparqlExpr` with `sh:prefixes`, so each command is exercised over a
+//! shapes graph that carries the vocabulary's own declaration.
 
 use std::path::Path;
 use std::process::{Command, Output};

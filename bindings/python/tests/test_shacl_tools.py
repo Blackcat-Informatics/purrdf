@@ -5,8 +5,9 @@
 ``purrdf.shapes.eval_node_expr`` and ``purrdf.shapes.lint_shapes``.
 
 Every shapes graph carries the W3C SHACL 1.2 declaration of
-``sh:SPARQLExprExpression`` verbatim -- the declaration that used to be refused as
-a bodiless custom function -- beside shapes that call ``sh:sparqlExpr`` with
+``sh:SPARQLExprExpression`` verbatim -- a built-in declared as a
+``sh:NamedParameterExpressionFunction`` with no ``sh:bodyExpression``, which is not a
+bodiless custom function -- beside shapes that call ``sh:sparqlExpr`` with
 ``sh:prefixes``.
 """
 

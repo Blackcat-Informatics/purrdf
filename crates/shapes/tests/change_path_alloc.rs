@@ -371,14 +371,14 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 ///
 /// A SHACL 1.2 `sh:class` value may be a list of classes (a disjunction), but only
 /// a list of two or more lowers to an identity set at bind; a single class stays
-/// the plain slot it always was. The seam shapes graph carries one `sh:class`, so
-/// binding it builds no set table and the figure is unchanged by the list form.
+/// a plain slot. The seam shapes graph carries one `sh:class`, so binding it
+/// builds no set table and the list form costs this figure nothing.
 const BIND_ALLOC_CONST: u64 = 59;
 
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 296 allocations
+/// seam, and here the figure really is constant: admission makes 291 allocations
 /// with either seam dataset bound.
 ///
 /// # Why it moved from 284
@@ -439,23 +439,22 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// the same for both seam datasets, which is the assertion above this one, and
 /// which is what says admission does not read the data.
 ///
-/// # Why it moved from 296
+/// # What the function linker costs
 ///
 /// Admission re-runs the function linker over the carried shapes graph, and that
-/// linker now scans THREE declaring classes (`sh:NodeExpressionFunction` joined the
+/// linker scans THREE declaring classes (`sh:NodeExpressionFunction` beside the
 /// two parameter-function classes, so a built-in declared under the wrong class is
-/// caught). Each class scan now first asks the dataset's term table whether the
-/// class IRI occurs at all, and skips the pattern probe — with the two IRI terms it
-/// used to build for it — when it does not. The seam shapes graph declares no
-/// function, so all three scans end at that lookup: seven allocations fewer than
-/// the two unconditional probes cost before.
+/// caught). Each class scan first asks the dataset's term table whether the class
+/// IRI occurs at all, and skips the pattern probe — and the two IRI terms it would
+/// build for it — when it does not. The seam shapes graph declares no function, so
+/// all three scans end at that lookup and allocate nothing.
 ///
-/// # Why it moved from 289
+/// # What list-valued `sh:class` and `sh:datatype` cost
 ///
-/// The carried model's `sh:class` and `sh:datatype` values are LISTS now — a
-/// SHACL 1.2 value of either may be a SHACL list, read as a disjunction — so the
-/// decoder reads each as a sequence into its own vector. The seam shapes graph
-/// carries one of each: two allocations, once per restore, whatever the data.
+/// The carried model's `sh:class` and `sh:datatype` values are LISTS — a SHACL 1.2
+/// value of either may be a SHACL list, read as a disjunction — so the decoder
+/// reads each as a sequence into its own vector. The seam shapes graph carries one
+/// of each: two allocations, once per restore, whatever the data.
 const ADMIT_ALLOC_CONST: u64 = 291;
 
 /// Conforming focus nodes per case in the golden fixture.
@@ -2087,13 +2086,13 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
 
 /// The expansion's fixed cost, independent of how many rows changed.
 ///
-/// It was 2 until every shapes graph gained one more read: the data graph's
-/// `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape targets"),
-/// which can make any node a focus node of any shape, so the footprint carries a
-/// `sh:shape` trigger for every shapes graph. The expansion resolves each
-/// trigger's predicate once per call, and on a delta-backed view that lookup
-/// builds the owned term it asks for — one allocation, charged once, whatever the
-/// change's size. The per-row and per-doubling terms did not move.
+/// One of the three is the `sh:shape` trigger every shapes graph carries: the
+/// data graph's `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape
+/// targets") can make any node a focus node of any shape, so the footprint reads
+/// them for every shapes graph. The expansion resolves each trigger's predicate
+/// once per call, and on a delta-backed view that lookup builds the owned term it
+/// asks for — one allocation, charged once, whatever the change's size. It adds
+/// nothing to the per-row or per-doubling terms.
 const EXPANSION_CONST: u64 = 3;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
@@ -2274,8 +2273,8 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 ///
 /// Measured on this revision the per-row term is then exactly zero — 17 allocations
 /// for 32 changed rows and 26 for 256, which is `2 + 3·log2(N)`: the three doubling
-/// series, and a constant that is one more than it was for the reason
-/// [`EXPANSION_CONST`] gives (the `sh:shape` trigger's predicate lookup). So the `2N` above really is one probe per row, and a
+/// series, and a constant of 2 that includes the `sh:shape` trigger's predicate
+/// lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
 #[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {

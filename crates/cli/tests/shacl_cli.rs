@@ -89,11 +89,12 @@ const DATA: &str = concat!(
 
 // ── `shacl pack --import` and the owl:imports closure ───────────────────────────
 //
-// `shacl pack` used to read raw Turtle text through a route with no import table, so an
-// `owl:imports` it could not see was silently dropped: the product
-// carried FEWER shapes than the document it was packed from, and validating through it
-// reported a decided, well-formed, WRONG verdict with nothing printed to say so. These tests
-// pin the two lanes to the same answer, which is what the shared seam exists to guarantee.
+// `shacl pack` reads its shapes document through the same import table as `shacl
+// validate`. A route with no import table would silently drop an `owl:imports` it could
+// not see: the product would carry FEWER shapes than the document it was packed from, and
+// validating through it would report a decided, well-formed, WRONG verdict with nothing
+// printed to say so. These tests pin the two lanes to the same answer, which is what the
+// shared seam exists to guarantee.
 
 /// A root shapes document that is nothing but an ontology header importing `lib` — every
 /// shape it has lives in the imported document, not here.

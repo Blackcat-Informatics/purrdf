@@ -172,34 +172,26 @@ fn census_counts_per_class_are_pinned() {
 
 /// The pinned per-class counts; see [`census_counts_per_class_are_pinned`].
 ///
-/// `sh:singleLine`, `sh:rootClass` and `sh:someValue` are constraint parameters
-/// of components the engine evaluates, so they count there and not among the
-/// refused terms: 42 + 3 and 48 − 3. `sh:subsetOf` followed when its
-/// component became evaluated: 45 + 1 and 45 − 1, and `sh:uniqueValuesFor` —
-/// the last declared component — when its did: 46 + 1 and 44 − 1. No
-/// component parameter is refused any more. `sh:ByTypes`, the IRI value of
-/// `sh:closed`, moved to the vocabulary when `sh:closed sh:ByTypes` became
-/// evaluated: 19 + 1 and 43 − 1. `sh:Debug` and `sh:Trace` moved to the
-/// vocabulary when they became evaluated severities (the spec table's severity
-/// rows), and `sh:conformanceDisallows` to the report vocabulary when the
-/// conformance-disallow set became a validation option the report echoes: 20 + 2,
-/// 20 + 1 and 42 − 3. `sh:ShapeClass` moved to the vocabulary, and `sh:targetWhere`
-/// and `sh:shape` to the targets, when implicit class targets, where targets and
-/// explicit shape targets became evaluated: 22 + 1, 7 + 2 and 39 − 3. `sh:values`
-/// and `sh:defaultValue` became a property shape's computed value nodes, and
-/// `sh:expectedPredicate` a rule term, when the three became evaluated: 0 + 2,
-/// 9 + 1 and 36 − 3. When the rules engine came to execute SHACL 1.2 Inference Rules
-/// whole, `sh:layer`, `sh:runOnce`, `sh:RuleSet`, `sh:includesRuleSet`, `sh:hasRule`,
-/// `sh:ruleProcessor`, `sh:sourceRule`, `sh:tempTriple` and `sh:SPARQLRuleTemplate`
-/// became rule terms (10 + 9), `sh:RulesGraph` and `sh:RulesEntailment` vocabulary
-/// (23 + 2) and `sh:entailment` graph structure (16 + 1): 33 − 12 = 21 remained.
-/// SHACL-SPARQL result annotations became evaluated, so `sh:resultAnnotation`,
-/// `sh:ResultAnnotation`, `sh:annotationProperty`, `sh:annotationValue` and
-/// `sh:annotationVarName` are declaration vocabulary; `sh:describe` and
-/// `sh:update`, which no SHACL specification executes, are declaration vocabulary
-/// refused by position wherever the loader reads; and the SHACL Advanced Features
-/// `sh:minus` became the `shnex:remove` alias: 32 + 7, 47 + 1 and 21 − 8. The 13
-/// that remain are the SHACL JavaScript Extensions, which are not SHACL 1.2.
+/// Every declared component's parameters count as constraint parameters —
+/// `sh:singleLine`, `sh:rootClass`, `sh:someValue`, `sh:subsetOf` and
+/// `sh:uniqueValuesFor` among them — so no component parameter is refused.
+/// `sh:ByTypes`, the IRI value of `sh:closed`, is vocabulary, as are `sh:Debug`
+/// and `sh:Trace` (evaluated severities, the spec table's severity rows),
+/// `sh:ShapeClass`, and `sh:RulesGraph` and `sh:RulesEntailment`.
+/// `sh:conformanceDisallows` is report vocabulary: the conformance-disallow set is
+/// a validation option the report echoes. `sh:targetWhere` and `sh:shape` are
+/// targets. `sh:values` and `sh:defaultValue` are a property shape's computed value
+/// nodes. The SHACL 1.2 Inference Rules terms — `sh:expectedPredicate`,
+/// `sh:layer`, `sh:runOnce`, `sh:RuleSet`, `sh:includesRuleSet`, `sh:hasRule`,
+/// `sh:ruleProcessor`, `sh:sourceRule`, `sh:tempTriple` and
+/// `sh:SPARQLRuleTemplate` among them — are rule terms, and `sh:entailment` is
+/// graph structure. The SHACL-SPARQL result-annotation terms
+/// (`sh:resultAnnotation`, `sh:ResultAnnotation`, `sh:annotationProperty`,
+/// `sh:annotationValue` and `sh:annotationVarName`) are declaration vocabulary;
+/// so are `sh:describe` and `sh:update`, which no SHACL specification executes
+/// and which the loader refuses by position wherever it reads; and the SHACL
+/// Advanced Features `sh:minus` is the `shnex:remove` alias. The 13 refused terms
+/// are the SHACL JavaScript Extensions, which are not SHACL 1.2.
 const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
