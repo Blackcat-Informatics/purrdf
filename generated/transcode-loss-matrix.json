@@ -910,13 +910,6 @@
     "note": "TypeScript uses structural object compatibility and index signatures apply to every string key, so it cannot constrain only JSON object properties not named by the schema. Named properties retain their exact declarations while the extra-property policy or value schema is widened."
   },
   {
-    "code": "array-cardinality-validation-widened",
-    "from": "json-schema",
-    "to": "typescript-7.0",
-    "intentional": true,
-    "note": "A JSON Schema minItems/maxItems assertion exceeds the declaration emitter's fixed tuple-expansion budget. Item and tuple-prefix carriers remain, while exact length validation is widened to keep declaration size bounded deterministically."
-  },
-  {
     "code": "array-contains-validation-dropped",
     "from": "json-schema",
     "to": "typescript-7.0",
@@ -963,7 +956,7 @@
     "from": "json-schema",
     "to": "typescript-7.0",
     "intentional": true,
-    "note": "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric predicates with no exact TypeScript number-type expression; integer const/enum values outside the IEEE-754 safe range also have no exact TypeScript number literal. The numeric carrier or closest literal remains while the predicate or excess precision is omitted."
+    "note": "JSON Schema minimum/maximum/exclusive bounds and multipleOf over infinitely many numbers have no TypeScript expression: the only proper subtypes of number are unions of numeric literals, and TypeScript has no complement of a literal within number. (Over a finite const/enum the numbers that fail are left out, exactly.) Integer const/enum values outside the IEEE-754 safe range also have no exact TypeScript number literal. The numeric carrier or closest literal remains while the predicate or excess precision is omitted."
   },
   {
     "code": "object-literal-validation-widened",
@@ -1008,13 +1001,6 @@
     "note": "JSON Schema minLength/maxLength, pattern, format, and content assertions are runtime predicates without a general TypeScript string-type equivalent. The string carrier remains while the predicate is omitted."
   },
   {
-    "code": "tuple-array-validation-widened",
-    "from": "json-schema",
-    "to": "typescript-7.0",
-    "intentional": true,
-    "note": "A JSON Schema prefixItems tuple exceeds the declaration emitter's fixed tuple-expansion budget. The common item carrier remains while position-specific validation beyond the budget is widened deterministically."
-  },
-  {
     "code": "unevaluated-validation-dropped",
     "from": "json-schema",
     "to": "typescript-7.0",
@@ -1026,7 +1012,7 @@
     "from": "json-schema",
     "to": "typescript-7.0",
     "intentional": true,
-    "note": "JSON Schema uniqueItems compares runtime array values for equality; TypeScript array and tuple declarations cannot require pairwise-distinct elements. Item and length declarations remain while uniqueness is omitted."
+    "note": "JSON Schema uniqueItems compares runtime array values for equality. A TypeScript tuple type constrains each position independently, so its pairs form a product of two item sets, and the pairwise-distinct pairs over infinitely many items are no finite union of products (among 3^n + 1 distinct items two share their membership in n products, and their pair lies in none). Over finitely many scalar items the distinct sequences are enumerated exactly, up to the compiler's union limit; otherwise item and length declarations remain while uniqueness is omitted."
   },
   {
     "code": "canonical-rdf12-projection",

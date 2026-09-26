@@ -432,8 +432,10 @@ What remains is recorded on the forward ledger, each case with its reason:
   `rdfs:subClassOf*` triples on other nodes.
 
 The Pydantic package enforces the list components, uniqueness included, with a
-validator over the raw JSON items. TypeScript states the length bounds as
-tuple types; it has no type for distinct elements. LinkML states all four on
+validator over the raw JSON items. TypeScript states the length bounds exactly
+at any size, and distinct elements when the members are finitely many scalars.
+It has no type for distinct elements of an unconstrained member, or for an
+integer minimum. LinkML states all four on
 the `@list` slot. GraphQL carries a list value as a `@oneOf` input object of a
 node reference and a list object, and each member as a `@oneOf` input object of
 the member shape's alternatives, so member types are checked. GraphQL list types
@@ -609,15 +611,33 @@ identity or vocabulary.
 The fixed declaration dialect uses `strict` plus
 `exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and
 literals, required versus optional fields, explicit `null`, local recursive
-references, unions, intersections, homogeneous arrays, and bounded tuples.
-There are no runtime enums, mergeable interfaces, branded pseudo-validators,
-or `any` escape hatches. Invalid keywords, open/dangling references, and name
+references, unions, intersections, arrays and tuples. There are no runtime
+enums, mergeable interfaces, branded pseudo-validators, or `any` escape
+hatches.
+
+Array length bounds are exact at any size. A tuple element states each
+position-specific item. A length beyond those positions is stated as an element
+property: an array literal whose contextual type is tuple-like is typed as a
+tuple, and a tuple of length `n` has exactly the properties `"0"` to `"n-1"`.
+So `minItems: m` is a required property `"m-1"`, and `maxItems: n` is an
+optional `never` property `"n"`. `uniqueItems` over items that admit finitely
+many JSON scalars is exact too. The generated `JsonDistinct` helper enumerates
+the distinct sequences as a union of tuple types. The enumeration stops at the
+compiler's limits: an instantiation depth of 100 (TS2589), and 100,000 members
+in a union that the compiler spreads into a tuple or distributes an
+intersection over (TS2590). Numeric keywords over a finite `const` or `enum`
+leave out the numbers that fail them. Invalid keywords, open/dangling references, and name
 collisions fail before bytes are emitted.
 
 Runtime assertions outside TypeScript structural assignability are never
 silently erased: integer, numeric/string predicate, closure, pattern-property,
-dependency, conditional, negation, contains/unique, evaluation-state, and
-bounded-expansion gaps receive stable codes and JSON Pointer locations. CI
+dependency, conditional, negation, contains, uniqueness and evaluation-state
+gaps receive stable codes and JSON Pointer locations. A numeric bound over
+infinitely many numbers and distinct elements of an infinite item type have no
+type. The only proper subtypes of `number` are unions of literals, and a tuple
+type constrains each position independently. The oracle compiles the facts
+these losses rest on: `Exclude<number, -1>` still admits `-1`, and each
+enumeration limit is accepted at its edge and refused one step past it. CI
 classifies instances independently with a draft 2020-12 validator and compiles
 the generated declarations with the locked TypeScript 7.0.2 compiler, including
 fresh-literal and through-variable probes:

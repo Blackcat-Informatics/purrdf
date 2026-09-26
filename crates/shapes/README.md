@@ -680,8 +680,9 @@ assert_eq!(package.type_names.get("Person").map(String::as_str), Some("Person"))
 The closed dialect is TypeScript 7.0 under `strict` and
 `exactOptionalPropertyTypes`. It represents JSON primitives and literals, exact
 required-versus-optional fields, explicit JSON `null`, local recursive
-references, `anyOf` unions, `allOf` intersections, homogeneous arrays, and
-bounded tuples. It emits type aliases rather than runtime enums or mergeable
+references, `anyOf` unions, `allOf` intersections, arrays and tuples with
+exact length bounds of any size, and pairwise-distinct items over a finite
+scalar item set. It emits type aliases rather than runtime enums or mergeable
 interfaces and never uses `any`. Malformed keyword values, external/dynamic or
 dangling references, reserved names, and normalized-name collisions fail
 closed.
@@ -689,9 +690,9 @@ closed.
 TypeScript's structural assignability cannot encode every runtime JSON Schema
 assertion. Integer subsets, numeric/string predicates, object closure with
 named fields, regex-selected properties, dependencies, conditionals,
-negation, contains/uniqueness, evaluation state, and expansion-budget
-widenings are therefore classified at their JSON Pointer locations by the
-closed loss profile. The compiler oracle checks both fresh literals and values
+negation, contains, uniqueness over infinitely many items (or beyond the
+compiler's enumeration limits), and evaluation state are therefore classified
+at their JSON Pointer locations by the closed loss profile. The compiler oracle checks both fresh literals and values
 passed through variables, so excess-property checks cannot hide structural
 widening:
 
