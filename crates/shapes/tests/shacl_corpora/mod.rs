@@ -133,6 +133,20 @@ pub(crate) type Tuple = (
 /// Result multiset: tuple → occurrence count.
 pub(crate) type Multiset = BTreeMap<Tuple, usize>;
 
+/// One expected result as the `sh:detail` grader reads it: its comparison tuple
+/// and, when the expected report states any, its nested `sh:detail` results.
+///
+/// `details` is `None` when the expected result states no `sh:detail` — the
+/// result's details are then not graded (see the `report_grading` module docs
+/// for the SHACL 1.2 Core text that makes them optional) — and `Some` when it
+/// states at least one, in which case the produced result's details must be
+/// EXACTLY that multiset, recursively.
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedResult {
+    pub(crate) tuple: Tuple,
+    pub(crate) details: Option<Vec<Self>>,
+}
+
 /// What the manifest says a case's outcome must be.
 pub(crate) enum Expected {
     /// `mf:result sht:Failure` — the validator must reject the input.
@@ -171,6 +185,11 @@ pub(crate) struct W3cCase {
     /// into the validation result") — with its `(property, value)` pairs,
     /// compared EXACTLY as a set, the way messages are.
     pub(crate) expected_annotations: Vec<(Tuple, BTreeSet<(String, String)>)>,
+    /// Every top-level expected result that states `sh:detail`, with its nested
+    /// results — graded beside the tuple multiset: each must be carried by a
+    /// distinct produced result with the same tuple whose details are exactly
+    /// the stated ones (see [`ExpectedResult`]).
+    pub(crate) expected_details: Vec<ExpectedResult>,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -495,10 +514,20 @@ pub(crate) fn parse_entry(
 
     let result = object(g, entry, mf::RESULT)
         .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
-    let (expected, conformance_disallows, expected_messages, expected_annotations) = match &result {
-        Term::NamedNode(n) if n.as_str() == sht::FAILURE => {
-            (Expected::Failure, Vec::new(), Vec::new(), Vec::new())
-        }
+    let (
+        expected,
+        conformance_disallows,
+        expected_messages,
+        expected_annotations,
+        expected_details,
+    ) = match &result {
+        Term::NamedNode(n) if n.as_str() == sht::FAILURE => (
+            Expected::Failure,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
         report_node => (
             Expected::Report {
                 conforms: expected_conforms(g, report_node, &id),
@@ -513,6 +542,7 @@ pub(crate) fn parse_entry(
                 .collect(),
             expected_result_messages(g, report_node),
             expected_result_annotations(g, report_node),
+            expected_result_details(g, report_node, &id),
         ),
     };
 
@@ -526,6 +556,7 @@ pub(crate) fn parse_entry(
         conformance_disallows,
         expected_messages,
         expected_annotations,
+        expected_details,
     })
 }
 
@@ -607,6 +638,44 @@ fn expected_result_annotations(
             (!pairs.is_empty()).then(|| (expected_tuple(g, &result), pairs))
         })
         .collect()
+}
+
+/// Every top-level expected result that states `sh:detail`, as an
+/// [`ExpectedResult`] tree.
+fn expected_result_details(g: &RdfDataset, report_node: &Term, id: &str) -> Vec<ExpectedResult> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .map(|result| expected_result(g, &result, id, &mut Vec::new()))
+        .filter(|result| result.details.is_some())
+        .collect()
+}
+
+/// One expected result and, recursively, the `sh:detail` results it states. A
+/// detail chain that revisits a result is a malformed frozen corpus and panics,
+/// as a malformed RDF list does.
+fn expected_result(
+    g: &RdfDataset,
+    result: &Term,
+    id: &str,
+    path: &mut Vec<Term>,
+) -> ExpectedResult {
+    assert!(
+        !path.contains(result),
+        "{id}: the sh:detail chain revisits the expected result {result}"
+    );
+    path.push(result.clone());
+    let details = objects(g, result, sh::DETAIL);
+    let details = (!details.is_empty()).then(|| {
+        details
+            .iter()
+            .map(|detail| expected_result(g, detail, id, path))
+            .collect()
+    });
+    path.pop();
+    ExpectedResult {
+        tuple: expected_tuple(g, result),
+        details,
+    }
 }
 
 /// Build the expected result multiset from the expected-report node.
