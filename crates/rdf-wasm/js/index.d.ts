@@ -1010,10 +1010,13 @@ export class QueryEngine {
   // `hasAsyncQueries` — and reject with the reason before touching wasm where it is
   // missing. Rejections: an option the twin would ignore is a `TypeError`; a parse or
   // evaluation failure (including a `SERVICE`/`LOAD` with no handler, and a result of the
-  // wrong kind) is an `Error` with the synchronous twin's message; a cancellation through
-  // `signal` rejects with `signal.reason` (an `AbortError` without one); a fault — a
-  // handler that threw, rejected or answered something unrecognizable, or an exhausted
-  // stack region — is an `Error` with the fault's text. Errors built by the twin carry
+  // wrong kind) is an `Error` with the synchronous twin's message — a request too deep
+  // for the job's stack region included: the evaluator's refusal keeps its code
+  // (`native-sparql-evaluation-stack-exhausted`) and gains the region's size and
+  // `stackBytes` as its remedy; a cancellation through `signal` rejects with
+  // `signal.reason` (an `AbortError` without one); a fault — a handler that threw,
+  // rejected or answered something unrecognizable, or work no stack check guards
+  // reaching its region's guard band — is an `Error` with the fault's text. Errors built by the twin carry
   // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
   // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
   // traps (or runs past its stack region's guard zone) poisons the instance, and so does a

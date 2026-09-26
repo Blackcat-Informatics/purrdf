@@ -554,11 +554,17 @@ never shared or reused.
 Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by default, at
 least 524 288). `evidence.async.stackHighWaterBytes` reports the deepest the job went, so
 the region can be sized from a real run. A request that nests deeper than the region
-allows fails with a typed error that says to raise `stackBytes`. The job fails and the
-instance stays usable. If a job traps, or its frames ever run past the guard zone below
-its region, the instance's state can no longer be trusted: the trap leaves the job's
-stack context in place of the caller's and anything the job was mutating half-changed,
-and an overrun may have overwritten memory outside the job. The instance is then
+allows fails with the parser's or the evaluator's own typed stack refusal, the one its
+synchronous twin gives: the evaluator's keeps its code,
+`native-sparql-evaluation-stack-exhausted`, and its message, and adds the region's size
+and a larger `stackBytes` as the remedy. Both check the stack left above the region's
+base at every recursive step and refuse while 64 KiB remain. Beneath that lies a guard
+band of 32 KiB, which only work no check guards can reach; it fails the job with
+`asynchronous job stack region exhausted (<bytes> bytes); raise stackBytes`. Either way
+the job fails and the instance stays usable. If a job traps, or its frames ever run past
+the overrun zone below its region, the instance's state can no longer be trusted: the
+trap leaves the job's stack context in place of the caller's and anything the job was
+mutating half-changed, and an overrun may have overwritten memory outside the job. The instance is then
 *poisoned*, and it cannot be used again: every in-flight job rejects, and every later
 call — synchronous or asynchronous, a constructor, a static, a free function, or a
 method of an object created before the trap — throws the same error. `ready()` rejects

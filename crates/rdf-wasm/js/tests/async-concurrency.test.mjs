@@ -243,43 +243,73 @@ test("an async job started from inside a sync callback runs and returns", async 
 });
 
 // Measured on the shipped artifact through `evidence.async.stackHighWaterBytes` (the
-// deepest poll below the region's top), with the chain above: 64 nested OPTIONALs reach
-// 319 037 bytes, 100 reach 487 805. A 512 KiB region stops a poll inside its 128 KiB
-// guard band, so it can host at most 524 288 − 131 072 = 393 216 bytes of polling
-// frames: 64 fits, 100 does not.
-const EXHAUSTING_DEPTH = 100;
+// deepest poll below the region's top), with the chain above: 100 nested OPTIONALs reach
+// 434 508 bytes and 105 reach 455 308, both answering on a 512 KiB region; 110 are
+// refused. The parser's and evaluator's checks refuse once less than the 64 KiB margin is
+// left above the region's base — 524 288 − 65 536 = 458 752 bytes down — and the polls'
+// guard band is half that margin, so a request whose every level checks is refused by the
+// evaluator itself, typed as its synchronous twin refuses, with its deepest poll between
+// the two. (Before the band lay below the margin, a 128 KiB band stopped 100 levels with
+// the region's fault instead.)
+const ANSWERING_DEPTH = 100;
+const EXHAUSTING_DEPTH = 110;
 const SMALL_REGION = 524288;
-const GUARD_BAND = 128 * 1024;
+const MARGIN = 64 * 1024;
+const GUARD_BAND = MARGIN / 2;
 /** The evaluator's own stack refusal, as a job's error carries it. */
 const EVALUATION_STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
+/** What the asynchronous lane appends to the evaluator's stack refusal on the smallest region. */
+const SMALL_REGION_HINT =
+  "; this asynchronous job ran on a stack region of 524288 bytes — run it with a larger stackBytes";
+/** The region's own fault, which only frames no check guards may reach. */
+const REGION_FAULT = /stack region exhausted/;
 
-test("stack region exhaustion is a typed error, not corruption", async () => {
+test("a request too deep for its stack region is the evaluator's typed refusal, not the region's fault and not corruption", async () => {
   const engine = new QueryEngine();
   const chain = Dataset.parse(CHAIN, "nquads");
   const query = nestedOptional(EXHAUSTING_DEPTH);
 
-  let exhausted;
-  try {
-    await engine.queryGovernedAsync(chain, query, { stackBytes: SMALL_REGION });
-  } catch (error) {
-    exhausted = error;
+  // Twice: a trap or an overrun of the region's zone would poison the instance, and the
+  // second job would reject with the poison instead of the same refusal.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let exhausted;
+    try {
+      await engine.queryGovernedAsync(chain, query, { stackBytes: SMALL_REGION });
+    } catch (error) {
+      exhausted = error;
+    }
+    assert.ok(exhausted instanceof Error, "the small region refuses the query");
+    // The synchronous twin's code and message, with the region and `stackBytes` named as
+    // the remedy — never the region's fault.
+    assert.match(
+      exhausted.message,
+      /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \(OPTIONAL needs more stack than this thread has left above its 65536-byte reserve\); run it on a thread with a larger stack/,
+    );
+    assert.ok(exhausted.message.endsWith(SMALL_REGION_HINT), exhausted.message);
+    assert.doesNotMatch(exhausted.message, REGION_FAULT);
+    assert.doesNotMatch(exhausted.message, /asynchronous twin of this call/);
+    // The polls went past the point the evaluator refuses at, and the evaluator stopped
+    // the job before any reached the guard band.
+    const exhaustedDepth = exhausted.evidence.async.stackHighWaterBytes;
+    assert.ok(
+      exhaustedDepth > SMALL_REGION - MARGIN && exhaustedDepth < SMALL_REGION - GUARD_BAND,
+      `the evaluator refused between the margin and the guard band (${exhaustedDepth} bytes deep)`,
+    );
+    assert.equal(stackPointer(), IDLE);
   }
-  assert.ok(exhausted instanceof Error, "the small region refuses the query");
-  assert.equal(
-    exhausted.message,
-    "asynchronous job stack region exhausted (524288 bytes); raise stackBytes",
-  );
-  const exhaustedDepth = exhausted.evidence.async.stackHighWaterBytes;
-  assert.ok(
-    exhaustedDepth > SMALL_REGION - GUARD_BAND - 16 && exhaustedDepth < SMALL_REGION,
-    `the job stopped inside the guard band (${exhaustedDepth} bytes deep)`,
-  );
-  assert.equal(stackPointer(), IDLE);
 
-  // The instance is intact: the synchronous answer is unchanged, and an ordinary
-  // asynchronous query still answers.
+  // The instance is intact: the synchronous lane answers the same request (its 1 MiB
+  // stack holds it), and asynchronous queries still answer — the valid neighbour at
+  // ANSWERING_DEPTH on the very region that refused, with every row.
+  assert.equal(engine.select(chain, query).rowCount, 200);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
+  const answeredSmall = await engine.queryGovernedAsync(chain, nestedOptional(ANSWERING_DEPTH), {
+    stackBytes: SMALL_REGION,
+  });
+  assert.equal(answeredSmall.isComplete, true);
+  assert.equal(answeredSmall.result.rowCount, 200);
+  assert.ok(answeredSmall.evidence.async.stackHighWaterBytes > 393_216, "deeper than a 128 KiB band allowed");
 
   // Frames that never poll: expression evaluation recurses once per level of the
   // expression tree without polling, so an expression nested deeply enough beneath a few
@@ -371,7 +401,7 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.equal(answered.isComplete, true);
   assert.equal(answered.result.rowCount, 200);
   const answeredDepth = answered.evidence.async.stackHighWaterBytes;
-  assert.ok(answeredDepth > SMALL_REGION - GUARD_BAND, `${answeredDepth} bytes deep`);
+  assert.ok(answeredDepth > SMALL_REGION - MARGIN, `${answeredDepth} bytes deep`);
   assert.ok(answeredDepth < 4 * 1024 * 1024 - GUARD_BAND);
   assert.equal(stackPointer(), IDLE);
 });
@@ -379,10 +409,12 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
 // Nesting the parser admits can need more stack than a region holds: 63 nested
 // `FILTER NOT EXISTS` or 126 nested `LATERAL` trapped the synchronous lane's 1 MiB stack
 // before the evaluator guarded its own recursion (the synchronous lane now answers the
-// first — see `query.test.mjs` — but a 512 KiB region still cannot). On the smallest region both are the
-// region's typed exhaustion — their frames poll at every algebra node, so the guard band
-// stops them before the evaluator's own check would — and the instance is not poisoned;
-// on a 16 MiB region both answer, with the rows their semantics give.
+// first — see `query.test.mjs` — but a 512 KiB region still cannot). On the smallest
+// region both are the evaluator's own typed refusal — their frames poll at every algebra
+// node, but the guard band lies below the point the evaluator refuses at, so the band
+// never pre-empts it — with the same code the synchronous lane refuses 126 nested
+// `LATERAL` with, and the instance is not poisoned; on a 16 MiB region both answer, with
+// the rows their semantics give.
 const NEST_DATA = [1, 2, 3, 4]
   .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
   .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
@@ -410,7 +442,12 @@ test("admitted nesting too deep for the smallest region is a typed error there, 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await assert.rejects(
         engine.queryAsync(data, query, { stackBytes: SMALL_REGION }),
-        { message: "asynchronous job stack region exhausted (524288 bytes); raise stackBytes" },
+        (error) => {
+          assert.match(error.message, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+          assert.ok(error.message.endsWith(SMALL_REGION_HINT), error.message);
+          assert.doesNotMatch(error.message, REGION_FAULT);
+          return true;
+        },
         `${what} on the smallest region`,
       );
       assert.equal(stackPointer(), IDLE);
@@ -428,6 +465,25 @@ test("admitted nesting too deep for the smallest region is a typed error there, 
     assert.deepEqual(subjectsOf(answered), expected, `${what} on a 16 MiB region`);
     assert.equal(stackPointer(), IDLE);
   }
+  // The synchronous twin of 126 nested LATERAL is over-deep for its own 1 MiB stack too,
+  // and refuses with the same code the job did; the text before the lanes' hints differs
+  // only in the construct the stack ran out at.
+  const lateral = nestedAround(`?s <${EX}p> ?o LATERAL { `, 126);
+  const code = (message) => /^error ([a-z-]+): /.exec(message)?.[1];
+  let syncRefusal;
+  try {
+    engine.select(data, lateral);
+  } catch (error) {
+    syncRefusal = error.message;
+  }
+  let asyncRefusal;
+  try {
+    await engine.queryAsync(data, lateral, { stackBytes: SMALL_REGION });
+  } catch (error) {
+    asyncRefusal = error.message;
+  }
+  assert.equal(code(syncRefusal), "native-sparql-evaluation-stack-exhausted", syncRefusal);
+  assert.equal(code(asyncRefusal), code(syncRefusal), asyncRefusal);
 });
 
 // Nesting is bounded by the stacks a job runs on, not by a count: its region's shadow

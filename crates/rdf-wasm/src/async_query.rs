@@ -67,15 +67,23 @@
 //! suspended is against the stack actually running, and a walk scope the job suspends
 //! inside (a property path's traversal polls, and so yields) stays the job's: nothing
 //! that runs while it waits latches a refusal in it, and the jobs close their scopes in
-//! whatever order they are resumed. The [`JspiStopWatch`] guards polling frames:
-//! every poll measures the stack left above the base and, inside a guard band of
-//! 128 KiB, latches a fault ("asynchronous job stack region exhausted …; raise
-//! stackBytes") and stops the job cleanly — before a deeper frame could run off the
-//! region into the heap. It also records the low-water mark, reported as
-//! [`AsyncEvidence::stack_high_water_bytes`]. The evaluator guards the frames that never
-//! poll — an operator chain, a nested `EXISTS` walk — by checking the same measurement at
-//! every recursive step and refusing with its own typed error
-//! (`native-sparql-evaluation-stack-exhausted`) while 64 KiB are still left.
+//! whatever order they are resumed. The parser and the evaluator check that
+//! measurement at every recursive step — an operator chain, a nested `EXISTS` walk, a
+//! property path's traversal — and refuse with their own typed errors
+//! (`native-sparql-evaluation-stack-exhausted`, the parser's stack refusal) while
+//! `purrdf_stack::MARGIN_BYTES` (64 KiB) are still left: the very refusal the synchronous
+//! twin gives, with the region's size and `stackBytes` named as the remedy. The
+//! [`JspiStopWatch`] is the last resort beneath them, for polling frames no check guards:
+//! every poll measures how far its frame is above the region's base and, inside a guard
+//! band of half the margin ([`STACK_GUARD_BYTES`]), latches a fault ("asynchronous job
+//! stack region exhausted …; raise stackBytes") and stops the job cleanly — before a
+//! deeper frame could run off the region into the heap. The band lies below the point
+//! every check refuses at, so a frame that checks is always refused, typed, before a poll
+//! could see the band; and the band is measured from the base itself, not from the
+//! floor, so neither the stack an evaluation reserves above the floor nor the exhausted
+//! floor a refusing walk installs while it unwinds turns the evaluator's own refusal
+//! into the region's fault. The poll also records the low-water mark, reported as
+//! [`AsyncEvidence::stack_high_water_bytes`].
 //!
 //! Work that neither polls nor is the evaluator's — parsing, serializing — can still
 //! recurse past the base between two polls. Beneath every base lies an overrun zone
@@ -177,7 +185,7 @@
 //! | State | Held across a poll or resolver call? |
 //! |---|---|
 //! | The stack floor (`purrdf-stack`'s thread-local `FLOOR`) | Yes — every frame of a suspended job is measured against its region's base. Swapped: it is part of the [`purrdf_stack::Context`] (with the walk-scope state and the stack the job's evaluation reserved) the job installs when its run starts, puts back at every suspension, reinstalls at every resumption and puts back when the run returns (`JspiStopWatch::leave_region` / `enter_region`, `JobInner::run`). |
-//! | The evaluator's walk-scope state (`purrdf-stack`'s thread-local `WALK`: no scope, a scope open, a refusal latched with the floor it replaced) | Yes — a property path's traversal runs inside a walk scope and polls the stop signal at every step, so a job yields with that scope open. Swapped with the floor as the other half of the same `Context`: a job starts with no scope open, a context that runs while the job waits sees its own scopes rather than the job's (so its walks never latch a refusal in the job's scope, nor install the exhausted floor on a context that never refused), and jobs resumed in any order close their own scopes. A refusal latched in a scope never reaches a suspension in any case: it installs the exhausted floor, and the next poll's stack guard stops the job before it could yield. No other walk scope contains a poll or a resolver call — `CONSTRUCT` and update template instantiation, `EXISTS` preparation, the per-row substitution copy, a `SERVICE` body's analysis and serialization, a function body's copy and rewrite all run between polls. |
+//! | The evaluator's walk-scope state (`purrdf-stack`'s thread-local `WALK`: no scope, a scope open, a refusal latched with the floor it replaced) | Yes — a property path's traversal runs inside a walk scope and polls the stop signal at every step, so a job yields with that scope open. Swapped with the floor as the other half of the same `Context`: a job starts with no scope open, a context that runs while the job waits sees its own scopes rather than the job's (so its walks never latch a refusal in the job's scope, nor install the exhausted floor on a context that never refused), and jobs resumed in any order close their own scopes. A refusal latched in a scope may reach a suspension while its walk unwinds (the poll's guard band reads the region's base, not the exhausted floor, so the evaluator's own refusal is what the job reports); the exhausted floor is part of the job's context, so it is swapped out with the rest, and the context that runs while the job waits keeps its own floor. No other walk scope contains a poll or a resolver call — `CONSTRUCT` and update template instantiation, `EXISTS` preparation, the per-row substitution copy, a `SERVICE` body's analysis and serialization, a function body's copy and rewrite all run between polls. |
 //! | `NativeSparqlEngine`'s plan cache (`RefCell<PlanCache>`) | No. Every borrow (`prepare_for`, `prepare_request`, `bind_functions`, `prepare_execution`, the stats accessors) is a temporary inside one statement that parses and admits a plan; planning polls no signal and calls no resolver, and the borrow ends before the returned `Arc<PreparedQuery>` is evaluated. The `engine_is_reentrant_from_a_resolver_and_from_a_poll` test below re-enters one engine from inside its own evaluation to prove it. |
 //! | The BGP join-order cache (`Mutex`, `bgp::order_for`) | No. Locked only around the `get` and the `insert`; the cost-based ordering between them runs unlocked and polls nothing. |
 //! | Plan-memory observers (`plan_memory::interner_memory_observer`'s thread-local `OBSERVER`, `PlanCharge`) | No. Locked only to add or credit a byte total. |
@@ -200,7 +208,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -253,13 +261,27 @@ const DEFAULT_YIELD_EVERY_POLLS: u32 = 65_536;
 /// A job's stack region when the caller names no `stackBytes`: 2 MiB.
 const DEFAULT_STACK_BYTES: u32 = 2 * 1024 * 1024;
 
-/// The smallest region a job may run on: 512 KiB, four times the guard band, so a job
-/// always has at least 384 KiB of usable stack.
+/// The smallest region a job may run on: 512 KiB, so a job always has at least 448 KiB
+/// of stack above the point the parser's and evaluator's checks refuse at.
 const MIN_STACK_BYTES: u32 = 512 * 1024;
 
-/// The guard band at the base of a region. A poll whose frame reaches it stops the job
-/// before a deeper frame can leave the region.
-const STACK_GUARD_BYTES: usize = 128 * 1024;
+/// The guard band at the base of a region: half the margin the parser's and evaluator's
+/// checks refuse at. A poll whose frame reaches it stops the job — with the region's
+/// fault — before a deeper frame can leave the region.
+///
+/// It must lie below the margin. Every check measures against the region's base (the
+/// floor [`JobInner::run`] installs, raised by whatever the evaluation reserved) and
+/// refuses once less than [`purrdf_stack::MARGIN_BYTES`] are left, so a frame that
+/// checks is refused with the evaluator's (or parser's) own typed error — the refusal
+/// its synchronous twin gives — at least `MARGIN_BYTES - STACK_GUARD_BYTES` above the
+/// band. Only frames that poll but never check can reach the band; a band wider than the
+/// margin would pre-empt every typed refusal with this fault instead.
+const STACK_GUARD_BYTES: usize = purrdf_stack::MARGIN_BYTES / 2;
+
+const _: () = assert!(
+    STACK_GUARD_BYTES < purrdf_stack::MARGIN_BYTES,
+    "the guard band must lie below the point every stack check refuses at"
+);
 
 /// The overrun zone below every region's base: 1 MiB.
 ///
@@ -886,13 +908,15 @@ struct StackBounds {
 }
 
 impl StackBounds {
-    /// Whether a frame at `sp`, with `left` bytes of stack below it, may keep running:
-    /// inside the region and above its guard band. The error is the fault to latch.
+    /// Whether a frame at `sp` may keep running: inside the region and above its guard
+    /// band. The error is the fault to latch.
     ///
-    /// `left` is [`purrdf_stack::remaining`], measured against the floor
-    /// [`JobInner::run`] installs — this region's base — so the guard band and the
-    /// parser's and evaluator's own stack guards read one measurement rather than two.
-    fn check(self, sp: usize, left: usize) -> Result<(), String> {
+    /// The band is measured from the region's base itself, not from
+    /// [`purrdf_stack::remaining`]: the floor that reads against is raised by the stack
+    /// an evaluation reserves, and replaced by `purrdf_stack::EXHAUSTED` while a refusing
+    /// walk unwinds — both are the evaluator's business, and reading either here would
+    /// turn the evaluator's own typed refusal into this fault.
+    fn check(self, sp: usize) -> Result<(), String> {
         if sp < self.base || sp > self.top {
             return Err(format!(
                 "asynchronous job is not running on its stack region (stack pointer {sp:#x} \
@@ -900,7 +924,7 @@ impl StackBounds {
                 self.base, self.top
             ));
         }
-        if left < STACK_GUARD_BYTES {
+        if sp - self.base < STACK_GUARD_BYTES {
             return Err(self.exhausted());
         }
         Ok(())
@@ -1156,14 +1180,14 @@ impl JspiStopWatch {
         if canary != STACK_CANARY {
             return Err(self.slots.bounds.exhausted());
         }
-        // The evaluator's own measurement of this frame's depth and of the stack left
-        // below it, against the region's base (see `JobInner::run`).
+        // The evaluator's own measurement of this frame's depth, read against the region's
+        // bounds.
         let sp = purrdf_stack::stack_pointer();
         self.slots
             .counters
             .stack_low_water
             .fetch_min(sp, Ordering::Relaxed);
-        self.slots.bounds.check(sp, purrdf_stack::remaining())
+        self.slots.bounds.check(sp)
     }
 
     /// Suspend on the already-issued effect `seq`, count it, and return the host's
@@ -1630,6 +1654,23 @@ impl JobError {
         }
     }
 
+    /// This error with the asynchronous lane's remedy appended when it is the evaluator's
+    /// stack refusal: the code and message stay the synchronous twin's,
+    /// and the hint names the region the job ran on and `stackBytes`, the option that
+    /// sizes it. (The synchronous lane appends its own remedy, the asynchronous twin; see
+    /// `query::SYNC_STACK_HINT`.) Any other error is returned as it is.
+    fn with_stack_hint(mut self, region_bytes: usize) -> Self {
+        if self.kind == JobErrorKind::Error && is_stack_refusal(&self.message) {
+            // Writing to a `String` cannot fail.
+            let _ = write!(
+                self.message,
+                "; this asynchronous job ran on a stack region of {region_bytes} bytes — \
+                 run it with a larger stackBytes"
+            );
+        }
+        self
+    }
+
     /// A negotiated query whose result no acceptable format can carry.
     const fn not_acceptable(message: String) -> Self {
         Self {
@@ -1772,6 +1813,18 @@ struct OperationInput {
     regime: Option<String>,
     program: Option<String>,
     accept: Option<String>,
+}
+
+/// Whether a job's error text is the evaluator's stack refusal
+/// (`native-sparql-evaluation-stack-exhausted`, the diagnostic's code). The evaluator
+/// measures the job's own region, so a larger `stackBytes` is always its remedy. The
+/// parser's stack refusal gets no hint: on `wasm32` it may be the parser's budget for
+/// the engine's native stack, which no region size changes.
+fn is_stack_refusal(message: &str) -> bool {
+    message
+        .strip_prefix("error ")
+        .and_then(|rest| rest.strip_prefix(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE))
+        .is_some_and(|rest| rest.starts_with(':'))
 }
 
 /// Run an ungoverned query under the metered base and the job's signal.
@@ -2448,7 +2501,8 @@ impl JobInner {
         };
         let status = match outcome {
             JobOutcome::Failed(error) => {
-                *self.error.borrow_mut() = Some(error);
+                *self.error.borrow_mut() =
+                    Some(error.with_stack_hint(self.region.bounds.top - self.region.bounds.base));
                 RUN_ERROR
             }
             JobOutcome::Refused(refusal) => {
@@ -4797,9 +4851,7 @@ mod tests {
             base: 0x10_0000,
             top: 0x18_0000,
         };
-        // What `purrdf_stack::remaining` reports on the region, whose base
-        // `JobInner::run` installs as the floor.
-        let check = |sp: usize| bounds.check(sp, sp.saturating_sub(bounds.base));
+        let check = |sp: usize| bounds.check(sp);
         assert!(check(bounds.top - 64).is_ok());
         assert!(
             check(bounds.base + STACK_GUARD_BYTES).is_ok(),
@@ -4811,11 +4863,58 @@ mod tests {
             exhausted,
             "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
         );
+        // The band lies below the point the evaluator's checks refuse at: a frame the
+        // margin has just run out under is still above it.
+        assert!(check(bounds.base + purrdf_stack::MARGIN_BYTES - 1).is_ok());
         assert!(
             check(bounds.top + 16)
                 .expect_err("outside the region")
                 .contains("not running on its stack region")
         );
+    }
+
+    #[test]
+    fn only_the_evaluators_stack_refusal_gains_the_region_hint() {
+        let refusal = "error native-sparql-evaluation-stack-exhausted: evaluation stack \
+                       exhausted: the request's nesting exceeds what this host's stack can \
+                       evaluate (OPTIONAL needs more stack than this thread has left above \
+                       its 65536-byte reserve); run it on a thread with a larger stack";
+        assert_eq!(
+            JobError::error(refusal).with_stack_hint(524_288).message,
+            format!(
+                "{refusal}; this asynchronous job ran on a stack region of 524288 bytes — \
+                 run it with a larger stackBytes"
+            )
+        );
+        // The neighbours keep their text: the parser's refusal (which may be its budget
+        // for the engine's native stack, which no region changes), another evaluation
+        // error, a code that merely starts the same way, and a fault naming the code.
+        for (kind, message) in [
+            (
+                JobErrorKind::Error,
+                "error native-sparql-query-parse: SPARQL parse stack exhausted at byte 9: \
+                 the group graph pattern opened there nests deeper than the stack parsing \
+                 it can hold; parse it on a thread with a larger stack",
+            ),
+            (
+                JobErrorKind::Error,
+                "error native-sparql-evaluation: the example.org function failed",
+            ),
+            (
+                JobErrorKind::Error,
+                "error native-sparql-evaluation-stack-exhausted-elsewhere: not this code",
+            ),
+            (
+                JobErrorKind::Fault,
+                "error native-sparql-evaluation-stack-exhausted: a host fault quoting it",
+            ),
+        ] {
+            let error = JobError {
+                kind,
+                message: message.to_owned(),
+            };
+            assert_eq!(error.with_stack_hint(524_288).message, message);
+        }
     }
 
     #[test]

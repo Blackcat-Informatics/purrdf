@@ -249,7 +249,8 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
   in flight (16 by default).
 - Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by
   default); `evidence.async.stackHighWaterBytes` reports how deep it went, and a
-  request too deep for the region fails with a typed error. A job that traps,
+  request too deep for the region fails with the typed stack refusal its
+  synchronous twin gives, naming `stackBytes` as the remedy. A job that traps,
   or whose frames run past the region's guard zone, poisons the instance, and so
   does a trap or a Rust panic in any synchronous call: from then on every
   call into the package — synchronous ones and objects created before the trap

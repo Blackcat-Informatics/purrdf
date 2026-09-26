@@ -167,9 +167,10 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// 64 KiB is twelve times the measured interval. It leaves the synchronous lane 960 KiB
 /// of its 1 MiB — 63 nested `FILTER EXISTS`, which reached 96% of the stack before the
 /// evaluator's guard existed, is refused, where 63 nested `FILTER NOT EXISTS` used to
-/// trap and corrupt the instance — and it sits below an asynchronous job's poll-time
-/// guard band, so a job whose frames poll is stopped there first and a check stops the
-/// frames that never poll. The parser checks against the same margin, so a parse deeper
+/// trap and corrupt the instance — and an asynchronous job's poll-time guard band lies
+/// below it (half of it, above the job's region's base), so a job's checked frames are
+/// refused here, with the same typed error the synchronous lane gives, before any poll
+/// could reach the band, which stops only polling frames no check guards. The parser checks against the same margin, so a parse deeper
 /// than a lane's shadow stack is refused there too; the host engine's own call stack,
 /// which this crate cannot read, the SPARQL parser bounds with a budget of its own.
 #[cfg(target_arch = "wasm32")]
