@@ -2262,7 +2262,7 @@ mod tests {
     use crate::json_schema::Namespaces;
     use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use serde_json::json;
 
     const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -2890,11 +2890,11 @@ mod tests {
         assert!(error.to_string().contains("exceeds depth"), "{error}");
     }
 
-    proptest! {
+    prop_test! {
         #[test]
         fn arbitrary_source_field_names_round_trip(
-            source_field in "[A-Za-z0-9:@/_-]{1,24}",
-            source_value in "[A-Za-z0-9 ]{0,32}",
+            source_field in prop::string::regex("[A-Za-z0-9:@/_-]{1,24}"),
+            source_value in prop::string::regex("[A-Za-z0-9 ]{0,32}"),
         ) {
             let schema = json!({
                 "$defs": {

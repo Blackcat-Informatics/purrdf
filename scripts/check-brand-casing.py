@@ -155,7 +155,7 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/rdf/src/turtle_normalize.rs", 1),
         ("crates/rdf/tests/gts_codec_hygiene.rs", 1),
         ("crates/rdf/tests/never_panic.rs", 1),
-        ("crates/rdf/tests/proptest_roundtrip.rs", 1),
+        ("crates/rdf/tests/property_roundtrip.rs", 1),
         ("crates/shapes/src/constraints.rs", 1),
         ("crates/shapes/src/engine.rs", 1),
         ("crates/shapes/src/expression.rs", 2),

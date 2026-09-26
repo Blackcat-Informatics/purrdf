@@ -9,7 +9,8 @@
 use std::process::{Command, Output};
 
 use purrdf_testkit::harness::{
-    self, Action, Arguments, ColorChoice, Conclusion, Failed, Format, RunIgnored, Trial,
+    self, Action, Arguments, ColorChoice, Conclusion, ERROR_EXIT_CODE, Failed, Format, RunIgnored,
+    Trial,
 };
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-fixture");
@@ -474,4 +475,128 @@ fn every_case_runs_across_many_threads() {
         text.contains("\nfailures:\n    case_007\n    case_057\n    case_107\n    case_157\n"),
         "{text}"
     );
+}
+
+#[test]
+fn a_failed_run_and_a_refused_command_line_exit_with_the_error_code() {
+    let failed = run_fixture(&["--test-threads=1"]);
+    assert_eq!(failed.status.code(), Some(i32::from(ERROR_EXIT_CODE)));
+    let refused = run_fixture(&["--frobnicate"]);
+    assert_eq!(refused.status.code(), Some(i32::from(ERROR_EXIT_CODE)));
+    let passed = run_fixture(&["--test-threads=1", "passes"]);
+    assert_eq!(passed.status.code(), Some(0), "the valid neighbour exits 0");
+}
+
+#[test]
+fn the_environment_supplies_threads_and_nocapture_when_the_flags_are_absent() {
+    // `harness::main` reads its configuration through `Arguments::from_env`,
+    // so the fixture observes that constructor in a real process.
+    let refused = Command::new(FIXTURE)
+        .env("RUST_TEST_THREADS", "0")
+        .env_remove("RUST_TEST_NOCAPTURE")
+        .output()
+        .expect("run the fixture harness");
+    assert_eq!(refused.status.code(), Some(i32::from(ERROR_EXIT_CODE)));
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        "error: RUST_TEST_THREADS is `0`, should be a positive integer.\n"
+    );
+    assert!(refused.stdout.is_empty(), "nothing runs");
+
+    let threaded = Command::new(FIXTURE)
+        .arg("passes")
+        .env("RUST_TEST_THREADS", "2")
+        .env_remove("RUST_TEST_NOCAPTURE")
+        .output()
+        .expect("run the fixture harness");
+    assert_eq!(threaded.status.code(), Some(0), "a positive count runs");
+
+    let overridden = Command::new(FIXTURE)
+        .args(["--test-threads=1", "passes"])
+        .env("RUST_TEST_THREADS", "0")
+        .env_remove("RUST_TEST_NOCAPTURE")
+        .output()
+        .expect("run the fixture harness");
+    assert_eq!(
+        overridden.status.code(),
+        Some(0),
+        "the flag takes precedence, so the variable is not read"
+    );
+
+    let nocapture = Command::new(FIXTURE)
+        .args(["--test-threads=1", "delta"])
+        .env("RUST_TEST_NOCAPTURE", "1")
+        .env_remove("RUST_TEST_THREADS")
+        .output()
+        .expect("run the fixture harness");
+    let stderr = String::from_utf8_lossy(&nocapture.stderr);
+    assert!(stderr.contains("the planted failure"), "{stderr}");
+    assert!(
+        !stdout_of(&nocapture).contains("---- delta_panics stdout ----"),
+        "the panic went to stderr, not the failures section"
+    );
+
+    let captured = Command::new(FIXTURE)
+        .args(["--test-threads=1", "delta"])
+        .env("RUST_TEST_NOCAPTURE", "0")
+        .env_remove("RUST_TEST_THREADS")
+        .output()
+        .expect("run the fixture harness");
+    assert!(
+        stdout_of(&captured).contains("---- delta_panics stdout ----"),
+        "`0` leaves capture on"
+    );
+}
+
+#[test]
+fn failed_carries_its_message_or_none() {
+    assert_eq!(Failed::without_message().message(), None);
+    assert_eq!(Failed::from("boom").message(), Some("boom"));
+    assert_eq!(Failed::from(42).message(), Some("42"));
+
+    let mut out = Vec::new();
+    let conclusion = harness::run(
+        &Arguments {
+            test_threads: Some(1),
+            ..Arguments::default()
+        },
+        vec![Trial::test("silent", || Err(Failed::without_message()))],
+        &mut out,
+    )
+    .expect("the run completes");
+    assert_eq!(conclusion.failed, 1);
+    let text = without_duration(&String::from_utf8(out).expect("utf-8"));
+    assert!(
+        text.contains("test silent ... FAILED\n") && !text.contains("---- silent stdout ----"),
+        "a failure without a message has no stdout block:\n{text}"
+    );
+}
+
+#[test]
+fn a_trial_reports_its_name_and_ignored_flag() {
+    let trial = Trial::test("named_case", || Ok(()));
+    assert_eq!(trial.name(), "named_case");
+    assert!(!trial.is_ignored());
+    let ignored = Trial::test(String::from("other"), || Ok(())).with_ignored_flag(true);
+    assert_eq!(ignored.name(), "other");
+    assert!(ignored.is_ignored());
+}
+
+#[test]
+fn a_conclusion_fails_exactly_when_a_case_failed() {
+    let clean = Conclusion {
+        passed: 3,
+        failed: 0,
+        ignored: 2,
+        filtered_out: 1,
+    };
+    assert!(!clean.has_failed());
+    assert_eq!(clean.exit_code(), std::process::ExitCode::SUCCESS);
+    let failed = Conclusion { failed: 1, ..clean };
+    assert!(failed.has_failed());
+    assert_eq!(
+        failed.exit_code(),
+        std::process::ExitCode::from(ERROR_EXIT_CODE)
+    );
+    assert!(!Conclusion::default().has_failed());
 }

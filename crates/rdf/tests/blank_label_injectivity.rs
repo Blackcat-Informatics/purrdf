@@ -22,12 +22,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use proptest::prelude::*;
 use purrdf_rdf::gts_compose::{GtsIngestError, SnapshotBuilder};
 use purrdf_rdf::{
     BlankScope, CompositeDatasetView, CompositeSource, RdfDataset, RdfDatasetBuilder,
     SerializeGraph, TermRef, ViewLimits, canonicalize, parse_dataset, serialize_dataset,
 };
+use purrdf_testkit::prop::prelude::*;
 
 const NTRIPLES: &str = "application/n-triples";
 
@@ -350,7 +350,7 @@ fn two_ingestion_orders_of_scoped_blank_sources_agree_byte_for_byte() {
 /// class the encoding reasons about: plain, dotted (in every run length),
 /// scope-suffix-shaped, and marker-prefixed.
 fn arb_legal_label() -> impl Strategy<Value = String> {
-    proptest::sample::select(vec![
+    prop::sample::select(vec![
         "abc".to_owned(),
         "b0".to_owned(),
         "c14n0".to_owned(),
@@ -371,8 +371,8 @@ fn arb_legal_label() -> impl Strategy<Value = String> {
     ])
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+prop_test! {
+    #![prop_config(Config { cases: 128, ..Config::default() })]
 
     /// PARSE IS INJECTIVE: a document listing any SET of distinct legal labels —
     /// each on its own predicate, so nothing can merge by deduplication — yields
@@ -381,7 +381,7 @@ proptest! {
     /// serialize is a byte fixpoint from gen1.
     #[test]
     fn a_document_of_distinct_labels_parses_to_that_many_nodes(
-        labels in proptest::collection::btree_set(arb_legal_label(), 1..8)
+        labels in prop::collection::btree_set(arb_legal_label(), 1..8)
     ) {
         let mut document = String::new();
         for (i, label) in labels.iter().enumerate() {

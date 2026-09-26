@@ -2441,7 +2441,7 @@ mod tests {
 
     use super::*;
     use ::purrdf::loss::check_ledger_sound;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
@@ -3368,8 +3368,8 @@ mod tests {
         );
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+    prop_test! {
+        #![prop_config(Config::with_cases(128))]
 
         #[test]
         fn ncname_sanitizer_is_total_valid_and_deterministic(source in any::<String>()) {
@@ -3384,7 +3384,7 @@ mod tests {
 
         #[test]
         fn slot_planning_is_independent_of_property_insertion_order(
-            names in proptest::collection::btree_set("[A-Za-z0-9_ /?.-]{1,24}", 1..24)
+            names in prop::collection::btree_set(prop::string::regex("[A-Za-z0-9_ /?.-]{1,24}"), 1..24)
         ) {
             let mut forward = Map::new();
             for name in &names {

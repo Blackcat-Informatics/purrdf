@@ -29,11 +29,11 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use proptest::prelude::*;
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
     parse_dataset, serialize_dataset,
 };
+use purrdf_testkit::prop::prelude::*;
 
 /// Serialize a dataset to `format`'s text, or explain which format refused.
 fn serialize(dataset: &RdfDataset, format: NativeRdfFormat) -> Vec<u8> {
@@ -116,7 +116,7 @@ const HOSTILE_LABELS: &[&str] = &[
 /// first few scopes, including the default one.
 fn arb_blank() -> impl Strategy<Value = (String, u32)> {
     (
-        proptest::sample::select(HOSTILE_LABELS).prop_map(str::to_owned),
+        prop::sample::select(HOSTILE_LABELS).prop_map(str::to_owned),
         0u32..4,
     )
 }
@@ -124,7 +124,7 @@ fn arb_blank() -> impl Strategy<Value = (String, u32)> {
 /// A dataset of one to four quads whose subjects and objects are drawn from the
 /// hostile blank pool (plus an IRI object, so a quad can be blank-free).
 fn arb_dataset() -> impl Strategy<Value = Arc<RdfDataset>> {
-    proptest::collection::vec((arb_blank(), arb_blank(), 0usize..3), 1..5).prop_map(|rows| {
+    prop::collection::vec((arb_blank(), arb_blank(), 0usize..3), 1..5).prop_map(|rows| {
         let mut b = RdfDatasetBuilder::new();
         let p = b.intern_iri("https://example.org/p");
         for ((subject_label, subject_scope), (object_label, object_scope), object_kind) in rows {
@@ -149,8 +149,8 @@ fn arb_dataset() -> impl Strategy<Value = Arc<RdfDataset>> {
     })
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+prop_test! {
+    #![prop_config(Config { cases: 256, ..Config::default() })]
 
     /// The load-bearing property: one serialize/parse cycle changes NO bytes, in
     /// every format the registry can both write and read.

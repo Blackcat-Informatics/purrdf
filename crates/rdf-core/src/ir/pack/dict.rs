@@ -1357,8 +1357,7 @@ impl PackDict {
 mod tests {
     use super::*;
     use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
-    use proptest::prelude::*;
-    use proptest::strategy::BoxedStrategy;
+    use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
 
     /// Intern one dataset-independent value into a builder, recursing for triple
@@ -1967,14 +1966,14 @@ mod tests {
         assert_eq!(dict.n_terms(), encoded.n_terms());
     }
 
-    // -- Proptest: full generative round trip ------------------------------------
+    // -- Property test: full generative round trip -------------------------------
 
     fn arb_iri_value() -> impl Strategy<Value = TermValue> {
         (0u32..10).prop_map(|i| TermValue::iri(format!("http://example.org/i{i}")))
     }
 
     fn arb_blank_value() -> impl Strategy<Value = TermValue> {
-        ("[a-z]{1,4}", 0u32..4).prop_map(|(label, scope)| TermValue::Blank {
+        (prop::string::regex("[a-z]{1,4}"), 0u32..4).prop_map(|(label, scope)| TermValue::Blank {
             label,
             scope: BlankScope(scope),
         })
@@ -1988,7 +1987,7 @@ mod tests {
         ];
         let languages = vec!["en".to_string(), "fr".to_string(), "de-ch".to_string()];
         (
-            "[a-zA-Z0-9 ]{0,8}",
+            prop::string::regex("[a-zA-Z0-9 ]{0,8}"),
             prop::sample::select(datatypes),
             prop::option::of(prop::sample::select(languages)),
         )
@@ -2037,11 +2036,11 @@ mod tests {
         )
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+    prop_test! {
+        #![prop_config(Config::with_cases(64))]
 
         #[test]
-        fn proptest_pack_dict_round_trips(
+        fn property_pack_dict_round_trips(
             quads in prop::collection::vec(arb_quad(), 1..24)
         ) {
             let dataset = build_dataset(&quads);
@@ -2264,13 +2263,13 @@ mod tests {
         }
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(512))]
+    prop_test! {
+        #![prop_config(Config::with_cases(512))]
 
         /// Random byte strings over a small alphabet (so long shared prefixes
         /// are common) agree with the bytewise oracle.
         #[test]
-        fn proptest_common_prefix_len_matches_bytewise(
+        fn property_common_prefix_len_matches_bytewise(
             a in prop::collection::vec(0_u8..3, 0..48),
             b in prop::collection::vec(0_u8..3, 0..48),
         ) {

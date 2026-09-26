@@ -54,16 +54,17 @@ purrdf-sparql-results.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Native-only, both of them, because `make wasm-test` builds ONE test target of
 # this crate for wasm32 and cargo builds every declared dev-dependency for any
-# test target. Neither of these is wasm32-clean (both reach for processes,
-# terminals and wall-clock timing), and neither is wanted there: proptest drives
-# native-only harnesses and criterion drives benches, which the wasm lane never
-# runs.
+# test target. Neither is wanted there: the testkit's property harness drives
+# native-only tests and criterion drives benches, which the wasm lane never runs,
+# and criterion is not wasm32-clean (it reaches for processes, terminals and
+# wall-clock timing).
 #
 # The report-only profiling harness in `benches/`. Never a gate: no measurement
 # here asserts a timing, and behaviour is fixed by the test suite instead.
 criterion.workspace = true
 # Property tests: encoding injectivity, and the fixed-point arithmetic laws.
-proptest.workspace = true
+# Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A differential proptest proving the page-admission law is a SOUND
+//! A differential property test proving the page-admission law is a SOUND
 //! filter — `PagedDataset::quads_for_pattern` and `PagedQueryView::quads_for_pattern`
 //! must equal a per-page reference, row-for-row and order-for-order, not merely as
 //! sets — plus a parity/determinism suite and a pinned-literal whole-dataset
@@ -28,7 +28,7 @@
 //! non-paged `RdfDataset`, unrelated to paging (see `mod fuzz`'s
 //! `assert_pattern_matches_reference` doc for the reproduction and the mechanism in
 //! `RdfDataset::candidate_access`). The repo's own `ir/dataset.rs` template
-//! (`proptest_indexed_pattern_matches_linear_scan`) compares via `BTreeSet` for
+//! (`property_indexed_pattern_matches_linear_scan`) compares via `BTreeSet` for
 //! exactly this reason. The reference used below is instead built by visiting each
 //! page in the SAME order `PagedDataset` does and calling that page's OWN
 //! `quads_for_pattern` — isolating what THIS task is actually about (did the
@@ -116,7 +116,7 @@ fn build_graph_page(subject: &str, predicate: &str, object: &str, graph: &str) -
     b.freeze().expect("page freeze")
 }
 
-// ── the differential proptest ───────────────────────────────────────────────────
+// ── the differential property test ──────────────────────────────────────────────
 
 mod fuzz {
     use super::{
@@ -124,7 +124,7 @@ mod fuzz {
         PageProvider, PagedDataset, PagedQueryLimits, QuadIds, RdfDataset, RdfDatasetBuilder,
         TermValue,
     };
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     const POOL_LEN: u8 = 5;
     const GRAPH_LEN: u8 = 3;
@@ -364,7 +364,7 @@ mod fuzz {
     /// `PagedQueryView::quads_for_pattern` equal a PER-PAGE reference built by
     /// visiting `variant`'s pages in ascending order and, for each, calling that
     /// page's OWN (already independently, exhaustively tested elsewhere — see
-    /// `proptest_indexed_pattern_matches_linear_scan` in `ir/dataset.rs`)
+    /// `property_indexed_pattern_matches_linear_scan` in `ir/dataset.rs`)
     /// `DatasetView::quads_for_pattern` on `raw_pages[page_map[i]]`, the ORIGINAL
     /// frozen page `variant`'s `PageId(i)` addresses, translating the GLOBAL pattern
     /// down to that page's LOCAL id space first (a page absent a bound term
@@ -380,7 +380,7 @@ mod fuzz {
     /// `ir/dataset.rs`) — which does NOT, in general, match the SPO-sorted order
     /// `quads()` itself yields, even for a single non-paged dataset with no paging
     /// involved at all. This is confirmed, pre-existing, unrelated-to-paging
-    /// behavior (the repo's own `proptest_indexed_pattern_matches_linear_scan`
+    /// behavior (the repo's own `property_indexed_pattern_matches_linear_scan`
     /// template compares by `BTreeSet`, not `Vec`, for exactly this reason). Because
     /// each admitted page's row order is ultimately produced by ITS OWN
     /// `quads_for_pattern`, the only reference that can honestly claim row-for-row
@@ -691,194 +691,402 @@ mod fuzz {
         }
     }
 
-    proptest! {
-        /// The sound-filter claim, checked differentially: for randomly generated
-        /// multi-page datasets and randomly generated `(s, p, o, g)` patterns, both
-        /// paged `quads_for_pattern` overrides equal the per-page reference (see
-        /// `assert_pattern_matches_reference`) — on the freshly sealed dataset, after
-        /// `compact()`, after `with_pages`/`drop_page`, and after a `to_parts()` →
-        /// `from_parts()` warm restart.
-        ///
-        /// The same five variants also carry the RDF 1.2 side-table claim: every
-        /// graph-narrowed and reifier-keyed reifier/annotation walk, on both paged
-        /// surfaces, equals its unkeyed stream filtered the same way (see
-        /// `assert_side_table_walks_match_unkeyed_streams`). The base-quad path and the
-        /// side-table paths compose the same page-admission machinery, so they are
-        /// worth exactly as much evidence, and a side-table walk that visits the wrong
-        /// pages drops rows just as silently.
-        #[test]
-        fn proptest_paged_quads_for_pattern_matches_linear_scan_over_quads(
-            rows in prop::collection::vec(
-                (0u8..POOL_LEN, 0u8..POOL_LEN, 0u8..(POOL_LEN + 1), prop::option::of(0u8..GRAPH_LEN)),
+    /// One generated row: subject, predicate and object selectors, and the named
+    /// graph (`None` is the default graph).
+    type Row = (u8, u8, u8, Option<u8>);
+
+    /// Everything one law draws: the rows, the `(s, p, o, g)` selectors, the page
+    /// count, and the raw pages the empty-graph and side-table rows land on.
+    type LawInputs = (
+        Vec<Row>,
+        Option<u8>,
+        Option<u8>,
+        Option<u8>,
+        u8,
+        usize,
+        usize,
+        usize,
+    );
+
+    fn law_inputs() -> impl Strategy<Value = LawInputs> {
+        (
+            prop::collection::vec(
+                (
+                    0u8..POOL_LEN,
+                    0u8..POOL_LEN,
+                    0u8..(POOL_LEN + 1),
+                    prop::option::of(0u8..GRAPH_LEN),
+                ),
                 0..40,
             ),
-            s_sel in prop::option::of(0u8..POOL_LEN),
-            p_sel in prop::option::of(0u8..POOL_LEN),
-            o_sel in prop::option::of(0u8..(POOL_LEN + 1)),
+            prop::option::of(0u8..POOL_LEN),
+            prop::option::of(0u8..POOL_LEN),
+            prop::option::of(0u8..(POOL_LEN + 1)),
             // 0 = Any, 1 = Default, 2..(2+GRAPH_LEN) = Named(graphs[g - 2]).
-            g_sel in 0u8..(2 + GRAPH_LEN),
-            page_count in 2usize..=4,
-            empty_graph_page_raw in 0usize..4,
-            side_graph_page_raw in 0usize..4,
+            0u8..(2 + GRAPH_LEN),
+            2usize..=4,
+            0usize..4,
+            0usize..4,
+        )
+    }
+
+    /// The sound-filter claim, checked differentially: for randomly generated
+    /// multi-page datasets and randomly generated `(s, p, o, g)` patterns, both
+    /// paged `quads_for_pattern` overrides equal the per-page reference (see
+    /// `assert_pattern_matches_reference`) — on the freshly sealed dataset, after
+    /// `compact()`, after `with_pages`/`drop_page`, and after a `to_parts()` →
+    /// `from_parts()` warm restart.
+    ///
+    /// The same five variants also carry the RDF 1.2 side-table claim: every
+    /// graph-narrowed and reifier-keyed reifier/annotation walk, on both paged
+    /// surfaces, equals its unkeyed stream filtered the same way (see
+    /// `assert_side_table_walks_match_unkeyed_streams`). The base-quad path and the
+    /// side-table paths compose the same page-admission machinery, so they are
+    /// worth exactly as much evidence, and a side-table walk that visits the wrong
+    /// pages drops rows just as silently.
+    // Eight parameters because the law is stated over exactly the eight inputs
+    // `law_inputs` draws, named as the property draws them.
+    #[allow(clippy::too_many_arguments)]
+    fn paged_quads_for_pattern_matches_linear_scan_over_quads(
+        rows: &[Row],
+        s_sel: Option<u8>,
+        p_sel: Option<u8>,
+        o_sel: Option<u8>,
+        g_sel: u8,
+        page_count: usize,
+        empty_graph_page_raw: usize,
+        side_graph_page_raw: usize,
+    ) -> Result<(), TestCaseError> {
+        let empty_graph_page = empty_graph_page_raw % page_count;
+        let side_graph_page = side_graph_page_raw % page_count;
+
+        let pages = build_pages(rows, page_count, empty_graph_page, side_graph_page);
+        // Kept as the ground truth for the per-page reference: the underlying
+        // per-page `RdfDataset` CONTENT never changes across the variants below
+        // (`compact`/`with_pages`/`drop_page`/`from_parts` only touch page
+        // numbering, global ids, or laziness — never a page's own local rows).
+        let raw_pages = pages.clone();
+        let provider: Arc<dyn PageProvider> = Arc::new(InMemoryPageProvider::new(pages));
+        let paged = PagedDataset::from_provider(provider.clone())
+            .expect("randomly generated pages are quad-disjoint by construction");
+
+        // Variant 1: the freshly sealed dataset itself. PageId(i) == raw_pages[i].
+        let identity_map: Vec<usize> = (0..page_count).collect();
+        assert_pattern_matches_reference(
+            &paged,
+            &raw_pages,
+            &identity_map,
+            s_sel,
+            p_sel,
+            o_sel,
+            g_sel,
+        );
+        assert_side_table_walks_match_unkeyed_streams(&paged);
+
+        // Variant 2: after compact() (renumbers GlobalTermIds; page SLOTS are
+        // untouched, so the identity map still applies).
+        let compacted = paged.compact();
+        assert_pattern_matches_reference(
+            &compacted,
+            &raw_pages,
+            &identity_map,
+            s_sel,
+            p_sel,
+            o_sel,
+            g_sel,
+        );
+        assert_side_table_walks_match_unkeyed_streams(&compacted);
+
+        // Variant 3: after with_pages() reordering every page (no page dropped):
+        // reordered's PageId(i) == raw_pages[page_count - 1 - i].
+        let reversed: Vec<PageId> = (0..page_count)
+            .rev()
+            .map(|i| PageId(u32::try_from(i).expect("page count fits u32")))
+            .collect();
+        let reordered = paged.with_pages(&reversed);
+        let reordered_map: Vec<usize> = (0..page_count).rev().collect();
+        assert_pattern_matches_reference(
+            &reordered,
+            &raw_pages,
+            &reordered_map,
+            s_sel,
+            p_sel,
+            o_sel,
+            g_sel,
+        );
+        assert_side_table_walks_match_unkeyed_streams(&reordered);
+
+        // Variant 4: after drop_page(0) (page_count is always >= 2, so a page
+        // always survives): dropped's PageId(i) == raw_pages[i + 1].
+        let dropped = paged.drop_page(PageId(0));
+        let dropped_map: Vec<usize> = (1..page_count).collect();
+        assert_pattern_matches_reference(
+            &dropped,
+            &raw_pages,
+            &dropped_map,
+            s_sel,
+            p_sel,
+            o_sel,
+            g_sel,
+        );
+        assert_side_table_walks_match_unkeyed_streams(&dropped);
+
+        // Variant 5: a to_parts() -> from_parts() warm restart. Page slots are
+        // preserved, so the identity map still applies.
+        let (dictionary, generation, parts) = paged.to_parts();
+        let warm = PagedDataset::from_parts(dictionary, provider, generation, parts)
+            .expect("warm restart from matching parts");
+        assert_pattern_matches_reference(
+            &warm,
+            &raw_pages,
+            &identity_map,
+            s_sel,
+            p_sel,
+            o_sel,
+            g_sel,
+        );
+        assert_side_table_walks_match_unkeyed_streams(&warm);
+        Ok(())
+    }
+
+    /// `cardinality_estimate` is a sound UPPER BOUND on the true match count on
+    /// BOTH paged surfaces, and is RESIDENCY-INDEPENDENT.
+    ///
+    /// The paged estimate is structurally weaker than the one
+    /// `property_cardinality_estimate_upper_bounds_count` pins for a single
+    /// `RdfDataset` (`ir/dataset.rs`), and this is the property that says the
+    /// weakening is still sound. Where the old paged path materialized an admitted
+    /// page and asked it for its own estimate, the estimate is now summed across
+    /// admitted pages from each page's SEALED summary alone: a per-page `min` over
+    /// independently computed per-axis row counts. That `min` is exact when exactly
+    /// one axis is bound and merely an upper bound when several are (the axes'
+    /// counts are each exact for their own axis, but nothing in the summary records
+    /// how the axes CO-OCCUR), so the claim that survives is the one the consumer
+    /// actually relies on — join-order ranking in `sparql-eval`'s BGP planner —
+    /// which needs an upper bound, not an exact count.
+    ///
+    /// Residency-independence is a stated guarantee, not an optimization: the
+    /// estimate is a pure function of `(snapshot, pattern)`. If it could shift as
+    /// pages warm, plan choice would shift with it, and the `requested_pages`
+    /// evidence sequence a G-clause treats as proof of what a query touched would
+    /// depend on incidental cache state rather than on the query. Both surfaces are
+    /// therefore measured cold and again after a full scan has forced every page
+    /// resident.
+    ///
+    /// There is no over-refusal risk in the estimate itself — nothing refuses a
+    /// query on it — so the properties asserted are soundness and stability, and
+    /// the upper bound is also checked against the whole-dataset row count so a
+    /// trivially enormous "estimate" cannot pass.
+    // Eight parameters because the law is stated over exactly the eight inputs
+    // `law_inputs` draws, named as the property draws them.
+    #[allow(clippy::too_many_arguments)]
+    fn paged_cardinality_estimate_upper_bounds_count(
+        rows: &[Row],
+        s_sel: Option<u8>,
+        p_sel: Option<u8>,
+        o_sel: Option<u8>,
+        g_sel: u8,
+        page_count: usize,
+        empty_graph_page_raw: usize,
+        side_graph_page_raw: usize,
+    ) -> Result<(), TestCaseError> {
+        let empty_graph_page = empty_graph_page_raw % page_count;
+        let side_graph_page = side_graph_page_raw % page_count;
+
+        let pages = build_pages(rows, page_count, empty_graph_page, side_graph_page);
+        let provider: Arc<dyn PageProvider> = Arc::new(InMemoryPageProvider::new(pages));
+        let paged = PagedDataset::from_provider(provider)
+            .expect("randomly generated pages are quad-disjoint by construction");
+        let (s, p, o, g) = resolve_pattern(&paged, s_sel, p_sel, o_sel, g_sel);
+
+        // Surface 1: `PagedDataset`, read BEFORE anything has walked a row through
+        // it, so its per-page cache is as cold as it will ever be.
+        let cold_dataset = paged.cardinality_estimate(s, p, o, g);
+        let count = paged.quads_for_pattern(s, p, o, g).count();
+        prop_assert!(
+            cold_dataset >= count,
+            "PagedDataset estimate {} must upper-bound count {}",
+            cold_dataset,
+            count
+        );
+        let total = paged.quads().count();
+        prop_assert!(
+            cold_dataset <= total,
+            "PagedDataset estimate {} must not exceed the whole-dataset row count {}",
+            cold_dataset,
+            total
+        );
+        // The scans above forced every page resident; the estimate may not move.
+        let warm_dataset = paged.cardinality_estimate(s, p, o, g);
+        prop_assert_eq!(
+            cold_dataset,
+            warm_dataset,
+            "PagedDataset::cardinality_estimate must not depend on page residency"
+        );
+
+        // Surface 2: `PagedQueryView`, whose page cache is per-OPERATION and so
+        // starts cold again on a freshly constructed view.
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let cold_view = view.cardinality_estimate(s, p, o, g);
+        let view_count = view.quads_for_pattern(s, p, o, g).count();
+        prop_assert!(
+            cold_view >= view_count,
+            "PagedQueryView estimate {} must upper-bound count {}",
+            cold_view,
+            view_count
+        );
+        let warm_view = view.cardinality_estimate(s, p, o, g);
+        prop_assert_eq!(
+            cold_view,
+            warm_view,
+            "PagedQueryView::cardinality_estimate must not depend on \
+             operation-cache residency"
+        );
+        prop_assert_eq!(
+            cold_dataset,
+            cold_view,
+            "both paged surfaces apply the identical estimation rule"
+        );
+        prop_assert_eq!(
+            count,
+            view_count,
+            "both paged surfaces answer the identical pattern identically"
+        );
+        Ok(())
+    }
+
+    prop_test! {
+        #[test]
+        fn property_paged_quads_for_pattern_matches_linear_scan_over_quads(
+            (rows, s_sel, p_sel, o_sel, g_sel, page_count, empty_graph_page_raw, side_graph_page_raw)
+                in law_inputs(),
         ) {
-            let empty_graph_page = empty_graph_page_raw % page_count;
-            let side_graph_page = side_graph_page_raw % page_count;
-
-            let pages = build_pages(&rows, page_count, empty_graph_page, side_graph_page);
-            // Kept as the ground truth for the per-page reference: the underlying
-            // per-page `RdfDataset` CONTENT never changes across the variants below
-            // (`compact`/`with_pages`/`drop_page`/`from_parts` only touch page
-            // numbering, global ids, or laziness — never a page's own local rows).
-            let raw_pages = pages.clone();
-            let provider: Arc<dyn PageProvider> = Arc::new(InMemoryPageProvider::new(pages));
-            let paged = PagedDataset::from_provider(provider.clone())
-                .expect("randomly generated pages are quad-disjoint by construction");
-
-            // Variant 1: the freshly sealed dataset itself. PageId(i) == raw_pages[i].
-            let identity_map: Vec<usize> = (0..page_count).collect();
-            assert_pattern_matches_reference(
-                &paged, &raw_pages, &identity_map, s_sel, p_sel, o_sel, g_sel,
-            );
-            assert_side_table_walks_match_unkeyed_streams(&paged);
-
-            // Variant 2: after compact() (renumbers GlobalTermIds; page SLOTS are
-            // untouched, so the identity map still applies).
-            let compacted = paged.compact();
-            assert_pattern_matches_reference(
-                &compacted, &raw_pages, &identity_map, s_sel, p_sel, o_sel, g_sel,
-            );
-            assert_side_table_walks_match_unkeyed_streams(&compacted);
-
-            // Variant 3: after with_pages() reordering every page (no page dropped):
-            // reordered's PageId(i) == raw_pages[page_count - 1 - i].
-            let reversed: Vec<PageId> = (0..page_count)
-                .rev()
-                .map(|i| PageId(u32::try_from(i).expect("page count fits u32")))
-                .collect();
-            let reordered = paged.with_pages(&reversed);
-            let reordered_map: Vec<usize> = (0..page_count).rev().collect();
-            assert_pattern_matches_reference(
-                &reordered, &raw_pages, &reordered_map, s_sel, p_sel, o_sel, g_sel,
-            );
-            assert_side_table_walks_match_unkeyed_streams(&reordered);
-
-            // Variant 4: after drop_page(0) (page_count is always >= 2, so a page
-            // always survives): dropped's PageId(i) == raw_pages[i + 1].
-            let dropped = paged.drop_page(PageId(0));
-            let dropped_map: Vec<usize> = (1..page_count).collect();
-            assert_pattern_matches_reference(
-                &dropped, &raw_pages, &dropped_map, s_sel, p_sel, o_sel, g_sel,
-            );
-            assert_side_table_walks_match_unkeyed_streams(&dropped);
-
-            // Variant 5: a to_parts() -> from_parts() warm restart. Page slots are
-            // preserved, so the identity map still applies.
-            let (dictionary, generation, parts) = paged.to_parts();
-            let warm = PagedDataset::from_parts(dictionary, provider, generation, parts)
-                .expect("warm restart from matching parts");
-            assert_pattern_matches_reference(
-                &warm, &raw_pages, &identity_map, s_sel, p_sel, o_sel, g_sel,
-            );
-            assert_side_table_walks_match_unkeyed_streams(&warm);
+            paged_quads_for_pattern_matches_linear_scan_over_quads(
+                &rows,
+                s_sel,
+                p_sel,
+                o_sel,
+                g_sel,
+                page_count,
+                empty_graph_page_raw,
+                side_graph_page_raw,
+            )?;
         }
 
-        /// `cardinality_estimate` is a sound UPPER BOUND on the true match count on
-        /// BOTH paged surfaces, and is RESIDENCY-INDEPENDENT.
-        ///
-        /// The paged estimate is structurally weaker than the one
-        /// `proptest_cardinality_estimate_upper_bounds_count` pins for a single
-        /// `RdfDataset` (`ir/dataset.rs`), and this is the property that says the
-        /// weakening is still sound. Where the old paged path materialized an admitted
-        /// page and asked it for its own estimate, the estimate is now summed across
-        /// admitted pages from each page's SEALED summary alone: a per-page `min` over
-        /// independently computed per-axis row counts. That `min` is exact when exactly
-        /// one axis is bound and merely an upper bound when several are (the axes'
-        /// counts are each exact for their own axis, but nothing in the summary records
-        /// how the axes CO-OCCUR), so the claim that survives is the one the consumer
-        /// actually relies on — join-order ranking in `sparql-eval`'s BGP planner —
-        /// which needs an upper bound, not an exact count.
-        ///
-        /// Residency-independence is a stated guarantee, not an optimization: the
-        /// estimate is a pure function of `(snapshot, pattern)`. If it could shift as
-        /// pages warm, plan choice would shift with it, and the `requested_pages`
-        /// evidence sequence a G-clause treats as proof of what a query touched would
-        /// depend on incidental cache state rather than on the query. Both surfaces are
-        /// therefore measured cold and again after a full scan has forced every page
-        /// resident.
-        ///
-        /// There is no over-refusal risk in the estimate itself — nothing refuses a
-        /// query on it — so the properties asserted are soundness and stability, and
-        /// the upper bound is also checked against the whole-dataset row count so a
-        /// trivially enormous "estimate" cannot pass.
         #[test]
-        fn proptest_paged_cardinality_estimate_upper_bounds_count(
-            rows in prop::collection::vec(
-                (0u8..POOL_LEN, 0u8..POOL_LEN, 0u8..(POOL_LEN + 1), prop::option::of(0u8..GRAPH_LEN)),
-                0..40,
-            ),
-            s_sel in prop::option::of(0u8..POOL_LEN),
-            p_sel in prop::option::of(0u8..POOL_LEN),
-            o_sel in prop::option::of(0u8..(POOL_LEN + 1)),
-            g_sel in 0u8..(2 + GRAPH_LEN),
-            page_count in 2usize..=4,
-            empty_graph_page_raw in 0usize..4,
-            side_graph_page_raw in 0usize..4,
+        fn property_paged_cardinality_estimate_upper_bounds_count(
+            (rows, s_sel, p_sel, o_sel, g_sel, page_count, empty_graph_page_raw, side_graph_page_raw)
+                in law_inputs(),
         ) {
-            let empty_graph_page = empty_graph_page_raw % page_count;
-            let side_graph_page = side_graph_page_raw % page_count;
+            paged_cardinality_estimate_upper_bounds_count(
+                &rows,
+                s_sel,
+                p_sel,
+                o_sel,
+                g_sel,
+                page_count,
+                empty_graph_page_raw,
+                side_graph_page_raw,
+            )?;
+        }
+    }
 
-            let pages = build_pages(&rows, page_count, empty_graph_page, side_graph_page);
-            let provider: Arc<dyn PageProvider> = Arc::new(InMemoryPageProvider::new(pages));
-            let paged = PagedDataset::from_provider(provider)
-                .expect("randomly generated pages are quad-disjoint by construction");
-            let (s, p, o, g) = resolve_pattern(&paged, s_sel, p_sel, o_sel, g_sel);
-
-            // Surface 1: `PagedDataset`, read BEFORE anything has walked a row through
-            // it, so its per-page cache is as cold as it will ever be.
-            let cold_dataset = paged.cardinality_estimate(s, p, o, g);
-            let count = paged.quads_for_pattern(s, p, o, g).count();
-            prop_assert!(
-                cold_dataset >= count,
-                "PagedDataset estimate {} must upper-bound count {}",
-                cold_dataset, count
-            );
-            let total = paged.quads().count();
-            prop_assert!(
-                cold_dataset <= total,
-                "PagedDataset estimate {} must not exceed the whole-dataset row count {}",
-                cold_dataset, total
-            );
-            // The scans above forced every page resident; the estimate may not move.
-            let warm_dataset = paged.cardinality_estimate(s, p, o, g);
-            prop_assert_eq!(
-                cold_dataset, warm_dataset,
-                "PagedDataset::cardinality_estimate must not depend on page residency"
-            );
-
-            // Surface 2: `PagedQueryView`, whose page cache is per-OPERATION and so
-            // starts cold again on a freshly constructed view.
-            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
-            let cold_view = view.cardinality_estimate(s, p, o, g);
-            let view_count = view.quads_for_pattern(s, p, o, g).count();
-            prop_assert!(
-                cold_view >= view_count,
-                "PagedQueryView estimate {} must upper-bound count {}",
-                cold_view, view_count
-            );
-            let warm_view = view.cardinality_estimate(s, p, o, g);
-            prop_assert_eq!(
-                cold_view, warm_view,
-                "PagedQueryView::cardinality_estimate must not depend on \
-                 operation-cache residency"
-            );
-            prop_assert_eq!(
-                cold_dataset, cold_view,
-                "both paged surfaces apply the identical estimation rule"
-            );
-            prop_assert_eq!(
-                count, view_count,
-                "both paged surfaces answer the identical pattern identically"
-            );
+    /// Counterexamples found by an earlier property run, kept as ordinary tests.
+    ///
+    /// Each is the choice sequence (hex, as a failing property prints it) that makes
+    /// [`law_inputs`] generate the inputs, and the inputs themselves: the test proves
+    /// the sequence still decodes to exactly those inputs, then holds both paged laws
+    /// over them. `SHRUNK` is the shrunk counterexample; `SEEDED` is the input its
+    /// seed generated before shrinking.
+    #[test]
+    fn paged_law_regressions_decode_to_their_inputs_and_hold_both_laws() {
+        const SHRUNK: &str = "010201020001000000000100000000010002000001010201010101010305000100020001010101000000010202050001020201000101010500000001010000000000";
+        const SEEDED: &str = "010002010102010302010001000005010201010204000101000201010100000201000100010501020102010001010103000500010104010100010202040001020003000104040000010401040001020303010201010303010001010303000101000000010203020001030203010101040200010201010102000101030501000100040001010103000000010202050001020403010201010103000101010500000001010000000203";
+        let shrunk: LawInputs = (
+            vec![
+                (2, 1, 2, None),
+                (0, 0, 0, None),
+                (0, 0, 0, None),
+                (0, 2, 0, None),
+                (1, 2, 1, Some(1)),
+                (1, 3, 5, None),
+                (0, 2, 0, Some(1)),
+                (1, 0, 0, None),
+                (2, 2, 5, None),
+                (2, 2, 1, None),
+                (1, 1, 5, None),
+            ],
+            None,
+            Some(1),
+            None,
+            0,
+            2,
+            0,
+            0,
+        );
+        let seeded: LawInputs = (
+            vec![
+                (0, 2, 1, Some(2)),
+                (3, 2, 1, None),
+                (0, 0, 5, Some(2)),
+                (1, 2, 4, None),
+                (1, 0, 2, Some(1)),
+                (0, 0, 2, Some(0)),
+                (0, 1, 5, Some(2)),
+                (2, 1, 0, Some(1)),
+                (3, 0, 5, None),
+                (1, 4, 1, Some(0)),
+                (2, 2, 4, None),
+                (2, 0, 3, None),
+                (4, 4, 0, None),
+                (4, 1, 4, None),
+                (2, 3, 3, Some(2)),
+                (1, 3, 3, Some(0)),
+                (1, 3, 3, None),
+                (1, 0, 0, None),
+                (2, 3, 2, None),
+                (3, 2, 3, Some(1)),
+                (4, 2, 0, Some(2)),
+                (1, 1, 2, None),
+                (1, 3, 5, Some(0)),
+                (0, 4, 0, Some(1)),
+                (3, 0, 0, None),
+                (2, 2, 5, None),
+                (2, 4, 3, Some(2)),
+                (1, 1, 3, None),
+                (1, 1, 5, None),
+            ],
+            None,
+            Some(1),
+            None,
+            0,
+            2,
+            2,
+            3,
+        );
+        for (label, hex, expected) in [("SHRUNK", SHRUNK, shrunk), ("SEEDED", SEEDED, seeded)] {
+            let inputs = prop::replay(&law_inputs(), hex);
+            assert_eq!(inputs, expected, "{label} decodes to its inputs");
+            let (rows, s_sel, p_sel, o_sel, g_sel, page_count, empty, side) = inputs;
+            let laws = [
+                (
+                    "quads_for_pattern",
+                    paged_quads_for_pattern_matches_linear_scan_over_quads(
+                        &rows, s_sel, p_sel, o_sel, g_sel, page_count, empty, side,
+                    ),
+                ),
+                (
+                    "cardinality_estimate",
+                    paged_cardinality_estimate_upper_bounds_count(
+                        &rows, s_sel, p_sel, o_sel, g_sel, page_count, empty, side,
+                    ),
+                ),
+            ];
+            for (law, outcome) in laws {
+                if let Err(error) = outcome {
+                    panic!("{label}: the {law} law fails: {error}");
+                }
+            }
         }
     }
 }

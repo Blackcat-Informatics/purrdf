@@ -11,16 +11,15 @@
 //!   same value, so the canonical form can be used as a value's identity (a
 //!   `GROUP BY` key, a golden, a hash input) without collapsing distinct values.
 //!
-//! The repository already uses `proptest` (it is a `[workspace.dependencies]` entry
-//! and the `purrdf-xsd` / `purrdf-iri` leaves both take it as a dev-dependency for
-//! exactly this kind of round-trip property), so the properties are checked over
-//! generated values rather than only over a hand-written corpus.
+//! The workspace's property harness (`purrdf_testkit::prop`, which the `purrdf-xsd`
+//! and `purrdf-iri` leaves also use for exactly this kind of round-trip property)
+//! checks both over generated values rather than only over a hand-written corpus.
 
-use proptest::prelude::*;
 use purrdf_cdt::{
     CdtDatatype, CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtValue, TextDirection, XSD_INTEGER,
     parse_cdt, parse_list, parse_map,
 };
+use purrdf_testkit::prop::prelude::*;
 
 // ── Fixed goldens: the exact bytes, pinned ─────────────────────────────────────
 
@@ -107,27 +106,38 @@ fn canonical_form_is_a_fixpoint_over_a_hand_written_corpus() {
 
 fn key_strategy() -> impl Strategy<Value = CdtKey> {
     prop_oneof![
-        "[a-z]{1,6}".prop_map(|name| CdtKey::Iri(format!("http://example.org/{name}"))),
-        ".{0,8}".prop_map(|lexical| CdtKey::Literal(CdtLiteral::plain(lexical))),
-        "-?[0-9]{1,6}".prop_map(|lexical| CdtKey::Literal(CdtLiteral::typed(lexical, XSD_INTEGER))),
-        ("[a-z]{1,6}", "[a-z]{2}")
+        prop::string::regex("[a-z]{1,6}")
+            .prop_map(|name| CdtKey::Iri(format!("http://example.org/{name}"))),
+        prop::string::regex(".{0,8}")
+            .prop_map(|lexical| CdtKey::Literal(CdtLiteral::plain(lexical))),
+        prop::string::regex("-?[0-9]{1,6}")
+            .prop_map(|lexical| CdtKey::Literal(CdtLiteral::typed(lexical, XSD_INTEGER))),
+        (
+            prop::string::regex("[a-z]{1,6}"),
+            prop::string::regex("[a-z]{2}")
+        )
             .prop_map(|(lexical, tag)| CdtKey::Literal(CdtLiteral::lang(lexical, tag))),
     ]
 }
 
 fn leaf_term_strategy() -> impl Strategy<Value = CdtTerm> {
     prop_oneof![
-        "[a-z]{1,6}".prop_map(|name| CdtTerm::Iri(format!("http://example.org/{name}"))),
-        "[a-z][a-z0-9]{0,5}".prop_map(CdtTerm::Blank),
+        prop::string::regex("[a-z]{1,6}")
+            .prop_map(|name| CdtTerm::Iri(format!("http://example.org/{name}"))),
+        prop::string::regex("[a-z][a-z0-9]{0,5}").prop_map(CdtTerm::Blank),
         // Unrestricted text, so control characters and quotes exercise the escapes.
-        ".{0,10}".prop_map(|lexical| CdtTerm::Literal(CdtLiteral::plain(lexical))),
-        "-?[0-9]{1,6}"
+        prop::string::regex(".{0,10}")
+            .prop_map(|lexical| CdtTerm::Literal(CdtLiteral::plain(lexical))),
+        prop::string::regex("-?[0-9]{1,6}")
             .prop_map(|lexical| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER))),
-        ("[a-z]{1,6}", "[a-z]{2}")
+        (
+            prop::string::regex("[a-z]{1,6}"),
+            prop::string::regex("[a-z]{2}")
+        )
             .prop_map(|(lexical, tag)| CdtTerm::Literal(CdtLiteral::lang(lexical, tag))),
         (
-            "[a-z]{1,6}",
-            "[a-z]{2}",
+            prop::string::regex("[a-z]{1,6}"),
+            prop::string::regex("[a-z]{2}"),
             prop_oneof![Just(TextDirection::Ltr), Just(TextDirection::Rtl)]
         )
             .prop_map(
@@ -140,7 +150,7 @@ fn leaf_term_strategy() -> impl Strategy<Value = CdtTerm> {
 }
 
 fn entries_strategy(term: BoxedStrategy<CdtTerm>) -> impl Strategy<Value = Vec<CdtEntry>> {
-    proptest::collection::vec((key_strategy(), term), 0..4).prop_filter_map(
+    prop::collection::vec((key_strategy(), term), 0..4).prop_filter_map(
         "a map's keys must be pairwise distinct",
         |pairs| {
             let entries: Vec<CdtEntry> = pairs
@@ -156,7 +166,7 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
     leaf_term_strategy()
         .prop_recursive(3, 24, 3, |inner| {
             prop_oneof![
-                proptest::collection::vec(inner.clone(), 0..4).prop_filter_map(
+                prop::collection::vec(inner.clone(), 0..4).prop_filter_map(
                     "a generated list must be within the crate's three bounds",
                     |items| CdtTerm::composite(CdtValue::list(items).ok()?).ok(),
                 ),
@@ -177,7 +187,7 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
 
 fn value_strategy() -> impl Strategy<Value = CdtValue> {
     prop_oneof![
-        proptest::collection::vec(term_strategy(), 0..5).prop_filter_map(
+        prop::collection::vec(term_strategy(), 0..5).prop_filter_map(
             "a generated list must be within the crate's three bounds",
             |items| CdtValue::list(items).ok(),
         ),
@@ -188,7 +198,7 @@ fn value_strategy() -> impl Strategy<Value = CdtValue> {
     ]
 }
 
-proptest! {
+prop_test! {
     /// canonical -> parse -> canonical is a fixpoint, and re-parsing recovers the
     /// very same value.
     #[test]

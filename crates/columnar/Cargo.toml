@@ -31,7 +31,6 @@ structured-zstd = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-proptest = { workspace = true }
 
 [[bench]]
 # End-to-end fixed-schema writer/reader latency over a representative RDF 1.2

@@ -3,14 +3,14 @@
 
 [package]
 name = "purrdf-testkit"
-description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, and a libtest-compatible runner for harness = false targets"
+description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, a libtest-compatible runner for harness = false targets, and property-based testing on a recorded choice sequence"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-keywords = ["rdf", "testing", "golden", "harness"]
+keywords = ["rdf", "testing", "golden", "harness", "property"]
 categories = ["development-tools::testing"]
 publish = false
 
@@ -26,7 +26,16 @@ test = false
 doc = false
 
 [dependencies]
-# SHA-256 for the frozen-vector tamper evidence. It is the only dependency, and
-# it must stay external: a `purrdf-*` dependency here would put a dev-dependency
-# cycle under every crate whose tests use this one.
+# Every dependency here must stay external: a `purrdf-*` dependency would put a
+# dev-dependency cycle under every crate whose tests use this one.
+#
+# SHA-256 for the frozen-vector tamper evidence.
 sha2 = { workspace = true }
+# The parser behind `regex`: string generators walk its high-level IR, so a
+# pattern means to `prop::string::regex` exactly what it means to `regex`.
+regex-syntax = { workspace = true }
+
+[dev-dependencies]
+# The independent oracle for the string generators: every generated string must
+# be a full match of its pattern under the `regex` crate itself.
+regex = { workspace = true }

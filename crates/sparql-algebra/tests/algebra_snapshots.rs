@@ -8,10 +8,10 @@
 //! query lowers to while every test stays green (exactly how the aggregate /
 //! ORDER BY gaps hid). These golden snapshots over the `{:#?}` of the parsed
 //! `Query` lock the algebra shape for representative in-scope features. A
-//! `proptest` additionally pins the no-panic contract on arbitrary input.
+//! A property test additionally pins the no-panic contract on arbitrary input.
 
-use proptest::prelude::*;
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_testkit::prop::prelude::*;
 
 const PREFIXES: &str = "PREFIX purrdf: <https://x/>\n\
      PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
@@ -122,12 +122,12 @@ fn snapshot_update_delete_insert_modify() {
     );
 }
 
-proptest! {
+prop_test! {
     // The parser must never panic on arbitrary input — it returns Ok or a typed
     // ParseError. Restrict to a SPARQL-ish alphabet so the lexer is exercised
     // deeply rather than rejecting on the first non-ASCII byte.
     #[test]
-    fn parse_never_panics(s in "[a-zA-Z0-9 ?<>{}().*+/^!|:_\"@-]{0,80}") {
+    fn parse_never_panics(s in prop::string::regex("[a-zA-Z0-9 ?<>{}().*+/^!|:_\"@-]{0,80}")) {
         let _ = SparqlParser::new().parse_query(&s);
     }
 }

@@ -7,10 +7,9 @@
 Two independent rules, matched to how each dependency was actually replaced:
 
 * **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
-  ``petgraph`` and ``tempfile`` have a first-party replacement good for every
-  edge kind, and proptest's fork-mode stack (``rusty-fork``, ``wait-timeout``,
-  ``quick-error``, ``fnv``) left with the feature no test used, so
-  reappearing ANYWHERE in the resolved dependency graph — runtime, build,
+  ``petgraph``, ``tempfile`` and ``proptest`` (with the random-number,
+  fork-mode and bit-set stack it alone pulled in) have a first-party
+  replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
   reintroduction through a dev-dependency or a transitive edge is caught the
@@ -101,11 +100,18 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
     "tempfile": "purrdf_testkit::{TempDir, NamedTempFile} (temp_dir!/temp_file!, for_unit_test)",
-    # Pulled in only by proptest's `fork`/`timeout` features, which no test used.
-    "rusty-fork": "proptest without its `fork` feature (no test forks a case)",
-    "wait-timeout": "proptest without its `timeout` feature (no test sets a case timeout)",
-    "quick-error": "proptest without its `fork` feature (only rusty-fork used it)",
-    "fnv": "proptest without its `fork` feature (only rusty-fork used it)",
+    "proptest": "purrdf_testkit::prop (the choice-sequence property harness, prop_test!)",
+    # proptest's own closure: its RNG stack, its fork/timeout runner and its
+    # array helpers. Nothing else in the graph pulled any of them in.
+    "rand": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "rand_chacha": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "rand_xorshift": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "ppv-lite86": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "unarray": "purrdf_testkit::prop (no array strategies are needed)",
+    "rusty-fork": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "wait-timeout": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "quick-error": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "fnv": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency
@@ -113,6 +119,15 @@ BANNED_ANY_EDGE: dict[str, str] = {
 # transitive third-party use is out of scope (see module docstring).
 BANNED_DIRECT_ONLY: dict[str, str] = {
     "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
+    # Left the graph as proptest's dependencies, but `fancy-regex` (under
+    # `datatest-stable`, a dev-dependency of the SPARQL conformance harness)
+    # still resolves them, so only a direct edge is refused.
+    "bit-set": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    "bit-vec": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    # proptest's rand_core 0.9 left with it; rand_core 0.6 stays in Cargo.lock as
+    # an optional dependency of `signature` (under ed25519-dalek), so only a
+    # direct edge is refused.
+    "rand_core": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
 }
 
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")

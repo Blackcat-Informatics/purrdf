@@ -858,7 +858,7 @@ impl DatasetView for RdfDataset {
     ) -> impl Iterator<Item = QuadIds> + '_ {
         // Indexed override (P4b): lazy permutation indexes + a bound-set ->
         // permutation -> partition_point dispatch, byte-identical to the trait's
-        // default linear scan (differential proptest in `ir/dataset.rs`).
+        // default linear scan (differential property test in `ir/dataset.rs`).
         Self::quads_for_pattern_indexed(self, s, p, o, g)
     }
 

@@ -14,7 +14,6 @@ mod common;
 
 use std::fmt::Write as _;
 
-use proptest::prelude::*;
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, derive_jsonld_context,
     parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
@@ -22,6 +21,7 @@ use purrdf_rdf::native_codecs::jsonld::{
 use purrdf_rdf::{
     RdfDatasetBuilder, RdfLiteral, canonical_flat_nquads, datasets_isomorphic, parse_dataset,
 };
+use purrdf_testkit::prop::prelude::*;
 use serde_json::{Value, json};
 
 fn parse_nquads(source: &str) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
@@ -799,10 +799,10 @@ fn compaction_bytes_ignore_input_insertion_order_and_are_idempotent() {
     assert_eq!(first, reserialized);
 }
 
-proptest! {
+prop_test! {
     #[test]
     fn compact_expand_is_an_isomorphic_idempotent_lens(
-        rows in prop::collection::btree_set(("[a-z]{1,8}", "[a-z]{1,8}"), 1..24)
+        rows in prop::collection::btree_set((prop::string::regex("[a-z]{1,8}"), prop::string::regex("[a-z]{1,8}")), 1..24)
     ) {
         let source = rows.iter().fold(String::new(), |mut source, (predicate, object)| {
             writeln!(

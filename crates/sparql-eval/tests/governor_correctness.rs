@@ -47,8 +47,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use proptest::prelude::*;
-use proptest::test_runner::{Config, TestRunner};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
     SparqlResult, TermId, TrippedGovernor,
@@ -57,6 +55,7 @@ use purrdf_sparql_eval::{
     GovernedOutcome, NativeSparqlEngine, PartialAnswers, PartialSparqlResult, QueryGovernors,
     QueryOptions,
 };
+use purrdf_testkit::prop::prelude::*;
 
 /// The fixture namespace. PurRDF mints no vocabulary IRIs; these are test data.
 const EX: &str = "http://example.org/";
@@ -70,7 +69,7 @@ const EX: &str = "http://example.org/";
 /// Deliberately small. The properties here are about the *algebra* of partial answers,
 /// and a five-subject graph exercises every operator's truncation behaviour while keeping
 /// a whole-budget sweep (which re-runs the query once per candidate budget) affordable at
-/// proptest's case counts.
+/// property-test case counts.
 #[derive(Debug, Clone, Copy)]
 struct DataShape {
     /// How many `sN ex:p oN` edges exist.
@@ -336,8 +335,8 @@ impl QueryShape {
 
 fn query_shape() -> impl Strategy<Value = QueryShape> {
     (
-        proptest::sample::select(&Body::ALL[..]),
-        proptest::sample::select(&Modifier::ALL[..]),
+        prop::sample::select(&Body::ALL[..]),
+        prop::sample::select(&Modifier::ALL[..]),
     )
         .prop_map(|(body, modifier)| QueryShape { body, modifier })
 }
@@ -406,12 +405,12 @@ impl Budget {
 }
 
 fn budget() -> impl Strategy<Value = Budget> {
-    (proptest::sample::select(&Dimension::ALL[..]), any::<u8>()).prop_map(
-        |(dimension, fraction)| Budget {
+    (prop::sample::select(&Dimension::ALL[..]), any::<u8>()).prop_map(|(dimension, fraction)| {
+        Budget {
             dimension,
             fraction,
-        },
-    )
+        }
+    })
 }
 
 /// One generated trial: a dataset, a query, and a budget.
@@ -688,7 +687,7 @@ fn measured_cost(dataset: &Arc<RdfDataset>, query: &str, dimension: Dimension) -
 
 /// How many *generated* trials a property runs, on top of the deterministic grid below.
 ///
-/// Above proptest's default, because the interesting region is narrow: a trial only says
+/// Above the property harness's default of 256, because the interesting region is narrow: a trial only says
 /// anything when its budget lands strictly inside the query's cost. The coverage
 /// assertions at the end of each property are what hold this number honest — though it is
 /// [`grid_trials`], not this, that makes those assertions deterministic.
@@ -756,19 +755,14 @@ fn grid_trials() -> Vec<Trial> {
 }
 
 /// Run `check` over the deterministic grid and then over generated trials, failing the
-/// test on the first counterexample (proptest shrinks the generated ones).
-fn for_each_trial(check: impl Fn(Trial) -> Result<(), TestCaseError>) {
+/// test on the first counterexample (the property harness shrinks the generated ones).
+fn for_each_trial(name: &str, check: impl Fn(Trial) -> Result<(), TestCaseError>) {
     for input in grid_trials() {
         if let Err(error) = check(input) {
             panic!("enumerated trial {input:?} failed: {error}");
         }
     }
-    let mut runner = TestRunner::new(Config {
-        cases: CASES,
-        failure_persistence: None,
-        ..Config::default()
-    });
-    runner
+    prop::Runner::new(Config::with_cases(CASES), name)
         .run(&trial(), check)
         .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -786,47 +780,53 @@ fn certain_answers_are_always_a_subset_of_the_ungoverned_answers() {
     let certified = AtomicUsize::new(0);
     let nonempty = AtomicUsize::new(0);
 
-    for_each_trial(|trial| {
-        let dataset = build_dataset(trial.data);
-        let query = trial.query.render();
-        let Ok(truth) = oracle(&dataset, &query) else {
-            // A query the ungoverned engine rejects has no answer to bound. The governed
-            // run must reject it too, which `d6_precedence_order` in `governed_query.rs`
-            // pins; here there is simply nothing to compare.
-            return Ok(());
-        };
-        let Some(truth_rows) = rows_of(&truth) else {
-            return Ok(());
-        };
-        let Some(cost) = measured_cost(&dataset, &query, trial.budget.dimension) else {
-            return Ok(());
-        };
-        let governors = trial.budget.dimension.governors(trial.budget.ceiling(cost));
-        let outcome = governed(&dataset, &query, &governors)
-            .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
+    for_each_trial(
+        concat!(
+            module_path!(),
+            "::certain_answers_are_always_a_subset_of_the_ungoverned_answers"
+        ),
+        |trial| {
+            let dataset = build_dataset(trial.data);
+            let query = trial.query.render();
+            let Ok(truth) = oracle(&dataset, &query) else {
+                // A query the ungoverned engine rejects has no answer to bound. The governed
+                // run must reject it too, which `d6_precedence_order` in `governed_query.rs`
+                // pins; here there is simply nothing to compare.
+                return Ok(());
+            };
+            let Some(truth_rows) = rows_of(&truth) else {
+                return Ok(());
+            };
+            let Some(cost) = measured_cost(&dataset, &query, trial.budget.dimension) else {
+                return Ok(());
+            };
+            let governors = trial.budget.dimension.governors(trial.budget.ceiling(cost));
+            let outcome = governed(&dataset, &query, &governors)
+                .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
 
-        let Some(partial) = certain_partial(&outcome) else {
-            return Ok(());
-        };
-        let Some(partial_rows) = rows_of(partial.result()) else {
-            return Ok(());
-        };
-        certified.fetch_add(1, Ordering::Relaxed);
-        if !partial_rows.is_empty() {
-            nonempty.fetch_add(1, Ordering::Relaxed);
-        }
-        bag_contains(&truth_rows, &partial_rows).map_err(|why| {
-            TestCaseError::fail(format!(
-                "certified partial answer is not contained in the ungoverned answer\n\
+            let Some(partial) = certain_partial(&outcome) else {
+                return Ok(());
+            };
+            let Some(partial_rows) = rows_of(partial.result()) else {
+                return Ok(());
+            };
+            certified.fetch_add(1, Ordering::Relaxed);
+            if !partial_rows.is_empty() {
+                nonempty.fetch_add(1, Ordering::Relaxed);
+            }
+            bag_contains(&truth_rows, &partial_rows).map_err(|why| {
+                TestCaseError::fail(format!(
+                    "certified partial answer is not contained in the ungoverned answer\n\
                  query:   {query}\n\
                  data:    {:?}\n\
                  budget:  {:?} at {}/256 of {cost}\n\
                  {why}",
-                trial.data, trial.budget.dimension, trial.budget.fraction
-            ))
-        })?;
-        Ok(())
-    });
+                    trial.data, trial.budget.dimension, trial.budget.fraction
+                ))
+            })?;
+            Ok(())
+        },
+    );
 
     assert!(
         certified.load(Ordering::Relaxed) > 0,
@@ -859,50 +859,56 @@ fn possible_answers_always_contain_the_ungoverned_answers() {
     // one position that really does subtract less — is where the upper bound now lives.
     let bounded = AtomicUsize::new(0);
 
-    for_each_trial(|trial| {
-        let dataset = build_dataset(trial.data);
-        let query = trial.query.render();
-        let Ok(truth) = oracle(&dataset, &query) else {
-            return Ok(());
-        };
-        let Some(truth_rows) = rows_of(&truth) else {
-            return Ok(());
-        };
-        let Some(cost) = measured_cost(&dataset, &query, trial.budget.dimension) else {
-            return Ok(());
-        };
-        let governors = trial.budget.dimension.governors(trial.budget.ceiling(cost));
-        let outcome = governed(&dataset, &query, &governors)
-            .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
+    for_each_trial(
+        concat!(
+            module_path!(),
+            "::possible_answers_always_contain_the_ungoverned_answers"
+        ),
+        |trial| {
+            let dataset = build_dataset(trial.data);
+            let query = trial.query.render();
+            let Ok(truth) = oracle(&dataset, &query) else {
+                return Ok(());
+            };
+            let Some(truth_rows) = rows_of(&truth) else {
+                return Ok(());
+            };
+            let Some(cost) = measured_cost(&dataset, &query, trial.budget.dimension) else {
+                return Ok(());
+            };
+            let governors = trial.budget.dimension.governors(trial.budget.ceiling(cost));
+            let outcome = governed(&dataset, &query, &governors)
+                .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
 
-        let GovernedOutcome::BudgetExhausted(exhausted) = &outcome else {
-            return Ok(());
-        };
-        let PartialAnswers::AtMost(partial) = &exhausted.partial else {
-            return Ok(());
-        };
-        let Some(partial_rows) = rows_of(partial.result()) else {
-            return Ok(());
-        };
-        bounded.fetch_add(1, Ordering::Relaxed);
-        assert!(
-            !partial.is_positional_prefix(),
-            "an upper bound is not a prefix of the answer, so it can never claim to be \
+            let GovernedOutcome::BudgetExhausted(exhausted) = &outcome else {
+                return Ok(());
+            };
+            let PartialAnswers::AtMost(partial) = &exhausted.partial else {
+                return Ok(());
+            };
+            let Some(partial_rows) = rows_of(partial.result()) else {
+                return Ok(());
+            };
+            bounded.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                !partial.is_positional_prefix(),
+                "an upper bound is not a prefix of the answer, so it can never claim to be \
              the answer's first rows"
-        );
-        bag_contains(&partial_rows, &truth_rows).map_err(|why| {
-            TestCaseError::fail(format!(
-                "the ungoverned answer is NOT contained in the upper bound, so a row \
+            );
+            bag_contains(&partial_rows, &truth_rows).map_err(|why| {
+                TestCaseError::fail(format!(
+                    "the ungoverned answer is NOT contained in the upper bound, so a row \
                  absent from it is not 'definitively not an answer'\n\
                  query:   {query}\n\
                  data:    {:?}\n\
                  budget:  {:?} at {}/256 of {cost}\n\
                  {why}",
-                trial.data, trial.budget.dimension, trial.budget.fraction
-            ))
-        })?;
-        Ok(())
-    });
+                    trial.data, trial.budget.dimension, trial.budget.fraction
+                ))
+            })?;
+            Ok(())
+        },
+    );
 
     // Non-vacuity has to be checked here rather than trusted, because the generator's
     // reach over the antitone positions is exactly what this property depends on: a
@@ -930,38 +936,43 @@ fn a_larger_budget_never_yields_fewer_certain_answers() {
     // complete answer and every rung below is checked into it.
     let compared = AtomicUsize::new(0);
 
-    for_each_trial(|trial| {
-        let dataset = build_dataset(trial.data);
-        let query = trial.query.render();
-        if oracle(&dataset, &query).is_err() {
-            return Ok(());
-        }
-        let dimension = trial.budget.dimension;
-        let Some(cost) = measured_cost(&dataset, &query, dimension) else {
-            return Ok(());
-        };
-
-        // A ladder of ceilings from nothing to the full measured cost. Every adjacent
-        // pair is a (smaller, larger) budget, and the property is checked on all of them
-        // rather than on one generated pair, because the interesting rungs are the ones
-        // where the trip point moves from one operator to another.
-        let rungs: Vec<u64> = (0..=8).map(|step| cost * step / 8).collect();
-        let mut previous: Option<(u64, Vec<Row>)> = None;
-        for ceiling in rungs {
-            let outcome = governed(&dataset, &query, &dimension.governors(ceiling))
-                .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
-            let Some(rows) = certain_rows(&outcome) else {
-                // A rung that certifies no lower bound (an upper bound, or a withheld
-                // one) says nothing about the lower bound's growth, and the ladder
-                // continues past it: the NEXT rung is still compared against the last
-                // rung that did certify one.
-                continue;
+    for_each_trial(
+        concat!(
+            module_path!(),
+            "::a_larger_budget_never_yields_fewer_certain_answers"
+        ),
+        |trial| {
+            let dataset = build_dataset(trial.data);
+            let query = trial.query.render();
+            if oracle(&dataset, &query).is_err() {
+                return Ok(());
+            }
+            let dimension = trial.budget.dimension;
+            let Some(cost) = measured_cost(&dataset, &query, dimension) else {
+                return Ok(());
             };
-            if let Some((smaller, before)) = &previous {
-                compared.fetch_add(1, Ordering::Relaxed);
-                bag_contains(&rows, before).map_err(|why| {
-                    TestCaseError::fail(format!(
-                        "raising the ceiling from {smaller} to {ceiling} LOST a certified \
+
+            // A ladder of ceilings from nothing to the full measured cost. Every adjacent
+            // pair is a (smaller, larger) budget, and the property is checked on all of them
+            // rather than on one generated pair, because the interesting rungs are the ones
+            // where the trip point moves from one operator to another.
+            let rungs: Vec<u64> = (0..=8).map(|step| cost * step / 8).collect();
+            let mut previous: Option<(u64, Vec<Row>)> = None;
+            for ceiling in rungs {
+                let outcome = governed(&dataset, &query, &dimension.governors(ceiling))
+                    .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
+                let Some(rows) = certain_rows(&outcome) else {
+                    // A rung that certifies no lower bound (an upper bound, or a withheld
+                    // one) says nothing about the lower bound's growth, and the ladder
+                    // continues past it: the NEXT rung is still compared against the last
+                    // rung that did certify one.
+                    continue;
+                };
+                if let Some((smaller, before)) = &previous {
+                    compared.fetch_add(1, Ordering::Relaxed);
+                    bag_contains(&rows, before).map_err(|why| {
+                        TestCaseError::fail(format!(
+                            "raising the ceiling from {smaller} to {ceiling} LOST a certified \
                          answer\n\
                          query: {query}\n\
                          data:  {:?}\n\
@@ -969,14 +980,15 @@ fn a_larger_budget_never_yields_fewer_certain_answers() {
                          at {smaller}: {before:?}\n\
                          at {ceiling}: {rows:?}\n\
                          {why}",
-                        trial.data
-                    ))
-                })?;
+                            trial.data
+                        ))
+                    })?;
+                }
+                previous = Some((ceiling, rows));
             }
-            previous = Some((ceiling, rows));
-        }
-        Ok(())
-    });
+            Ok(())
+        },
+    );
 
     assert!(
         compared.load(Ordering::Relaxed) > 0,
@@ -998,75 +1010,81 @@ fn certified_prefix_is_stable_across_budget_increases() {
     let compared = AtomicUsize::new(0);
     let against_complete = AtomicUsize::new(0);
 
-    for_each_trial(|trial| {
-        let dataset = build_dataset(trial.data);
-        let query = trial.query.render();
-        let Ok(truth) = oracle(&dataset, &query) else {
-            return Ok(());
-        };
-        let Some(truth_rows) = rows_of(&truth) else {
-            return Ok(());
-        };
-        let dimension = trial.budget.dimension;
-        let Some(cost) = measured_cost(&dataset, &query, dimension) else {
-            return Ok(());
-        };
-
-        let mut previous: Option<(u64, Vec<Row>)> = None;
-        for step in 0..=8_u64 {
-            let ceiling = cost * step / 8;
-            let outcome = governed(&dataset, &query, &dimension.governors(ceiling))
-                .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
-            let Some(partial) = certain_partial(&outcome) else {
-                continue;
+    for_each_trial(
+        concat!(
+            module_path!(),
+            "::certified_prefix_is_stable_across_budget_increases"
+        ),
+        |trial| {
+            let dataset = build_dataset(trial.data);
+            let query = trial.query.render();
+            let Ok(truth) = oracle(&dataset, &query) else {
+                return Ok(());
             };
-            if !partial.is_positional_prefix() {
-                // The certificate declines the positional claim here, so there is nothing
-                // to hold stable. The rung is dropped from the chain rather than compared
-                // loosely — a property that silently weakened itself on the awkward cases
-                // would be the failure this file exists to prevent.
-                previous = None;
-                continue;
-            }
-            let Some(rows) = rows_of(partial.result()) else {
-                continue;
+            let Some(truth_rows) = rows_of(&truth) else {
+                return Ok(());
+            };
+            let dimension = trial.budget.dimension;
+            let Some(cost) = measured_cost(&dataset, &query, dimension) else {
+                return Ok(());
             };
 
-            // Against the ungoverned answer, which is the budget increase taken to its
-            // limit: a positional prefix must be a prefix of the true output, in order.
-            against_complete.fetch_add(1, Ordering::Relaxed);
-            if !truth_rows.starts_with(&rows) {
-                return Err(TestCaseError::fail(format!(
-                    "a certified POSITIONAL prefix is not a prefix of the ungoverned \
+            let mut previous: Option<(u64, Vec<Row>)> = None;
+            for step in 0..=8_u64 {
+                let ceiling = cost * step / 8;
+                let outcome = governed(&dataset, &query, &dimension.governors(ceiling))
+                    .map_err(|e| TestCaseError::fail(format!("governed run failed: {e}")))?;
+                let Some(partial) = certain_partial(&outcome) else {
+                    continue;
+                };
+                if !partial.is_positional_prefix() {
+                    // The certificate declines the positional claim here, so there is nothing
+                    // to hold stable. The rung is dropped from the chain rather than compared
+                    // loosely — a property that silently weakened itself on the awkward cases
+                    // would be the failure this file exists to prevent.
+                    previous = None;
+                    continue;
+                }
+                let Some(rows) = rows_of(partial.result()) else {
+                    continue;
+                };
+
+                // Against the ungoverned answer, which is the budget increase taken to its
+                // limit: a positional prefix must be a prefix of the true output, in order.
+                against_complete.fetch_add(1, Ordering::Relaxed);
+                if !truth_rows.starts_with(&rows) {
+                    return Err(TestCaseError::fail(format!(
+                        "a certified POSITIONAL prefix is not a prefix of the ungoverned \
                      answer\n\
                      query:  {query}\n\
                      data:   {:?}\n\
                      dim:    {dimension:?} at {ceiling}\n\
                      partial: {rows:?}\n\
                      truth:   {truth_rows:?}",
-                    trial.data
-                )));
-            }
+                        trial.data
+                    )));
+                }
 
-            if let Some((smaller, before)) = &previous {
-                compared.fetch_add(1, Ordering::Relaxed);
-                if !rows.starts_with(before) {
-                    return Err(TestCaseError::fail(format!(
-                        "the rows certified at {smaller} are not a positional prefix of \
+                if let Some((smaller, before)) = &previous {
+                    compared.fetch_add(1, Ordering::Relaxed);
+                    if !rows.starts_with(before) {
+                        return Err(TestCaseError::fail(format!(
+                            "the rows certified at {smaller} are not a positional prefix of \
                          those certified at {ceiling}, so a caller cannot page through \
                          this query by raising the ceiling\n\
                          query: {query}\n\
                          data:  {:?}\n\
                          at {smaller}: {before:?}\n\
                          at {ceiling}: {rows:?}",
-                        trial.data
-                    )));
+                            trial.data
+                        )));
+                    }
                 }
+                previous = Some((ceiling, rows));
             }
-            previous = Some((ceiling, rows));
-        }
-        Ok(())
-    });
+            Ok(())
+        },
+    );
 
     assert!(
         against_complete.load(Ordering::Relaxed) > 0,
