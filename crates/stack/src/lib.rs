@@ -138,7 +138,8 @@ mod platform;
 /// 128 KiB is eight times the evaluator's widest interval and twice the parser's. The
 /// rest is room for what the sweeps cannot see: host code a leaf calls (a registered
 /// function, relation or aggregate, a `SERVICE` transport), and the derived copy and
-/// comparison of terms, which nest no deeper than the parser's triple-term limit. It
+/// comparison of terms up to 128 triple-term levels deep (a computation walking deeper
+/// ones keeps what they take out of reach with [`reserve`]). It
 /// costs a thread little it could have used: a default 2 MiB thread keeps 94% of its
 /// stack, and a request refused here needed nearly all of it anyway.
 #[cfg(not(target_arch = "wasm32"))]
@@ -210,6 +211,9 @@ thread_local! {
     static FLOOR: Cell<usize> = const { Cell::new(UNKNOWN) };
     /// The running context's [`WalkState`].
     static WALK: Cell<WalkState> = const { Cell::new(WalkState::Unscoped) };
+    /// The bytes the open [`reserve`] scopes keep above the stack's real floor: `FLOOR`
+    /// is the real floor raised by this much, and a floor read again is raised by it too.
+    static RESERVED: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The current stack pointer, as the address of a local of the calling frame.
@@ -261,6 +265,8 @@ pub struct Context {
     floor: usize,
     /// The walk-scope state.
     walk: WalkState,
+    /// The bytes the context's open [`reserve`] scopes keep above its real floor.
+    reserved: usize,
 }
 
 impl Context {
@@ -272,6 +278,7 @@ impl Context {
         Self {
             floor,
             walk: WalkState::Unscoped,
+            reserved: 0,
         }
     }
 }
@@ -279,14 +286,89 @@ impl Context {
 /// Install `context` as the running computation's, returning the context it replaces
 /// (which the caller puts back when it switches away again).
 ///
-/// The floor and the walk-scope state are swapped together, so a walk scope a suspended
-/// computation left open — and a refusal it latched there, with [`EXHAUSTED`] installed —
-/// stays with that computation, and whatever runs while it waits sees only its own. See
+/// The floor, the walk-scope state and the open [`reserve`] scopes are swapped together,
+/// so a walk scope a suspended computation left open — and a refusal it latched there,
+/// with [`EXHAUSTED`] installed — stays with that computation, as does the stack it
+/// reserved, and whatever runs while it waits sees only its own. See
 /// [Switching contexts](crate#switching-contexts).
 pub fn replace_context(context: Context) -> Context {
     Context {
         floor: replace_floor(context.floor),
         walk: WALK.with(|state| state.replace(context.walk)),
+        reserved: RESERVED.with(|reserved| reserved.replace(context.reserved)),
+    }
+}
+
+/// Keep `bytes` of stack, beyond [`MARGIN_BYTES`], out of reach of every check on this
+/// thread until the returned [`Reserve`] is dropped.
+///
+/// For a computation whose leaves run a recursion of known depth with no check of its
+/// own — the SPARQL evaluator copies, compares and matches the triple terms a request
+/// writes wherever its evaluation stands, and a term nested `n` deep takes those walks
+/// `n` levels down — reserving what that recursion needs up front makes every check the
+/// computation passes leave room for it: [`is_low`], [`remaining`] and [`walk_is_low`]
+/// all measure against the floor raised by `bytes`, so a frame that passed a check has
+/// the margin *and* the reserve below it. It is the floor that moves, so a check costs
+/// what it always did.
+///
+/// Reserves nest, and add up. A floor read again while one is open (a native thread
+/// that finds its frame below the cached floor) is raised by what is reserved, and a
+/// host's [`replace_context`] carries the reserve with the computation that made it. On
+/// a platform whose stack bound cannot be read, where every guard of this crate is
+/// inactive, nothing is reserved either.
+pub fn reserve(bytes: usize) -> Reserve {
+    // Read the floor first, so what is raised is a real floor rather than the "not yet
+    // read" marker.
+    let _ = remaining();
+    let floor = FLOOR.with(Cell::get);
+    let inactive = cfg!(not(target_arch = "wasm32")) && floor == 0;
+    if bytes == 0 || floor == EXHAUSTED || inactive {
+        return Reserve { bytes: 0 };
+    }
+    FLOOR.with(|cell| cell.set(floor.saturating_add(bytes)));
+    RESERVED.with(|reserved| reserved.set(reserved.get() + bytes));
+    Reserve { bytes }
+}
+
+/// Stack kept out of reach of every check while it lives; see [`reserve`]. Dropping it
+/// gives the bytes back.
+#[derive(Debug)]
+#[must_use = "the stack is reserved only while the `Reserve` lives"]
+pub struct Reserve {
+    /// What this reserve raised the floor by.
+    bytes: usize,
+}
+
+impl Reserve {
+    /// The bytes this reserve keeps: what was asked for, or `0` where nothing could be
+    /// reserved (no readable stack bound, or a refusal already latched).
+    #[must_use]
+    pub const fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+impl Drop for Reserve {
+    fn drop(&mut self) {
+        if self.bytes == 0 {
+            return;
+        }
+        RESERVED.with(|reserved| reserved.set(reserved.get().saturating_sub(self.bytes)));
+        match FLOOR.with(Cell::get) {
+            // A walk scope inside this reserve refused and has not closed: it put
+            // EXHAUSTED in place of the raised floor and puts that floor back when it
+            // closes, so that is the floor to lower.
+            EXHAUSTED => WALK.with(|state| {
+                if let WalkState::Refused { construct, floor } = state.get() {
+                    state.set(WalkState::Refused {
+                        construct,
+                        floor: floor.saturating_sub(self.bytes),
+                    });
+                }
+            }),
+            UNKNOWN => {}
+            floor => FLOOR.with(|cell| cell.set(floor.saturating_sub(self.bytes))),
+        }
     }
 }
 
@@ -402,7 +484,11 @@ fn refresh(sp: usize) -> usize {
     // system rather than from any particular frame, so — unlike a floor derived from a
     // "bytes left" figure measured a few frames down — this is the thread's exact floor,
     // not an approximation of it.
-    let floor = platform::stack_floor().unwrap_or(0);
+    let floor = match platform::stack_floor() {
+        // What the open reserves keep is above the real floor.
+        Some(floor) => floor.saturating_add(RESERVED.with(Cell::get)),
+        None => 0,
+    };
     FLOOR.with(|cell| cell.set(floor));
     sp.saturating_sub(floor)
 }
@@ -431,8 +517,9 @@ const DEFAULT_FLOOR: usize = 0;
 #[cfg(target_arch = "wasm32")]
 fn refresh(sp: usize) -> usize {
     if FLOOR.with(Cell::get) == UNKNOWN {
-        FLOOR.with(|cell| cell.set(DEFAULT_FLOOR));
-        return sp - DEFAULT_FLOOR;
+        let floor = DEFAULT_FLOOR + RESERVED.with(Cell::get);
+        FLOOR.with(|cell| cell.set(floor));
+        return sp.saturating_sub(floor);
     }
     0
 }
@@ -691,6 +778,118 @@ mod tests {
                 "and refuses the job for the waiting context's walk"
             );
             replace_floor(real);
+        });
+    }
+
+    /// A reserve takes its bytes off what every check sees, and gives them back when it
+    /// is dropped; reserves add up. The neighbouring control: a reserve that leaves more
+    /// than the margin is not low, one that eats into the margin is.
+    #[test]
+    fn a_reserve_is_kept_out_of_reach_until_dropped() {
+        on_thread(4 * 1024 * 1024, || {
+            let before = remaining();
+            let outer = reserve(512 * 1024);
+            assert_eq!(outer.bytes(), 512 * 1024);
+            let within = remaining();
+            assert!(
+                (before - 512 * 1024 - 1024..before - 512 * 1024 + 1024).contains(&within),
+                "{before} bytes before a 512 KiB reserve, {within} within it"
+            );
+            assert!(
+                !is_low(),
+                "a reserve that leaves more than the margin is not low"
+            );
+            let inner = reserve(within - MARGIN_BYTES / 2);
+            assert!(is_low(), "a reserve that eats into the margin is low");
+            drop(inner);
+            assert!(!is_low());
+            drop(outer);
+            let after = remaining();
+            assert!(
+                (before - 1024..before + 1024).contains(&after),
+                "{before} bytes before, {after} after the reserve is dropped"
+            );
+        });
+    }
+
+    /// A floor read again inside a reserve — a native thread whose frame is found below
+    /// the cached floor — is raised by what is reserved, so the reserve survives it.
+    #[test]
+    fn a_floor_read_again_keeps_the_reserve() {
+        on_thread(4 * 1024 * 1024, || {
+            let before = remaining();
+            let kept = reserve(1024 * 1024);
+            let raised = FLOOR.with(Cell::get);
+            // As if the thread had switched stacks: the cached floor is above the frame.
+            replace_floor(stack_pointer() + 4096);
+            let within = remaining();
+            assert_eq!(
+                FLOOR.with(Cell::get),
+                raised,
+                "the floor read again is raised"
+            );
+            assert!(
+                within + 1024 * 1024 <= before + 1024,
+                "{within} bytes left inside a 1 MiB reserve of {before}"
+            );
+            drop(kept);
+            assert!(remaining() + 1024 > before);
+        });
+    }
+
+    /// A reserve travels with its context: the computation that runs while it waits sees
+    /// its own stack whole, and the reserve is still in force when it resumes.
+    #[test]
+    fn a_reserve_stays_with_its_context() {
+        on_thread(4 * 1024 * 1024, || {
+            let before = remaining();
+            let kept = reserve(1024 * 1024);
+            let real = FLOOR.with(Cell::get) - 1024 * 1024;
+            let job = replace_context(Context::on_floor(real));
+            let waiting = remaining();
+            let back = replace_context(job);
+            assert_eq!(
+                back,
+                Context::on_floor(real),
+                "the waiting context reserved nothing"
+            );
+            assert!(
+                waiting + 1024 > before,
+                "{waiting} of {before} bytes for the waiting context"
+            );
+            assert!(
+                remaining() + 1024 * 1024 <= before + 1024,
+                "the reserve is back in force"
+            );
+            drop(kept);
+            assert!(remaining() + 1024 > before);
+        });
+    }
+
+    /// A walk scope that refuses inside a reserve and closes after the reserve is dropped
+    /// puts back the real floor, not the raised one.
+    #[test]
+    fn a_refusal_latched_inside_a_reserve_restores_the_real_floor() {
+        on_thread(4 * 1024 * 1024, || {
+            let _ = remaining();
+            let real = FLOOR.with(Cell::get);
+            let refused = walk(|| {
+                let kept = reserve(remaining() - MARGIN_BYTES / 2);
+                assert!(
+                    walk_is_low("reserved walk"),
+                    "the reserve eats into the margin"
+                );
+                assert_eq!(FLOOR.with(Cell::get), EXHAUSTED);
+                drop(kept);
+                assert_eq!(
+                    FLOOR.with(Cell::get),
+                    EXHAUSTED,
+                    "the refusal stays latched"
+                );
+            });
+            assert_eq!(refused, Err("reserved walk"));
+            assert_eq!(FLOOR.with(Cell::get), real, "the real floor is back");
+            assert!(!is_low());
         });
     }
 }

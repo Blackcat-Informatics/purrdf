@@ -135,6 +135,15 @@ pub enum EvalError {
         kind: Option<UnsupportedKind>,
     },
 
+    /// What the request builds was refused by the dataset it builds into: a
+    /// `CONSTRUCT` graph is a frozen dataset, and a template that instantiates a
+    /// statement no dataset admits — a triple term nested past the dataset's limit,
+    /// say — is refused by that dataset's own admission. Carries its diagnostic, whose
+    /// code (`rdf-ir-triple-nesting-limit`, …) is the one the request's diagnostic
+    /// carries too ([`Self::code`]), exactly as an `UPDATE` that writes the same
+    /// statement is refused.
+    Dataset(purrdf_core::RdfDiagnostic),
+
     /// An internal invariant was violated — e.g. a solution row whose width does
     /// not match its schema. This indicates a bug in the evaluator, not bad input
     /// (a frozen, validated dataset and a parsed algebra cannot legitimately cause
@@ -360,6 +369,7 @@ impl EvalError {
         match self {
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
+            | Self::Dataset(_)
             | Self::Internal(_)
             | Self::Remote(_)
             | Self::ServiceDenied(_)
@@ -372,6 +382,17 @@ impl EvalError {
             | Self::FloatEnvironment(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
+        }
+    }
+
+    /// The machine-readable code this error carries to the `SparqlEngine` boundary:
+    /// [`Self::diagnostic_code`], or — for [`Self::Dataset`] — the dataset's own
+    /// diagnostic code.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Dataset(diagnostic) => Some(&diagnostic.code),
+            other => other.diagnostic_code(),
         }
     }
 
@@ -452,6 +473,11 @@ impl core::fmt::Display for EvalError {
             Self::Unsupported { what, .. } => {
                 write!(f, "unsupported in sparql-eval (S6 scope): {what}")
             }
+            Self::Dataset(diagnostic) => write!(
+                f,
+                "the dataset this request builds refused it: {}",
+                diagnostic.message
+            ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::ServiceDenied(denial) => {

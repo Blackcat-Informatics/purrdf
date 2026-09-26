@@ -17,9 +17,9 @@
 //! [`super::walk_is_low`]. They must run inside a [`super::walk`] scope — every caller's
 //! is — which discards the placeholder a refusing level leaves. Outside a scope they never
 //! refuse, and copy exactly what the derived `Clone` copies. The leaves they reach
-//! (terms, triple patterns, `VALUES` cells) are copied with their own `Clone`: their
-//! nesting is the triple-term nesting the parser bounds at
-//! [`purrdf_sparql_algebra::MAX_TRIPLE_TERM_NESTING`], at a few hundred bytes a level.
+//! (terms, triple patterns, `VALUES` cells) are copied with their own `Clone`, at a few
+//! hundred bytes a triple-term level: the stack those copies take past what the margin
+//! holds is reserved when the evaluation starts (see [`super::reserve_terms`]).
 //!
 //! Every `match` here is exhaustive and wildcard-free, so a new algebra variant is a
 //! compile error here rather than a node these copies silently drop.

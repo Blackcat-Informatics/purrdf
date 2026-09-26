@@ -18,7 +18,7 @@
 use std::hash::{Hash, Hasher};
 
 use purrdf_sparql_algebra::{
-    GraphPattern, MAX_TRIPLE_TERM_NESTING, ParseError, Query, SparqlParser, pattern_to_select_query,
+    GraphPattern, ParseError, Query, SparqlParser, TermPattern, pattern_to_select_query,
 };
 
 const EX: &str = "http://example.org/";
@@ -212,6 +212,24 @@ fn forms() -> Vec<Form> {
             },
         },
         Form {
+            name: "nested triple terms",
+            text: |n| {
+                format!(
+                    "SELECT * WHERE {{ {} <{EX}q> ?z }}",
+                    nested(&format!("<<( ?s <{EX}p> "), "?o", " )>>", n)
+                )
+            },
+        },
+        Form {
+            name: "nested VALUES triple terms",
+            text: |n| {
+                format!(
+                    "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
+                    nested(&format!("<<( <{EX}s> <{EX}p> "), "1", " )>>", n)
+                )
+            },
+        },
+        Form {
             name: "a spine of 1 500 OPTIONAL siblings under nested groups",
             text: |n| {
                 format!(
@@ -358,28 +376,44 @@ fn every_stack_between_the_margin_and_the_need_parses_or_refuses_typed() {
     }
 }
 
-/// Triple terms are the one nesting a count still bounds, for the walks over terms that
-/// carry no stack check: at [`MAX_TRIPLE_TERM_NESTING`] they parse and are walked in
-/// full, one level more is the typed syntax refusal naming the limit, and reifying
-/// triples — whose reifier is a flat blank node — nest past it freely.
+/// Triple terms nest as deep as the stack holds them, like every other construct: a
+/// thousand levels in a pattern and in `VALUES` parse with every level present — the
+/// height check reports all thousand, the oracle that no level was dropped — where the
+/// removed count refused the 129th, and a thousand nested reifying triples parse too.
 #[test]
-fn triple_terms_nest_to_their_limit_and_reifying_triples_past_it() {
-    let triple_terms = |n: usize| {
-        format!(
-            "SELECT * WHERE {{ {} <{EX}q> ?z }}",
-            nested(&format!("<<( ?s <{EX}p> "), "?o", " )>>", n)
-        )
-    };
-    parse_on(&triple_terms(MAX_TRIPLE_TERM_NESTING), 1024 * 1024)
-        .expect("triple terms nested to the limit parse on a 1 MiB stack");
-    match SparqlParser::new().parse_query(&triple_terms(MAX_TRIPLE_TERM_NESTING + 1)) {
-        Err(ParseError::Syntax { reason, .. }) => assert!(
-            reason.contains(&format!(
-                "triple term nesting exceeds the safety limit of {MAX_TRIPLE_TERM_NESTING}"
-            )),
-            "{reason}"
+fn triple_terms_nest_as_deep_as_the_stack_holds_them() {
+    for (name, text) in [
+        (
+            "pattern",
+            format!(
+                "SELECT * WHERE {{ {} <{EX}q> ?z }}",
+                nested(&format!("<<( ?s <{EX}p> "), "?o", " )>>", 1_000)
+            ),
         ),
-        other => panic!("expected the triple-term limit, got {other:?}"),
+        (
+            "VALUES",
+            format!(
+                "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
+                nested(&format!("<<( <{EX}s> <{EX}p> "), "1", " )>>", 1_000)
+            ),
+        ),
+    ] {
+        let nesting = on_stack(LARGE, move || {
+            let query = SparqlParser::new()
+                .parse_query(&text)
+                .unwrap_or_else(|e| panic!("{name}: a thousand nested triple terms parse: {e}"));
+            let (Query::Select { pattern, .. }
+            | Query::Ask { pattern, .. }
+            | Query::Construct { pattern, .. }
+            | Query::Describe { pattern, .. }) = &query;
+            pattern
+                .validate_height()
+                .expect("the height check admits it")
+        });
+        assert_eq!(
+            nesting, 1_000,
+            "{name}: every level of the term is in the algebra"
+        );
     }
     let reifying = format!(
         "SELECT * WHERE {{ {} <{EX}q> ?z }}",
@@ -392,6 +426,43 @@ fn triple_terms_nest_to_their_limit_and_reifying_triples_past_it() {
     })
     .expect("a thousand nested reifying triples parse");
     assert_eq!(parsed.matches("rdf-syntax-ns#reifies").count(), 1_000);
+}
+
+/// [`TermPattern::triple_term_nesting`] counts the triple terms of the longest chain,
+/// through subjects and objects alike, and nothing for a term that is not one.
+#[test]
+fn triple_term_nesting_counts_the_longest_chain() {
+    let leaf = TermPattern::Variable(purrdf_sparql_algebra::Variable::new("o"));
+    let wrap = |subject: TermPattern, object: TermPattern| {
+        TermPattern::Triple(Box::new(purrdf_sparql_algebra::TriplePattern {
+            subject,
+            predicate: purrdf_sparql_algebra::NamedNodePattern::NamedNode(
+                purrdf_sparql_algebra::NamedNode::new(format!("{EX}p")).expect("IRI"),
+            ),
+            object,
+        }))
+    };
+    assert_eq!(leaf.triple_term_nesting(), 0);
+    let mut deep = leaf.clone();
+    for _ in 0..5 {
+        deep = wrap(leaf.clone(), deep);
+    }
+    assert_eq!(deep.triple_term_nesting(), 5, "down the objects");
+    let subject_side = wrap(deep, leaf.clone());
+    assert_eq!(subject_side.triple_term_nesting(), 6, "down a subject");
+    let mut long = leaf.clone();
+    for _ in 0..100_000 {
+        long = wrap(leaf.clone(), long);
+    }
+    assert_eq!(
+        long.triple_term_nesting(),
+        100_000,
+        "counted without recursion"
+    );
+    // Dropped level by level, so the test's stack never holds its drop.
+    while let TermPattern::Triple(triple) = long {
+        long = triple.object;
+    }
 }
 
 /// A tall tree is held to the same measure when it is admitted as when it is parsed:
@@ -407,7 +478,10 @@ fn a_tall_tree_is_admitted_by_the_stack_it_would_be_walked_on() {
         let pattern: &GraphPattern = pattern;
         [
             ("Query::validate", query.validate()),
-            ("GraphPattern::validate_height", pattern.validate_height()),
+            (
+                "GraphPattern::validate_height",
+                pattern.validate_height().map(drop),
+            ),
         ]
     }
     let query = on_stack(LARGE, || {

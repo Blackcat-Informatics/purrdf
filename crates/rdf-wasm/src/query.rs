@@ -72,7 +72,7 @@ use purrdf::{
     SerializeGraph, query_with_entailment_governed, serialize_dataset,
 };
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
-use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{RdfDiagnostic, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
@@ -1276,7 +1276,7 @@ impl QueryEngine {
         let mut frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         self.inner
             .update(&mut frozen, sparql_request(sparql, base.as_deref()))
-            .map_err(|e| diag_to_err(&e))?;
+            .map_err(|e| sync_lane_err(&e))?;
         dataset.replace(frozen);
         Ok(())
     }
@@ -1401,7 +1401,7 @@ impl QueryEngine {
                 QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                 &governors,
             )
-            .map_err(|e| diag_to_err(&e))?;
+            .map_err(|e| sync_lane_err(&e))?;
         query_outcome_from_governed(outcome)
     }
 
@@ -1534,7 +1534,7 @@ impl QueryEngine {
                 QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                 &governors,
             )
-            .map_err(|e| diag_to_err(&e))?;
+            .map_err(|e| sync_lane_err(&e))?;
         // The engine publishes into its own `Arc` only on the applied path, so adopting
         // the returned base on a trip would adopt a base nothing was written to.
         if outcome.is_applied() {
@@ -1565,7 +1565,7 @@ impl QueryEngine {
         Ok(self
             .inner
             .explain_query(&frozen, sparql, base.as_deref())
-            .map_err(|e| diag_to_err(&e))?
+            .map_err(|e| sync_lane_err(&e))?
             .render())
     }
 
@@ -1612,7 +1612,7 @@ impl QueryEngine {
         let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         self.inner
             .query(&frozen, sparql_request(sparql, base))
-            .map_err(|e| diag_to_err(&e))
+            .map_err(|e| sync_lane_err(&e))
     }
 
     fn query_raw_with_options(
@@ -1625,6 +1625,29 @@ impl QueryEngine {
     ) -> Result<String, JsError> {
         serialize_configured_graph(self.run_query(dataset, sparql, base)?, format, options)
             .map_err(|message| JsError::new(&message))
+    }
+}
+
+/// What the synchronous lane appends to a stack refusal: the remedy. The synchronous
+/// lane runs on the instance's own 1 MiB shadow stack and under the host-stack budget,
+/// so a request nested past them answers only on the asynchronous twin of the call
+/// (`selectAsync`, `updateAsync`, …), whose job runs on a stack region of the size its
+/// `stackBytes` option names.
+pub(crate) const SYNC_STACK_HINT: &str = "; the synchronous lane runs on the instance's own \
+     stack — run this request with the asynchronous twin of this call (selectAsync, \
+     queryAsync, updateAsync, …) and a larger stackBytes region";
+
+/// [`diag_to_err`] for an engine call on the synchronous lane: a stack refusal — the
+/// parser's `StackExhausted` or the evaluator's `native-sparql-evaluation-stack-exhausted`
+/// — keeps its code and message and gains [`SYNC_STACK_HINT`], the remedy only this lane
+/// has to name. Every other diagnostic is [`diag_to_err`]'s.
+fn sync_lane_err(diag: &RdfDiagnostic) -> JsError {
+    let stack = diag.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+        || diag.message.contains("SPARQL parse stack exhausted");
+    if stack {
+        JsError::new(&format!("{diag}{SYNC_STACK_HINT}"))
+    } else {
+        diag_to_err(diag)
     }
 }
 

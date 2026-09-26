@@ -103,23 +103,6 @@ pub const WASM_HOST_STACK_BUDGET: usize = 640 * 1024;
 pub const WASM_GRAPH_PATTERN_DEPTH: usize =
     WASM_HOST_STACK_BUDGET / host_stack_cost("group graph pattern");
 
-/// How deeply triple terms may nest: 128 levels (`<<( <<( … )>> … )>>`, in pattern,
-/// template and `VALUES` positions alike), on every target.
-///
-/// Unlike an expression or a graph pattern, a term is copied, compared, hashed, matched
-/// and instantiated by recursions that carry no stack check — the evaluator copies the
-/// terms of a correlated `EXISTS` body per row, matches a nested triple pattern level by
-/// level, and builds `CONSTRUCT` output from template terms — at whatever depth the
-/// evaluation has reached, where only [`purrdf_stack::MARGIN_BYTES`] are guaranteed.
-/// One level costs those walks at most about 500 bytes natively (the derived `Debug`
-/// of a triple-term chain, measured at 496 bytes a level; its `Clone` is 258), so 128
-/// levels take at most 64 KiB: half the margin. A deeper term could not be answered
-/// anyway: a dataset holds triple terms at most 16 deep, so a pattern nested deeper
-/// matches nothing and a template nested deeper builds a statement the dataset refuses.
-/// The level past the limit is refused with a typed [`ParseError::Syntax`] naming the
-/// construct and this limit.
-pub const MAX_TRIPLE_TERM_NESTING: usize = 128;
-
 /// The group-graph-pattern nesting limit this crate used to enforce.
 ///
 /// Nothing enforces it any more: group nesting is bounded by the stack the parse and the
@@ -177,7 +160,7 @@ pub(crate) fn walkable(height: usize) -> bool {
 /// rounded up. A group is charged for the `LATERAL` and `EXISTS` evaluations it nests
 /// under; a collection, an annotation block and an expression triple term, which cost V8
 /// less than a quarter of a kilobyte a level, are charged 256 bytes.
-const fn host_stack_cost(construct: &str) -> usize {
+pub(crate) const fn host_stack_cost(construct: &str) -> usize {
     match construct.as_bytes() {
         b"group graph pattern" => 2304,
         b"EXISTS" | b"NOT EXISTS" => 1536,
@@ -624,7 +607,6 @@ impl SparqlParser {
             nesting_depth: 0,
             nesting_peak: 0,
             host_units: 0,
-            term_depth: 0,
             exists_scope_stack: Vec::new(),
             dataset_at: None,
             dataset_slot: None,
@@ -711,9 +693,6 @@ struct Parser<'a, 'o> {
     /// chain built there) reached since the innermost [`Parser::measured`] window
     /// opened; outside such a window its value is never read.
     nesting_peak: usize,
-    /// How many triple terms enclose the cursor — the count [`Parser::triple_term_level`]
-    /// charges against [`MAX_TRIPLE_TERM_NESTING`].
-    term_depth: usize,
     /// The `EXISTS`/`NOT EXISTS` in-scope-set stack (SEP-0007 Part 3) — see
     /// [`Parser::exists_scope`] for what "in scope" means here and
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
@@ -899,7 +878,6 @@ impl<'a> Parser<'a, '_> {
             nesting_depth: self.nesting_depth,
             nesting_peak: self.nesting_depth,
             host_units: self.host_units,
-            term_depth: self.term_depth,
             // A fork reparses only a bounded braced block for a template/quad
             // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
             // quad-pattern reading) — neither production can contain `EXISTS`,
@@ -988,29 +966,6 @@ impl<'a> Parser<'a, '_> {
         let result = parse(self);
         self.nesting_depth -= 1;
         self.host_units -= units;
-        result
-    }
-
-    /// Parse the components of a triple term one level deeper in term nesting,
-    /// refusing it past [`MAX_TRIPLE_TERM_NESTING`] with a typed [`ParseError::Syntax`]
-    /// naming the limit.
-    ///
-    /// Runs inside the [`Self::nested`] level of the construct that opened the term, so
-    /// the stack is guarded as for every other level; this bounds only how deeply terms
-    /// nest, for the walks over terms that carry no stack check (see the limit's
-    /// documentation). The depth is restored on the error path too.
-    fn triple_term_level<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        if self.term_depth >= MAX_TRIPLE_TERM_NESTING {
-            return Err(ParseError::syntax(
-                format!(
-                    "triple term nesting exceeds the safety limit of {MAX_TRIPLE_TERM_NESTING}"
-                ),
-                self.span(),
-            ));
-        }
-        self.term_depth += 1;
-        let result = parse(self);
-        self.term_depth -= 1;
         result
     }
 
@@ -3547,17 +3502,7 @@ impl<'a> Parser<'a, '_> {
     fn parse_triple_node_body(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::TripleOpen)?;
         let is_triple_term = self.eat(&Token::LParen);
-        let inner = if is_triple_term {
-            self.triple_term_level(|p| p.parse_inner_triple(sink))?
-        } else {
-            // A reifying triple's `s p o` becomes the triple term of the `rdf:reifies`
-            // statement it emits: one term level, whatever encloses the reifier, which
-            // is itself a flat blank node or IRI.
-            let enclosing = std::mem::replace(&mut self.term_depth, 0);
-            let inner = self.triple_term_level(|p| p.parse_inner_triple(sink));
-            self.term_depth = enclosing;
-            inner?
-        };
+        let inner = self.parse_inner_triple(sink)?;
         if is_triple_term {
             self.expect(&Token::RParen)?;
             self.expect(&Token::TripleClose)?;
@@ -4084,9 +4029,7 @@ impl<'a> Parser<'a, '_> {
                 Ok(TermPattern::Literal(self.parse_literal()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.nested("triple term", |p| {
-                    p.triple_term_level(Self::parse_quoted_triple)
-                })?;
+                let t = self.nested("triple term", Self::parse_quoted_triple)?;
                 Ok(TermPattern::Triple(Box::new(t)))
             }
             other => Err(ParseError::syntax(
@@ -4298,9 +4241,7 @@ impl<'a> Parser<'a, '_> {
                 Ok(GroundTerm::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.nested("triple term", |p| {
-                    p.triple_term_level(Self::parse_ground_triple)
-                })?;
+                let t = self.nested("triple term", Self::parse_ground_triple)?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
             // Every other legal ground term — a string, a boolean, or a numeral
@@ -6794,9 +6735,6 @@ mod tests {
         enclosing: usize,
         /// Recursive levels one written level opens.
         per_level: usize,
-        /// Whether each written level nests a triple term, bounded by
-        /// [`MAX_TRIPLE_TERM_NESTING`] rather than by the stack.
-        terms: bool,
         /// Whether `text` is an update request rather than a query.
         update: bool,
         /// The request, written `levels` deep.
@@ -6840,45 +6778,32 @@ mod tests {
         }
 
         /// The refusal at `levels` on the calling thread: the typed stack error naming
-        /// this family's construct (or the height charge beside it), or — for a
-        /// triple-term family — the typed syntax error naming [`MAX_TRIPLE_TERM_NESTING`].
+        /// this family's construct (or the height charge beside it).
         fn assert_refused(&self, levels: usize) {
             let error = self.parse(levels).expect_err(&format!(
                 "{} written {levels} deep must be refused",
                 self.name
             ));
-            if self.terms {
-                let expected = format!(
-                    "triple term nesting exceeds the safety limit of {MAX_TRIPLE_TERM_NESTING}"
-                );
-                assert!(
-                    matches!(error, ParseError::Syntax { .. })
-                        && error.to_string().contains(&expected),
-                    "{}: expected `{expected}`, got: {error}",
-                    self.name
-                );
+            // Where the stack runs out, the refusal is the level's own guard or the
+            // height charge of what the loop around it builds next: whichever the
+            // last few hundred bytes reach first.
+            // A written `EXISTS` level is two recursive levels, so its keyword's own
+            // guard can be the one that refuses.
+            let keyword = if self.name.contains("NOT EXISTS") {
+                "NOT EXISTS"
+            } else if self.name.contains("EXISTS") {
+                "EXISTS"
             } else {
-                // Where the stack runs out, the refusal is the level's own guard or the
-                // height charge of what the loop around it builds next: whichever the
-                // last few hundred bytes reach first.
-                // A written `EXISTS` level is two recursive levels, so its keyword's own
-                // guard can be the one that refuses.
-                let keyword = if self.name.contains("NOT EXISTS") {
-                    "NOT EXISTS"
-                } else if self.name.contains("EXISTS") {
-                    "EXISTS"
-                } else {
-                    self.refused_as
-                };
-                assert!(
-                    matches!(error, ParseError::StackExhausted { construct, .. }
-                        if [self.refused_as, keyword, "graph pattern", "expression", "property path"]
-                            .contains(&construct)),
-                    "{}: expected the stack refusal at the {}, got: {error}",
-                    self.name,
-                    self.refused_as
-                );
-            }
+                self.refused_as
+            };
+            assert!(
+                matches!(error, ParseError::StackExhausted { construct, .. }
+                    if [self.refused_as, keyword, "graph pattern", "expression", "property path"]
+                        .contains(&construct)),
+                "{}: expected the stack refusal at the {}, got: {error}",
+                self.name,
+                self.refused_as
+            );
         }
     }
 
@@ -6893,7 +6818,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6909,7 +6833,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6925,7 +6848,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6941,7 +6863,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6957,7 +6878,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 2,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} }}",
@@ -6973,7 +6893,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -6990,7 +6909,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "!".repeat(n)),
                 marker: "Not(",
                 occurrences: |n| n,
@@ -7001,7 +6919,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "- ".repeat(n)),
                 marker: "UnaryMinus(",
                 occurrences: |n| n,
@@ -7012,7 +6929,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "+ ".repeat(n)),
                 marker: "UnaryPlus(",
                 occurrences: |n| n,
@@ -7023,7 +6939,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -7039,7 +6954,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -7055,7 +6969,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER({}) }}",
@@ -7071,7 +6984,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ FILTER(?x = {}) }}",
@@ -7087,7 +6999,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} ?o }}",
@@ -7105,7 +7016,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} ?o }}",
@@ -7126,7 +7036,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {} }}",
@@ -7147,7 +7056,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {EX_P} {} }}",
@@ -7163,7 +7071,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: true,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
@@ -7179,7 +7086,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
@@ -7195,7 +7101,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ ?s {EX_P} ?o {} }}",
@@ -7213,7 +7118,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: false,
-                terms: true,
                 text: |n| {
                     format!(
                         "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
@@ -7234,7 +7138,6 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: false,
-                terms: false,
                 text: |n| {
                     format!(
                         "CONSTRUCT {{ ?s {EX_P} {} }} WHERE {{ ?s ?p ?innermost }}",
@@ -7250,7 +7153,6 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
-                terms: false,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ <http://example.org/s> {} }}",
@@ -7271,7 +7173,6 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
-                terms: false,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ <http://example.org/s> {EX_P} {} }}",
@@ -7287,7 +7188,6 @@ mod tests {
                 enclosing: 0,
                 per_level: 1,
                 update: true,
-                terms: true,
                 text: |n| {
                     format!(
                         "INSERT DATA {{ {} <http://example.org/q> 1 }}",
@@ -7308,7 +7208,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: true,
-                terms: false,
                 text: |n| {
                     format!(
                         "DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o FILTER({}?innermost) }}",
@@ -7324,7 +7223,6 @@ mod tests {
                 enclosing: 1,
                 per_level: 1,
                 update: true,
-                terms: false,
                 text: |n| {
                     format!(
                         "DELETE {{ ?s ?p ?o }} WHERE {{ {} }}",
@@ -7338,25 +7236,18 @@ mod tests {
     }
 
     /// Every recursive production parses a thousand written levels deep — ten times past
-    /// the removed 128-level count, which refused them — with every level present in
-    /// the algebra. A triple-term family parses at [`MAX_TRIPLE_TERM_NESTING`] with
-    /// every level present and is refused one level past it.
+    /// the removed 128-level counts, which refused them — with every level present in
+    /// the algebra. Triple terms included: in a pattern, in `VALUES` and in
+    /// `INSERT DATA` alike, how deeply they nest is the stack's to bound, not a count's.
     #[test]
     fn every_recursive_production_parses_a_thousand_levels_deep() {
         on_thread(LARGE_STACK, || {
             for family in nesting_families() {
-                let levels = if family.terms {
-                    MAX_TRIPLE_TERM_NESTING
-                } else {
-                    1_000
-                };
+                let levels = 1_000;
                 let algebra = family.parse(levels).unwrap_or_else(|error| {
                     panic!("{} written {levels} deep must parse: {error}", family.name)
                 });
                 family.assert_complete(&algebra, levels);
-                if family.terms {
-                    family.assert_refused(levels + 1);
-                }
             }
         });
     }
@@ -7379,7 +7270,7 @@ mod tests {
     #[test]
     fn every_recursive_production_is_refused_where_a_one_mebibyte_stack_ends() {
         on_thread(1024 * 1024, || {
-            for family in nesting_families().into_iter().filter(|f| !f.terms) {
+            for family in nesting_families() {
                 let (mut parses, mut refused) = (1_usize, 100_000_usize);
                 assert!(
                     family.parse(parses).is_ok(),

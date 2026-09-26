@@ -703,9 +703,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
         }
     }
 
-    builder
-        .validate()
-        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed validation: {d:?}")))
+    builder.validate().map_err(EvalError::Dataset)
 }
 
 /// Blank-label bookkeeping for SPARQL §16.2 template freshness across one

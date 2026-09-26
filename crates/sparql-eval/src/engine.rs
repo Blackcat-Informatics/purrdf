@@ -2982,8 +2982,9 @@ where
 }
 
 /// The [`RdfDiagnostic`] code for an evaluation failure: the error's own
-/// [`crate::error::EvalError::diagnostic_code`] when it names one of the narrow,
-/// enumerated S6-deferral residue, else `fallback` — each call site's existing,
+/// [`crate::error::EvalError::code`] when it names one of the narrow, enumerated
+/// S6-deferral residue or carries the dataset's own refusal, else `fallback` — each call
+/// site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
 /// evaluation seam), preserved for every genuine gap: an unclassified
@@ -2992,11 +2993,11 @@ where
 /// reads, so a caller further downstream (e.g. the golden-capture harness) can
 /// always recover the typed classification from `RdfDiagnostic::code` without
 /// scraping `Display` text.
-pub(crate) fn eval_diagnostic_code(
-    e: &crate::error::EvalError,
+pub(crate) fn eval_diagnostic_code<'e>(
+    e: &'e crate::error::EvalError,
     fallback: &'static str,
-) -> &'static str {
-    e.diagnostic_code().unwrap_or(fallback)
+) -> &'e str {
+    e.code().unwrap_or(fallback)
 }
 
 /// Evaluate `prepared`, applying any pre-binding `substitutions` first.

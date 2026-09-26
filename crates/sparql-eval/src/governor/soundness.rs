@@ -828,8 +828,11 @@ where
 /// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
 /// evaluation's recursion too, so graph patterns nested deeper than
 /// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well.
-pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
-    root.validate_height().map_err(crate::EvalError::from)?;
+///
+/// Returns how deeply the pattern's triple terms nest, for the reserve walks over them
+/// take ([`crate::stack::reserve_terms`]).
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize, crate::EvalError> {
+    let terms = root.validate_height().map_err(crate::EvalError::from)?;
     if cfg!(target_arch = "wasm32") {
         let limit = purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH;
         let mut stack = vec![(root, 1_usize)];
@@ -846,7 +849,7 @@ pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), cr
             });
         }
     }
-    Ok(())
+    Ok(terms)
 }
 
 // ---------------------------------------------------------------------------

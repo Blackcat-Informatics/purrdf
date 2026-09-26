@@ -580,6 +580,11 @@ impl DatasetView for DeltaDatasetView {
     type Id = DeltaViewId;
     type ProbePlan = QuadProbePlan;
 
+    /// The base and the delta are both frozen datasets, each bounded at 16.
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        Some(super::super::validate::MAX_TERM_NESTING_DEPTH)
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.base
             .quads()

@@ -180,6 +180,12 @@ impl DatasetView for PackView<'_> {
     type Id = PackId;
     type ProbePlan = ();
 
+    /// A pack's dictionary is admitted only when no triple term in it nests past
+    /// [`super::dict::MAX_TRIPLE_TERM_DEPTH`].
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        Some(super::dict::MAX_TRIPLE_TERM_DEPTH)
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds<PackId>> + '_ {
         self.triples().all_quads().map(map_quad)
     }

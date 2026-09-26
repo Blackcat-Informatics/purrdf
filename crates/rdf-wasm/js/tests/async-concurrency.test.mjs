@@ -329,6 +329,9 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.ok(overran instanceof Error, "the small region refuses the deep chain");
   assert.match(overran.message, EVALUATION_STACK_REFUSAL);
   assert.match(overran.message, /expression needs more stack than this thread has left above its 65536-byte reserve/);
+  // The synchronous lane's remedy (the asynchronous twin, a larger stackBytes) is the
+  // synchronous lane's alone: an asynchronous job's refusal does not name it.
+  assert.doesNotMatch(overran.message, /asynchronous twin of this call/);
   const overranPollDepth = overran.evidence.async.stackHighWaterBytes;
   assert.ok(
     overranPollDepth < SMALL_REGION - GUARD_BAND,

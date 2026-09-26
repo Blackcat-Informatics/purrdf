@@ -520,8 +520,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   through the same split. `ParseError::StackExhausted` refuses a parse that the
   thread's remaining stack cannot hold, and `GraphPattern::validate_height`
   refuses, with the same error, a pattern too tall for the walks over it to fit
-  the calling thread's stack. `MAX_TRIPLE_TERM_NESTING` (128) is how deeply
-  triple terms nest; `WASM_HOST_STACK_BUDGET` (640 KiB) and
+  the calling thread's stack; it returns how deeply the pattern's triple terms nest.
+  `TermPattern::triple_term_nesting` and `GroundTerm::triple_term_nesting` count a
+  term's triple-term levels without recursion. `WASM_HOST_STACK_BUDGET` (640 KiB) and
   `WASM_GRAPH_PATTERN_DEPTH` (284) are the host call-stack bounds a `wasm32` build
   applies to nesting.
 
@@ -621,19 +622,16 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `PartialEq`, `Hash` and `Debug`, the serializer, the evaluator's analyses) fits
   the stack left there, at a measured 512 bytes a level, so a tree the parser
   returns can be dropped, copied, compared and formatted from the frame that
-  parsed it. Triple terms nest at most 128 deep (`MAX_TRIPLE_TERM_NESTING`),
-  because the evaluator copies, matches and instantiates terms with no stack check
-  wherever an evaluation stands; the dataset model holds at most 16 levels, so a
-  deeper pattern could match nothing, but a native build used to accept one. On
+  parsed it. Triple terms — in patterns, `VALUES`, templates and `INSERT DATA` —
+  nest as deep as the stack holds them too, with no count of their own. On
   `wasm32` the host engine's own call stack, which wasm code cannot read, runs out
   before the shadow stack for some constructs (path groups trapped V8 at about
   2 000 levels), so there each level is also charged its measured V8 cost against
   a 640 KiB budget (`WASM_HOST_STACK_BUDGET`, 65% of V8's stack), and tree height
   is capped at 2 048 levels: the synchronous lane answers 637 nested parentheses,
   537 `-(`, 283 groups, 1 133 path groups and 425 built-in calls, and refuses the
-  next level typed. A synchronous call nested between that budget and the depth
-  at which the shadow stack used to trap it (638 to about 950 parentheses) is now
-  refused rather than answered.
+  next level typed. (Some requests the synchronous lane used to answer are now
+  refused there; see the **BREAKING** **wasm** entry under Changed.)
 
 - **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
   On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
@@ -651,6 +649,35 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   thread and run on another is judged by the stack it runs on. On `wasm32`, graph
   patterns still nest at most 284 deep (`WASM_GRAPH_PATTERN_DEPTH`), for V8's call
   stack.
+
+- **sparql-eval, core, stack:** a triple term nested past anything a dataset holds is
+  valid SPARQL 1.2 and is answered, not refused. A pattern whose triple term nests
+  deeper than any the dataset holds matches nothing: `SELECT` answers no rows, `ASK`
+  false, `COUNT` zero, and the neighbour of the same shape at the stored depth
+  matches. `DatasetView::triple_term_nesting_bound` is how deep a view's triple terms
+  can nest (16 for every frozen dataset, delta and composite view, 128 for a PACK,
+  none by default), and the evaluator answers such a pattern before converting or
+  looking up any of it. A deep triple term written as a value (`VALUES`, `BIND`) is
+  returned whole. The derived copies, comparisons and matching of terms recurse once
+  per level wherever an evaluation stands, so a request whose own triple terms nest
+  past 128 levels is evaluated under a stack reserve (`purrdf_stack::reserve`, 512
+  bytes a level natively, 256 on `wasm32`) that every check it passes leaves room
+  for; past the stack the answer is the typed `native-sparql-evaluation-stack-exhausted`
+  or `ParseError::StackExhausted` refusal. Writing a triple term into a dataset is
+  held to the dataset's own limit: `INSERT DATA`, an `INSERT` template and a
+  `CONSTRUCT` graph nesting one past 16 levels are refused with
+  `rdf-ir-triple-nesting-limit` (a `CONSTRUCT`'s through the new
+  `EvalError::Dataset`, whose `EvalError::code` is the dataset's), and 16 levels are
+  written and matched. An `UPDATE`'s `WHERE` is held to the stack it runs on as a
+  query's pattern is.
+
+- **BREAKING** **core:** `RdfDatasetBuilder::freeze` refused a triple term nested past
+  16 levels only when its chain was interned outermost first. Every ingress interns innermost
+  first, and then any depth was frozen. The limit now holds whatever the order: a
+  chain of 17 triple terms is refused with `rdf-ir-triple-nesting-limit`, as the
+  dataset contract and the GTS transport's own 16-level bound always stated. A
+  document, update or `CONSTRUCT` that wrote a deeper triple term, and used to freeze,
+  is now refused.
 
 - **sparql-algebra, sparql-eval:** a `SERVICE` body the parser admitted could be
   forwarded as text the parser refuses. The serializer bracketed every binary
@@ -2299,6 +2326,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   built by this one and must be re-planned.
 
 ### Changed
+
+- **BREAKING** **wasm:** the synchronous lane refuses some requests it used to
+  answer. Every recursive level of a synchronous request is now charged its measured
+  cost to V8's call stack against a 640 KiB budget (`WASM_HOST_STACK_BUDGET`), so a
+  request nested between that budget and the depth at which the shadow stack used to
+  trap — 638 to about 950 nested parentheses, which 2.0.2 answered — is now the typed
+  `ParseError::StackExhausted` refusal (it used to trap near 950). On the synchronous
+  lane every stack refusal, the parser's and the evaluator's, keeps its code and
+  message and ends with the remedy: run the request with the asynchronous twin of the
+  call (`selectAsync`, `queryAsync`, `updateAsync`, …) and a larger `stackBytes`
+  region.
 
 - **release:** under this suite's full-semver rule, the breaking changes below
   make the next release a MAJOR version. Several of them change surfaces that no

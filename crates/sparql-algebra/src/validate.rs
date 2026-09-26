@@ -11,22 +11,27 @@ use crate::{
     Variable,
 };
 
+/// How deeply triple terms may nest on `wasm32`: as deep as [`crate::WASM_HOST_STACK_BUDGET`]
+/// admits them written alone, 2 048 levels. A built tree is held to what a parsed one can
+/// be, for the host engine's call stack the walks over it run on.
+pub(crate) const WASM_TRIPLE_TERM_DEPTH: usize =
+    crate::WASM_HOST_STACK_BUDGET / crate::parser::host_stack_cost("triple term");
+
 /// The tallest tree admitted on `wasm32`, in every node kind: the parser's height count,
 /// with room for what a parsed tree holds that its count does not see — a triple term is
 /// one level of the parser's count and two here (its term and its triple), and each of
 /// the nested groups may carry up to eight wrapper nodes.
 const WASM_STRUCTURAL_LIMIT: usize = crate::parser::WASM_TREE_HEIGHT_LIMIT
-    + 2 * crate::MAX_TRIPLE_TERM_NESTING
+    + 2 * WASM_TRIPLE_TERM_DEPTH
     + 8 * crate::WASM_GRAPH_PATTERN_DEPTH;
 
-/// The tallest run of expression, path and term nodes admitted on `wasm32`: the parser's
-/// height count, with a triple term's second level.
-const WASM_VALUE_LIMIT: usize =
-    crate::parser::WASM_TREE_HEIGHT_LIMIT + 2 * crate::MAX_TRIPLE_TERM_NESTING;
+/// The tallest run of expression and path nodes admitted on `wasm32`: the parser's
+/// height count, with room for the second node some written levels build.
+const WASM_VALUE_LIMIT: usize = crate::parser::WASM_TREE_HEIGHT_LIMIT + 256;
 
 /// How deep a node sits: in every node kind (`structural`, the height a walk over the
-/// tree descends), in expression, path and term nodes (`values`), and in triple terms
-/// (`terms`).
+/// tree descends), in expression and path nodes (`values`), and in triple terms
+/// (`terms`: pattern and `VALUES` triple terms, and `TRIPLE` calls, which build one).
 #[derive(Clone, Copy)]
 struct Depth {
     structural: usize,
@@ -45,11 +50,13 @@ impl Depth {
     fn below(self, node: &Node<'_>) -> Self {
         Self {
             structural: self.structural + 1,
-            values: self.values + usize::from(!matches!(node, Node::Pattern(_))),
+            values: self.values + usize::from(matches!(node, Node::Expr(_) | Node::Path(_))),
             terms: self.terms
                 + usize::from(matches!(
                     node,
-                    Node::Term(TermPattern::Triple(_)) | Node::Ground(GroundTerm::Triple(_))
+                    Node::Term(TermPattern::Triple(_))
+                        | Node::Ground(GroundTerm::Triple(_))
+                        | Node::Expr(Expression::FunctionCall(Function::Triple, _))
                 )),
         }
     }
@@ -64,9 +71,8 @@ impl Depth {
     /// height rather than once per node.
     ///
     /// On `wasm32` the host engine's call stack, which no measurement reaches, also
-    /// bounds the walks: the parser's height count, applied to built trees (see
-    /// [`WASM_STRUCTURAL_LIMIT`]). Terms are walked by recursions with no stack check,
-    /// wherever an evaluation stands, so they nest no deeper than the parser lets them.
+    /// bounds the walks: the parser's height and host-stack counts, applied to built
+    /// trees (see [`WASM_STRUCTURAL_LIMIT`] and [`WASM_TRIPLE_TERM_DEPTH`]).
     fn admit(self, fits: &mut usize) -> Result<()> {
         if self.structural > *fits {
             if !crate::parser::walkable(self.structural) {
@@ -78,18 +84,14 @@ impl Depth {
             *fits = self.structural;
         }
         if cfg!(target_arch = "wasm32")
-            && (self.structural > WASM_STRUCTURAL_LIMIT || self.values > WASM_VALUE_LIMIT)
+            && (self.structural > WASM_STRUCTURAL_LIMIT
+                || self.values > WASM_VALUE_LIMIT
+                || self.terms > WASM_TRIPLE_TERM_DEPTH)
         {
             return Err(ParseError::StackExhausted {
                 construct: "query algebra",
                 at: 0,
             });
-        }
-        if self.terms > crate::MAX_TRIPLE_TERM_NESTING {
-            return Err(invalid(format!(
-                "triple term nesting exceeds the safety limit of {}",
-                crate::MAX_TRIPLE_TERM_NESTING
-            )));
         }
         Ok(())
     }
@@ -103,23 +105,76 @@ impl GraphPattern {
     /// thread, a pre-bound copy.
     ///
     /// Walks borrowed nodes iteratively, so it needs no more stack than it measures.
+    /// Returns how deeply the pattern's triple terms nest — pattern and `VALUES` triple
+    /// terms, and `TRIPLE` calls, each of which builds one around its arguments — so an
+    /// evaluator can reserve the stack walks over them take (see
+    /// [`purrdf_stack::reserve`]); `0` when the pattern has none.
     ///
     /// # Errors
     ///
     /// [`ParseError::StackExhausted`] when a walk as tall as the pattern (every node
     /// kind counted: patterns, expressions, paths, terms) does not fit the stack left
     /// on the calling thread past [`purrdf_stack::MARGIN_BYTES`], at the parser's
-    /// per-level charge (on `wasm32`, also past the parser's host-stack counts); a
-    /// typed [`ParseError::Syntax`] when triple terms nest past
-    /// [`crate::MAX_TRIPLE_TERM_NESTING`].
-    pub fn validate_height(&self) -> Result<()> {
+    /// per-level charge (on `wasm32`, also past the parser's host-stack counts).
+    pub fn validate_height(&self) -> Result<usize> {
         let mut stack = vec![(Node::Pattern(self), Depth::ROOT)];
         let mut fits = 0;
+        let mut terms = 0;
         while let Some((node, depth)) = stack.pop() {
             depth.admit(&mut fits)?;
-            node.children(&mut stack, depth.below(&node));
+            let below = depth.below(&node);
+            terms = terms.max(below.terms);
+            node.children(&mut stack, below);
         }
-        Ok(())
+        Ok(terms)
+    }
+}
+
+impl TermPattern {
+    /// How many triple terms this term's longest chain holds, the outermost included:
+    /// `0` for an IRI, blank node, literal or variable, `1` for `<<( ?s ?p ?o )>>`, `2`
+    /// for `<<( ?s ?p <<( ?s ?p ?o )>> )>>`.
+    ///
+    /// Counted iteratively, so it needs no more stack however deep the term nests, and
+    /// without allocating unless a triple term's subject is itself one.
+    #[must_use]
+    pub fn triple_term_nesting(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending: Vec<(&Self, usize)> = Vec::new();
+        let mut next = Some((self, 0));
+        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+            if let Self::Triple(triple) = term {
+                let depth = above + 1;
+                deepest = deepest.max(depth);
+                if matches!(triple.subject, Self::Triple(_)) {
+                    pending.push((&triple.subject, depth));
+                }
+                next = Some((&triple.object, depth));
+            }
+        }
+        deepest
+    }
+}
+
+impl GroundTerm {
+    /// How many triple terms this `VALUES` cell's longest chain holds, the outermost
+    /// included; see [`TermPattern::triple_term_nesting`].
+    #[must_use]
+    pub fn triple_term_nesting(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending: Vec<(&Self, usize)> = Vec::new();
+        let mut next = Some((self, 0));
+        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+            if let Self::Triple(triple) = term {
+                let depth = above + 1;
+                deepest = deepest.max(depth);
+                if matches!(triple.subject, Self::Triple(_)) {
+                    pending.push((&triple.subject, depth));
+                }
+                next = Some((&triple.object, depth));
+            }
+        }
+        deepest
     }
 }
 
@@ -133,11 +188,10 @@ impl Query {
     ///
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, malformed typed calls or ranges, empty property-path chains, and
-    /// triple terms nested past [`crate::MAX_TRIPLE_TERM_NESTING`]; and, with
-    /// [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
+    /// collisions, malformed typed calls or ranges, and empty property-path chains; and,
+    /// with [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
     /// the stack the calling thread has left (on `wasm32`, also one past the parser's
-    /// host-stack counts).
+    /// host-stack counts). How deeply triple terms nest is bounded by that stack alone.
     pub fn validate(&self) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {

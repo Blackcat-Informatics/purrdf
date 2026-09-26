@@ -528,6 +528,13 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal, and the 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     assert.throws(() => engine.select(ds, deep), /SPARQL parse stack exhausted .*bracketted expression/);
   }
+  // The synchronous lane names the remedy: the asynchronous twin with a larger stack
+  // region. The refusal's own text is unchanged in front of it.
+  assert.throws(() => engine.select(ds, deep), (error) => {
+    assert.match(error.message, /^error native-sparql-query-parse: SPARQL parse stack exhausted/);
+    assert.match(error.message, SYNC_STACK_HINT);
+    return true;
+  });
   // The instance is intact: an ordinary query answers exactly.
   const names = engine
     .select(ds, "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
@@ -545,6 +552,8 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal, and the 
 // nested `EXISTS` body is now substituted when it is evaluated rather than copied into
 // every level around it, so 63 levels answer — see the test after this one.)
 const STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
+// What the synchronous lane appends to a stack refusal: the remedy only it has to name.
+const SYNC_STACK_HINT = /asynchronous twin of this call \(selectAsync, queryAsync, updateAsync, …\) and a larger stackBytes region$/;
 const NEST_DATA = [1, 2, 3, 4]
   .map((n) => `<https://example.org/s${n}> <https://example.org/p> <https://example.org/o${n}> .`)
   .concat(["<https://example.org/s1> <https://example.org/q> <https://example.org/o1> ."])
@@ -572,6 +581,12 @@ for (const [what, deep, shallow, expected] of [
     for (let attempt = 0; attempt < 2; attempt += 1) {
       assert.throws(() => engine.select(ds, deep), STACK_REFUSAL);
     }
+    // The evaluator's refusal keeps its code and names the synchronous lane's remedy.
+    assert.throws(() => engine.select(ds, deep), (error) => {
+      assert.match(error.message, /^error native-sparql-evaluation-stack-exhausted: /);
+      assert.match(error.message, SYNC_STACK_HINT);
+      return true;
+    });
     // No memory was overwritten: the dataset's canonical form is byte-identical, and
     // queries over it and over a freshly parsed one answer exactly.
     assert.equal(ds.canonicalize(), before);
@@ -683,4 +698,46 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
       .sort(),
     ["n2", "n3"],
   );
+});
+
+// Triple terms nest as deep as the stacks hold them, like every other construct. A
+// pattern nested deeper than any triple term a dataset holds (16 levels) matches nothing
+// — the neighbour of the same shape at the stored depth matches the stored statement —
+// and a triple term written into the dataset past 16 levels is refused with the
+// dataset's own limit, while 16 are inserted and matched.
+const TT = "https://example.org/";
+/** `<<( <s> <p> … core … )>>`, `levels` triple terms deep. */
+const tripleChain = (levels, core) =>
+  `${`<<( <${TT}s> <${TT}p> `.repeat(levels)}${core}${" )>>".repeat(levels)}`;
+
+test("a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches", () => {
+  const ds = Dataset.parse("", "nquads");
+  const engine = new QueryEngine();
+  engine.update(ds, `INSERT DATA { <${TT}a> <${TT}q> ${tripleChain(16, `<${TT}o>`)} }`);
+  const select = (levels) =>
+    engine
+      .select(ds, `SELECT ?a ?o WHERE { ?a <${TT}q> ${tripleChain(levels, "?o")} }`)
+      .rows.toArray()
+      .map((row) => [row.a.value, row.o.value]);
+  assert.deepEqual(select(16), [[`${TT}a`, `${TT}o`]], "the stored depth matches");
+  assert.deepEqual(select(200), [], "200 levels match nothing");
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(200, "?o")} }`), false);
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(16, "?o")} }`), true);
+});
+
+test("inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert", () => {
+  const ds = Dataset.parse("", "nquads");
+  const engine = new QueryEngine();
+  const insert = (levels) => `INSERT DATA { <${TT}b> <${TT}q> ${tripleChain(levels, `<${TT}o>`)} }`;
+  assert.throws(() => engine.update(ds, insert(17)), (error) => {
+    assert.match(error.message, /^error rdf-ir-triple-nesting-limit: /);
+    return true;
+  });
+  assert.equal(ds.canonicalize(), "", "the refusal wrote nothing");
+  engine.update(ds, insert(16));
+  const rows = engine
+    .select(ds, `SELECT ?o WHERE { <${TT}b> <${TT}q> ${tripleChain(16, "?o")} }`)
+    .rows.toArray()
+    .map((row) => row.o.value);
+  assert.deepEqual(rows, [`${TT}o`], "the 16-deep insert is matched");
 });

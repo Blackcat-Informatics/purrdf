@@ -2903,7 +2903,8 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    let terms = crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    let _terms = crate::stack::reserve_terms(terms)?;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
     // that is done here, and the renamed column is dropped from the bag handed back.
@@ -3136,12 +3137,19 @@ pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalErro
 }
 
 /// Shared admission and dataset/base setup for all graph publication forms.
+///
+/// Returns the stack reserved for walks over the query's triple terms
+/// ([`crate::stack::reserve_terms`]), which the caller holds for as long as it evaluates.
 pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<(), EvalError> {
+) -> Result<purrdf_stack::Reserve, EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    let mut terms = crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    if let Query::Construct { template, .. } = query {
+        terms = terms.max(crate::stack::template_nesting(template));
+    }
+    let reserve = crate::stack::reserve_terms(terms)?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
@@ -3149,7 +3157,7 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
     install_answer_cap_pushdown(query, ctx);
-    Ok(())
+    Ok(reserve)
 }
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
@@ -3176,7 +3184,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
         .options
         .force_sequential
         .then(crate::parallel::force_sequential_operation);
-    prepare_query_context(query, ctx)?;
+    let _terms = prepare_query_context(query, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column

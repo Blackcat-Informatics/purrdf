@@ -55,8 +55,17 @@
 //!   those walks with room to spare, and refuses the plan, typed, where it does not fit.
 //! * The drop of a per-row copy runs where the copy was made, by a guarded walk whose
 //!   levels cost more than the drop's.
-//! * Terms nest no deeper than [`purrdf_sparql_algebra::MAX_TRIPLE_TERM_NESTING`], so their
-//!   derived copy, comparison and matching fit the margin wherever they run.
+//! * The derived copy, comparison, hashing and matching of terms recurse once per
+//!   triple-term level, wherever an evaluation stands. The margin holds those walks for
+//!   terms up to [`MARGIN_TERM_LEVELS`] deep — every term a dataset holds (a frozen
+//!   dataset at most 16, a PACK at most 128). A request whose own triple terms nest
+//!   deeper — in a pattern, a `VALUES` block, a template, or a chain of `TRIPLE` calls —
+//!   is evaluated under a [`purrdf_stack::reserve`] of [`TERM_LEVEL_BYTES`] a level past
+//!   that ([`reserve_terms`]), so every check the evaluation passes leaves room below it
+//!   for a walk over the deepest of them: what bounds such a term is the stack, measured,
+//!   and never a count. A pattern position whose triple terms nest deeper than any the
+//!   dataset holds matches nothing, and is answered so before it is walked (see
+//!   `bgp::compile_term`).
 //! * The one-level visitors do not recurse.
 //!
 //! The parser guards its own recursion against the same measurement, so the re-parse of
@@ -77,6 +86,61 @@
 use crate::error::EvalError;
 
 pub(crate) mod clone;
+
+/// How many triple-term levels [`purrdf_stack::MARGIN_BYTES`] holds walks over, with no
+/// reserve: 128, at [`TERM_LEVEL_BYTES`] a level half the margin natively and a quarter
+/// of it on `wasm32` (see the margin's derivation).
+pub(crate) const MARGIN_TERM_LEVELS: usize = 128;
+
+/// What one triple-term level costs the walks over a term, in bytes: 512 natively, 256 on
+/// `wasm32`.
+///
+/// Measured natively (x86_64, the workspace's opt-level-3 profile) on chains of triple
+/// terms thousands of levels deep, the costliest walk a level takes is the derived
+/// `Debug` of a pattern triple term, 496 bytes (its `Clone` is 258); a `wasm32` level
+/// costs 0.37 to 0.45 of its native size on the shadow stack the guard measures. It is the
+/// figure the parser charges a level of any tree it builds for the walks over it.
+pub(crate) const TERM_LEVEL_BYTES: usize = if cfg!(target_arch = "wasm32") {
+    256
+} else {
+    512
+};
+
+/// Reserve the stack walks over triple terms nested `levels` deep need past what the
+/// margin already holds ([`MARGIN_TERM_LEVELS`]), for as long as the returned reserve
+/// lives, then check that the stack left still clears the margin.
+///
+/// Nothing is reserved for a request whose triple terms nest [`MARGIN_TERM_LEVELS`] deep
+/// or less — every request a count used to admit — so the common case pays nothing.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] naming triple terms when the thread has too little stack
+/// left for the reserve and the margin both.
+pub(crate) fn reserve_terms(levels: usize) -> Result<purrdf_stack::Reserve, EvalError> {
+    let reserve = purrdf_stack::reserve(
+        levels
+            .saturating_sub(MARGIN_TERM_LEVELS)
+            .saturating_mul(TERM_LEVEL_BYTES),
+    );
+    check("triple term")?;
+    Ok(reserve)
+}
+
+/// How deeply the triple terms of `template` nest: the deepest of its quads' subjects
+/// and objects, counted without recursion.
+pub(crate) fn template_nesting(template: &[purrdf_sparql_algebra::QuadPattern]) -> usize {
+    template
+        .iter()
+        .map(|quad| {
+            quad.triple
+                .subject
+                .triple_term_nesting()
+                .max(quad.triple.object.triple_term_nesting())
+        })
+        .max()
+        .unwrap_or(0)
+}
 
 /// Refuse to go deeper when less than [`purrdf_stack::MARGIN_BYTES`] of stack are left.
 ///
