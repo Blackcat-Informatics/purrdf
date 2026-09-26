@@ -4,8 +4,9 @@
 // Node real-execution coverage of the shapes-graph tools reached through the PUBLIC
 // package root (`../index.mjs`): `shaclApplyRules`, `shaclEvalNodeExpr` and
 // `shaclLintShapes`. Every shapes graph carries the W3C SHACL 1.2 declaration of
-// `sh:SPARQLExprExpression` verbatim — once refused as a bodiless custom function —
-// beside shapes that call `sh:sparqlExpr` with `sh:prefixes`.
+// `sh:SPARQLExprExpression` verbatim — a built-in declared as a
+// `sh:NamedParameterExpressionFunction` with no `sh:bodyExpression`, which is not a
+// bodiless custom function — beside shapes that call `sh:sparqlExpr` with `sh:prefixes`.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -80,7 +81,7 @@ const INFERRED =
     .join("") +
   "<http://example.org/ns#a> <http://example.org/ns#tagged> <http://example.org/ns#yes> .\n";
 
-test("shaclApplyRules writes the inference graph, its proof, and honours the round limit", () => {
+test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit", () => {
   const plain = shaclApplyRules(DATA, SHAPES);
   assert.equal(plain.inferred, INFERRED);
   assert.equal(plain.proof, undefined);
@@ -128,7 +129,7 @@ test("shaclApplyRules writes the inference graph, its proof, and honours the rou
   );
 });
 
-test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {
+test("wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {
   assert.deepEqual(
     shaclEvalNodeExpr(SHAPES, DATA, "http://example.org/ns#Tag", "http://example.org/ns#a"),
     ["<http://example.org/ns#yes>"],
@@ -155,7 +156,7 @@ test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope
   );
 });
 
-test("shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle", () => {
+test("wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle", () => {
   const SH = "http://www.w3.org/ns/shacl#";
   const A = "http://example.org/ns#a";
   const YES = ["<http://example.org/ns#yes>"];
@@ -190,7 +191,7 @@ test("shaclEvalNodeExpr names an anonymous expression by a walk and inline as Tu
   );
 });
 
-test("shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one", () => {
+test("wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one", () => {
   const clean = shaclLintShapes(SHAPES);
   assert.equal(clean.clean, true);
   assert.equal(clean.findings, 0);

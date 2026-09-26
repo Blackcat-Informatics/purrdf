@@ -1386,6 +1386,45 @@ mod tests {
         assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA, &[], &[]).is_err());
     }
 
+    /// The issue's reproducer across the C boundary: a shapes graph carrying the W3C
+    /// SHACL 1.2 vocabulary's `sh:SPARQLExprExpression` declaration verbatim (the tools
+    /// fixture, [`TOOLS_SHAPES`]) loads, and a property shape's `sh:values [
+    /// sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ]` is evaluated natively: the
+    /// Warning result's value is the computed `<http://example.org/ns#yes>`, which only
+    /// the prefix-expanded expression yields. It does not conform under the default
+    /// conformance-disallow set and conforms under `sh:Violation` alone.
+    #[test]
+    fn capi_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration() {
+        let shapes = format!(
+            "{TOOLS_SHAPES}
+ex:StatusShape a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:property [
+    sh:path ex:status ;
+    sh:values [ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] ;
+    sh:in ( ex:no ) ;
+    sh:severity sh:Warning
+  ] .
+"
+        );
+        let run = |levels: &[&str]| -> serde_json::Value {
+            let sarif = validate_to_sarif_bytes(&shapes, None, TOOLS_DATA, levels, &[])
+                .expect("the declaration-bearing shapes graph loads and validates");
+            serde_json::from_slice(&sarif).expect("json")
+        };
+        let default = run(&[]);
+        assert_eq!(default["runs"][0]["properties"]["shaclConforms"], false);
+        let results = default["runs"][0]["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "{default}");
+        let text = results[0]["message"]["text"].as_str().expect("message");
+        assert!(
+            text.starts_with("Value <http://example.org/ns#yes> "),
+            "the computed value: {text}"
+        );
+        let relaxed = run(&["http://www.w3.org/ns/shacl#Violation"]);
+        assert_eq!(relaxed["runs"][0]["properties"]["shaclConforms"], true);
+    }
+
     /// The conformance-disallow set crosses the boundary as a C string array and
     /// reaches the validation: a Warning-graded violation does not conform under the
     /// default set (count 0, NULL array) and conforms under `sh:Violation` alone; a

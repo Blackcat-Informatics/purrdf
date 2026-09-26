@@ -2448,6 +2448,104 @@ fn a_change_document_may_have_stdin_but_only_if_nothing_else_does() {
     );
 }
 
+/// The W3C SHACL 1.2 vocabulary's declaration of the built-in `sh:SPARQLExprExpression`,
+/// verbatim: a `sh:NamedParameterExpressionFunction` with the two `sh:Parameter`s
+/// `-prefixes` and `-sparqlExpr` and no `sh:bodyExpression`.
+const SPARQL_EXPR_DECLARATION: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+"#;
+
+/// A Warning-graded property shape whose value nodes are computed by `sh:values [
+/// sh:sparqlExpr "ex:active" ; sh:prefixes ex:Prefixes ]`: the one value node is
+/// `ex:active`, which `sh:in ( ex:retired )` refuses at every `ex:Person`.
+const SPARQL_EXPR_SHAPES: &str = r#"
+@prefix ex: <http://example.org/> .
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/"^^xsd:anyURI ] .
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [
+    sh:path ex:status ;
+    sh:values [ sh:sparqlExpr "ex:active" ; sh:prefixes ex:Prefixes ] ;
+    sh:in ( ex:retired ) ;
+    sh:severity sh:Warning
+  ] .
+"#;
+
+/// The issue's reproducer on the command line: a shapes graph carrying the vocabulary's
+/// own `sh:SPARQLExprExpression` declaration loads, and its `sh:sparqlExpr` +
+/// `sh:prefixes` expression is evaluated natively — each result's `sh:value` is the
+/// computed `<http://example.org/active>`, which only the prefix-expanded expression
+/// yields. The Warning results do not conform under the default conformance-disallow set
+/// and conform under `sh:Violation` alone.
+#[test]
+fn cli_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration() {
+    const VALUE: &str = "<http://www.w3.org/ns/shacl#value> <http://example.org/active>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "sparql-expr.ttl",
+        &format!("{SPARQL_EXPR_DECLARATION}{SPARQL_EXPR_SHAPES}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let default = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&default), 0, "{}", stderr(&default));
+    assert!(
+        stderr(&default).contains("shacl conforms false\n"),
+        "{}",
+        stderr(&default)
+    );
+    assert!(
+        stderr(&default).contains("shacl results 2\n"),
+        "{}",
+        stderr(&default)
+    );
+    let report = stdout(&default);
+    assert_eq!(report.matches(VALUE).count(), 2, "{report}");
+
+    let relaxed = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        "http://www.w3.org/ns/shacl#Violation",
+        &data,
+    ]);
+    assert_eq!(code(&relaxed), 0, "{}", stderr(&relaxed));
+    assert!(
+        stderr(&relaxed).contains("shacl conforms true\n"),
+        "{}",
+        stderr(&relaxed)
+    );
+    assert_eq!(stdout(&relaxed).matches(VALUE).count(), 2);
+}
+
 /// `--conformance-disallows` is the conformance-disallow set the run is judged against, on
 /// the parse route and the product route alike: a Warning-only graph does not conform under
 /// SHACL's default set and conforms under `sh:Violation` alone, the report echoes the named

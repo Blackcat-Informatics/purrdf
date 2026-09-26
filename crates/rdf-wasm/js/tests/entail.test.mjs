@@ -847,7 +847,7 @@ test("a malformed import table is refused by entry", async () => {
 // `premiseIris` reaches the boundary: a premise importing its OWN IRI, with an empty
 // import table, throws when no premise IRI is declared and answers when that IRI is —
 // the two calls differ in `premiseIris` alone.
-test("the three services honour premiseIris", () => {
+test("wasm_entail_premise_iris: the three services honour premiseIris", () => {
   const iri = "http://example.org/premise";
   const premise =
     `<${iri}> <http://www.w3.org/2002/07/owl#imports> <${iri}> .\n` +
