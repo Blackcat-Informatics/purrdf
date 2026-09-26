@@ -878,6 +878,10 @@ def _suite_entailment_rl() -> SuiteResult:
     )
 
 
+# The rows the two Python gates produce, which `--no-python` does not run.
+PYTHON_SUITES = frozenset({"rdflib LSP drop-in gate", "Python binding suite"})
+
+
 def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     """rdflib's OWN vendored tests run against the purrdf drop-in."""
     log = ""
@@ -976,7 +980,11 @@ def _augment(detail: str, msg: str) -> str:
     return f"{detail} · {msg}" if detail else msg
 
 
-def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
+def enforce_ratchet(
+    results: list[SuiteResult],
+    budget: dict[str, int],
+    not_run: frozenset[str] = frozenset(),
+) -> None:
     """Gate each suite's ledgered count against its committed budget.
 
     The budget in ``conformance-baseline.json`` is authoritative and may only
@@ -1030,7 +1038,10 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
                 "scripts/conformance-baseline.json to lock the gain",
             )
 
-    orphans = sorted(set(budget) - {r.name for r in results})
+    # `not_run` names suites this invocation deliberately skipped (the Python
+    # gates under `--no-python`): their budgets are not orphans, they are simply
+    # not measured by this run. A name that is neither run nor skipped is.
+    orphans = sorted(set(budget) - {r.name for r in results} - not_run)
     if orphans:
         raise SystemExit(
             "conformance-matrix: scripts/conformance-baseline.json budgets a suite "
@@ -1142,6 +1153,25 @@ def native_suites() -> list[SuiteResult]:
              "--test", "syntax_conformance", "--test", "shexc_roundtrip",
              "--test", "shexj_roundtrip"],
             detail="schemas parse + negative syntax/structure",
+        ),
+        # A `_suite_cargo` row that IS a per-case measurement: the suite
+        # harness is `harness = false` with one libtest case per suite test, so
+        # the tally counts suite cases, and its `suite-inventory` case pins the
+        # file, group, case and remote counts, so the corpus cannot shrink
+        # under this number without the row going RED.
+        _suite_cargo(
+            "JSON Schema draft 2020-12 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test", "suite"],
+            detail=(
+                "every draft 2020-12 test file, optional/ included (optional/format/ is "
+                "format-as-assertion, not vendored), one case per suite test: 1,462 of "
+                "the 1,463 validation cases and all 4 output-format cases pass, plus the "
+                "suite-inventory case and the dialect-refusal case. The one ledgered "
+                "case asks for a draft 2019-09 document to be evaluated; purrdf-jsonschema "
+                "implements 2020-12 only and refuses other dialects, and the "
+                "dialect-refusal case pins that typed refusal"
+            ),
         ),
         _suite_gts_vectors(),
     ]
@@ -1645,7 +1675,9 @@ def main() -> int:
 
     # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
     # its committed budget (growth and silent shrink both fail RED).
-    enforce_ratchet(results, load_budget())
+    enforce_ratchet(
+        results, load_budget(), not_run=PYTHON_SUITES if args.no_python else frozenset()
+    )
 
     text = render(results)
     print(text)

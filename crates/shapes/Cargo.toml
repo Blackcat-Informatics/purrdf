@@ -107,18 +107,23 @@ syn = { workspace = true }
 # a reformat or a reworded comment from moving a digest products are written under.
 # Dev-only.
 proc-macro2 = { workspace = true }
+# Draft 2020-12 validator: the negation tests observe the emitted schema_json's
+# real accept/reject behaviour against JSON-LD instance nodes, rather than
+# asserting the schema's JSON shape, and the TypeScript and GraphQL oracle
+# fixtures classify their source values with it. An independent implementation:
+# it shares no code with this crate's emitter. wasm32-clean, so it needs no
+# target gate.
+purrdf-jsonschema = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# The three native-only harness dependencies.
+# The two native-only harness dependencies.
 #
 # Target-gated, not plain dev-dependencies, because `make wasm-test` builds ONE test
 # target of this crate for wasm32 (`tests/product_wasm.rs`) and cargo builds every
-# declared dev-dependency of the package for any test target it builds. None of these
-# three is wanted there: the property harness drives native-only tests, criterion
-# reaches for wall-clock timing and processes, and boon pulls a hasher whose default
-# random-seed backend has no wasm32 implementation — which is the whole reason
-# `purrdf-core` pins its own hashers to a fixed key. Same target-gated shape, and the
-# same reason, as `crates/sparql-eval`.
+# declared dev-dependency of the package for any test target it builds. Neither of
+# these is wanted there: the property harness drives native-only tests, and
+# criterion reaches for wall-clock timing and processes. Same target-gated shape,
+# and the same reason, as `crates/sparql-eval`.
 #
 # Property-based generation for the never-panic, monotonicity and product-refusal
 # harnesses: the shared property harness. Path-only and unpublished, so it is stripped
@@ -126,11 +131,6 @@ proc-macro2 = { workspace = true }
 purrdf-testkit = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
-# Trusted external JSON Schema (draft 2020-12) validator: the negation tests
-# observe the emitted schema_json's real accept/reject behaviour against JSON-LD
-# instance nodes, rather than asserting the schema's JSON shape. Dev-only; never
-# enters the release/wasm build.
-boon = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # The wasm32 test harness, for `tests/product_wasm.rs` — the one test in this crate

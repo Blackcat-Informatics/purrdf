@@ -720,11 +720,11 @@ resource behavior deterministic:
 | schema-expression or codec-value depth | 128 |
 | generated or caller-supplied GraphQL name | 255 bytes |
 
-The dev-only oracle uses `boon` as the draft 2020-12 source classifier and the
-locked official GraphQL.js 16.14.0 implementation to build the generated SDL
-and execute real variable coercion. It checks lossless agreement, every closed
-loss family and location, codec/name-map agreement, and deliberate corruption
-failures:
+The dev-only oracle uses `purrdf-jsonschema` as the draft 2020-12 source
+classifier and the locked official GraphQL.js 16.14.0 implementation to build
+the generated SDL and execute real variable coercion. It checks lossless
+agreement, every closed loss family and location, codec/name-map agreement, and
+deliberate corruption failures:
 
 ```bash
 make graphql-oracle

@@ -3,7 +3,8 @@
 
 /**
  * Compile emitted declarations with the locked TypeScript 7.0 compiler and
- * compare their JSON-literal acceptance with dev-only boon classifications.
+ * compare their JSON-literal acceptance with the purrdf-jsonschema
+ * classifications the fixture carries.
  */
 
 import assert from "node:assert/strict";
@@ -237,7 +238,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
     if (actual !== probe.sourceValid) {
       throw new Error(
         `${fixtureName}/${probe.label} has an unlocated acceptance divergence: ` +
-          `boon=${probe.sourceValid}, TypeScript=${actual}`,
+          `jsonschema=${probe.sourceValid}, TypeScript=${actual}`,
       );
     }
     return;
@@ -251,7 +252,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
   if (actual === probe.sourceValid) {
     throw new Error(
       `${fixtureName}/${probe.label} was expected to expose ` +
-        `${probe.expectedLoss.code}, but boon and TypeScript both classified it as ${actual}`,
+        `${probe.expectedLoss.code}, but JSON Schema and TypeScript both classified it as ${actual}`,
     );
   }
 }
@@ -372,7 +373,7 @@ try {
   }
   console.log(
     `TypeScript oracle: compiler ${compilerVersion}; ` +
-      `${manifest.exact.probes.length} exact boon probes and ` +
+      `${manifest.exact.probes.length} exact JSON Schema probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
       `${divergenceCount} divergences map to the complete 18-code loss profile; ` +
       "verified reverse SHACL import passes",

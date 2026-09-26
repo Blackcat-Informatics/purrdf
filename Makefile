@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -238,7 +238,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 25 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -365,9 +365,12 @@ typescript-oracle: ## Compile emitted declarations with TypeScript 7.0 and compa
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/typescript_oracle.mjs
 
-graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and boon.
+graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and purrdf-jsonschema.
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/graphql_oracle.mjs
+
+jsonschema-pattern-oracle: node-prerequisite ## Re-ask JavaScript's RegExp for every frozen purrdf-jsonschema pattern verdict; fails if any answer moved.
+	node crates/jsonschema/tests/pattern_oracle.mjs
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
@@ -486,7 +489,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \

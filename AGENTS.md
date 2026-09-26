@@ -54,6 +54,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
+| `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema draft 2020-12 validation: every vocabulary, `$dynamicRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, ECMA-262 `pattern` translated to `regex` with the ECMA-262 class sets spelled out; depends on `serde_json`, `regex` and `purrdf-iri` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
@@ -95,7 +96,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 25 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 26 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -108,7 +109,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
   shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
   (`crates/shapes/corpus/`), RDFC-1.0 fixtures
-  (`crates/rdf/tests/fixtures/rdfc/`), and the **frozen** GTS vectors in
+  (`crates/rdf/tests/fixtures/rdfc/`), the official JSON-Schema-Test-Suite
+  (`crates/jsonschema/tests/suite/`), and the **frozen** GTS vectors in
   `vectors/` (shared byte-exact with the other GTS engines — never regenerate or
   "fix" them here; the GTS wire format is governed in `gmeow-gts`). Harnesses
   assert exact counts and enforce XPASS discipline on their xfail ledgers —
@@ -245,7 +247,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (25 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (26 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Eight members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,

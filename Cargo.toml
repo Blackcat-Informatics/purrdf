@@ -18,6 +18,7 @@ members = [
     "crates/hnsw",
     "crates/iri",
     "crates/json",
+    "crates/jsonschema",
     "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
@@ -85,6 +86,7 @@ purrdf-gts = { path = "crates/gts", version = "2.0.2" }
 purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
+purrdf-jsonschema = { path = "crates/jsonschema", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
 purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
@@ -113,11 +115,6 @@ ahash = { version = "0.8", default-features = false }
 # rayon feature: multi-threaded hashing for large inputs (rayon executes
 # inline-sequentially on wasm32 without atomics, so the wasm gate holds).
 blake3 = { version = "1", features = ["rayon"] }
-# Pure-Rust JSON Schema (draft 2020-12) validator. DEV-ONLY: crates/shapes tests
-# use it as a trusted external oracle to observe the emitted schema_json's real
-# accept/reject behaviour against JSON-LD instance nodes. Not a runtime/release
-# dependency, so the wasm gate is unaffected (`make wasm` builds `--lib` only).
-boon = "0.6"
 camino = "1"
 # Full Unicode case folding (the `CaseFolding.txt` table, Unicode Annex UAX 21).
 # The text analyzer folds before it segments, and folding is NOT lowercasing:

@@ -35,3 +35,13 @@ rand = [
     # The GTS ULID generator's statement that it depends on no RNG crate.
     '`uuid`, `ulid`, `rand`, or `getrandom`',
 ]
+url = [
+    # `url` is an ordinary word and an identifier throughout the tree: the
+    # CSVW `url` property and every `table.url`, the SVG `url(#…)` paint
+    # reference, the JavaScript `URL`/`import.meta.url` of the playground and
+    # the book, and local variables named `url`. A reference to the removed
+    # crate takes one of three shapes — a `url::` path, a manifest entry
+    # `url = "…"` / `url = { … }`, or the crate named as a crate or
+    # dependency — and a line holding any of them is not matched here.
+    '^(?!.*(?<![\w.-])url::)(?!.*(?<![\w.-])url\s*=\s*[{"])(?!.*`url` (?:crate|dependency)).*\burl\b',
+]

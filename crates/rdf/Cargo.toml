@@ -139,8 +139,9 @@ purrdf-alloc-probe = { workspace = true }
 # Parse Rust scopes and token bodies for the closed GTS authorship census.
 syn = { workspace = true }
 proc-macro2 = { workspace = true }
-# Trusted draft-2020-12 oracle for the public JSON-LD options schema.
-boon = { workspace = true }
+# Draft 2020-12 validator for the public JSON-LD options schema: the decoder's
+# acceptance is checked against what the published schema accepts.
+purrdf-jsonschema = { workspace = true }
 ciborium = { workspace = true }
 purrdf-gts = { workspace = true }
 # The SEP-0009 grammar, used by the composite blank-node scoping tests as an
