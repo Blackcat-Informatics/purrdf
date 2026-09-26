@@ -1953,7 +1953,7 @@ fn the_declared_depth_placement_yields_an_invocation_the_relation_answers() {
 
 // A seeded splitmix64 stream of values in `[-1, 1)`, so every product and partial
 // sum of a long row rounds and the order a fold takes is visible in its bits.
-use crate::test_rng::stream;
+use purrdf_testkit::rng::signed_unit_stream as stream;
 
 /// A space of 64-component rows the two arithmetics can tell apart.
 ///

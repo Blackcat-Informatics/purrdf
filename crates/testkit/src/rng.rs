@@ -43,6 +43,24 @@ pub const fn splitmix64_step(state: u64) -> u64 {
     mix_rounds(state.wrapping_add(0x9E37_79B9_7F4A_7C15))
 }
 
+/// One value in `[-1, 1)` from the [`splitmix64_next`] counter stream: the
+/// top 53 bits of the next output as a fraction of 2^53, doubled and shifted
+/// down by one. Every step is exact in binary64, so the value is the same on
+/// every target.
+#[must_use]
+pub fn signed_unit_next(state: &mut u64) -> f64 {
+    let z = splitmix64_next(state);
+    ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+}
+
+/// `len` values in `[-1, 1)` from the [`splitmix64_next`] counter stream
+/// started at `seed`, drawn with [`signed_unit_next`].
+#[must_use]
+pub fn signed_unit_stream(len: usize, seed: u64) -> Vec<f64> {
+    let mut state = seed;
+    (0..len).map(|_| signed_unit_next(&mut state)).collect()
+}
+
 /// SplitMix64 (Steele, Lea and Flood): a seed expander and a strong 64-bit
 /// finaliser.
 #[derive(Debug, Clone)]
@@ -132,7 +150,7 @@ impl Xoshiro256 {
 
 #[cfg(test)]
 mod tests {
-    use super::{SplitMix64, Xoshiro256, splitmix64_next, splitmix64_step};
+    use super::{SplitMix64, Xoshiro256, signed_unit_stream, splitmix64_next, splitmix64_step};
 
     #[test]
     fn splitmix64_matches_the_reference_outputs() {
@@ -219,6 +237,59 @@ mod tests {
         let mut state = 0x9E37_79B9_7F4A_7C15_u64;
         let seed_golden_ratio: [u64; 16] = std::array::from_fn(|_| splitmix64_next(&mut state));
         assert_eq!(seed_golden_ratio, SEED_GOLDEN_RATIO);
+    }
+
+    /// The `[-1, 1)` stream `purrdf-sparql-eval` kept in its own
+    /// `#[doc(hidden)]` module for its kNN metric tests, its kNN relation
+    /// bench and its wasm32 reassociated-distance test, pinned as bit patterns
+    /// from seed 0 and from `0x9E3779B97F4A7C15`, recorded from that module
+    /// before it was deleted.
+    #[test]
+    fn signed_unit_stream_matches_the_deleted_crate_local_copy() {
+        const SEED_ZERO: [u64; 16] = [
+            0x3FE8_882A_0E5E_C772,
+            0xBFC1_8761_955E_46A0,
+            0xBFEE_4EE8_B9DF_FDB0,
+            0x3FEE_22EE_2A1C_9320,
+            0xBFE9_319D_A56B_95E4,
+            0xBFD6_1A30_79C5_C0B0,
+            0xBFE4_DF59_5078_2EB4,
+            0x3FE1_6104_CEB2_45AA,
+            0xBFE0_46A1_DBEF_8D9E,
+            0x3FEC_EE12_230D_A32C,
+            0xBFCA_8113_22C3_4EC8,
+            0x3FE0_B4C9_B801_56F6,
+            0x3FA8_8680_FF82_EF60,
+            0x3FBC_3EEA_AB30_7550,
+            0x3FDA_A707_8B00_6624,
+            0x3FA2_ECFE_5E5C_7600,
+        ];
+        const SEED_GOLDEN_RATIO: [u64; 16] = [
+            0xBFC1_8761_955E_46A0,
+            0xBFEE_4EE8_B9DF_FDB0,
+            0x3FEE_22EE_2A1C_9320,
+            0xBFE9_319D_A56B_95E4,
+            0xBFD6_1A30_79C5_C0B0,
+            0xBFE4_DF59_5078_2EB4,
+            0x3FE1_6104_CEB2_45AA,
+            0xBFE0_46A1_DBEF_8D9E,
+            0x3FEC_EE12_230D_A32C,
+            0xBFCA_8113_22C3_4EC8,
+            0x3FE0_B4C9_B801_56F6,
+            0x3FA8_8680_FF82_EF60,
+            0x3FBC_3EEA_AB30_7550,
+            0x3FDA_A707_8B00_6624,
+            0x3FA2_ECFE_5E5C_7600,
+            0xBF96_B3ED_1C55_6F80,
+        ];
+        let bits = |seed| -> Vec<u64> {
+            signed_unit_stream(16, seed)
+                .into_iter()
+                .map(f64::to_bits)
+                .collect()
+        };
+        assert_eq!(bits(0), SEED_ZERO);
+        assert_eq!(bits(0x9E37_79B9_7F4A_7C15), SEED_GOLDEN_RATIO);
     }
 
     /// The self-composed stream `purrdf-core` and `purrdf-sparql-eval` each

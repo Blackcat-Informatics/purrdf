@@ -50,29 +50,30 @@ unicode-segmentation.workspace = true
 [dev-dependencies]
 # Solution-sequence shapes for the ranked-row tests.
 purrdf-sparql-results.workspace = true
+# Property tests (encoding injectivity, and the fixed-point arithmetic laws), and
+# the `harness = false` runner `tests/wasm_determinism.rs` runs on, natively and on
+# wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
+# the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only, both of them, because `make wasm-test` builds ONE test target of
-# this crate for wasm32 and cargo builds every declared dev-dependency for any
-# test target. Neither is wanted there: the testkit's property harness drives
-# native-only tests and criterion drives benches, which the wasm lane never runs,
-# and criterion is not wasm32-clean (it reaches for processes, terminals and
-# wall-clock timing).
+# Native-only, because `make wasm-test` builds a test target of this crate for
+# wasm32 and cargo builds every declared dev-dependency for any test target.
+# Criterion drives benches, which the wasm lane never runs, and it is not
+# wasm32-clean (it reaches for processes, terminals and wall-clock timing).
 #
 # The report-only profiling harness in `benches/`. Never a gate: no measurement
 # here asserts a timing, and behaviour is fixed by the test suite instead.
 criterion.workspace = true
-# Property tests: encoding injectivity, and the fixed-point arithmetic laws.
-# Path-only and unpublished, so it is stripped from the packaged manifest.
-purrdf-testkit.workspace = true
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
-# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile
-# for it. Ranking needs a natural logarithm, and "the same answer on every
-# target" is a claim no number of runs on ONE target can check. Run by
-# `make wasm-test`.
-wasm-bindgen-test = { workspace = true }
+# The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
+# than merely compile for it. Ranking needs a natural logarithm, and "the same
+# answer on every target" is a claim no number of runs on ONE target can check.
+# `harness = false` on the shared runner, so `make wasm-test` runs the same named
+# cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs natively.
+[[test]]
+name = "wasm_determinism"
+harness = false
 
 [[bench]]
 name = "search"

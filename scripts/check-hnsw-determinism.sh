@@ -9,25 +9,24 @@
 # pure function of the input, so a native build and a wasm32-unknown-unknown build
 # produce the same canonical byte image. crates/hnsw/tests/determinism.rs proves the
 # thread-count half natively (1/2/4/8 workers, one pinned golden) and pins the
-# native golden. This script proves the OTHER half: it builds the one-function
-# cdylib in crates/hnsw/determinism (excluded from the workspace) for
-# wasm32-unknown-unknown, calls its export from Node's WebAssembly host, and fails
-# unless the wasm digest equals the same golden and folds the same corpus.
-#
-# The wasm module is built twice: on the baseline wasm32 target, and with
+# goldens. It is `harness = false` on the shared test runner, so the same named
+# cases also run on wasm32-unknown-unknown, in Node, under the cargo runner every
+# wasm32 test uses (scripts/wasm-test-runner.sh). This script runs the target three
+# times — natively, on the baseline wasm32 build, and on a wasm32 build with
 # `-C target-feature=+simd128`, where LLVM packs the exact distance fold's sixteen
-# lanes into f64x2 operations. Both digests must equal the same golden, so the
-# vectorized compilation is held to the scalar one's bits, and the two modules must
-# differ, so the SIMD build is proven to be a different compilation rather than the
-# same bytes twice.
+# lanes into f64x2 operations — and fails unless every reporting case prints the
+# same digest on all three, each equal to the golden the test file pins for it. The
+# two wasm modules must also differ, so the SIMD build is proven to be a different
+# compilation rather than the same bytes twice.
 #
-# Three numbers, one constant, no reasoning in between. If native and wasm disagree,
-# the portability guarantee has broken and the digest is the least interesting part
-# of the problem.
+# Each case that computes a digest prints a
+# `determinism-digest case=<name> digest=<hex> corpus_len=<n>` line. On wasm32 the
+# digests are computed with every host clock and entropy source sealed, so a build
+# that reached one fails by that source's name instead of agreeing by accident.
 #
-# Not part of `make check`: it needs the wasm32 target and Node, and `make check`
-# must stay runnable without either. `make hnsw-determinism` runs it, and CI runs
-# it in the wasm job where both are already present.
+# Not part of `make check`: it needs the wasm32 target, the wasm-bindgen CLI and
+# Node, and `make check` must stay runnable without them. `make hnsw-determinism`
+# runs it, and CI runs it in the wasm job where all three are already present.
 
 set -euo pipefail
 
@@ -48,108 +47,106 @@ if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknow
 	exit 0
 fi
 
+if ! command -v wasm-bindgen >/dev/null 2>&1; then
+	if [ -n "${CI:-}" ]; then
+		fail "the wasm-bindgen CLI is absent in CI"
+	fi
+	echo "SKIP: the wasm-bindgen CLI is not on PATH — install wasm-bindgen-cli $(sed -n 's/^wasm-bindgen = "=\([0-9][0-9.]*\)"$/\1/p' Cargo.toml) to enable ('make doctor')"
+	exit 0
+fi
+
+runner="$PWD/scripts/wasm-test-runner.sh"
+
 # ---------------------------------------------------------------------------
-# 1. The golden and the expected corpus size, read from the test and the source
+# 1. The goldens and the expected corpus size, read from the test and the source
 #    that define them. Reading them out of the tree rather than restating them
 #    here means there is exactly one copy and the assertions cannot drift.
 # ---------------------------------------------------------------------------
 golden_file="crates/hnsw/tests/determinism.rs"
 golden="$(sed -n 's/^const GOLDEN_DIGEST: u64 = 0x\([0-9a-f_]*\);.*/\1/p' "$golden_file" | tr -d '_')"
 [ -n "$golden" ] || fail "no GOLDEN_DIGEST constant found in $golden_file"
+serial_golden="$(sed -n 's/^const GOLDEN_SERIAL_DIGEST: u64 = 0x\([0-9a-f_]*\);.*/\1/p' "$golden_file" | tr -d '_')"
+[ -n "$serial_golden" ] || fail "no GOLDEN_SERIAL_DIGEST constant found in $golden_file"
 
 corpus_file="crates/hnsw/src/determinism.rs"
 expected_corpus="$(sed -n 's/^pub const CORPUS_ROWS: usize = \([0-9_]*\);.*/\1/p' "$corpus_file" | tr -d '_')"
 [ -n "$expected_corpus" ] || fail "no CORPUS_ROWS constant found in $corpus_file"
 
-# ---------------------------------------------------------------------------
-# 2. The wasm digest.
-#
-# The helper is OUTSIDE the workspace, so it is built from its own directory with
-# its own lock file. `--target-dir` keeps its artifacts out of the workspace's, so
-# a stale workspace build can never be mistaken for a fresh wasm one, and the module
-# folded is the one cargo reports it just wrote.
-# ---------------------------------------------------------------------------
-helper_dir="$PWD/crates/hnsw/determinism"
-# CARGO_TARGET_DIR may be absolute (shared caches usually are), so it cannot be
-# pasted after $PWD unconditionally — that would silently build into a nested
-# path inside the repo rather than the cache, and the freshness the separate
-# target directory buys would be lost.
-case "${CARGO_TARGET_DIR:-}" in
-/*) target_dir="$CARGO_TARGET_DIR/hnsw-determinism" ;;
-"") target_dir="$PWD/target/hnsw-determinism" ;;
-*) target_dir="$PWD/$CARGO_TARGET_DIR/hnsw-determinism" ;;
-esac
-mkdir -p "$target_dir"
-
-# Build the helper for wasm32 and print the path of the module cargo reports it wrote.
-#
-# The path is read from cargo's own `compiler-artifact` message, never assumed from
-# `--target-dir`: a cargo wrapper is entitled to place final artifacts somewhere else,
-# and then the assumed path is either empty or, worse, holds a stale module from an
-# earlier build that the digest would silently fold instead. Any arguments are an
-# `env` prefix for the build.
-build_module() {
-	local messages module
-	messages="$(cd "$helper_dir" && env "$@" cargo build --quiet --release \
-		--target wasm32-unknown-unknown --target-dir "$target_dir" \
-		--message-format=json-render-diagnostics)" || fail "the wasm helper did not build"
-	module="$(printf '%s\n' "$messages" | grep '"reason":"compiler-artifact"' |
-		sed -n 's/.*"\([^"]*\/purrdf_hnsw_determinism\.wasm\)".*/\1/p' | tail -n 1)"
-	[ -n "$module" ] || fail "cargo reported no purrdf_hnsw_determinism.wasm artifact"
-	[ -f "$module" ] || fail "cargo reported the wasm module at $module, which does not exist"
-	printf '%s\n' "$module"
-}
-
-# Each module is copied out the moment it is built, into a file this script owns, so
-# the second build can never overwrite the first one's module before it is run.
-wasm="$target_dir/purrdf_hnsw_determinism.wasm"
-cp "$(build_module)" "$wasm"
-
-# The +simd128 module. Cargo ignores target-scoped flags whenever RUSTFLAGS or
+# The +simd128 build's flags. Cargo ignores target-scoped flags whenever RUSTFLAGS or
 # CARGO_ENCODED_RUSTFLAGS is set, so a caller's RUSTFLAGS is folded into the
-# target-scoped value and unset for this build, and CARGO_ENCODED_RUSTFLAGS is refused.
+# target-scoped value and unset for that build, and CARGO_ENCODED_RUSTFLAGS is refused.
 # A target-scoped value also replaces build.rustflags, so -D warnings is restated.
 [ -z "${CARGO_ENCODED_RUSTFLAGS:-}" ] ||
 	fail "CARGO_ENCODED_RUSTFLAGS is set; Cargo would ignore the +simd128 build's target-scoped flags"
 simd_flags="${RUSTFLAGS:-} ${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128"
-simd_wasm="$target_dir/purrdf_hnsw_determinism.simd128.wasm"
-cp "$(build_module -u RUSTFLAGS CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$simd_flags")" "$simd_wasm"
+baseline_env=(env)
+simd_env=(env -u RUSTFLAGS CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$simd_flags")
 
-if cmp -s "$wasm" "$simd_wasm"; then
+# The wasm module cargo reports it built for the determinism target under the
+# environment given as arguments. The path is read from cargo's own
+# `compiler-artifact` message, never assumed.
+wasm_module() {
+	local messages module
+	messages="$("$@" cargo test --locked --no-run --target wasm32-unknown-unknown \
+		-p purrdf-hnsw --test determinism --message-format=json-render-diagnostics)" ||
+		fail "the wasm32 determinism target did not build"
+	module="$(printf '%s\n' "$messages" | grep '"reason":"compiler-artifact"' |
+		sed -n 's/.*"executable":"\([^"]*\/determinism-[0-9a-f]*\.wasm\)".*/\1/p' | tail -n 1)"
+	[ -n "$module" ] || fail "cargo reported no determinism test module"
+	[ -f "$module" ] || fail "cargo reported the module at $module, which does not exist"
+	printf '%s\n' "$module"
+}
+
+baseline_module="$(wasm_module "${baseline_env[@]}")"
+simd_module="$(wasm_module "${simd_env[@]}")"
+if cmp -s "$baseline_module" "$simd_module"; then
 	fail "the +simd128 module is byte-identical to the baseline one; the target feature did not reach the build"
 fi
 
-# One module's digest and corpus length, as `digest corpus_len`.
-run_module() {
-	local output digest corpus
-	output="$(node scripts/hnsw-determinism.mjs "$1")"
-	digest="$(printf '%s\n' "$output" | sed -n 's/^digest=//p')"
-	corpus="$(printf '%s\n' "$output" | sed -n 's/^corpus_len=//p')"
-	[ -n "$digest" ] || fail "the wasm module $1 printed no digest"
-	[ -n "$corpus" ] || fail "the wasm module $1 printed no corpus length"
-	printf '%s %s\n' "$digest" "$corpus"
+# The `determinism-digest` records a run printed, sorted by case name. A record may
+# follow libtest's `test <name> ... ` on the same console line, so it is matched
+# wherever it starts.
+digests() {
+	grep -o 'determinism-digest case=[A-Za-z0-9_]* digest=[0-9a-f]\{16\} corpus_len=[0-9]*' |
+		sed 's/^determinism-digest //' | sort
 }
 
-read -r wasm_digest wasm_corpus <<<"$(run_module "$wasm")"
-read -r simd_digest simd_corpus <<<"$(run_module "$simd_wasm")"
+# ---------------------------------------------------------------------------
+# 2. The three runs. Each must pass on its own: every case asserts its golden.
+# ---------------------------------------------------------------------------
+native_output="$(cargo test --locked -p purrdf-hnsw --test determinism)" ||
+	fail "the native determinism target failed"
+wasm_output="$("${baseline_env[@]}" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$runner" \
+	cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test determinism)" ||
+	fail "the wasm32 determinism target failed"
+simd_output="$("${simd_env[@]}" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$runner" \
+	cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test determinism)" ||
+	fail "the wasm32+simd128 determinism target failed"
+
+native="$(printf '%s\n' "$native_output" | digests)"
+wasm="$(printf '%s\n' "$wasm_output" | digests)"
+simd="$(printf '%s\n' "$simd_output" | digests)"
+
+echo "native:"
+printf '%s\n' "$native" | sed 's/^/  /'
+echo "wasm32:"
+printf '%s\n' "$wasm" | sed 's/^/  /'
+echo "wasm32+simd128:"
+printf '%s\n' "$simd" | sed 's/^/  /'
+echo "golden          digest=$golden serial=$serial_golden corpus_len=$expected_corpus"
 
 # ---------------------------------------------------------------------------
-# 3. Compare. All of them, plus a non-vacuity check on the corpus.
+# 3. Compare, case by case, plus a non-vacuity check on the corpus.
 # ---------------------------------------------------------------------------
-echo "wasm32          digest=$wasm_digest corpus_len=$wasm_corpus"
-echo "wasm32+simd128  digest=$simd_digest corpus_len=$simd_corpus"
-echo "golden          digest=$golden corpus_len=$expected_corpus"
-
-for corpus in "$wasm_corpus" "$simd_corpus"; do
-	[ "$corpus" = "$expected_corpus" ] ||
-		fail "a wasm digest folded $corpus rows, but the corpus has $expected_corpus"
+for pair in "native:$native" "wasm32:$wasm" "wasm32+simd128:$simd"; do
+	[ -n "${pair#*:}" ] || fail "the ${pair%%:*} run reported no digest"
 done
 
-for pair in "wasm32:$wasm_digest" "wasm32+simd128:$simd_digest"; do
+for pair in "wasm32:$wasm" "wasm32+simd128:$simd"; do
 	build="${pair%%:*}"
-	digest="${pair#*:}"
-	if [ "$digest" != "$golden" ]; then
-		fail "$build AND THE NATIVE GOLDEN DISAGREE: $digest vs $golden.
+	if [ "${pair#*:}" != "$native" ]; then
+		fail "$build AND NATIVE DISAGREE:
+$(diff <(printf '%s\n' "$native") <(printf '%s\n' "${pair#*:}") || true)
   purrdf-hnsw's determinism claim is that these are equal by construction, so a
   difference is a real defect, not a tolerance to widen. Look for a float
   operation that is not associative across targets or builds, a usize-width
@@ -157,4 +154,19 @@ for pair in "wasm32:$wasm_digest" "wasm32+simd128:$simd_digest"; do
 	fi
 done
 
-echo "OK: the wasm32 and wasm32+simd128 digests are identical to the natively pinned golden"
+while read -r case digest corpus; do
+	case="${case#case=}"
+	digest="${digest#digest=}"
+	corpus="${corpus#corpus_len=}"
+	[ "$corpus" = "$expected_corpus" ] ||
+		fail "$case folded $corpus rows, but the corpus has $expected_corpus"
+	if [ "$case" = "a_serial_insert_builds_a_different_graph" ]; then
+		expected="$serial_golden"
+	else
+		expected="$golden"
+	fi
+	[ "$digest" = "$expected" ] ||
+		fail "$case reports $digest on every build, but its golden is $expected"
+done <<<"$native"
+
+echo "OK: every named case reports the same digest natively, on wasm32 and on wasm32+simd128, and each matches its natively pinned golden"

@@ -69,15 +69,21 @@ purrdf-alloc-probe = { workspace = true }
 serde_json.workspace = true
 # The timed benches (`benches/on_demand_read.rs`). Report-only.
 criterion = { workspace = true }
+# The `harness = false` runner `tests/wasm_determinism.rs` runs on, natively and on
+# wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
+# the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
-# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile
-# for it. A fused score is a sum of truncated reciprocals and the whole ordering
-# claim rests on those being the same value everywhere; "the same answer on every
-# target" is a claim no number of runs on ONE target can check. Run by
-# `make wasm-test`.
-wasm-bindgen-test = { workspace = true }
+# The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
+# than merely compile for it. A fused score is a sum of truncated reciprocals and
+# the whole ordering claim rests on those being the same value everywhere; "the
+# same answer on every target" is a claim no number of runs on ONE target can
+# check. `harness = false` on the shared runner, so `make wasm-test` runs the same
+# named cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs
+# natively.
+[[test]]
+name = "wasm_determinism"
+harness = false
 
 # Peak-allocation evidence for the fused frontier, in its own process so the
 # tracking allocator's atomics skew no timed measurement. Report-only: it prints

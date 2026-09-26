@@ -707,7 +707,7 @@ mod tests {
 
     /// A deterministic stream of values in `[-1, 1)`, for the differential tests below.
     fn stream(len: usize, seed: u64) -> Vec<f64> {
-        crate::test_rng::stream(len, seed)
+        purrdf_testkit::rng::signed_unit_stream(len, seed)
     }
 
     #[test]
@@ -913,7 +913,7 @@ mod tests {
         // matrix widened in advance -- otherwise halving the resident size would quietly be
         // a different index. Asserted on bits, not on an epsilon.
         let mut state = 0xF32_0000_1234_ABCD_u64;
-        let mut next = || crate::test_rng::unit_f64_next(&mut state) as f32;
+        let mut next = || purrdf_testkit::rng::signed_unit_next(&mut state) as f32;
         for len in [1_usize, 63, 64, 65, 200, 4_096] {
             let a32: Vec<f32> = (0..len).map(|_| next()).collect();
             let b32: Vec<f32> = (0..len).map(|_| next()).collect();

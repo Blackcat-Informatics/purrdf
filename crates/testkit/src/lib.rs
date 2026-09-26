@@ -8,7 +8,8 @@
 //!   `PURRDF_REGENERATE_GOLDEN=1`. Call it through [`assert_golden!`], which
 //!   resolves `tests/golden/` against the *calling* crate.
 //! * [`TempDir`] and [`NamedTempFile`] — scratch space under the cargo target
-//!   directory, never the system temporary directory. Integration tests and
+//!   directory, never the system temporary directory, on every target with a
+//!   file system (so not on `wasm32-unknown-unknown`). Integration tests and
 //!   benches create them through [`temp_dir!`] and [`temp_file!`], which read
 //!   `CARGO_TARGET_TMPDIR` in the calling target; a crate's `src/` unit tests,
 //!   where cargo does not set that variable, use [`TempDir::for_unit_test`]
@@ -18,7 +19,9 @@
 //!   that names the first record an implementation disagrees with.
 //! * [`harness`] — a libtest-compatible runner for `harness = false` targets:
 //!   the same console lines, the same tally line, the same flags, parallel
-//!   execution and per-case panic isolation.
+//!   execution and per-case panic isolation, natively and on
+//!   `wasm32-unknown-unknown` in Node under `scripts/wasm-test-runner.sh`.
+//!   [`harness_main!`] writes a target's `main` from plain case functions.
 //! * [`prop`] — property-based testing on a recorded choice sequence:
 //!   strategies, [`prop_test!`], shrinking by replaying edited choice
 //!   sequences, regex-driven string generators, stateful model-based testing,
@@ -35,11 +38,17 @@
 
 pub mod golden;
 pub mod harness;
+mod host;
 pub mod prop;
 pub mod rng;
+// Scratch space on a file system. wasm32-unknown-unknown has none — its
+// `std::fs::File` is an uninhabited type — so the module exists only where a
+// test can create a path.
+#[cfg(not(target_arch = "wasm32"))]
 mod temp;
 pub mod vectors;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use temp::{NamedTempFile, TempDir};
 
 /// A fresh [`TempDir`] under the calling test's `CARGO_TARGET_TMPDIR`.
@@ -51,6 +60,7 @@ pub use temp::{NamedTempFile, TempDir};
 /// the macro anywhere else is a compile error rather than a silent fallback to
 /// the system temporary directory. Evaluates to
 /// `std::io::Result<TempDir>`.
+#[cfg(not(target_arch = "wasm32"))]
 #[macro_export]
 macro_rules! temp_dir {
     () => {
@@ -65,6 +75,7 @@ macro_rules! temp_dir {
 ///
 /// The file counterpart of [`temp_dir!`], with the same prefix form and the
 /// same call-site resolution. Evaluates to `std::io::Result<NamedTempFile>`.
+#[cfg(not(target_arch = "wasm32"))]
 #[macro_export]
 macro_rules! temp_file {
     () => {
@@ -88,5 +99,38 @@ macro_rules! assert_golden {
             $name,
             $actual,
         )
+    };
+}
+
+/// A `harness = false` target's `main`, running the named functions as its
+/// cases on [`harness::main`].
+///
+/// Each function takes no argument and fails by panicking, as a `#[test]`
+/// function does, and its case is named by the function's identifier — the
+/// name libtest would give the same function — so a target moved off libtest
+/// keeps its case names. Cases run in the order written. A case may carry
+/// attributes, such as a `#[cfg(...)]` that registers it on some targets only.
+///
+/// ```
+/// fn arithmetic_holds() {
+///     assert_eq!(1 + 1, 2);
+/// }
+///
+/// purrdf_testkit::harness_main!(arithmetic_holds);
+/// ```
+#[macro_export]
+macro_rules! harness_main {
+    ($($(#[$attribute:meta])* $case:ident),+ $(,)?) => {
+        fn main() -> ::std::process::ExitCode {
+            $crate::harness::main([
+                $(
+                    $(#[$attribute])*
+                    $crate::harness::Trial::test(::core::stringify!($case), || {
+                        $case();
+                        ::core::result::Result::Ok(())
+                    }),
+                )+
+            ])
+        }
     };
 }

@@ -600,3 +600,46 @@ fn a_conclusion_fails_exactly_when_a_case_failed() {
     );
     assert!(!Conclusion::default().has_failed());
 }
+
+#[test]
+fn cases_that_print_from_workers_and_spawned_threads_finish_under_a_deadline() {
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_testkit-harness-print-fixture"))
+        .args(["--test-threads=4", "--nocapture"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the print fixture starts");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while child
+        .try_wait()
+        .expect("the fixture can be polled")
+        .is_none()
+    {
+        if Instant::now() > deadline {
+            child.kill().expect("the stuck fixture can be killed");
+            panic!("the runner blocked a case's own write to standard output");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child
+        .wait_with_output()
+        .expect("the fixture's output is readable");
+    let text = stdout_of(&output);
+    assert!(output.status.success(), "{text}");
+    for index in 0..8 {
+        assert!(
+            text.contains(&format!("printed by case {index} on its worker\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("printed by a thread case {index} spawned\n")),
+            "{text}"
+        );
+    }
+    assert!(
+        text.contains("test result: ok. 8 passed; 0 failed; 0 ignored;"),
+        "{text}"
+    );
+}

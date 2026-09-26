@@ -6066,7 +6066,7 @@ mod tests {
 #[cfg(test)]
 mod numeric_chain_tests {
     use super::*;
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";

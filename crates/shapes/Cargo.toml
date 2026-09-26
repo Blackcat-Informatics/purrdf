@@ -114,32 +114,34 @@ proc-macro2 = { workspace = true }
 # it shares no code with this crate's emitter. wasm32-clean, so it needs no
 # target gate.
 purrdf-jsonschema = { workspace = true }
+# The shared test support: property-based generation for the never-panic,
+# monotonicity and product-refusal harnesses, and the `harness = false` runner
+# `tests/product_wasm.rs` runs on, natively and on wasm32-unknown-unknown alike.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# The two native-only harness dependencies.
+# Native-only, because `make wasm-test` builds a test target of this crate for
+# wasm32 (`tests/product_wasm.rs`) and cargo builds every declared dev-dependency
+# of the package for any test target it builds. Criterion reaches for wall-clock
+# timing and processes, and drives benches the wasm lane never runs. Same
+# target-gated shape, and the same reason, as `crates/sparql-eval`.
 #
-# Target-gated, not plain dev-dependencies, because `make wasm-test` builds ONE test
-# target of this crate for wasm32 (`tests/product_wasm.rs`) and cargo builds every
-# declared dev-dependency of the package for any test target it builds. Neither of
-# these is wanted there: the property harness drives native-only tests, and
-# criterion reaches for wall-clock timing and processes. Same target-gated shape,
-# and the same reason, as `crates/sparql-eval`.
-#
-# Property-based generation for the never-panic, monotonicity and product-refusal
-# harnesses: the shared property harness. Path-only and unpublished, so it is stripped
-# from the packaged manifest.
-purrdf-testkit = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/product_wasm.rs` — the one test in this crate
-# that must EXECUTE on wasm32-unknown-unknown rather than merely compile for it. A
-# prepared product is written by a build tool on a host and restored months later in a
-# browser, so "the same bytes on every target" is a claim two runs on one target cannot
-# check: they cannot distinguish a codec that is target-independent from one that merely
-# agrees with wherever it was last compiled. Run by `make wasm-test`.
-wasm-bindgen-test = { workspace = true }
+# The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
+# than merely compile for it. A prepared product is written by a build tool on a
+# host and restored months later in a browser, so "the same bytes on every target"
+# is a claim two runs on one target cannot check: they cannot distinguish a codec
+# that is target-independent from one that merely agrees with wherever it was last
+# compiled. `harness = false` on the shared runner, so `make wasm-test` runs the
+# same named cases in Node through scripts/wasm-test-runner.sh that `cargo test`
+# runs natively.
+[[test]]
+name = "product_wasm"
+harness = false
 
 [[bench]]
 name = "validate"

@@ -52,6 +52,17 @@ criterion = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-shapes = { workspace = true }
+# The shared `harness = false` runner `tests/determinism.rs` runs on, natively and
+# on wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped
+# from the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
+
+# The cross-target determinism check: the same named cases run natively and on
+# wasm32-unknown-unknown in Node through scripts/wasm-test-runner.sh, and
+# `make geo-determinism` compares the digest each one reports.
+[[test]]
+name = "determinism"
+harness = false
 
 [[bench]]
 # The two costs a geometry predicate actually has: parsing a WKT literal into

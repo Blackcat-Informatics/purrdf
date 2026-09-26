@@ -391,14 +391,18 @@ jobs:
       - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
         # purrdf-geo claims that every geometric answer is the same on both
         # targets because every computation is integer arithmetic. This RUNS the
-        # same digest on both and compares, rather than trusting the argument.
+        # same named test cases on both (wasm32 through scripts/wasm-test-runner.sh,
+        # the one cargo runner every wasm32 test uses) and compares the digest each
+        # reports, rather than trusting the argument.
         run: make geo-determinism
 
       - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
         # purrdf-hnsw claims its canonical index image is a pure function of the
         # input, so a native build and a wasm32 build must produce the same bytes.
-        # This RUNS the same FNV-1a digest of the canonical payload on both targets
-        # and compares, rather than trusting the argument.
+        # This RUNS the same named test cases natively, on wasm32 and on wasm32
+        # +simd128 (through scripts/wasm-test-runner.sh) and compares the FNV-1a
+        # digest of the canonical payload each reports, rather than trusting the
+        # argument.
         run: make hnsw-determinism
 
       - name: Build the optimized wasm package
@@ -422,7 +426,10 @@ jobs:
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets. The reassociated HNSW
+        # same pinned expectations, executed on both targets: every target is
+        # `harness = false` on the shared test runner, and Cargo hands each wasm32
+        # binary to scripts/wasm-test-runner.sh, which runs it in Node. The runner
+        # is itself observed failing a planted panic first. The reassociated HNSW
         # index is built, recorded, decoded, verified and searched here too, on the
         # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test

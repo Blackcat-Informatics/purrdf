@@ -9,8 +9,10 @@ Two independent rules, matched to how each dependency was actually replaced:
 * **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
   ``petgraph``, ``tempfile``, ``proptest`` (with the random-number,
   fork-mode and bit-set stack it alone pulled in), ``boon`` (with the
-  URL, IDNA and ICU4X stack it alone pulled in) and ``datatest-stable``
-  (with the path, runner and regex stack it alone pulled in) have a
+  URL, IDNA and ICU4X stack it alone pulled in), ``datatest-stable``
+  (with the path, runner and regex stack it alone pulled in),
+  ``wasm-bindgen-test`` (with the macro, executor and coverage stack it alone
+  pulled in) and the futures stack js-sys's ``std`` feature pulled in have a
   first-party replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
@@ -18,12 +20,11 @@ Two independent rules, matched to how each dependency was actually replaced:
   same way as a direct one.
 
   It reads **every** ``Cargo.lock`` tracked by git, not just the root one.
-  The repository commits more than one: directories in the root manifest's
-  ``exclude`` list (``crates/geo/determinism``, and ``crates/gts/fuzz`` if it
-  ever gains a lock) are their own workspace roots with their own resolution,
-  so a root-only scan is blind to exactly the corners least likely to be
-  noticed — an excluded crate's lock drifted to a stale resolution carrying
-  ``oxilangtag`` and nothing said so. Each failure names the lock it came
+  A directory in the root manifest's ``exclude`` list (``crates/gts/fuzz``,
+  should it ever commit a lock) is its own workspace root with its own
+  resolution, so a root-only scan is blind to exactly the corners least likely
+  to be noticed — an excluded crate's lock once drifted to a stale resolution
+  carrying ``oxilangtag`` and nothing said so. Each failure names the lock it came
   from, so the message points at the file to fix.
 
 * **Direct-edge ban** (``BANNED_DIRECT_ONLY``): ``hex`` was removed only from
@@ -41,11 +42,10 @@ Two independent rules, matched to how each dependency was actually replaced:
   still never opens a lockfile, so the over-refusal the tier split exists to
   prevent stays prevented.
 
-  "First-party manifest" is **not** "workspace member". Two first-party roots
-  are committed but deliberately kept out of the root workspace via its
-  ``exclude`` list — ``crates/geo/determinism`` (the wasm32 determinism
-  harness) and ``crates/gts/fuzz`` — and a member-only scan cannot see either,
-  so a direct ``hex`` in one of them passed the gate silently. That is the
+  "First-party manifest" is **not** "workspace member". A first-party root
+  is committed but deliberately kept out of the root workspace via its
+  ``exclude`` list — ``crates/gts/fuzz`` — and a member-only scan cannot see
+  it, so a direct ``hex`` in such a root once passed the gate silently. That is the
   same corner the tier-1 scan had to be widened for. The manifest set is
   therefore the union of two derivations, so neither can narrow it alone:
 
@@ -164,6 +164,25 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "stable_deref_trait": "purrdf-iri (no Unicode normalization on the IRI path)",
     "displaydoc": "purrdf-iri (no Unicode normalization on the IRI path)",
     "synstructure": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "wasm-bindgen-test": "purrdf_testkit::harness run on wasm32 by scripts/wasm-test-runner.sh",
+    # wasm-bindgen-test's own closure: its attribute macro and shared descriptor
+    # crate, its async test executor, its coverage hook and its console colours.
+    # Nothing else in the graph pulled any of them in.
+    "wasm-bindgen-test-macro": "purrdf_testkit::harness_main! (cases named by their functions)",
+    "wasm-bindgen-test-shared": "purrdf_testkit::harness run on wasm32 by scripts/wasm-test-runner.sh",
+    "wasm-bindgen-futures": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "async-trait": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "scoped-tls": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "minicov": "purrdf_testkit::harness (no coverage hook in the wasm32 test binaries)",
+    "nu-ansi-term": "purrdf_testkit::harness (libtest's own ANSI colour codes)",
+    # js-sys's `std` feature pulled futures-util and its closure in for a stream
+    # adapter nothing here uses; the workspace takes js-sys with default features
+    # off, so nothing else resolves them.
+    "futures-util": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "futures-core": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "futures-task": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "pin-project-lite": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "slab": "js-sys with default-features = false (its `std` feature pulled it in)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency
@@ -541,7 +560,7 @@ def self_test() -> int:
         [
             "Cargo.toml",
             "Cargo.lock",
-            "crates/geo/determinism/Cargo.lock",
+            "crates/excluded-root/Cargo.lock",
             "crates/gts/fuzz/Cargo.lock",
             # Near misses that are NOT lockfiles and must not be scanned.
             "docs/Cargo.lock.md",
@@ -553,7 +572,7 @@ def self_test() -> int:
     discovered = lockfile_paths_from_ls_files(listing)
     expected_discovered = [
         "Cargo.lock",
-        "crates/geo/determinism/Cargo.lock",
+        "crates/excluded-root/Cargo.lock",
         "crates/gts/fuzz/Cargo.lock",
     ]
     if discovered != expected_discovered:
@@ -585,10 +604,10 @@ def self_test() -> int:
     # --- (C) a tier-1 failure names the lockfile it came from, so a violation
     #     in a non-root lock points at the right file.
     nested_failures = lock_failures(
-        "crates/geo/determinism/Cargo.lock",
+        "crates/excluded-root/Cargo.lock",
         'name = "oxilangtag"\nversion = "0.1.6"\n',
     )
-    if len(nested_failures) != 1 or "crates/geo/determinism/Cargo.lock" not in (
+    if len(nested_failures) != 1 or "crates/excluded-root/Cargo.lock" not in (
         nested_failures[0]
     ):
         failures.append(
@@ -610,12 +629,28 @@ def self_test() -> int:
         )
         if "Cargo.lock" not in relative:
             failures.append(f"the root Cargo.lock was not discovered: {relative}")
-        if len(relative) < 2:
+        # An independent derivation of the same set: git's own pathspec match
+        # for a `Cargo.lock` at any depth. Discovery that narrowed back to the
+        # root lock would disagree with it the moment a second lock is committed.
+        pathspec = subprocess.run(
+            ["git", "ls-files", "-z", "--", "Cargo.lock", ":(glob)**/Cargo.lock"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if pathspec.returncode != 0:
             failures.append(
-                "only one committed lockfile was discovered in this repository; "
-                "the excluded-directory locks are exactly what this scan exists "
-                f"to reach (found {relative})"
+                "git ls-files could not list this repository's lockfiles: "
+                f"{pathspec.stderr.decode(errors='replace').strip()}"
             )
+        else:
+            listed = sorted(
+                path for path in pathspec.stdout.decode().split("\0") if path
+            )
+            if relative != listed:
+                failures.append(
+                    f"lockfile discovery found {relative}, but git lists {listed}"
+                )
         for lock in repo_locks:
             if not lock.is_file():
                 failures.append(f"discovered lockfile does not exist: {lock}")
@@ -627,7 +662,7 @@ def self_test() -> int:
         [
             "Cargo.toml",
             "crates/iri/Cargo.toml",
-            "crates/geo/determinism/Cargo.toml",
+            "crates/excluded-root/Cargo.toml",
             "crates/gts/fuzz/Cargo.toml",
             "docs/Cargo.toml.md",
             "vendor/Cargo.toml.orig",
@@ -637,7 +672,7 @@ def self_test() -> int:
     discovered_manifests = manifest_paths_from_ls_files(manifest_listing)
     expected_manifests = [
         "Cargo.toml",
-        "crates/geo/determinism/Cargo.toml",
+        "crates/excluded-root/Cargo.toml",
         "crates/gts/fuzz/Cargo.toml",
         "crates/iri/Cargo.toml",
     ]
@@ -668,7 +703,6 @@ def self_test() -> int:
     #     a members-only scan cannot see them. A direct `hex` in either one
     #     passed the gate silently before they were included.
     excluded_roots = [
-        "crates/geo/determinism/Cargo.toml",
         "crates/gts/fuzz/Cargo.toml",
     ]
     try:

@@ -25,6 +25,20 @@ path = "src/bin/harness_fixture.rs"
 test = false
 doc = false
 
+# The fixture scripts/check-wasm-test-runner.sh runs on wasm32 to observe the
+# runner's host seal: a clock read outside the seal passes, the same read inside
+# it fails by name.
+[[bin]]
+name = "testkit-harness-print-fixture"
+path = "src/bin/harness_print_fixture.rs"
+test = false
+
+[[bin]]
+name = "testkit-wasm-host-fixture"
+path = "src/bin/wasm_host_fixture.rs"
+test = false
+doc = false
+
 [dependencies]
 # Every dependency here must stay external: a `purrdf-*` dependency would put a
 # dev-dependency cycle under every crate whose tests use this one.
@@ -39,3 +53,12 @@ regex-syntax = { workspace = true }
 # The independent oracle for the string generators: every generated string must
 # be a full match of its pattern under the `regex` crate itself.
 regex = { workspace = true }
+
+# The harness's host on wasm32-unknown-unknown, where the standard library has
+# no command line, environment, console or clock: the test binary runs in Node
+# under scripts/wasm-test-runner.sh, and these reach Node's `process.argv`,
+# `process.env`, `console.log`/`console.error` and `Date.now`. Both are the
+# workspace's own wasm32 dependencies already, so this adds no package.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }

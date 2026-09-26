@@ -7,9 +7,8 @@
 // `shaclEntail` (tests/shacl.test.mjs), which is SHACL-AF `sh:rule` entailment over a
 // shapes graph; these close a document under a regime's own specification rule table.
 //
-// This file is where the tri-host claim is actually EXECUTED on wasm32. The repo has
-// no `wasm-bindgen-test` harness (the crate carries no such dev-dependency, and adding
-// one is out of scope), so the wasm leg of the assertion runs here instead: Node loads
+// This file is where the tri-host claim is actually EXECUTED on wasm32, against the
+// shipped npm package rather than a test binary: Node loads
 // the real wasm-bindgen artifact `make wasm-pkg` produced and calls the SAME
 // `check_regime_golden_vectors()` that the `purrdf-validate` and `purrdf-capi` Rust
 // tests call, over the SAME committed artifact. wasm32 has a different pointer width,
