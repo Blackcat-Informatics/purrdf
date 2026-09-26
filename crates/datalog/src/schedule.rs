@@ -830,7 +830,7 @@ mod tests {
     use crate::clause::HeadDisjunct;
     use crate::guard::{Guard, GuardCall, GuardReads};
     use crate::seminaive::{
-        BudgetResource, DEFAULT_MAX_TERM_GENERATING_ROUNDS, EvalOptions, compile, evaluate_guarded,
+        BudgetResource, EvalOptions, TERM_GENERATING_HORIZON_FLOOR, compile, evaluate_guarded,
     };
 
     const EX: &str = "https://example.org/";
@@ -1047,13 +1047,13 @@ mod tests {
         assert!(has(model.facts(), "a", "count", "\"2\""));
     }
 
-    /// The term-generating round limit is the caller's. A counter stepping `?n + 1` to
-    /// 1000 terminates after 1000 term-generating rounds and completes under the default
-    /// limit; the SAME program under a limit of 500 is refused with the typed error naming
-    /// 500 and how to raise it; a rule appending to a string every round with no bound is
-    /// refused under the default, in bounded time.
+    /// A counter stepping `?n + 1` to 1000 over one fact terminates after 1000
+    /// term-generating rounds — past the default horizon its three input terms grant
+    /// (the 256 floor), so the default refuses it as divergent, naming the rule; the
+    /// caller who knows the bound states it, and under a fixed limit of 1000 it
+    /// completes, under 500 it is refused with the typed budget error naming 500.
     #[test]
-    fn the_term_generating_round_limit_is_the_callers() {
+    fn a_constant_bounded_counter_past_the_horizon_needs_its_bound_stated() {
         let counter = || {
             let rule = DlClause::datalog(
                 atom(v("?x"), "value", v("?m")),
@@ -1067,20 +1067,39 @@ mod tests {
             compile(vec![rule]).expect("compiles")
         };
         let seed = || store(&[("a", "value", "\"0\"")]);
-        let model = evaluate_guarded(
+        let error = evaluate_guarded(
             &counter(),
             seed(),
             &Guards::default(),
             &EvalOptions::default(),
             None,
         )
-        .expect("the 1000-step counter terminates under the default limit");
+        .expect_err("1000 generating rounds pass the horizon of a three-term input");
+        let rendered = error.to_string();
+        let EvalError::TermGenerationDiverged { rules, report, .. } = error else {
+            panic!("expected a divergence refusal, got {error}");
+        };
+        assert_eq!(rules, [0]);
+        assert_eq!(
+            report.term_generating_round_limit(),
+            TERM_GENERATING_HORIZON_FLOOR
+        );
+        assert_eq!(
+            report.term_generating_rounds(),
+            TERM_GENERATING_HORIZON_FLOOR + 1
+        );
+        assert!(rendered.contains("rule(s) 0"), "{rendered}");
+        assert!(
+            rendered.contains("with_max_term_generating_rounds"),
+            "{rendered}"
+        );
+
+        let stated = EvalOptions::default().with_max_term_generating_rounds(1000);
+        let model = evaluate_guarded(&counter(), seed(), &Guards::default(), &stated, None)
+            .expect("the 1000-step counter terminates under its stated bound");
         assert!(has(model.facts(), "a", "value", "\"1000\""));
         assert_eq!(model.budget().term_generating_rounds(), 1000);
-        assert_eq!(
-            model.budget().term_generating_round_limit(),
-            DEFAULT_MAX_TERM_GENERATING_ROUNDS
-        );
+        assert_eq!(model.budget().term_generating_round_limit(), 1000);
 
         let limited = EvalOptions::default().with_max_term_generating_rounds(500);
         let error = evaluate_guarded(&counter(), seed(), &Guards::default(), &limited, None)
@@ -1093,11 +1112,55 @@ mod tests {
         assert_eq!(report.term_generating_round_limit(), 500);
         assert_eq!(report.term_generating_rounds(), 501);
         assert!(rendered.contains("500 permitted"), "{rendered}");
-        assert!(
-            rendered.contains("with_max_term_generating_rounds"),
-            "{rendered}"
-        );
+    }
 
+    /// The neighbour the horizon must not refuse: a counter bounded by its DATA. The
+    /// depth of every node of a 600-edge chain is one more than its predecessor's — 600
+    /// term-generating rounds, far past the floor, and within the horizon the chain's
+    /// terms grant — so it completes under the default with every depth.
+    #[test]
+    fn a_data_bounded_counter_deeper_than_the_floor_completes() {
+        const LENGTH: usize = 600;
+        let rule = DlClause::datalog(
+            atom(v("?y"), "depth", v("?m")),
+            vec![
+                atom(v("?x"), "depth", v("?n")),
+                atom(v("?x"), "next", v("?y")),
+            ],
+        )
+        .with_guards(vec![Guard::assign("succ", vec!["?n".to_owned()], "?m")]);
+        let exe = compile(vec![rule]).expect("compiles");
+        let mut edb = RelationStore::new();
+        for index in 0..LENGTH {
+            edb.insert(
+                &surface(&format!("n{index}")),
+                &surface("next"),
+                &surface(&format!("n{}", index + 1)),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+        edb.insert(
+            &surface("n0"),
+            &surface("depth"),
+            "\"0\"",
+            RelationStore::DEFAULT_GRAPH,
+        );
+        let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
+            .expect("a data-bounded counter completes under the default horizon");
+        assert!(has(
+            model.facts(),
+            &format!("n{LENGTH}"),
+            "depth",
+            &format!("\"{LENGTH}\"")
+        ));
+        assert_eq!(model.budget().term_generating_rounds(), LENGTH as u64);
+        assert!(model.budget().term_generating_round_limit() >= LENGTH as u64);
+    }
+
+    /// A rule appending to a string every round, with no bound, is refused as divergent
+    /// under the default after the horizon's rounds, naming the rule.
+    #[test]
+    fn an_unbounded_string_growing_rule_is_refused_as_divergent() {
         let growing = DlClause::datalog(
             atom(v("?x"), "name", v("?m")),
             vec![atom(v("?x"), "name", v("?n"))],
@@ -1112,9 +1175,13 @@ mod tests {
             None,
         )
         .expect_err("an unbounded string-growing rule diverges");
-        assert!(
-            matches!(error, EvalError::BudgetExhausted { .. }),
-            "a divergence is a typed ceiling refusal: {error}"
+        let EvalError::TermGenerationDiverged { rules, report, .. } = error else {
+            panic!("a divergence is a typed divergence refusal: {error}");
+        };
+        assert_eq!(rules, [0]);
+        assert_eq!(
+            report.term_generating_rounds(),
+            TERM_GENERATING_HORIZON_FLOOR + 1
         );
     }
 
@@ -1259,7 +1326,7 @@ mod tests {
         )
         .expect_err("never converges");
         assert!(
-            matches!(error, EvalError::BudgetExhausted { .. }),
+            matches!(error, EvalError::TermGenerationDiverged { ref rules, .. } if rules == &[0]),
             "{error}"
         );
         let error = evaluate_scheduled(

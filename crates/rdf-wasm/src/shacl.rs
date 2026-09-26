@@ -487,10 +487,10 @@ pub(crate) fn apply_rules_impl(
 /// IRIs — a guest has no retrieval IRI to derive one from.
 ///
 /// `maxTermGeneratingRounds` (a `bigint`) bounds the evaluation rounds that infer a term
-/// the graph did not hold; one more throws naming the limit. Omitted, the engine default
-/// (65,536) applies. A host running UNTRUSTED rule sets should lower it: an exponential
-/// rule set reaches the engine's fixed arena and join ceilings only slowly under the
-/// default, and the limit is what bounds the time it can take.
+/// the graph did not hold; one more throws naming the limit. Omitted, the limit is a
+/// divergence criterion derived from the input — at most max(256, 4 × N) such rounds for
+/// N distinct input terms — past which the rule set is refused as divergent, naming its
+/// rules. A rule set bounded by a constant past that horizon states its bound here.
 ///
 /// `importIris` / `importDocuments` are the SHACL shapes graph's `owl:imports` table (see
 /// [`ShaclImportError`]); an imported document's rules run. A SPARQL 1.2 RL rule set reads

@@ -164,9 +164,11 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   `srl` — and writes the **inference graph** (the inferred triples only, never the
   data graph) as canonical N-Triples. A non-NULL `out_proof` also receives the proof
   of every inferred triple. `max_term_generating_rounds` is a nullable `uint64_t *`:
-  NULL keeps the default of 65,536 rounds that infer a new term. A host running
-  untrusted rule sets should pass a lower limit, because an exponential rule set
-  reaches the engine's fixed arena and join ceilings only slowly under the default.
+  NULL keeps the default, a divergence criterion derived from the input: at most
+  `max(256, 4 × N)` rounds that infer a new term, `N` the distinct terms of the
+  data graph (and of an SRL rule set's data blocks), past which the rule set is
+  refused as divergent, naming its rules. A rule set bounded by a constant past
+  that horizon terminates; pass its bound.
 - `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
   expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
   import_iris, import_documents, import_count, out_terms, out_error)` evaluates

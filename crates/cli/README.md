@@ -750,11 +750,13 @@ are N-Triples 1.2 and keep the blank-node labels of the evaluation.
 
 **`--max-term-generating-rounds <N>`** bounds the evaluation rounds that infer a
 term the graph did not already hold, such as a computed literal. One round more
-fails the run naming the limit, and no graph is written. The default is 65,536,
-which a trusted rule set that genuinely counts that far needs. **Lower it for an
-untrusted rule set.** A rule set whose term generation diverges (an exponential
-one in particular) reaches the engine's fixed arena and join ceilings only
-slowly under the default, and this limit is what bounds its running time.
+fails the run naming the limit, and no graph is written. Omitted, the limit is a
+divergence criterion derived from the input: at most `max(256, 4 × N)` such
+rounds, `N` the distinct terms of the data graph (and of a SPARQL 1.2 RL rule
+set's data blocks). A rule set still inferring new terms past that horizon is
+refused as divergent, naming the rules that did. A rule set bounded by a
+constant past the horizon, such as a counter stepping to 10,000, terminates:
+state its bound with this option.
 
 **`--import <IRI>=<FILE>`** resolves the rule source's imports to local
 documents: an `owl:imports` of the shapes graph (exactly as `validate --import`

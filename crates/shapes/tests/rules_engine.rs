@@ -14,7 +14,7 @@ use std::sync::Arc;
 use purrdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
-use purrdf_shapes::rules::{RuleOptions, RuleProcessor, infer};
+use purrdf_shapes::rules::{RuleOptions, RuleProcessor, TermGeneratingLimit, infer};
 use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::srl::{
     self,
@@ -431,8 +431,8 @@ fn a_class_condition_brings_its_superclasses() {
 // ── Termination ─────────────────────────────────────────────────────────────────
 
 /// A rule computing a new term from its own output every pass never terminates. Under
-/// the DEFAULT limit it is still refused with a typed budget error rather than hanging;
-/// the bounded neighbour, whose FILTER stops it, terminates with every step.
+/// the DEFAULT limit it is refused as a divergence naming the rule, after the horizon's
+/// rounds; the bounded neighbour, whose FILTER stops it, terminates with every step.
 #[test]
 fn a_diverging_term_generating_rule_is_refused_and_a_bounded_one_terminates() {
     let rule = |filter: &str| {
@@ -443,8 +443,18 @@ fn a_diverging_term_generating_rule_is_refused_and_a_bounded_one_terminates() {
     };
     let err =
         run(r#"ex:a ex:name "s" ."#, &rule(""), &RuleOptions::default()).expect_err("diverges");
-    assert!(err.contains("SHACL rules did not complete"), "{err}");
-    assert!(err.contains("exceeded"), "a budget refusal: {err}");
+    assert!(
+        err.contains("SHACL rules did not complete: the rules diverged"),
+        "{err}"
+    );
+    assert!(
+        err.contains("257 rounds"),
+        "one past the floor of the horizon: {err}"
+    );
+    assert!(
+        err.contains("rule <http://example.org/ns#grow> inferred a new term"),
+        "the refusal names the rule: {err}"
+    );
     let bounded = run(
         r#"ex:a ex:name "s" ."#,
         &rule("FILTER (STRLEN(?n) < 4)"),
@@ -462,14 +472,29 @@ fn counter(bound: u32) -> String {
     )
 }
 
-/// The term-generating round limit is the caller's. A counter that terminates after
-/// 1000 term-generating rounds completes under the default limit with every step; the
-/// same counter under a limit of 500 is refused with an error naming 500 and the
-/// option that raises it.
+/// A counter bounded by a CONSTANT past the default horizon terminates, and is refused
+/// by default: one triple grants the 256-round floor, and 1000 steps need 1000 rounds.
+/// Its caller states the bound: under a fixed limit of 1000 it completes with every step;
+/// under 500 it is refused with an error naming 500 and the option that raises it; and
+/// 500 admits a counter that needs fewer rounds.
 #[test]
 fn the_term_generating_round_limit_is_the_callers() {
     let data_ttl = "ex:a ex:n 0 .";
-    let done = run(data_ttl, &counter(1000), &RuleOptions::default()).expect("terminates");
+    let err = run(data_ttl, &counter(1000), &RuleOptions::default())
+        .expect_err("1000 rounds pass the horizon of a one-triple graph");
+    assert!(err.contains("the rules diverged"), "{err}");
+    assert!(err.contains("rule <http://example.org/ns#count>"), "{err}");
+    assert!(
+        err.contains("state its bound with RuleOptions::with_max_term_generating_rounds"),
+        "{err}"
+    );
+    assert_eq!(
+        RuleOptions::default().term_generating_limit(),
+        TermGeneratingLimit::Horizon
+    );
+
+    let stated = RuleOptions::default().with_max_term_generating_rounds(1000);
+    let done = run(data_ttl, &counter(1000), &stated).expect("terminates within its bound");
     assert_eq!(done.len(), 1000, "ex:n 1 through 1000");
     assert!(
         has(&done, "a", "n", &int(1000)),
@@ -481,10 +506,9 @@ fn the_term_generating_round_limit_is_the_callers() {
     );
 
     let limited = RuleOptions::default().with_max_term_generating_rounds(500);
-    assert_eq!(limited.max_term_generating_rounds(), 500);
     assert_eq!(
-        RuleOptions::default().max_term_generating_rounds(),
-        purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS
+        limited.term_generating_limit(),
+        TermGeneratingLimit::Fixed(500)
     );
     let err = run(data_ttl, &counter(1000), &limited).expect_err("past the limit");
     assert!(err.contains("501 rounds"), "{err}");
@@ -496,6 +520,30 @@ fn the_term_generating_round_limit_is_the_callers() {
     // The same limit admits a counter that needs fewer rounds than it permits.
     let short = run(data_ttl, &counter(400), &limited).expect("within the limit");
     assert_eq!(short.len(), 400, "ex:n 1 through 400");
+}
+
+/// The neighbour the default horizon must not refuse: a counter bounded by its DATA,
+/// deeper than the horizon's floor. The depth of every node of a 400-edge chain is one
+/// more than its predecessor's — 400 term-generating rounds, past the 256 floor and
+/// within the horizon the chain's terms grant — and it completes with every depth.
+#[test]
+fn a_data_bounded_counter_deeper_than_the_floor_completes_under_the_default() {
+    const LENGTH: usize = 400;
+    let mut data_ttl = String::from("ex:n0 ex:depth 0 .\n");
+    for index in 0..LENGTH {
+        writeln!(data_ttl, "ex:n{index} ex:next ex:n{} .", index + 1).expect("write");
+    }
+    let depth = r#"ex:depth a sh:SPARQLRule ; sh:construct
+        "CONSTRUCT { ?y ex:depth ?e } WHERE { ?x ex:depth ?d . ?x ex:next ?y BIND (?d + 1 AS ?e) }" ."#;
+    let inferred = run(&data_ttl, depth, &RuleOptions::default())
+        .expect("a data-bounded counter completes under the default horizon");
+    assert_eq!(inferred.len(), LENGTH, "one depth per node past n0");
+    assert!(has(
+        &inferred,
+        &format!("n{LENGTH}"),
+        "depth",
+        &int(i64::try_from(LENGTH).expect("fits"))
+    ));
 }
 
 /// An iterating rule that mints a fresh blank node on every pass generates a new term
@@ -571,6 +619,7 @@ fn evaluate(rules: Vec<IrRule<'static>>, data_ttl: &str) -> Result<Vec<[Term; 3]
         &RuleOptions::default(),
     )
     .map(|inference| inference.inferred().to_vec())
+    .map_err(String::from)
 }
 
 fn v(name: &str) -> Expression {

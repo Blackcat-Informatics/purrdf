@@ -191,10 +191,10 @@ pub fn evaluate(
     data: &ShaclData,
     shapes: &Shapes,
     options: &rules::RuleOptions,
-) -> Result<Inference, String> {
+) -> Result<Inference, rules::RulesError> {
     let source_rules = options.source_rules();
-    let governors = EvalOptions::default()
-        .with_max_term_generating_rounds(options.max_term_generating_rounds());
+    let governors =
+        EvalOptions::default().with_term_generating_limit(options.term_generating_limit());
     for rule in &set.rules {
         if let IrRuleBody::Elements(element_rule) = &rule.body {
             element_rule
@@ -295,7 +295,7 @@ pub fn evaluate(
         &governors,
         None,
     )
-    .map_err(|e| describe(&e, set))?;
+    .map_err(|e| refusal(&e, set))?;
 
     // The inference graph: every default-graph fact that is not a base triple.
     let facts = engine.model_facts(evaluation.facts())?;
@@ -337,7 +337,8 @@ pub fn evaluate(
             return Err(format!(
                 "{source} put `{s} {p} {o}` in the inference graph, which is not an RDF \
                  triple: {why}"
-            ));
+            )
+            .into());
         }
     }
 
@@ -467,6 +468,33 @@ fn register_constants(codec: &Codec, rule: &super::ir::ElementRule) {
         pattern(codec, template);
     }
     elements(codec, &rule.body);
+}
+
+/// An evaluation refusal: a [`rules::Divergence`] naming its rules, or the described
+/// error.
+fn refusal(error: &EvalError, set: &RuleSet<'_>) -> rules::RulesError {
+    match error {
+        EvalError::TermGenerationDiverged {
+            rules: indices,
+            input_terms,
+            report,
+        } => rules::RulesError::diverged(
+            indices
+                .iter()
+                .map(|&index| {
+                    let name = set.rules.get(index).map_or_else(
+                        || format!("rule {index}"),
+                        |rule| format!("rule {}", rule.id),
+                    );
+                    (index, name)
+                })
+                .collect(),
+            report.term_generating_rounds(),
+            report.term_generating_round_limit(),
+            *input_terms,
+        ),
+        other => describe(other, set).into(),
+    }
 }
 
 /// An evaluation error, with rule indices named by the rules they index.

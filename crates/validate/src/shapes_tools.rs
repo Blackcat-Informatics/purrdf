@@ -28,11 +28,10 @@
 //! [`purrdf_shapes::srl::InferOptions::with_max_term_generating_rounds`]: at most that many
 //! evaluation rounds may infer a term the evaluation graph did not hold, and one more is a
 //! failure naming the limit. `None` keeps the engine default
-//! (`purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS`, 65,536), which a
-//! trusted rule set that genuinely counts far needs. **A host running UNTRUSTED rule sets
-//! should lower it**: a rule set whose term generation diverges — an exponential one in
-//! particular — reaches the engine's fixed arena and join ceilings only slowly under the
-//! default, and the limit is what bounds the time such a rule set can take.
+//! ([`purrdf_shapes::rules::TermGeneratingLimit::Horizon`]), a divergence criterion
+//! derived from the input: at most `max(256, 4 × N)` such rounds, `N` the distinct input
+//! terms, past which the rule set is refused as divergent, naming its rules. A rule set
+//! bounded by a constant past that horizon terminates; its host states the bound.
 
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::free_expression::{self, FreeExpression};

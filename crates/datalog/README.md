@@ -69,10 +69,12 @@ and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
   planner and make a caller's *model* move when the join order does. The one
   exception is the limit on TERM-GENERATING rounds of a guarded program: whether
   such a program terminates is undecidable, so any fixed limit refuses some
-  program that terminates, and the limit is the caller's (`EvalOptions`, with a
-  generous default). It counts rounds rather than pricing work, only ever
-  refuses, cannot bind a guard-free program, and is folded into the program's
-  contract hash.
+  program that terminates, and the limit is the caller's (`EvalOptions`). Its
+  default is a divergence criterion derived from the input, `max(256, 4 × N)`
+  rounds for `N` distinct seeded terms, refused as `TermGenerationDiverged`
+  naming the rules that generated a term in the last round. It counts rounds
+  rather than pricing work, only ever refuses, cannot bind a guard-free program,
+  and is folded into the program's contract hash.
 * **A stop signal is admitted, because it is answer-blind.** `StopSignal` is a
   two-line trait polled at round boundaries the fixpoint was going to reach
   anyway. It carries no number and cannot be asked *where* to stop, only whether

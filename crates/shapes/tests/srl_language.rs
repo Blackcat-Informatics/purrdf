@@ -402,3 +402,64 @@ fn numeric_and_boolean_terms() {
         "{inferred:?}"
     );
 }
+
+// ── divergence ────────────────────────────────────────────────────────────────────
+
+/// A general rule that nests the triple term it matched inside a new one every round
+/// never terminates. Under the default term-generating horizon — one base triple grants
+/// the 256-round floor — it is refused with the typed [`SrlError::Divergence`], naming
+/// the rule by its document position.
+#[test]
+fn a_rule_nesting_triple_terms_every_round_is_refused_as_divergent() {
+    let err = infer(
+        "RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }",
+        ":a :p :b .",
+    )
+    .expect_err("the nesting never ends");
+    let SrlError::Divergence(divergence) = &err else {
+        panic!("expected a typed divergence, got {err}");
+    };
+    assert_eq!(divergence.horizon(), 256);
+    assert_eq!(divergence.rounds(), 257);
+    assert_eq!(divergence.rules().len(), 1);
+    assert!(
+        divergence.rules()[0].starts_with(&format!("rule <{EX}nest>")),
+        "{divergence}"
+    );
+    // A stated bound is the caller's: under a fixed limit the refusal is the budget error.
+    let document = srl::parse_and_check(
+        &rules("RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }"),
+        None,
+    )
+    .expect("checks");
+    let fixed = srl::infer(
+        &document,
+        &data(":a :p :b ."),
+        &InferOptions::default().with_max_term_generating_rounds(8),
+    )
+    .expect_err("past the stated limit");
+    assert!(
+        matches!(&fixed, SrlError::Evaluation { message } if message.contains("past the limit of 8")),
+        "{fixed}"
+    );
+}
+
+/// The neighbour: a recursive rule over a chain longer than the horizon's floor infers
+/// no term the store did not hold — every `:connected` object is a chain node — so the
+/// divergence criterion never counts a round, and the closure completes in full.
+#[test]
+fn a_closure_deeper_than_the_floor_completes() {
+    const LENGTH: usize = 300;
+    let mut ttl = String::new();
+    for index in 0..LENGTH {
+        ttl.push_str(&format!(":n{index} :link :n{} .\n", index + 1));
+    }
+    let inferred = infer(
+        "RULE { ?x :connected ?y } WHERE { ?x :link ?y }
+         RULE { ?x :connected ?z } WHERE { ?x :link ?y . ?y :connected ?z }",
+        &ttl,
+    )
+    .expect("a closure over a long chain completes");
+    assert_eq!(inferred.len(), LENGTH * (LENGTH + 1) / 2);
+    assert!(inferred.contains(&[iri("n0"), iri("connected"), iri(&format!("n{LENGTH}"))]));
+}

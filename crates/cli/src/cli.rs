@@ -1233,12 +1233,12 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         explain: Option<Option<PathBuf>>,
-        /// Permit at most `N` evaluation rounds that infer a term the evaluation graph did
-        /// not hold; one more fails the run naming the limit. Defaults to 65,536, which a
-        /// trusted rule set that genuinely counts far needs. Running an UNTRUSTED rule set,
-        /// lower it: a rule set whose term generation diverges — an exponential one in
-        /// particular — reaches the engine's fixed arena and join ceilings only slowly
-        /// under the default, and this is what bounds the time it can take.
+        /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did
+        /// not hold; one more fails the run naming the limit. Omitted, the limit is a
+        /// divergence criterion derived from the input — at most max(256, 4 × N) such
+        /// rounds for N distinct input terms — past which the rule set is refused as
+        /// divergent, naming its rules. A rule set bounded by a constant past that
+        /// horizon terminates; state its bound here.
         #[arg(long = "max-term-generating-rounds", value_name = "N")]
         max_term_generating_rounds: Option<u64>,
         /// Data-graph format override; inferred from the input extension when omitted.

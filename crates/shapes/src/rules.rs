@@ -40,10 +40,12 @@
 //! two executions never share a minted blank — "some rules may produce fresh blank nodes
 //! with each execution and therefore cause infinite iterations", which is exactly what
 //! `sh:runOnce` exists to prevent. A rule that mints on every pass without `sh:runOnce`
-//! is stopped by the term-generating round limit the caller configures
-//! ([`RuleOptions::with_max_term_generating_rounds`]), as the specification allows:
-//! "Rule engines MAY also report a failure after a pre-configured maximum iteration
-//! count has been exceeded".
+//! is stopped by the term-generating round limit, as the specification allows: "Rule
+//! engines MAY also report a failure after a pre-configured maximum iteration count has
+//! been exceeded". By default that limit is a divergence criterion derived from the base
+//! graph ([`TermGeneratingLimit::Horizon`]), refused as a [`Divergence`] naming the
+//! rules that kept inferring new terms; a host that knows its rule set's bound states it
+//! with [`RuleOptions::with_max_term_generating_rounds`].
 //!
 //! # Ill-formed triples are skipped
 //!
@@ -266,7 +268,7 @@ pub struct RuleOptions {
     /// Whether to track each inferred triple's rule with `sh:sourceRule`.
     source_rules: bool,
     /// The limit on term-generating rounds ([`Self::with_max_term_generating_rounds`]).
-    max_term_generating_rounds: u64,
+    term_generating_limit: TermGeneratingLimit,
 }
 
 impl Default for RuleOptions {
@@ -275,8 +277,7 @@ impl Default for RuleOptions {
             processors: Vec::new(),
             rule_set: None,
             source_rules: false,
-            max_term_generating_rounds:
-                purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS,
+            term_generating_limit: TermGeneratingLimit::Horizon,
         }
     }
 }
@@ -312,31 +313,30 @@ impl RuleOptions {
         self
     }
 
-    /// Permit at most `rounds` TERM-GENERATING rounds: rounds that infer a term the
+    /// Permit exactly `rounds` TERM-GENERATING rounds: rounds that infer a term the
     /// evaluation graph did not hold — a computed literal, a longer IRI, a fresh blank
     /// node. One more is refused with an error naming the limit.
     ///
     /// SHACL 1.2 Inference Rules: "Rule engines MAY also report a failure after a
     /// pre-configured maximum iteration count has been exceeded". Whether a rule set
-    /// that keeps computing new terms terminates is undecidable, so no fixed count is
-    /// right for every rule set: a counter stepping to 1000 needs 1000 such rounds and
-    /// terminates. The limit is therefore the host's, defaulting to
-    /// `purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS`. A round that
-    /// infers only terms the graph already holds is never counted. Every SHACL rule
-    /// round re-executes the rule over the whole evaluation graph, so a host running
-    /// untrusted rule sets bounds the time a divergent one takes by LOWERING this limit:
-    /// an exponential rule set reaches the engine's fixed arena and join ceilings only
-    /// slowly under the default (65,536 rounds).
+    /// that keeps computing new terms terminates is undecidable. The DEFAULT
+    /// ([`TermGeneratingLimit::Horizon`]) is a divergence criterion: at most
+    /// `max(256, 4 × N)` such rounds, `N` the distinct terms of the base graph (and of a
+    /// SPARQL 1.2 RL document's data blocks), which a rule set whose new terms are bounded
+    /// by its data needs — a depth counted along a chain inferred to its end — and past
+    /// which a rule set is refused as a [`Divergence`] naming the rules that inferred a
+    /// new term in the refused round. A rule set bounded by a constant past that horizon
+    /// — a counter stepping to 10,000 — terminates; its host states the bound here.
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.max_term_generating_rounds = rounds;
+        self.term_generating_limit = TermGeneratingLimit::Fixed(rounds);
         self
     }
 
     /// The term-generating round limit in force.
     #[must_use]
-    pub fn max_term_generating_rounds(&self) -> u64 {
-        self.max_term_generating_rounds
+    pub fn term_generating_limit(&self) -> TermGeneratingLimit {
+        self.term_generating_limit
     }
 
     /// How the host handles `value`, if it does.
@@ -358,6 +358,136 @@ impl RuleOptions {
     #[must_use]
     pub fn source_rules(&self) -> bool {
         self.source_rules
+    }
+}
+
+pub use purrdf_datalog::seminaive::TermGeneratingLimit;
+
+/// A rule set refused as DIVERGENT: under the default term-generating limit
+/// ([`TermGeneratingLimit::Horizon`]) it kept inferring terms the evaluation graph did
+/// not hold for more rounds than the horizon its input grants.
+///
+/// The criterion, exactly: with `N` the distinct terms of the evaluation's seeded
+/// store — the base graph's terms, and a SPARQL 1.2 RL document's data-block terms —
+/// the run is refused once more than `max(256, 4 × N)` rounds have each inferred at
+/// least one term the store did not hold. See [`TermGeneratingLimit::Horizon`] for why
+/// that horizon admits a rule set whose new terms its data bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Divergence {
+    rules: Vec<String>,
+    /// The same rules, as indices into the evaluated rule set.
+    indices: Vec<usize>,
+    rounds: u64,
+    horizon: u64,
+    input_terms: usize,
+}
+
+impl Divergence {
+    /// Rename the rules by their index into the evaluated rule set.
+    pub(crate) fn rename(&mut self, name: impl Fn(usize) -> Option<String>) {
+        for (slot, &index) in self.rules.iter_mut().zip(&self.indices) {
+            if let Some(renamed) = name(index) {
+                *slot = renamed;
+            }
+        }
+    }
+
+    /// The rules that inferred a new term in the refused round, as the rule set names
+    /// them, in rule order.
+    #[must_use]
+    pub fn rules(&self) -> &[String] {
+        &self.rules
+    }
+
+    /// The term-generating rounds run: one past the horizon.
+    #[must_use]
+    pub fn rounds(&self) -> u64 {
+        self.rounds
+    }
+
+    /// The horizon, `max(256, 4 × input_terms)`.
+    #[must_use]
+    pub fn horizon(&self) -> u64 {
+        self.horizon
+    }
+
+    /// The distinct terms of the seeded store the horizon was derived from.
+    #[must_use]
+    pub fn input_terms(&self) -> usize {
+        self.input_terms
+    }
+}
+
+impl std::fmt::Display for Divergence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the rules diverged: {} rounds inferred a term the evaluation graph did not hold, \
+             past the horizon of {} such rounds that the input's {} terms grant (max({}, {} \
+             per input term)); {} inferred a new term in the last round (SHACL 1.2 Inference \
+             Rules: \"Rule engines MAY also report a failure after a pre-configured maximum \
+             iteration count has been exceeded\"); if the rule set terminates, state its bound \
+             with RuleOptions::with_max_term_generating_rounds",
+            self.rounds,
+            self.horizon,
+            self.input_terms,
+            purrdf_datalog::seminaive::TERM_GENERATING_HORIZON_FLOOR,
+            purrdf_datalog::seminaive::TERM_GENERATING_ROUNDS_PER_INPUT_TERM,
+            self.rules.join(", "),
+        )
+    }
+}
+
+impl std::error::Error for Divergence {}
+
+/// Why [`crate::srl::evaluate`] refused: a [`Divergence`], or any other failure, as the
+/// engine's diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RulesError {
+    /// The rule set diverged under the default term-generating limit.
+    Diverged(Divergence),
+    /// Any other failure.
+    Failed(String),
+}
+
+impl RulesError {
+    pub(crate) fn diverged(
+        rules: Vec<(usize, String)>,
+        rounds: u64,
+        horizon: u64,
+        input_terms: usize,
+    ) -> Self {
+        let (indices, rules) = rules.into_iter().unzip();
+        Self::Diverged(Divergence {
+            rules,
+            indices,
+            rounds,
+            horizon,
+            input_terms,
+        })
+    }
+}
+
+impl std::fmt::Display for RulesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Diverged(divergence) => write!(f, "SHACL rules did not complete: {divergence}"),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for RulesError {}
+
+impl From<String> for RulesError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<RulesError> for String {
+    fn from(error: RulesError) -> Self {
+        error.to_string()
     }
 }
 
@@ -385,9 +515,9 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 ///
 /// A failure the specification makes one: a `sh:ruleProcessor` value the host has not
 /// registered, on a rule or on any rule set; a requested rule set the shapes graph does
-/// not declare; a rule or expression that fails during execution; and a rule set that
-/// passes one of the engine's fixed ceilings — a rule minting a new term every pass
-/// included.
+/// not declare; a rule or expression that fails during execution; a rule set that keeps
+/// inferring new terms past its term-generating limit — a [`Divergence`] under the
+/// default; and a rule set that passes one of the engine's fixed ceilings.
 pub fn infer(
     data: &ShaclData,
     shapes: &Shapes,
@@ -400,7 +530,7 @@ pub fn infer(
         crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let rule_set = shacl_rule_set(shapes, options)?;
-    srl::evaluate(&rule_set, data, shapes, options)
+    srl::evaluate(&rule_set, data, shapes, options).map_err(String::from)
 }
 
 /// Execute the shapes graph's rules over a frozen [`RdfDataset`]: build the SHACL
