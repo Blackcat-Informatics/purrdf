@@ -63,6 +63,44 @@ const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
 const BASE_CLASS: &str = "PurrdfBaseModel";
 
+/// The Python source of the runtime `uniqueItems` check: JSON Schema's
+/// equality (numbers by value, `true` never `1`, objects by members) over the
+/// raw JSON input, run before any item is coerced — a coerced item (a parsed
+/// `datetime`, say) could make two distinct JSON strings equal.
+const UNIQUE_ITEMS_HELPER: &str = "def _purrdf_json_key(value: Any) -> Any:
+    if isinstance(value, bool):
+        return (\"boolean\", value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return (\"number\", repr(value))
+        return (\"number\", Fraction(value))
+    if isinstance(value, str):
+        return (\"string\", value)
+    if value is None:
+        return (\"null\",)
+    if isinstance(value, (list, tuple)):
+        return (\"array\", tuple(_purrdf_json_key(item) for item in value))
+    if isinstance(value, dict):
+        return (
+            \"object\",
+            tuple(sorted((str(key), _purrdf_json_key(item)) for key, item in value.items())),
+        )
+    return (\"other\", repr(value))
+
+
+def _purrdf_unique_items(value: Any) -> Any:
+    if isinstance(value, list):
+        seen: set[Any] = set()
+        for item in value:
+            key = _purrdf_json_key(item)
+            if key in seen:
+                raise ValueError(\"array items must be unique (JSON Schema uniqueItems)\")
+            seen.add(key)
+    return value
+
+
+";
+
 /// Fixed generated-package dialect and reverse-loss source identifier.
 pub const PYDANTIC_DIALECT: &str = "pydantic-v2";
 
@@ -1305,9 +1343,11 @@ impl<'a> Renderer<'a> {
         let mut out = String::new();
         out.push_str(&python_string(docstring));
         out.push_str("\nfrom __future__ import annotations\n\n");
+        out.push_str("import math\n");
         out.push_str("from copy import deepcopy\n");
         out.push_str("from datetime import date, datetime, time\n");
         out.push_str("from enum import StrEnum\n");
+        out.push_str("from fractions import Fraction\n");
         out.push_str("from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never\n\n");
         out.push_str("from pydantic import (\n");
         out.push_str("    BeforeValidator,\n    ConfigDict,\n    Field,\n    RootModel,\n");
@@ -1322,6 +1362,7 @@ impl<'a> Renderer<'a> {
             "        raise ValueError(\"temporal values require a JSON string carrier\")\n",
         );
         out.push_str("    return value\n\n\n");
+        out.push_str(UNIQUE_ITEMS_HELPER);
         writeln!(out, "_PURRDF_DEFS = {defs_literal}\n")
             .expect("writing generated Python to a String cannot fail");
 
@@ -1449,11 +1490,15 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
             }
         }
     }
+    let mut validators = Vec::new();
     if declared_type == Some("array") {
         for (keyword, pydantic) in [("minItems", "min_length"), ("maxItems", "max_length")] {
             if let Some(value) = object.get(keyword).and_then(Value::as_u64) {
                 arguments.push(format!("{pydantic}={value}"));
             }
+        }
+        if object.get("uniqueItems") == Some(&Value::Bool(true)) {
+            validators.push("BeforeValidator(_purrdf_unique_items)");
         }
     } else if declared_type == Some("string") && !is_temporal_format(object) {
         for (keyword, pydantic) in [("minLength", "min_length"), ("maxLength", "max_length")] {
@@ -1467,10 +1512,15 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
             arguments.push(format!("pattern={}", python_string(pattern)));
         }
     }
-    if arguments.is_empty() {
+    let mut metadata = Vec::new();
+    if !arguments.is_empty() {
+        metadata.push(format!("Field({})", arguments.join(", ")));
+    }
+    metadata.extend(validators.into_iter().map(str::to_owned));
+    if metadata.is_empty() {
         base
     } else {
-        format!("Annotated[{base}, Field({})]", arguments.join(", "))
+        format!("Annotated[{base}, {}]", metadata.join(", "))
     }
 }
 
@@ -1522,7 +1572,7 @@ fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -
                 "minLength" | "maxLength" | "pattern" | "format" => {
                     has_schema_type(branch_object, "string")
                 }
-                "minItems" | "maxItems" => has_schema_type(branch_object, "array"),
+                "minItems" | "maxItems" | "uniqueItems" => has_schema_type(branch_object, "array"),
                 "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => {
                     has_numeric_schema_type(branch_object)
                 }
@@ -1558,6 +1608,7 @@ fn runtime_constraint_keys() -> &'static [&'static str] {
         "pattern",
         "minItems",
         "maxItems",
+        "uniqueItems",
         "format",
     ]
 }
@@ -1622,8 +1673,10 @@ fn render_routed_base(docstring: &str) -> String {
     let mut out = String::new();
     out.push_str(&python_string(docstring));
     out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("import math\n");
     out.push_str("from datetime import date, datetime, time\n");
     out.push_str("from enum import StrEnum\n");
+    out.push_str("from fractions import Fraction\n");
     out.push_str(
         "from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never, TypeAlias, cast\n\n",
     );
@@ -1643,6 +1696,7 @@ fn render_routed_base(docstring: &str) -> String {
     out.push_str("    if not isinstance(value, str):\n");
     out.push_str("        raise ValueError(\"temporal values require a JSON string carrier\")\n");
     out.push_str("    return value\n\n\n");
+    out.push_str(UNIQUE_ITEMS_HELPER);
     out.push_str("_PURRDF_RUNTIME_TYPES: dict[str, Any] = {\n");
     for name in routed_runtime_names() {
         writeln!(out, "    {}: {name},", python_string(name))
@@ -1682,6 +1736,7 @@ fn routed_runtime_names() -> &'static [&'static str] {
         "TypeAlias",
         "TypedDict",
         "_purrdf_temporal_input",
+        "_purrdf_unique_items",
         "cast",
         "date",
         "datetime",
@@ -2106,6 +2161,7 @@ fn known_schema_keyword(keyword: &str) -> bool {
             | "pattern"
             | "minItems"
             | "maxItems"
+            | "uniqueItems"
             | "format"
     )
 }
@@ -2189,6 +2245,7 @@ fn reserved_type_names() -> BTreeSet<&'static str> {
         "ConfigDict",
         "Field",
         "ForwardRef",
+        "Fraction",
         "Literal",
         "Never",
         "NotRequired",
