@@ -176,7 +176,9 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 - `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, import_iris,
   import_documents, import_count, out_report, out_clean, out_findings, out_error)`
   certifies a shapes graph — its whole `owl:imports` closure: the loader's verdict, the
-  W3C `shacl-shacl.ttl` results, and which implementation every function call binds to.
+  W3C `shacl-shacl.ttl` results, which implementation every function call binds to, and
+  every validator declared for a built-in component (superseded by the native
+  implementation, never run).
   It writes the same deterministic report text as `purrdf shapes lint`. A malformed
   shapes graph is a report with findings and `*out_clean == 0`, not an error; a
   closure that is not in hand is `PURRDF_STATUS_SHAPES_IMPORT_ERROR` and no report.

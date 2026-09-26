@@ -10,8 +10,10 @@
 //!    every key parameter and every parameter set — and the declared-vs-implemented
 //!    gap is empty for functions and for components alike.
 //! 2. **The linker's outcomes.** A built-in's bare declaration binds and indexes
-//!    nothing; a second definition, a kind or signature mismatch and a key clash
-//!    are refused. Every refusal is proven
+//!    nothing; a built-in component's declared validators bind as alternatives the
+//!    native implementation supersedes; a second definition, a kind or signature
+//!    mismatch, a semantic statement on a built-in, an ill-formed validator and a key
+//!    clash are refused. Every refusal is proven
 //!    next to a VALID neighbour whose outcome differs from the refusal's.
 //! 3. **The resolution report.** Every call site names what it bound to.
 //!
@@ -473,16 +475,239 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
   sh:property [ sh:path ex:p ; sh:minCount 1 ] .
 ";
 
+/// The alternatives declared for `sh:MinCountConstraintComponent` below: a SELECT
+/// property validator that reports EVERY focus node, and an ASK validator that calls a
+/// function this engine does not have. Either, if it ran, would change the report.
+const MIN_COUNT_ALTERNATIVES: &str = r#"
+sh:MinCountConstraintComponent
+  sh:propertyValidator [ a sh:SPARQLSelectValidator ; sh:select "SELECT $this WHERE { }" ] ;
+  sh:validator ex:askAlternative .
+ex:askAlternative a sh:SPARQLAskValidator ;
+  sh:ask "ASK { FILTER (<http://example.org/ns#notAFunction>(?value)) }" .
+"#;
+
+/// A built-in given validators binds NATIVELY: the declared validators are
+/// alternative implementations the native one supersedes (SHACL 1.2 SPARQL
+/// Extensions, "Validators": a constraint uses "one of the values"). The report is the
+/// native one — identical to the report without the alternatives — although the
+/// SELECT alternative would flag ex:a as well and the ASK alternative would fail on
+/// an unknown function.
 #[test]
-fn a_builtin_component_given_a_validator_is_a_duplicate_definition() {
+fn a_builtin_component_given_validators_binds_natively() {
+    let data = "ex:a ex:p 1 .";
+    let with = validate(
+        &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}{MIN_COUNT_SHAPE}"),
+        data,
+    );
+    let without = validate(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"), data);
+    assert_eq!(
+        focus_nodes(&with),
+        vec!["<http://example.org/ns#b>".to_owned()]
+    );
+    assert_eq!(summary(&with), summary(&without));
+    let linked = linked(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}"));
+    assert_eq!(linked.registered_components, Vec::<String>::new());
+    let alternatives: Vec<(String, String, &str)> = linked
+        .alternative_validators
+        .iter()
+        .map(|a| {
+            (
+                a.component.clone(),
+                a.attachment.clone(),
+                a.language.label(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        alternatives,
+        vec![
+            (
+                sh_iri("MinCountConstraintComponent"),
+                sh_iri("propertyValidator"),
+                "sparql-select"
+            ),
+            (
+                sh_iri("MinCountConstraintComponent"),
+                sh_iri("validator"),
+                "sparql-ask"
+            ),
+        ]
+    );
+}
+
+/// Every result as (focus, path, value, component, severity, messages) — the report
+/// minus the shape's blank-node label, which differs between two parses.
+fn summary(report: &ValidationReport) -> Vec<String> {
+    let mut out: Vec<String> = report
+        .results
+        .iter()
+        .map(|r| {
+            format!(
+                "{} {:?} {:?} {} {:?} {:?}",
+                r.focus_node,
+                r.result_path,
+                r.value,
+                r.source_constraint_component,
+                r.severity,
+                r.messages
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn sh_iri(local: &str) -> String {
+    format!("http://www.w3.org/ns/shacl#{local}")
+}
+
+/// A built-in's declaration that ALSO states a parameter the built-in does not have
+/// is still refused, alternatives or not; the neighbour without the foreign
+/// parameter is the test above.
+#[test]
+fn a_builtin_with_validators_and_a_foreign_parameter_is_a_signature_mismatch() {
+    let error = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}
+         sh:MinCountConstraintComponent sh:parameter [ sh:path ex:extra ] .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(
+        error.contains("signature mismatch") && error.contains("http://example.org/ns#extra"),
+        "{error}"
+    );
+}
+
+/// A query stated on the built-in component ITSELF, not on a validator, is a second
+/// definition; the same query on a validator is an alternative and loads.
+#[test]
+fn a_query_on_a_builtin_component_itself_is_a_duplicate_definition() {
     let error = load_error(&format!(
         "{MIN_COUNT_DECLARATION}
-         sh:MinCountConstraintComponent sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{}}\" ] .
+         sh:MinCountConstraintComponent sh:ask \"ASK {{ }}\" .
          {MIN_COUNT_SHAPE}"
     ));
     assert!(
         error.contains("duplicate definition") && error.contains("MinCountConstraintComponent"),
         "{error}"
+    );
+    load(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{ }}\" ] .
+         {MIN_COUNT_SHAPE}"
+    ))
+    .expect("the same query on a validator is an alternative");
+}
+
+/// `sh:severity` on a built-in's declaration would state something the native
+/// implementation does not honour, so it is refused. The neighbour carries every
+/// annotation the linker accepts — `sh:message`, `sh:labelTemplate`, a non-validating
+/// `sh:name`, and non-SHACL `rdfs:label` — and validates exactly as the bare
+/// declaration does: the component's `sh:message` belongs to the SPARQL validation
+/// protocol the native implementation supersedes, so the native result carries no
+/// message.
+#[test]
+fn a_semantic_statement_on_a_builtin_declaration_is_refused() {
+    let error = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:severity sh:Warning .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(
+        error.contains("MinCountConstraintComponent") && error.contains("shacl#severity"),
+        "{error}"
+    );
+    let annotated = validate(
+        &format!(
+            "{MIN_COUNT_DECLARATION}
+             sh:MinCountConstraintComponent
+               sh:message \"Fewer than {{$minCount}} values\" ;
+               sh:labelTemplate \"Must have at least {{$minCount}} values\" ;
+               sh:name \"min count\" ;
+               rdfs:label \"Min count\" .
+             {MIN_COUNT_SHAPE}"
+        ),
+        "ex:a ex:p 1 .",
+    );
+    let bare = validate(
+        &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"),
+        "ex:a ex:p 1 .",
+    );
+    assert_eq!(
+        focus_nodes(&annotated),
+        vec!["<http://example.org/ns#b>".to_owned()]
+    );
+    assert_eq!(summary(&annotated), summary(&bare));
+    assert_eq!(
+        annotated.results[0].messages.len(),
+        0,
+        "{:?}",
+        annotated.results
+    );
+}
+
+/// An alternative must still be a well-formed validator of its attachment. A SHACL-JS
+/// validator is not ("The values of sh:validator must be ASK-based validators"), nor
+/// is an ASK validator under `sh:propertyValidator` ("The values of
+/// sh:propertyValidator must be SELECT-based validators"), nor an ASK validator whose
+/// query does not parse; each is refused. The neighbours — the SPARQL validator of the
+/// right form, with a parsable query calling an unknown function — load (see
+/// `a_builtin_component_given_validators_binds_natively`).
+#[test]
+fn an_ill_formed_alternative_on_a_builtin_is_refused() {
+    let js = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:validator [
+           a sh:JSValidator ; sh:jsFunctionName \"validateMinCount\" ] .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(
+        js.contains("sh:JSValidator") && js.contains("SHACL JavaScript Extensions"),
+        "{js}"
+    );
+    let wrong_form = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:propertyValidator [
+           a sh:SPARQLAskValidator ; sh:ask \"ASK {{ }}\" ] .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(
+        wrong_form.contains("requires SELECT validators"),
+        "{wrong_form}"
+    );
+    let unparsable = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:validator [
+           a sh:SPARQLAskValidator ; sh:ask \"ASK {{\" ] .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(unparsable.contains("unparsable query"), "{unparsable}");
+}
+
+/// A CUSTOM component with a SHACL-JS validator is refused even when no shape uses
+/// it: the node is ill-formed whatever uses it. The neighbour — the same component
+/// with only its SPARQL validator — loads and runs that validator.
+#[test]
+fn a_custom_component_with_a_javascript_validator_is_refused() {
+    const COMPONENT: &str = r#"
+ex:EqualsOne a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:one ] ;
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value = 1) }" ] .
+"#;
+    let error = load_error(&format!(
+        "{COMPONENT}
+         ex:EqualsOne sh:validator [ a sh:JSValidator ; sh:jsFunctionName \"equalsOne\" ] ."
+    ));
+    assert!(error.contains("sh:JSValidator"), "{error}");
+    let report = validate(
+        &format!(
+            "{COMPONENT}
+             ex:S a sh:NodeShape ; sh:targetNode 1, 2 ; ex:one true ."
+        ),
+        "",
+    );
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()]
     );
 }
 
@@ -644,31 +869,38 @@ fn the_unique_values_for_declaration_binds_natively() {
     );
 }
 
-/// A shapes graph that supplies its own validator for the native component is
-/// refused as a duplicate definition; the bare declaration beside it loads (see
-/// the test above).
+/// A shapes graph that supplies its own validator for the native component binds
+/// the component natively: the validator's `FILTER (true)` would pass every value,
+/// and the native `sh:uniqueValuesFor` still reports the clash.
 #[test]
-fn a_validator_on_unique_values_for_is_a_duplicate_definition() {
-    let error = load_error(&format!(
+fn a_validator_on_unique_values_for_is_a_superseded_alternative() {
+    let shapes = format!(
         r#"{UNIQUE_VALUES_FOR_DECLARATION}
         sh:UniqueValuesForConstraintComponent sh:validator [
           a sh:SPARQLAskValidator ;
           sh:ask """ASK {{ FILTER (true) }}"""
         ] .
         {UNIQUE_VALUES_FOR_SHAPE}"#
-    ));
-    assert!(
-        error.contains("UniqueValuesForConstraintComponent"),
-        "{error}"
+    );
+    let clash = validate(
+        &shapes,
+        "ex:a a ex:Record ; ex:id \"1\" . ex:b a ex:Record ; ex:id \"1\" .",
+    );
+    assert_eq!(
+        focus_nodes(&clash),
+        vec![
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#b>".to_owned()
+        ]
     );
 }
 
-/// A component this engine now evaluates natively is a native IRI: its bare
-/// W3C declaration binds, and a shapes graph that also supplies a validator for
-/// it is refused as a duplicate definition — the native `sh:singleLine` is the
-/// implementation, and a second one would silently compete with it.
+/// A component this engine evaluates natively is a native IRI: its bare W3C
+/// declaration binds, and a validator the shapes graph also supplies for it is an
+/// alternative the native `sh:singleLine` supersedes — the alternative's
+/// `FILTER (true)` would pass the two-line value the native component reports.
 #[test]
-fn a_validator_on_a_native_component_is_a_duplicate_definition() {
+fn a_validator_on_a_native_component_is_a_superseded_alternative() {
     const SINGLE_LINE_DECLARATION: &str = r"
 sh:SingleLineConstraintComponent a sh:ConstraintComponent ;
   sh:parameter sh:SingleLineConstraintComponent-singleLine .
@@ -679,22 +911,21 @@ sh:SingleLineConstraintComponent-singleLine a sh:Parameter ;
 ex:S a sh:NodeShape ; sh:targetNode ex:a ;
   sh:property [ sh:path ex:text ; sh:singleLine true ] .
 ";
-    let error = load_error(&format!(
+    let shapes = format!(
         r#"{SINGLE_LINE_DECLARATION}
         sh:SingleLineConstraintComponent sh:validator [
           a sh:SPARQLAskValidator ;
           sh:ask """ASK {{ FILTER (true) }}"""
         ] .
         {SINGLE_LINE_SHAPE}"#
-    ));
-    assert!(error.contains("SingleLineConstraintComponent"), "{error}");
-    let shapes = format!("{SINGLE_LINE_DECLARATION}{SINGLE_LINE_SHAPE}");
+    );
     assert_eq!(
         focus_nodes(&validate(&shapes, "ex:a ex:text \"one\\ntwo\" .")),
         vec!["<http://example.org/ns#a>".to_owned()]
     );
     assert!(validate(&shapes, "ex:a ex:text \"one two\" .").conforms);
     assert_eq!(linked(&shapes).registered_components, Vec::<String>::new());
+    assert_eq!(linked(&shapes).alternative_validators.len(), 1);
 }
 
 // ── 5. The index stays empty ─────────────────────────────────────────────────
@@ -822,5 +1053,89 @@ fn every_call_site_names_what_it_bound_to() {
             .iter()
             .any(|c| matches!(c, Constraint::Component { .. }))),
         "no component instance was made from a function declaration"
+    );
+}
+
+// ── 6. Alternatives are reported, never findings ─────────────────────────────
+
+fn lint_report(shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
+    let document =
+        purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{shapes_ttl}"), None)
+            .expect("parses");
+    purrdf_shapes::lint::lint(
+        &document.dataset,
+        &document.prefixes,
+        None,
+        None,
+        &purrdf_shapes::ShapesImports::new(),
+    )
+    .expect("shacl-shacl.ttl loads and validates")
+}
+
+/// `shapes lint` names every alternative a built-in's declaration carries, with the
+/// native implementation superseding it, and counts none as a finding: the report
+/// with the alternatives has exactly the findings of the report without them. A
+/// graph the loader refuses reports `validators unavailable`.
+#[test]
+fn lint_reports_superseded_alternatives_without_findings() {
+    let with = lint_report(&format!(
+        "{MIN_COUNT_DECLARATION}{MIN_COUNT_ALTERNATIVES}{MIN_COUNT_SHAPE}"
+    ));
+    let without = lint_report(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"));
+    assert_eq!(with.load_error(), None, "{}", with.render());
+    assert_eq!(with.findings(), without.findings());
+    assert_eq!(with.alternative_validators().map(<[_]>::len), Some(2));
+    assert_eq!(without.alternative_validators().map(<[_]>::len), Some(0));
+    let text = with.render();
+    assert!(
+        text.contains(
+            "validators 2\n\
+             alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> \
+             <http://www.w3.org/ns/shacl#propertyValidator> _:"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> \
+             <http://www.w3.org/ns/shacl#validator> <http://example.org/ns#askAlternative> \
+             sparql-ask superseded-by-native\n"
+        ),
+        "{text}"
+    );
+    assert!(without.render().contains("validators 0\n"));
+    let refused = lint_report(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:severity sh:Warning ."
+    ));
+    assert!(refused.load_error().is_some());
+    assert_eq!(refused.alternative_validators(), None);
+    assert!(refused.render().contains("validators unavailable\n"));
+}
+
+/// The neighbour of the alternative that calls an unknown function: a SELECTED
+/// validator calling one is a hard error — at validation, where the host's function
+/// registry is in scope (a shapes graph is parsed once and validated under whatever
+/// registry each caller installs, so the load has none to consult) — never a silently
+/// false FILTER. The superseded alternative in
+/// `a_builtin_component_given_validators_binds_natively` calls the same kind of
+/// function and validates, because it never runs.
+#[test]
+fn a_selected_validator_calling_an_unknown_function_fails_validation() {
+    let shapes = load(
+        r#"
+ex:C a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:c ] ;
+  sh:validator [ a sh:SPARQLAskValidator ;
+                 sh:ask "ASK { FILTER (<http://example.org/ns#notAFunction>(?value)) }" ] .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:c true .
+"#,
+    )
+    .expect("the validator's query is well-formed");
+    let error = validate_dataset_with_shapes_graph(&data_of(""), &shapes, None)
+        .expect_err("the selected validator cannot run");
+    assert!(
+        error.contains("http://example.org/ns#notAFunction"),
+        "{error}"
     );
 }

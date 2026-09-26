@@ -978,6 +978,9 @@ pub struct LinkedDeclarations {
     pub native_list_functions: Vec<String>,
     /// The custom constraint components registered, in IRI order.
     pub registered_components: Vec<String>,
+    /// Every validator declared for a built-in component, superseded by the native
+    /// implementation, sorted (see [`crate::validator_alternatives`]).
+    pub alternative_validators: Vec<crate::validator_alternatives::AlternativeValidator>,
 }
 
 impl LinkedDeclarations {
@@ -1019,7 +1022,30 @@ pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarat
         custom_key_parameters: linked.custom.key_parameters(),
         native_list_functions: linked.native_list.into_iter().collect(),
         registered_components,
+        alternative_validators: registry.alternatives,
     })
+}
+
+/// Every validator `dataset` declares for a built-in component, sorted — the list
+/// [`crate::lint`] reports. `doc_prefixes` are the loader's, as for
+/// [`from_resolved_dataset`].
+///
+/// # Errors
+///
+/// The component registry's own refusal, exactly as a parse of `dataset` reports it.
+pub(crate) fn alternative_validators(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+) -> Result<Vec<crate::validator_alternatives::AlternativeValidator>, String> {
+    let parser = Parser::new(
+        dataset.as_ref(),
+        None,
+        doc_prefixes,
+        None,
+        Arc::clone(dataset),
+        None,
+    );
+    Ok(ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?.alternatives)
 }
 
 /// Parse shapes from a dataset, with the shapes document's `@prefix` declarations

@@ -371,6 +371,10 @@ fn eval_node_expr(
 /// - `"calls"` — one dict per function call site, `"binding"` (`native`, `custom`,
 ///   `sparql-registered`, `host-extension`), `"function"`, `"owner"`; `None` when the
 ///   loader refused the graph;
+/// - `"alternatives"` — one dict per validator the graph declares for a built-in
+///   constraint component, which the native implementation supersedes and never runs:
+///   `"component"`, `"attachment"`, `"validator"`, `"language"` (`sparql-ask`,
+///   `sparql-select`); never findings; `None` when the loader refused the graph;
 /// - `"report"` — the deterministic text every PurRDF host prints.
 ///
 /// The report certifies the shapes graph's whole `owl:imports` closure, resolved against
@@ -423,6 +427,21 @@ fn lint_shapes(
                 calls.append(d)?;
             }
             out.set_item("calls", calls)?;
+        }
+    }
+    match report.alternative_validators() {
+        None => out.set_item("alternatives", py.None())?,
+        Some(declared) => {
+            let alternatives = PyList::empty(py);
+            for alternative in declared {
+                let d = PyDict::new(py);
+                d.set_item("component", &alternative.component)?;
+                d.set_item("attachment", &alternative.attachment)?;
+                d.set_item("validator", alternative.validator.to_string())?;
+                d.set_item("language", alternative.language.label())?;
+                alternatives.append(d)?;
+            }
+            out.set_item("alternatives", alternatives)?;
         }
     }
     out.set_item("report", report.render())?;

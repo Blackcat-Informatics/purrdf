@@ -263,9 +263,24 @@ resolves each declaration against the engine's table of what it implements:
 
 - a bare declaration of a built-in binds to the native implementation and adds
   nothing to the custom-function index or the component registry;
-- a built-in declared again with a body, a validator, `sh:ask` or `sh:select`
-  is a duplicate definition, and one declared under the wrong class or with a
-  contradicting signature is a mismatch; both fail the load;
+- a built-in declared again with a body is a duplicate definition, and so is a
+  built-in component given an `sh:ask` or `sh:select` of its own; one declared
+  under the wrong class or with a contradicting signature is a mismatch; all of
+  these fail the load;
+- validators declared for a built-in component are alternatives the native
+  implementation supersedes. SHACL 1.2 SPARQL Extensions selects "one of the
+  values" of a component's validators, so each is an implementation of the same
+  component, and the engine's own is the one that runs. Vocabularies such as
+  DASH declare them for SHACL Core components. An alternative must be a
+  well-formed SPARQL validator of its attachment: a SHACL-JS `sh:JSValidator`,
+  an ASK validator under `sh:propertyValidator` or an unparsable query fails the
+  load. It is never executed, so its query may call a function the engine does
+  not have;
+- any other `sh:` statement on a built-in's declaration fails the load, except
+  `sh:message`, `sh:labelTemplate` and the non-validating characteristics
+  (`sh:name`, `sh:description`, …): `sh:severity` on
+  `sh:MinCountConstraintComponent`, for example, would ask the native
+  implementation for something it does not do;
 - a function the engine does not implement still needs its body, whatever its
   namespace: a bodiless `ex:f` fails the load, and so does a bodiless
   `sh:NotABuiltin`;
@@ -280,7 +295,8 @@ report is byte-identical with and without the merge. `purrdf_shapes::spec`
 exposes what the vocabularies declare and what the engine implements, and a
 test pins the difference at zero. `purrdf shapes lint` reports, per function
 call site, whether the call bound natively, to a custom body, to a SPARQL
-registration or to a host extension.
+registration or to a host extension, and lists every validator declared for a
+built-in component as `superseded-by-native`. Those lines are never findings.
 
 ## SHACL 1.2 conformance
 
@@ -646,7 +662,7 @@ purrdf.shapes.eval_node_expr(shapes_ttl, data_nt, "_:suffix",
 **Certifying a shapes graph.** Loading a shapes graph is the hot path: it
 refuses the first construct it cannot evaluate faithfully, and does not pay for
 validating the graph against the W3C `shacl-shacl.ttl`. Linting pays that cost
-once, on request, and reports three sections:
+once, on request, and reports four sections:
 
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
@@ -659,6 +675,9 @@ once, on request, and reports three sections:
    to — `native`, `custom`, `sparql-registered` or `host-extension`. For a shapes
    graph that merges the W3C SHACL 1.2 vocabularies, a `sh:sparqlExpr` call
    binds `native` even though the graph declares `sh:SPARQLExprExpression`.
+4. `validators`: every validator the shapes graph declares for a built-in
+   constraint component, which the native implementation supersedes and never
+   runs. These lines are never findings.
 
 A report is clean when the loader accepted the graph and every `shacl-shacl`
 result is superseded. Every host renders the same deterministic text; the

@@ -230,7 +230,7 @@ const fn non_validating(iri: &'static str) -> CensusRow {
 }
 
 /// Why a SHACL JavaScript Extensions term is refused.
-const JS: &str = "SHACL JavaScript Extensions are not part of SHACL 1.2, and this engine has no \
+pub(crate) const JS: &str = "SHACL JavaScript Extensions are not part of SHACL 1.2, and this engine has no \
      JavaScript engine to evaluate them";
 
 /// Every term the spec symbol table has no row for, classified by hand. Each is
@@ -322,7 +322,7 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh::PARAMETER_PROPERTY, Role::Declaration),
     structural(sh::OPTIONAL, Role::ParameterDeclaration),
     structural(sh::KEY_PARAMETER, Role::ParameterDeclaration),
-    non_validating(sh_iri!("labelTemplate")),
+    non_validating(sh::LABEL_TEMPLATE),
     structural(sh::CONSTRAINT_COMPONENT, Role::Declaration),
     structural(sh::VALIDATOR, Role::Declaration),
     structural(sh::NODE_VALIDATOR, Role::Declaration),

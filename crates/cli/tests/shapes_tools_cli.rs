@@ -429,7 +429,10 @@ fn cli_shapes_lint() {
         ),
         "{report}"
     );
-    assert!(report.ends_with("findings 0\nclean true\n"), "{report}");
+    assert!(
+        report.ends_with("validators 0\nfindings 0\nclean true\n"),
+        "{report}"
+    );
     assert!(stderr(&out).contains("shapes lint clean true\n"));
     assert_eq!(
         stdout(&run(&["shapes", "lint", &clean])),
@@ -453,6 +456,7 @@ fn cli_shapes_lint() {
         "{report}"
     );
     assert!(report.contains("functions unavailable\n"), "{report}");
+    assert!(report.contains("validators unavailable\n"), "{report}");
     assert!(report.ends_with("clean false\n"), "{report}");
     assert!(stderr(&bad).contains("shapes lint clean false\n"));
 
@@ -682,4 +686,42 @@ fn the_shacl_prefix_idiom_validates_without_an_import_and_a_labelled_target_is_r
         "the refusal names the labelled target: {err}"
     );
     assert!(stdout(&out).is_empty(), "no report is written");
+}
+
+/// `shapes lint` names each validator a shapes graph declares for a built-in component
+/// — here an ASK validator on `sh:MinCountConstraintComponent` that would pass
+/// nothing — as an alternative the native implementation supersedes, and counts it as
+/// no finding: exit 0, clean, the same findings as the graph without it. `validate`
+/// over the same graph reports the NATIVE verdict, so the alternative did not run.
+#[test]
+fn cli_shapes_lint_reports_superseded_builtin_validators() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "alternatives.ttl",
+        &format!(
+            r#"{PREFIXES}
+sh:MinCountConstraintComponent a sh:ConstraintComponent ;
+  sh:validator ex:neverValid .
+ex:neverValid a sh:SPARQLAskValidator ; sh:ask "ASK {{ FILTER (false) }}" .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:n ; sh:minCount 1 ] .
+"#
+        ),
+    );
+    let out = run(&["shapes", "lint", &shapes]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = stdout(&out);
+    assert!(
+        report.contains(
+            "validators 1\nalternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> \
+             <http://www.w3.org/ns/shacl#validator> <http://example.org/ns#neverValid> \
+             sparql-ask superseded-by-native\n"
+        ),
+        "{report}"
+    );
+    assert!(report.ends_with("findings 0\nclean true\n"), "{report}");
+
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let validated = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&validated), 0, "{}", stderr(&validated));
 }

@@ -24,7 +24,10 @@
 //! | Declaration | Outcome |
 //! |---|---|
 //! | a native IRI, bare | binds natively; no custom-function or component-registry entry |
-//! | a native IRI carrying `sh:bodyExpression`, a validator, `sh:ask` or `sh:select` | load error: duplicate definition |
+//! | a native function IRI carrying `sh:bodyExpression`, a validator, `sh:ask` or `sh:select` | load error: duplicate definition |
+//! | a native component IRI carrying `sh:bodyExpression`, `sh:ask` or `sh:select` | load error: duplicate definition |
+//! | a native component IRI carrying validators | binds natively; each validator is an alternative the native implementation supersedes, never run ([`crate::validator_alternatives`]) |
+//! | a native component IRI carrying any other `sh:` statement than its signature, validators, `sh:message`, `sh:labelTemplate` or a non-validating characteristic | load error |
 //! | a native IRI under another declaring class, or stating a parameter or key the native signature does not have | load error: kind or signature mismatch |
 //! | a non-native IRI with no body / validator | load error (functions); ignored as SHACL-SPARQL requires (components) |
 //! | a custom named function keyed by node-expression vocabulary | load error: key clash |

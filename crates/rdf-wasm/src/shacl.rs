@@ -650,8 +650,10 @@ impl ShaclLintReport {
 
     /// The whole report as the deterministic text every PurRDF host prints: the `load`,
     /// `shacl-shacl` (`result …` lines, `superseded NAME` where SHACL 1.2 Core makes the
-    /// flagged graph well-formed) and `functions` (`call BINDING <IRI> in OWNER`) sections,
-    /// then `findings N` and `clean true|false`.
+    /// flagged graph well-formed), `functions` (`call BINDING <IRI> in OWNER`) and
+    /// `validators` (`alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE
+    /// superseded-by-native`, one per validator declared for a built-in component)
+    /// sections, then `findings N` and `clean true|false`.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn report(&self) -> String {

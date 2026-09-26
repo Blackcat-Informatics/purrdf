@@ -247,8 +247,9 @@ ownership, and all limits. Complete examples are in
   returns the output nodes as N-Triples terms in sequence order.
 - `shaclLintShapes(shapesTtl, shapesBase?)` — certifies a shapes graph: the
   loader's verdict, every result of validating it against the W3C
-  `shacl-shacl.ttl`, and which implementation every function call binds to.
-  Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
+  `shacl-shacl.ttl`, which implementation every function call binds to, and
+  every validator declared for a built-in component (superseded by the native
+  implementation, never run). Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
   deterministic `report` text. Call `free()` when done.
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /

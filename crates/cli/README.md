@@ -832,7 +832,7 @@ Certify a shapes graph cold: everything PurRDF can say about it before any data
 is validated, in one deterministic report. Validation never pays for this; the
 verb is where it is paid, on request. The loader is configured by the same
 `--import`, `--box-role-vocab` and `--shapes-graph` flags `validate` takes, so
-the graph certified is the graph validation would use. The report has three
+the graph certified is the graph validation would use. The report has four
 sections:
 
 ```text
@@ -841,6 +841,8 @@ shacl-shacl 1
 result <http://www.w3.org/ns/shacl#DatatypeConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#closed> value <http://www.w3.org/ns/shacl#ByTypes> shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded closed-by-types
 functions 1
 call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
+validators 1
+alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
 findings 0
 clean true
 ```
@@ -861,6 +863,13 @@ clean true
   `sh:SPARQLFunction`), or `host-extension` (an IRI the graph does not declare,
   resolved against the host's registry at evaluation). It reads `functions
   unavailable` when the loader refused the graph.
+- **`validators`** lists every validator the graph declares for a built-in
+  constraint component. Vocabularies such as DASH give SHACL Core components
+  SPARQL validators; SHACL selects "one of the values" of a component's
+  validators, and for a built-in the native implementation is the one that
+  runs, so each declared validator is `superseded-by-native` and is never
+  executed. These lines are not findings. It reads `validators unavailable`
+  when the loader refused the graph.
 
 The report goes to `OUT` either way, and `shapes lint clean true|false` and
 `shapes lint findings N` always go to stderr.

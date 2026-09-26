@@ -198,9 +198,10 @@ shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
                       "http://example.org/a", scope={"suffix": '"!"'})
 
 # Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
-# and which implementation every function call binds to.
+# which implementation every function call binds to, and the validators a
+# vocabulary declares for built-in components (superseded, never run).
 lint = shapes.lint_shapes(my_shapes)
-lint["clean"], lint["findings"], lint["calls"], lint["report"]
+lint["clean"], lint["findings"], lint["calls"], lint["alternatives"], lint["report"]
 ```
 
 A malformed shapes graph is a `lint_shapes` report with findings, not an

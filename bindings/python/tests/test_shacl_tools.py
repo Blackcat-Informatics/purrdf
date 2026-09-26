@@ -153,7 +153,8 @@ def test_py_lint_shapes() -> None:
         "function": "http://www.w3.org/ns/shacl#SPARQLExprExpression",
         "owner": "sh:rule on <http://example.org/ns#Tagger>",
     } in clean["calls"]
-    assert clean["report"].endswith("findings 0\nclean true\n")
+    assert clean["alternatives"] == []
+    assert clean["report"].endswith("validators 0\nfindings 0\nclean true\n")
 
     malformed = purrdf.shapes.lint_shapes(
         _PREFIXES + _SNIPPET + 'ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount "one" ] .\n'
@@ -162,6 +163,7 @@ def test_py_lint_shapes() -> None:
     assert malformed["findings"] >= 2
     assert isinstance(malformed["load_error"], str)
     assert malformed["calls"] is None
+    assert malformed["alternatives"] is None
     assert any(
         result["path"] == "<http://www.w3.org/ns/shacl#minCount>" and result["superseded"] is None
         for result in malformed["shacl_shacl"]
@@ -173,3 +175,28 @@ def test_py_lint_shapes() -> None:
 
     with pytest.raises(ValueError):
         purrdf.shapes.lint_shapes("@@@ not turtle")
+
+
+def test_py_lint_shapes_lists_superseded_builtin_validators() -> None:
+    # A validator declared for a built-in component is an alternative the native
+    # implementation supersedes: listed, never run, never a finding.
+    report = purrdf.shapes.lint_shapes(
+        _PREFIXES
+        + "sh:MinCountConstraintComponent a sh:ConstraintComponent ; sh:validator ex:neverValid .\n"
+        + 'ex:neverValid a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" .\n'
+        + "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:n ; sh:minCount 1 ] .\n"
+    )
+    assert report["load_error"] is None, report["report"]
+    assert report["alternatives"] == [
+        {
+            "component": "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
+            "attachment": "http://www.w3.org/ns/shacl#validator",
+            "validator": "<http://example.org/ns#neverValid>",
+            "language": "sparql-ask",
+        }
+    ]
+    assert (
+        "alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> "
+        "<http://www.w3.org/ns/shacl#validator> <http://example.org/ns#neverValid> "
+        "sparql-ask superseded-by-native\n"
+    ) in report["report"]
