@@ -512,12 +512,44 @@ With that rule in place, the warn-and-continue path could only mean one thing: a
 verdict about a smaller shapes graph than the one named, printed next to a warning
 that does not undo it.
 
-**The rule now.** `purrdf_entail::entails::imports::unresolved_imports` decides, and
-every host takes its verdict from it: `validate --shapes` and `shacl pack` refuse an
-unresolved import with exit 1, naming each IRI and its `--import IRI=FILE` pair;
-`pack_shapes_product` refuses it on `UnsupportedCapability`; and `entails` refuses it
-with `EntailError::UnresolvedImport`. Pinned by `merged_vocabulary_needs_no_import_flag`
-and `unresolved_import_is_refused` (CLI), `merged_vocabulary_packs` and
-`unresolved_import_refused` (product), `import_present_in_graph_is_resolved`,
-`absent_import_is_unresolved` and `self_import_is_resolved` (the rule), and
-`a_self_imported_prefix_document_needs_no_import_flag` (the W3C `prefixes-001` vector).
+**The rule now.** `purrdf_core::imports` decides, for entailment and SHACL alike.
+Every shapes-graph entry point on every host — every `Shapes` constructor, and so
+validation, the change path, rules, node expressions, lint and the prepared product,
+through the Rust API, the command line, Python, WebAssembly and C — resolves the
+closure through `purrdf_shapes::imports::resolve_shapes_imports` against the caller's
+import table and refuses an incomplete one with the typed
+`ShapesError::Imports(ShapesImportError::Unresolved)`: exit 1 on the command line,
+naming each IRI and its `--import IRI=FILE` pair; `ShapesImportError` in Python;
+`ShaclImportError` in JavaScript; `PURRDF_STATUS_SHAPES_IMPORT_ERROR` in C. `entails`
+refuses it with `EntailError::UnresolvedImport`. Pinned by
+`merged_vocabulary_needs_no_import_flag` and `unresolved_import_is_refused` (CLI),
+`merged_vocabulary_packs` and `unresolved_import_refused` (product),
+`import_present_in_graph_is_resolved`, `absent_import_is_unresolved` and
+`self_import_is_resolved` (the rule), `a_self_imported_prefix_document_needs_no_import_flag`
+(the W3C `prefixes-001` vector), and the cross-host verdict tests
+(`crates/validate/tests/shapes_owl_imports.rs`,
+`every_shapes_lane_gives_the_same_owl_imports_verdict`,
+`every_shapes_entry_point_gives_the_same_owl_imports_verdict`,
+`test_shacl_owl_imports.py`, `shacl-owl-imports.test.mjs`).
+
+### A shapes graph's `owl:imports` rule is applied by every host
+
+**Was stated in** the `owl:imports` section of `docs/book/src/validation/shacl.md`
+and `crates/cli/src/shapes_source.rs`:
+
+> The prepared-product packer that the WebAssembly and C-ABI hosts call applies the
+> same rule, so every host agrees on which shapes graphs are complete.
+
+**Why it was believed.** The command line and the product packer both called the
+one resolution rule, and the product packer is what the three binding hosts reach
+when they pack.
+
+**What changed.** Packing is one entry point of many. The engine's own
+constructors, the SARIF, rules, node-expression and lint boundaries, and therefore
+every Python, WebAssembly and C function except pack, never applied the rule: the
+same shapes graph was refused on the command line and validated, given an empty
+inference graph, or certified clean on the other hosts.
+
+**The rule now.** The enforcement is at the shapes engine boundary itself, as the
+entry above states: a `Shapes` value is complete by construction, and every host
+takes the import table in its own spelling and raises the same typed refusal.

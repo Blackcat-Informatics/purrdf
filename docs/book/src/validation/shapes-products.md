@@ -93,10 +93,12 @@ and validating the document with the same `--import` now reach the
 byte-identical report, by construction: the two commands read and fold the
 closure through the same function.
 
-The Python, C-ABI and WebAssembly bindings call a lower-level, text-only pack
-entry point that has no `--import` table at all. It applies the same rule — an
-import of the document's own IRI (the base the host passes, or an `@base`), or
-of an ontology already in the shapes graph, packs — and refuses any other rather than fold — see [What a product carries, and what it does not](#what-a-product-carries-and-what-it-does-not).
+The Python, C-ABI and WebAssembly bindings pack through the same resolution with
+their own import table — `imports=` in Python, `importIris` / `importDocuments`
+in JavaScript, `import_iris` / `import_documents` / `import_count` in C — and a
+closure that is not in hand is refused with the same typed import error their
+validation functions raise. See
+[The same rule on every host](shacl.md#the-same-rule-on-every-host).
 
 ### `--shapes-graph` is resolved and recorded at pack time, the same way `validate --shapes` resolves it
 
@@ -253,24 +255,20 @@ parsed one. The SHACL 1.2 expression-bodied declarations
 (`sh:ListParameterExpressionFunction`) are carried too, from the model, because
 their bodies *are* node expressions.
 
-Two capabilities are refused at pack time rather than lost at restore, both on
+One capability is refused at pack time rather than lost at restore, on
 `unsupported-capability`:
 
 - a declared function that nothing in the model reaches — an expression-bodied
   declaration called only from `sh:sparql` query text, say. The model is what
   carries those declarations, so one the model never reaches is not in it, and
   a product written from it would resolve that call site to nothing and
-  validate green. Call the function from the shapes model and it packs;
-- an `owl:imports` that names neither the shapes document itself (the base
-  passed in, or an `@base`) nor an ontology already in the shapes graph (`<X> a
-  owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), through the
-  Python, C-ABI and WebAssembly bindings' lower-level, text-only entry point,
-  which carries no `--import` table to resolve it from. An import whose
-  ontology IS in the graph packs. The CLI's `purrdf shacl pack --import` can
-  also fold the closure from local files; an import neither in the graph nor
-  resolved by a pair is refused there too, exactly as `validate --shapes`
-  refuses it — see
-  [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph).
+  validate green. Call the function from the shapes model and it packs.
+
+An incomplete `owl:imports` closure is not an admission dimension: no product
+exists yet when it is refused, so every host reports it as the typed import
+error its validation functions raise, and the product is only ever packed from
+the merged closure — see
+[`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph).
 
 ## Shipping a product
 

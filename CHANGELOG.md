@@ -561,9 +561,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   new terms and is folded into `contract_hash_with` and `scheduled_contract_hash`.
   The limit cannot bind a guard-free program.
 
-- **entail:** `entails::imports::unresolved_imports`, `ImportMap::declare_loaded` and
-  `ImportMap::unresolved_imports`: one rule for when an `owl:imports` is resolved,
-  used by every host.
+- **core:** `purrdf_core::imports`, the one rule for when an `owl:imports` is resolved
+  and the one merge that folds a resolved closure into a dataset: `ImportMap`
+  (`insert`, `declare_loaded`, `closure`, `unresolved_imports`), `ImportClosure`
+  (`documents`, `unresolved`, `unreached`, `merge`), `unresolved_imports` and
+  `imported_iris`. Entailment and SHACL both take their verdict from it;
+  `purrdf-entail` re-exports it from `entails::imports`.
+
+- **shapes:** `purrdf_shapes::imports`: the `ShapesImports` table (`from_turtle`,
+  `insert`, `insert_turtle`, `declare_loaded`), the typed `ShapesImportError`
+  (`Unresolved`, `Unreached`, `InvalidEntry`, with a stable `kind()` label:
+  `unresolved-import`, `unreached-import`, `invalid-import`), and
+  `resolve_shapes_imports`, the one helper every shapes-graph entry point resolves a
+  shapes graph's `owl:imports` closure through. `ShapesError` (`Imports` or
+  `Invalid`) is the error those entry points return.
+
+- **python/wasm/capi:** the shapes graph's `owl:imports` table on every host.
+  Python's shapes functions and `Shapes(...)` take `imports=[(iri, turtle), ...]`
+  and raise `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and
+  `.iris`. Every JavaScript `shacl*` function that takes a shapes graph takes
+  trailing `importIris` / `importDocuments` arrays and rejects with the
+  `ShaclImportError` class (`kind`, `iris`, `message`). The C ABI appends
+  `PURRDF_STATUS_SHAPES_IMPORT_ERROR` (12) and adds
+  `purrdf_shapes_import_error_kind`, `purrdf_shapes_import_error_iri_count` and
+  `purrdf_shapes_import_error_iri`.
 
 - **rdf:** `ParseOutcome::document_prefixes`, the prefixes a Turtle, TriG or RDF/XML
   document declares, and `parse_dataset_reporting_failure`, whose `ParseFailure`
@@ -3029,6 +3050,51 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and `purrdf_entail_verify_entailment` gain `premise_iris` and `premise_iri_count`
   between `import_count` and `out_answer`. All four change within the unreleased 0.8
   ABI, and a host built against 0.7 must recompile.
+
+- **BREAKING** **shapes:** a shapes graph's `owl:imports` closure is resolved or
+  refused by every shapes-graph entry point, not by the command line and the
+  product packer alone. Before, the same shapes graph was refused by
+  `purrdf validate`, validated by the engine API, Python, WebAssembly and C against
+  the importing document alone, given an empty inference graph by `apply_rules`,
+  and certified clean by `lint_shapes`. Every `Shapes` constructor now resolves the
+  closure through `resolve_shapes_imports` before reading a shape, merges the
+  supplied documents (their prefix maps join the fallback environment), and refuses
+  an import nothing resolves — and a table entry nothing imports — with
+  `ShapesError::Imports`. A caller whose shapes graph imports a document it does not
+  contain must now supply it, or declare the ontology in place. The constructors
+  and the engine's text entry points (`parse_shapes`, `parse_shapes_with_config`,
+  `validate_graphs`, `validate_graphs_with_options`, `validate_graphs_with_config`,
+  `validate_dataset_graphs`, `entail_graphs`, `free_expression::evaluate`,
+  `lint::lint`) return `ShapesError` instead of `String`;
+  `from_dataset_with_base`, `from_dataset_with_node_expressions`,
+  `parse_shapes_with_config`, `validate_graphs_with_options`,
+  `validate_graphs_with_config`, `validate_dataset_graphs`, `entail_graphs` and
+  `lint::lint` take a `&ShapesImports`, and `FreeExpression` gains `imports`. `lint`
+  certifies the merged closure and refuses an incomplete one rather than reporting
+  it in the `load` section.
+
+- **BREAKING** **validate:** `validate_to_sarif_string`,
+  `validate_changes_to_sarif_string`, `entail_to_ntriples_string`,
+  `lint_shapes_ttl` and `pack_shapes_product` take a `ShapesImportList` of
+  `(IRI, Turtle)` pairs and return `ShapesError` where they returned `String`;
+  `pack_shapes_product_from_dataset` takes a `&ShapesImports`; `RulesRequest` gains
+  `shapes_imports` and `NodeExprRequest` gains `imports`.
+  `ShapesProductRefusal::Shapes` carries a `ShapesError`, an unresolved import is
+  that variant (with `import_error()`) rather than an `unsupported-capability`
+  admission refusal, and `ShapesProductRefusal::message` returns a `Cow<str>`.
+
+- **BREAKING** **entail:** `ImportMap::rif_resolver(&self)` is the free function
+  `rif_resolver(&ImportMap)`: `ImportMap` is now a `purrdf-core` type.
+
+- **BREAKING** **capi:** `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`,
+  `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`,
+  `purrdf_shacl_lint_shapes` and `purrdf_shapes_product_encode` gain `import_iris`,
+  `import_documents` and `import_count` before their out-parameters, within the
+  unreleased 0.8 ABI; a host built against 0.7 must recompile. An unresolved import
+  is `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, where `purrdf_shapes_product_encode`
+  returned `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` and the other six validated the
+  importing document alone.
 
 - **datalog:** `BudgetResource` gains `TermGeneratingRounds`, `EvalError` gains
   `Guard`, `ModelReadingGuard`, `NonStratifiableRules`, `MalformedSchedule` and

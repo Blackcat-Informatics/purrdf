@@ -166,9 +166,45 @@ IRI — the W3C test vectors are such documents, read here from a local file.
 Validating without the imported document would be a verdict about a smaller
 shapes graph than the one named, so there is no warn-and-continue path. A pair
 the closure never reaches is refused as unused (exit 2) rather than read and
-ignored. The prepared-product packer that the WebAssembly and C-ABI hosts call
-applies the same rule, so every host agrees on which shapes graphs are
-complete.
+ignored.
+
+### The same rule on every host
+
+The command line is one caller of a rule that lives in the engine. Every way a
+shapes graph becomes a validator — parsing it, validating with it, running its
+rules, evaluating one of its node expressions, linting it, packing it into a
+product — resolves the closure through one helper,
+`purrdf_shapes::imports::resolve_shapes_imports`, over the rule in
+`purrdf_core::imports` that entailment applies too. The same shapes graph
+therefore gets the same verdict on every host, and each host takes the import
+table in its own spelling:
+
+| Host | Import table | Refusal |
+|---|---|---|
+| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry)` |
+| CLI | `--import IRI=FILE`, repeatable | exit 1 for an unresolved import; exit 2 for a pair nothing imports or a malformed pair |
+| Python | `imports=[(iri, turtle), ...]` on `validate`, `entail`, `apply_rules`, `eval_node_expr`, `lint_shapes`, `pack_product` and `Shapes(...)` | `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and `.iris` |
+| WebAssembly | trailing `importIris`, `importDocuments` arrays on every `shacl*` function that takes a shapes graph | `ShaclImportError` with `kind`, `iris` and `message` |
+| C ABI | `import_iris`, `import_documents`, `import_count` before the out-parameters | `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, read with `purrdf_shapes_import_error_kind`, `_iri_count` and `_iri` |
+
+Each imported document is Turtle, parsed with its ontology IRI as its base. The
+kind is `unresolved-import`, `unreached-import` (a table entry no import names —
+refused on every host, because its shapes would be read and never applied) or
+`invalid-import` (a key that is not an absolute IRI, a key named twice, or a
+document that does not parse). Branch on the kind, not on the message.
+
+```python
+import purrdf
+
+report = purrdf.shapes.validate(
+    shapes_ttl, data_nt, imports=[("https://example.org/lib", lib_ttl)]
+)
+```
+
+A lint certifies the whole closure: an imported document's shapes are loaded
+and checked against `shacl-shacl.ttl` like the importing document's, and a
+shapes graph whose imports are not in hand is refused rather than reported
+clean.
 
 ## Prefixes in SHACL-SPARQL queries
 
