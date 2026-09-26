@@ -3215,27 +3215,33 @@ def load_shacl12_type_counts() -> dict[str, int]:
 
 
 _SHACL12_HARNESS = _REPO / "crates" / "shapes" / "tests" / "w3c12_conformance.rs"
+# The node-expression grader both SHACL 1.2 harnesses (library and CLI) share; it owns
+# the upstream-errata table and its count pin.
+_SHACL12_NODE_EXPR_GRADER = (
+    _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "node_expr_grading.rs"
+)
 _SHACL12_UNLISTED_ROW = "SHACL 1.2 unlisted vendored files"
 
 
 def load_shacl12_category_pins() -> dict[str, int]:
     """The SHACL 1.2 harness's own pins for the categories the matrix folds into
-    one XFail/Skip column: upstream errata (``NON_CANONICAL_EXPECTATIONS_COUNT``),
+    one XFail/Skip column: upstream errata (``NON_CANONICAL_EXPECTATIONS_COUNT``, in
+    the shared node-expression grader),
     expected import refusals (``W3C12_REFUSED_IMPORTS``), entries of unlisted
     vendored files (``W3C12_UNLISTED_ENTRIES``) and those graded with a delta
     (``UNLISTED_FILE_DELTAS_COUNT``). The harness asserts each against what it
     grades, so prose that restates the split is checked against the numbers the
     run itself enforces.
     """
-    text = _read(_SHACL12_HARNESS)
-    rel = _SHACL12_HARNESS.relative_to(_REPO)
     pins: dict[str, int] = {}
-    for key, name in (
-        ("errata", "NON_CANONICAL_EXPECTATIONS_COUNT"),
-        ("refused", "W3C12_REFUSED_IMPORTS"),
-        ("unlisted", "W3C12_UNLISTED_ENTRIES"),
-        ("delta", "UNLISTED_FILE_DELTAS_COUNT"),
+    for key, name, path in (
+        ("errata", "NON_CANONICAL_EXPECTATIONS_COUNT", _SHACL12_NODE_EXPR_GRADER),
+        ("refused", "W3C12_REFUSED_IMPORTS", _SHACL12_HARNESS),
+        ("unlisted", "W3C12_UNLISTED_ENTRIES", _SHACL12_HARNESS),
+        ("delta", "UNLISTED_FILE_DELTAS_COUNT", _SHACL12_HARNESS),
     ):
+        text = _read(path)
+        rel = path.relative_to(_REPO)
         m = re.search(rf"const {name}: usize = (\d+);", text)
         if m is None:
             raise SystemExit(f"check-doc-claims: {name} not found in {rel}")

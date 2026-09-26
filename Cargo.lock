@@ -1365,6 +1365,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
+ "purrdf-xsd",
  "rustix",
  "serde_json",
  "sha2",

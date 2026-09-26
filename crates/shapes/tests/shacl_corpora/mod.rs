@@ -43,6 +43,8 @@
 //!   `sht:Validate` entry parser, adding the 1.2 test types.
 //! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
 //!   asserts none, so both W3C harnesses grade a validation case identically.
+//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the upstream
+//!   errata table, shared by the library harness and the command-line harness.
 
 #![allow(
     dead_code,
@@ -61,6 +63,7 @@ use purrdf::RdfDataset;
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::data::{GraphFilter, native_quads};
 
+pub(crate) mod node_expr_grading;
 pub(crate) mod report_grading;
 pub(crate) mod shacl12;
 use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
