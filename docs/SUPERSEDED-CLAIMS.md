@@ -555,3 +555,50 @@ inference graph, or certified clean on the other hosts.
 **The rule now.** The enforcement is at the shapes engine boundary itself, as the
 entry above states: a `Shapes` value is complete by construction, and every host
 takes the import table in its own spelling and raises the same typed refusal.
+
+### A built-in constraint component given a validator is a duplicate definition
+
+**Was stated in** `crates/shapes/src/spec/mod.rs` (the linker's outcome table),
+`crates/shapes/README.md`, the "Built-in declarations and the W3C vocabularies" section
+of `docs/book/src/validation/shacl.md`, and the test
+`imported_native_validator_is_a_duplicate_definition`:
+
+> A built-in component's declaration carrying a VALIDATOR is a second definition of the
+> built-in, refused at load — neither silently ignored (the validator would never run
+> while the author believed it did) nor silently preferred (the native semantics would
+> be replaced behind the author's back).
+
+**Why it was believed.** A validator is what gives a SPARQL-based component its
+meaning, so a validator on a component the engine already implements read as a second,
+competing implementation, and the only choices seemed to be refusing it, ignoring it
+or running it instead.
+
+**What changed.** The specification makes several validators on one component
+ordinary. SHACL 1.2 SPARQL Extensions, "Validators": "For a given constraint, a
+validator is selected from the constraint component using the following rules, in
+order: For node shapes, use one of the values of sh:nodeValidator, if present. For
+property shapes, use one of the values of sh:propertyValidator, if present. Otherwise,
+use one of the values of sh:validator." Every value is an implementation of the same
+component, and "SHACL processors may choose alternative approaches as long as the
+outcome is equivalent" ("Validation with SPARQL-based Constraint Components"). The
+native implementation is the approach this engine chooses, with the specification's
+semantics, so an alternative is neither a competing definition nor a dropped
+constraint. Real vocabularies write such declarations (DASH gives most SHACL Core
+components SPARQL validators), and refusing a well-formed one is over-refusal: the
+rejected input is valid.
+
+**The rule now.** A built-in component's declared validators bind as alternatives the
+native implementation supersedes. Each is checked for well-formedness and never run,
+and `shapes lint` lists each one (`alternative … superseded-by-native`) without
+counting it as a finding. What still changes the component is still refused: a body,
+`sh:ask` or `sh:select` on the component itself, a contradicting signature, a validator
+that is not a well-formed SPARQL validator of its attachment, and any other `sh:`
+statement except `sh:message`, `sh:labelTemplate` and the non-validating
+characteristics (`crates/shapes/src/spec/link.rs`, `BUILTIN_COMPONENT_ANNOTATIONS`).
+Pinned by `a_builtin_component_given_validators_binds_natively`,
+`an_ill_formed_alternative_on_a_builtin_is_refused`,
+`a_semantic_statement_on_a_builtin_declaration_is_refused`,
+`lint_reports_superseded_alternatives_without_findings` (`tests/spec_linker.rs`),
+`imported_native_validator_binds_as_a_superseded_alternative`
+(`tests/component_parameters.rs`) and
+`cli_shapes_lint_reports_superseded_builtin_validators`.

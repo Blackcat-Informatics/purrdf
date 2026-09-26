@@ -1526,9 +1526,10 @@ export class ShaclLintReport {
   /** The loader's refusal, or `undefined` when it accepted the graph. */
   readonly loadError?: string;
   /**
-   * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl` and
-   * `functions` (`call BINDING <IRI> in OWNER`) sections, then `findings N` and
-   * `clean true|false`.
+   * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl`,
+   * `functions` (`call BINDING <IRI> in OWNER`) and `validators` (`alternative
+   * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
+   * declared for a built-in component) sections, then `findings N` and `clean true|false`.
    */
   readonly report: string;
 }

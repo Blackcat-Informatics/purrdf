@@ -29,9 +29,15 @@ use crate::shapes::prefixes::PrefixResolver;
 use crate::shapes::{ComponentValidator, Path};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
+use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
+
+/// `sh:JSValidator`, the SHACL JavaScript Extensions validator class. Not a SHACL 1.2
+/// term (the census refuses it), so it has no `model::sh` constant; it is named here
+/// only so a validator of that class is refused with the reason.
+const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
 
 /// Discriminator for a SPARQL validator's query form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ValidatorKind {
     /// An `ASK` query: a result of `true` means the focus node/value is valid.
     Ask,
@@ -95,6 +101,9 @@ pub(crate) struct ComponentRegistry {
     pub by_parameter_path: FastMap<String, NamedNode>,
     /// Component IRI string → component definition.
     pub components: FastMap<String, Component>,
+    /// Every validator declared for a built-in component — an alternative its native
+    /// implementation supersedes — sorted. See [`crate::validator_alternatives`].
+    pub alternatives: Vec<AlternativeValidator>,
 }
 
 impl ComponentRegistry {
@@ -117,6 +126,7 @@ impl ComponentRegistry {
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
         let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
+        let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -140,21 +150,59 @@ impl ComponentRegistry {
             }
             // The linker (`crate::spec`): a declaration of a component the spec
             // symbol table knows is a SIGNATURE, bound against the table rather than
-            // registered as a custom component. A native component's bare
-            // declaration binds and registers nothing; one carrying a validator is
-            // a duplicate definition; a declaration of a built-in FUNCTION IRI is a
-            // kind mismatch. Every spec component is evaluated natively, so none is
-            // registered as a custom component.
+            // registered as a custom component. A native component's declaration
+            // binds and registers nothing; the validators it declares are
+            // alternative implementations the native one supersedes, checked for
+            // well-formedness, recorded, and never run; a body, a query or a
+            // semantic `sh:` statement on it is refused; a declaration of a
+            // built-in FUNCTION IRI is a kind mismatch. Every spec component is
+            // evaluated natively, so none is registered as a custom component.
             crate::spec::refuse_component_declared_function(component.as_str())?;
             if let Some(row) = crate::spec::component(component.as_str()) {
                 crate::spec::bind_spec_component(data, row)?;
+                let component_term = Term::NamedNode(component.clone());
+                // An alternative is never run, but it must still be a well-formed
+                // validator: "The value of sh:ask must be a valid SPARQL ASK query"
+                // (likewise sh:select), under the parameter names the built-in's
+                // signature pre-binds. The parse is the grammar and pre-binding
+                // check only; it resolves no function, so a query calling a function
+                // this engine does not have is well-formed and loads.
+                let param_names: Vec<String> = row
+                    .params
+                    .iter()
+                    .map(|param| sparql_local_name(param.path))
+                    .collect();
+                for (attachment, validator, kind) in
+                    declared_validators(data, &component_term, &mut subclass_memo)?
+                {
+                    parse_validator(
+                        data,
+                        prefixes,
+                        &component_term,
+                        &validator,
+                        &param_names,
+                        kind,
+                    )?;
+                    builtin_alternatives.push(AlternativeValidator {
+                        component: component.as_str().to_owned(),
+                        attachment: attachment.to_owned(),
+                        validator,
+                        language: match kind {
+                            ValidatorKind::Ask => ValidatorLanguage::SparqlAsk,
+                            ValidatorKind::Select => ValidatorLanguage::SparqlSelect,
+                        },
+                    });
+                }
                 continue;
             }
             component_iris.push(component.as_str().to_owned());
         }
         component_iris.sort();
 
-        let mut registry = Self::default();
+        let mut registry = Self {
+            alternatives: builtin_alternatives,
+            ..Self::default()
+        };
         for component_iri in component_iris {
             let component_term = Term::NamedNode(NamedNode::from(component_iri.as_str()));
             let component = parse_component(
@@ -172,6 +220,7 @@ impl ComponentRegistry {
             let id = component.id.as_str().to_owned();
             registry.components.insert(id, component);
         }
+        registry.alternatives.sort();
         Ok(registry)
     }
 }
@@ -688,8 +737,14 @@ fn is_subclass_of(
     result
 }
 
-/// Determine the validator kind from its `rdf:type` declarations, respecting
-/// subclasses of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
+/// The query form `validator`'s `rdf:type` declarations name, respecting subclasses
+/// of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
+///
+/// # Errors
+///
+/// A validator typed as both, one typed as neither, and a SHACL-JS `sh:JSValidator` —
+/// none of which is a validator SHACL 1.2 defines (see
+/// [`crate::validator_alternatives`]).
 fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
@@ -697,32 +752,69 @@ fn validator_kind(
 ) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
+    let mut is_js = false;
     for q in objects_of(data, validator, rdf::TYPE) {
         let Term::NamedNode(class) = q else {
             continue;
         };
-        if is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo) {
-            is_ask = true;
-        }
-        if is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo) {
-            is_select = true;
-        }
+        is_ask |= is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo);
+        is_select |= is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo);
+        is_js |= is_subclass_of(data, class.as_str(), JS_VALIDATOR, memo);
     }
-    if is_ask && is_select {
-        return Err(format!(
+    match (is_ask, is_select) {
+        (true, true) => Err(format!(
             "validator {validator} is typed as both ASK and SELECT"
-        ));
+        )),
+        (true, false) => Ok(ValidatorKind::Ask),
+        (false, true) => Ok(ValidatorKind::Select),
+        (false, false) if is_js => Err(format!(
+            "validator {validator} is a sh:JSValidator: {}; the values of sh:validator, \
+             sh:nodeValidator and sh:propertyValidator must be ASK-based or SELECT-based \
+             validators (SHACL 1.2 SPARQL Extensions, \"Validators\"), and a SHACL processor \
+             SHOULD produce a failure for an ill-formed shapes graph (SHACL 1.2 Core, \
+             \"Handling of Ill-formed Shapes Graphs\")",
+            crate::spec::census::JS
+        )),
+        (false, false) => Err(format!(
+            "validator {validator} must be typed as sh:SPARQLAskValidator or \
+             sh:SPARQLSelectValidator (or a subclass)"
+        )),
     }
-    if is_ask {
-        return Ok(ValidatorKind::Ask);
+}
+
+/// Every validator `component` declares, as `(attachment, validator, query form)` in
+/// attachment order and canonical term order within one.
+///
+/// # Errors
+///
+/// A validator [`validator_kind`] refuses, and a validator whose query form is not the
+/// one its attachment takes: "The values of sh:nodeValidator must be SELECT-based
+/// validators. The values of sh:propertyValidator must be SELECT-based validators", "The
+/// values of sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL Extensions).
+fn declared_validators(
+    data: &RdfDataset,
+    component: &Term,
+    memo: &mut FastMap<(String, String), bool>,
+) -> Result<Vec<(&'static str, Term, ValidatorKind)>, String> {
+    let mut out = Vec::new();
+    for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+        let mut nodes = objects_of(data, component, attachment);
+        crate::term::sort_terms_canonical(&mut nodes);
+        let expects_ask = attachment == sh::VALIDATOR;
+        for node in nodes {
+            let kind = validator_kind(data, &node, memo)
+                .map_err(|e| format!("component {component} validator {node}: {e}"))?;
+            if matches!(kind, ValidatorKind::Ask) != expects_ask {
+                return Err(format!(
+                    "component {component} {attachment} requires {} validators, and {node} is \
+                     {kind:?}",
+                    if expects_ask { "ASK" } else { "SELECT" },
+                ));
+            }
+            out.push((attachment, node, kind));
+        }
     }
-    if is_select {
-        return Ok(ValidatorKind::Select);
-    }
-    Err(format!(
-        "validator {validator} must be typed as sh:SPARQLAskValidator or \
-         sh:SPARQLSelectValidator (or a subclass)"
-    ))
+    Ok(out)
 }
 
 /// Whether `name` is a SPARQL `VARNAME` and not one of the reserved names banned
@@ -735,21 +827,20 @@ fn is_valid_varname(name: &str) -> bool {
     !BANNED.contains(&name) && purrdf_sparql_algebra::lexer::is_varname(name)
 }
 
-/// Parse a single SPARQL validator node attached to a component.
+/// Parse a single SPARQL validator node, of query form `kind`, attached to a
+/// component.
 fn parse_validator(
     data: &RdfDataset,
     prefixes: &PrefixResolver,
     component: &Term,
     validator: &Term,
     param_names: &[String],
-    subclass_memo: &mut FastMap<(String, String), bool>,
+    kind: ValidatorKind,
 ) -> Result<Validator, String> {
     let component_iri = match component {
         Term::NamedNode(n) => n.as_str(),
         _ => return Err(format!("component {component} is not a named node")),
     };
-    let kind = validator_kind(data, validator, subclass_memo)
-        .map_err(|e| format!("component {component_iri} validator {validator}: {e}"))?;
 
     let query_pred = match kind {
         ValidatorKind::Ask => sh::ASK,
@@ -872,39 +963,15 @@ fn parse_component(
     }
     let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
 
-    let mut node_validator_nodes: Vec<Term> = objects_of(data, component, sh::NODE_VALIDATOR);
-    crate::term::sort_terms_canonical(&mut node_validator_nodes);
-    let node_validators = node_validator_nodes
-        .into_iter()
-        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
-        .collect::<Result<Vec<Validator>, _>>()?;
-    let mut property_validator_nodes: Vec<Term> =
-        objects_of(data, component, sh::PROPERTY_VALIDATOR);
-    crate::term::sort_terms_canonical(&mut property_validator_nodes);
-    let property_validators = property_validator_nodes
-        .into_iter()
-        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
-        .collect::<Result<Vec<Validator>, _>>()?;
-    let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
-    crate::term::sort_terms_canonical(&mut validator_nodes);
-    let validators = validator_nodes
-        .into_iter()
-        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
-        .collect::<Result<Vec<Validator>, _>>()?;
-
-    for (attachment, parsed, expect_ask) in [
-        (sh::NODE_VALIDATOR, &node_validators, false),
-        (sh::PROPERTY_VALIDATOR, &property_validators, false),
-        (sh::VALIDATOR, &validators, true),
-    ] {
-        if parsed
-            .iter()
-            .any(|validator| matches!(validator.kind, ValidatorKind::Ask) != expect_ask)
-        {
-            return Err(format!(
-                "component {component_iri} {attachment} requires {} validators",
-                if expect_ask { "ASK" } else { "SELECT" },
-            ));
+    let mut node_validators = Vec::new();
+    let mut property_validators = Vec::new();
+    let mut validators = Vec::new();
+    for (attachment, node, kind) in declared_validators(data, component, subclass_memo)? {
+        let parsed = parse_validator(data, prefixes, component, &node, &param_names, kind)?;
+        match attachment {
+            sh::NODE_VALIDATOR => node_validators.push(parsed),
+            sh::PROPERTY_VALIDATOR => property_validators.push(parsed),
+            _ => validators.push(parsed),
         }
     }
 

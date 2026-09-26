@@ -73,15 +73,32 @@ query produces (`ValidationResult::annotations`), and the SHACL-AF 1.1
 body. Loading resolves each declaration against the table of what the engine
 implements (`purrdf_shapes::spec`): a bare declaration of a built-in binds to
 the native implementation and registers nothing, a built-in redefined with a
-body or validator is a duplicate-definition load error, and a declaration
-under the wrong class or with a contradicting signature is a mismatch. A
-bodiless function the engine does not implement is refused in any namespace.
+body, or a component given `sh:ask` or `sh:select` of its own, is a
+duplicate-definition load error, and a declaration under the wrong class or
+with a contradicting signature is a mismatch. Validators declared for a
+built-in component (vocabularies such as DASH give SHACL Core components SPARQL
+validators) bind as alternatives the native implementation supersedes: SHACL
+1.2 SPARQL Extensions selects "one of the values" of a component's validators,
+so each is an implementation of the same component. An alternative must be a
+well-formed SPARQL validator of its attachment and is never executed;
+`validator_alternatives` and `lint::lint` list every one. Any other `sh:`
+statement on a built-in's declaration, beyond `sh:message`, `sh:labelTemplate`
+and the non-validating characteristics, is refused. A bodiless function the
+engine does not implement is refused in any namespace.
 Merging the W3C vocabularies into a shapes graph is therefore a no-op, and
 `tests/vocabulary_import_invariance.rs` holds every report of three corpora
 byte-identical with and without the merge.
 `FunctionResolution` and `lint::lint` say, per call site, whether a
 node-expression function bound natively, to a custom body, to a SPARQL
 registration or to a host extension.
+
+**SHACL-JS.** SHACL JavaScript Extensions are not part of SHACL 1.2 and the
+engine has no JavaScript engine. A `sh:JSValidator` is refused wherever a
+validator is declared, on a built-in or a custom component, because "The values
+of sh:validator must be ASK-based validators" and those of `sh:nodeValidator`
+and `sh:propertyValidator` SELECT-based ones (SHACL 1.2 SPARQL Extensions), and
+SHACL 1.2 Core says a processor "SHOULD produce a failure" for an ill-formed
+shapes graph.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL

@@ -252,18 +252,29 @@ fn repeated_parameter_values_preserve_rdf12_term_identity() {
     );
 }
 
-/// A built-in component's declaration carrying a VALIDATOR is a second definition
-/// of the built-in, refused at load — neither silently ignored (the validator would
-/// never run while the author believed it did) nor silently preferred (the native
-/// semantics would be replaced behind the author's back).
+/// A built-in component's declaration carrying a VALIDATOR binds natively: the
+/// validator is an alternative implementation the native one supersedes (SHACL 1.2
+/// SPARQL Extensions, "Validators": a constraint uses "one of the values"), never run.
+/// The oracle observes which ran: the alternative's `FILTER (false)` would flag BOTH
+/// focus nodes, the native `sh:class` flags only the one that is not an `ex:Class`.
 #[test]
-fn imported_native_validator_is_a_duplicate_definition() {
+fn imported_native_validator_binds_as_a_superseded_alternative() {
     let body = r#"sh:ClassConstraintComponent a sh:ConstraintComponent ;
         sh:parameter [ sh:path sh:class ] ;
         sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
-        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; sh:class ex:Class ."#;
-    let error = shapes(body).expect_err("a built-in cannot be redefined");
-    assert!(error.contains("duplicate definition"), "{error}");
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class ."#;
+    let parsed = shapes(body).expect("the declared validator is an alternative");
+    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
+    );
+    assert_eq!(
+        report.results[0].source_constraint_component.as_str(),
+        sh::CLASS_CONSTRAINT_COMPONENT
+    );
 }
 
 /// The neighbour: the BARE declaration binds to the native component, which runs

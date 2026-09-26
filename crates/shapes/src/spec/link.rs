@@ -9,14 +9,14 @@
 
 use ::purrdf::RdfDataset;
 
-use super::{ComponentRow, FunctionClass, NativeFunction};
+use super::{ComponentRow, FunctionClass, NativeFunction, census};
 use crate::data::{GraphFilter, native_quads};
 use crate::model::sh;
 use crate::term::{NamedNode, Term};
 
-/// The predicates that GIVE a declaration an implementation. A built-in already
-/// has one, so any of these on a built-in's declaration is a second definition.
-const IMPLEMENTATION_MATERIAL: [&str; 6] = [
+/// The predicates that GIVE a function declaration an implementation. A built-in
+/// function already has one, so any of these on its declaration is a second definition.
+const FUNCTION_IMPLEMENTATION_MATERIAL: [&str; 6] = [
     sh::BODY_EXPRESSION,
     sh::VALIDATOR,
     sh::NODE_VALIDATOR,
@@ -24,6 +24,47 @@ const IMPLEMENTATION_MATERIAL: [&str; 6] = [
     sh::ASK,
     sh::SELECT,
 ];
+
+/// The predicates that would make a built-in COMPONENT's declaration a second
+/// definition of it: a function body, or a query stated on the component itself
+/// rather than on a validator.
+///
+/// Validators are not here. SHACL 1.2 SPARQL Extensions, "Validators", selects "one of
+/// the values" of `sh:nodeValidator` / `sh:propertyValidator` / `sh:validator` as a
+/// constraint's validator, so a component with several validators is a component with
+/// several implementations of one semantics — and "SHACL processors may choose
+/// alternative approaches as long as the outcome is equivalent" ("Validation with
+/// SPARQL-based Constraint Components"). For a built-in, the native implementation is
+/// the approach this engine chooses; the declared validators are alternatives it never
+/// runs, and the component registry lists each one
+/// ([`crate::validator_alternatives`]), refusing only a validator that is not a
+/// well-formed SPARQL validator of its attachment.
+const COMPONENT_IMPLEMENTATION_MATERIAL: [&str; 3] = [sh::BODY_EXPRESSION, sh::ASK, sh::SELECT];
+
+/// The `sh:` predicates a built-in component's declaration may carry besides its
+/// signature (`sh:parameter`) and its alternative validators, none of which changes
+/// what the component checks:
+///
+/// * `sh:labelTemplate` — SHACL 1.2 SPARQL Extensions, "Label Templates": it "can be
+///   used at any constraint component to suggest how constraints could be rendered to
+///   humans".
+/// * `sh:message` — SHACL 1.2 SPARQL Extensions, "Mapping of Solution Bindings to
+///   Result Properties": a component's `sh:message` supplies `sh:resultMessage` "For
+///   SPARQL-based constraint components", after "the values of sh:message of the
+///   validator"; it is part of the SPARQL validation protocol, which the native
+///   implementation supersedes. A built-in's result messages are SHACL 1.2 Core's:
+///   those of the shape's own `sh:message`.
+/// * every term the census classifies [`census::TermClass::NonValidating`] — SHACL 1.2
+///   Core, "Non-Validating Shape Characteristics": "properties that are ignored by SHACL
+///   processors" (`sh:name`, `sh:description`, `sh:order`, `sh:group`, …).
+///
+/// Predicates outside the `sh:` and `shnex:` namespaces (`rdfs:label`, `rdfs:comment`,
+/// a vocabulary's own annotations such as `dash:localConstraint`) are not SHACL terms
+/// and change nothing a SHACL processor evaluates, so they are not examined. Every
+/// other `sh:` predicate — `sh:severity`, `sh:deactivated`, `sh:property`, … — would
+/// state something about the component that its native implementation does not honour,
+/// so it is refused.
+const BUILTIN_COMPONENT_ANNOTATIONS: [&str; 2] = [sh::LABEL_TEMPLATE, sh::MESSAGE];
 
 /// A parameter a declaration states: its `sh:path` and every `sh:keyParameter`
 /// value it states (none, usually one).
@@ -47,9 +88,14 @@ fn objects(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
 }
 
 /// Refuse a declaration of a built-in that carries implementation material.
-fn refuse_material(data: &RdfDataset, iri: &str, what: &str) -> Result<(), String> {
+fn refuse_material(
+    data: &RdfDataset,
+    iri: &str,
+    what: &str,
+    material: &[&str],
+) -> Result<(), String> {
     let id = Term::NamedNode(NamedNode::from(iri));
-    for predicate in IMPLEMENTATION_MATERIAL {
+    for &predicate in material {
         if !objects(data, &id, predicate).is_empty() {
             return Err(format!(
                 "duplicate definition of <{iri}>: it is a {what} this engine implements \
@@ -163,7 +209,12 @@ pub(crate) fn bind_native_function(
             describe_class(class)
         ));
     }
-    refuse_material(data, iri, "node-expression function")?;
+    refuse_material(
+        data,
+        iri,
+        "node-expression function",
+        &FUNCTION_IMPLEMENTATION_MATERIAL,
+    )?;
     let signature: Vec<(&'static str, bool)> =
         native.params().iter().map(|p| (p.path, p.key)).collect();
     check_signature(data, iri, "node-expression function", &signature)
@@ -172,12 +223,58 @@ pub(crate) fn bind_native_function(
 /// Link one `sh:ConstraintComponent` declaration of spec component `row`.
 ///
 /// Every spec component row is evaluated natively, so the declaration is a
-/// SIGNATURE: it must state the native parameter set, and one carrying a
-/// validator is a duplicate definition.
+/// SIGNATURE: it must state the native parameter set; one carrying a body or a query
+/// of its own is a duplicate definition; and any other `sh:` statement on it must be
+/// one of the annotations [`BUILTIN_COMPONENT_ANNOTATIONS`] lists. Its validators are
+/// alternatives the caller records, never refused here.
 pub(crate) fn bind_spec_component(data: &RdfDataset, row: &ComponentRow) -> Result<(), String> {
     let signature: Vec<(&'static str, bool)> = row.params.iter().map(|p| (p.path, false)).collect();
     check_signature(data, row.iri, "constraint component", &signature)?;
-    refuse_material(data, row.iri, "constraint component")
+    refuse_material(
+        data,
+        row.iri,
+        "constraint component",
+        &COMPONENT_IMPLEMENTATION_MATERIAL,
+    )?;
+    refuse_builtin_component_statements(data, row.iri)
+}
+
+/// Refuse a `sh:`/`shnex:` statement on a built-in component's declaration that is
+/// neither its signature, an alternative validator, nor an annotation
+/// [`BUILTIN_COMPONENT_ANNOTATIONS`] accepts.
+fn refuse_builtin_component_statements(data: &RdfDataset, iri: &str) -> Result<(), String> {
+    let id = Term::NamedNode(NamedNode::from(iri));
+    let mut predicates: Vec<NamedNode> =
+        native_quads(data, Some(&id), None, None, GraphFilter::AnyGraph)
+            .into_iter()
+            .map(|(_, predicate, _)| predicate)
+            .collect();
+    predicates.sort();
+    predicates.dedup();
+    for predicate in &predicates {
+        let p = predicate.as_str();
+        if !census::is_census_namespace(p)
+            || matches!(
+                p,
+                sh::PARAMETER_PROPERTY
+                    | sh::VALIDATOR
+                    | sh::NODE_VALIDATOR
+                    | sh::PROPERTY_VALIDATOR
+            )
+            || BUILTIN_COMPONENT_ANNOTATIONS.contains(&p)
+            || census::classify(p).is_some_and(|row| row.class == census::TermClass::NonValidating)
+        {
+            continue;
+        }
+        return Err(format!(
+            "the declaration of the built-in <{iri}> carries <{p}>, which is not an annotation \
+             of a constraint component: this engine implements <{iri}> natively, with the \
+             specification's semantics, so a statement that would change what it checks or \
+             reports is refused rather than ignored; remove it, or declare a component under \
+             an IRI of your own"
+        ));
+    }
+    Ok(())
 }
 
 /// Refuse a component declaration of an IRI the table knows as a FUNCTION.

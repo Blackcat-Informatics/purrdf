@@ -70,6 +70,7 @@ pub mod term;
 pub mod text_ingest;
 pub mod typescript;
 pub(crate) mod unique_values;
+pub mod validator_alternatives;
 
 pub use error::ShapesError;
 pub use graphql::{

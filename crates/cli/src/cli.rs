@@ -1331,14 +1331,17 @@ pub(crate) enum ShapesCommand {
     /// Certify a shapes graph, COLD: everything PurRDF can say about it before any data is
     /// validated, in one deterministic report.
     ///
-    /// Three sections. `load`: the loader's own verdict — accepted, or the refusal it
+    /// Four sections. `load`: the loader's own verdict — accepted, or the refusal it
     /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, …).
     /// `shacl-shacl`: every result of validating the shapes graph, as data, against the
     /// W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs; a result SHACL 1.2
     /// Core makes well-formed where that file still flags it (`sh:closed sh:ByTypes`, a
     /// list-valued `sh:nodeKind`, …) is marked `superseded NAME` and is not a finding.
     /// `functions`: which implementation every node-expression function call binds to —
-    /// `native`, `custom`, `sparql-registered` or `host-extension`.
+    /// `native`, `custom`, `sparql-registered` or `host-extension`. `validators`: every
+    /// validator the graph declares for a built-in constraint component (a vocabulary
+    /// such as DASH gives SHACL Core components SPARQL validators), which the native
+    /// implementation supersedes and never runs; never a finding.
     ///
     /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
     /// on request.

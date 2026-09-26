@@ -2374,6 +2374,34 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
 
+- **BREAKING** **shapes:** a built-in constraint component's declaration that
+  carries validators binds natively. SHACL 1.2 SPARQL Extensions selects "one of the
+  values" of `sh:nodeValidator`, `sh:propertyValidator` or `sh:validator` as a
+  constraint's validator, so each declared validator is an alternative implementation
+  of the same component; the native implementation is the one that runs, and the
+  declared ones are checked for well-formedness (query grammar and pre-binding) and
+  never executed, so their queries may call functions the engine does not have. Such
+  a declaration used to be refused as a duplicate definition. A body, an `sh:ask` or
+  an `sh:select` stated on the component itself is still a duplicate definition, a
+  contradicting signature is still a mismatch, and a validator that is not a
+  well-formed SPARQL validator of its attachment — a SHACL-JS `sh:JSValidator`, an
+  untyped node, an ASK validator under `sh:nodeValidator` or `sh:propertyValidator`,
+  a SELECT validator under `sh:validator`, an unparsable query — is refused. Newly
+  refused: an `sh:` statement on a built-in's declaration other than its signature,
+  its validators, `sh:message`, `sh:labelTemplate` or a non-validating
+  characteristic (`sh:severity` on `sh:MinCountConstraintComponent`, for one), which
+  the native implementation would not honour. A `sh:JSValidator` of a custom
+  component is refused with the SHACL-JS reason.
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report gains a
+  fourth section, `validators N` (`validators unavailable` over a refused graph), with
+  one `alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`
+  line per validator declared for a built-in component; never a finding.
+  `LintReport::alternative_validators` and the new
+  `purrdf_shapes::validator_alternatives` module (`AlternativeValidator`,
+  `ValidatorLanguage`) carry it, `LinkedDeclarations` gains `alternative_validators`,
+  and Python's `lint_shapes` dict gains `"alternatives"`.
+
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as
   `float_algebraic` in Rust 1.98.0. A 1.97 compiler rejects the crate with

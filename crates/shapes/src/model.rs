@@ -594,6 +594,10 @@ pub mod sh {
     /// `sh:SPARQLSelectValidator` — the class of SELECT-query-based validators.
     pub const SPARQL_SELECT_VALIDATOR: &str = "http://www.w3.org/ns/shacl#SPARQLSelectValidator";
 
+    /// `sh:labelTemplate` — how a constraint of a component could be rendered to
+    /// humans (SHACL 1.2 SPARQL Extensions, "Label Templates").
+    pub const LABEL_TEMPLATE: &str = "http://www.w3.org/ns/shacl#labelTemplate";
+
     // ── Constraint component IRIs (sh:*ConstraintComponent) ──────────────────
 
     /// `sh:MinCountConstraintComponent` — the component reported for `sh:minCount` violations.

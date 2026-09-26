@@ -10,7 +10,7 @@
 //! parameter value, an unresolved or duplicate function definition (the
 //! [linker](crate::spec)) — and it deliberately does not validate the graph against the
 //! W3C's `shacl-shacl.ttl`, because a load pays for that on every validation. [`lint`]
-//! is where that price is paid once, on request. It reports three sections:
+//! is where that price is paid once, on request. It reports four sections:
 //!
 //! 1. **load** — the loader's own verdict: accepted, or the refusal it raised.
 //! 2. **shacl-shacl** — every result of validating the shapes graph, as DATA, against
@@ -18,6 +18,10 @@
 //!    "SHACL shapes graph to validate SHACL shapes graphs".
 //! 3. **functions** — which implementation every node-expression function call binds
 //!    to ([`Shapes::function_resolution`]), when the load succeeded.
+//! 4. **validators** — every validator the shapes graph declares for a built-in
+//!    constraint component, which the native implementation supersedes and never runs
+//!    ([`crate::validator_alternatives`]), when the load succeeded. They are reported,
+//!    never findings: the component's semantics are the specification's either way.
 //!
 //! # Where `shacl-shacl.ttl` lags SHACL 1.2 Core
 //!
@@ -56,8 +60,11 @@ use crate::error::ShapesError;
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
 use crate::model::BoxRoleVocab;
-use crate::shapes::{Shapes, from_dataset_with_base, from_resolved_dataset};
+use crate::shapes::{
+    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset,
+};
 use crate::term::Term;
+use crate::validator_alternatives::AlternativeValidator;
 
 /// The W3C shapes graph for shapes graphs, vendored byte-exact.
 const SHACL_SHACL: &str = include_str!("../spec/shacl-shacl.ttl");
@@ -228,6 +235,8 @@ pub struct LintReport {
     shacl_shacl: Vec<ShaclShaclResult>,
     /// The call-site bindings, when the loader accepted the graph.
     functions: Option<FunctionResolution>,
+    /// The validators declared for built-ins, when the loader accepted the graph.
+    alternatives: Option<Vec<AlternativeValidator>>,
 }
 
 impl LintReport {
@@ -249,6 +258,14 @@ impl LintReport {
     #[must_use]
     pub fn function_resolution(&self) -> Option<&FunctionResolution> {
         self.functions.as_ref()
+    }
+
+    /// Every validator the shapes graph declares for a built-in component — superseded
+    /// by the native implementation — sorted, or `None` when the loader refused the
+    /// graph. Never findings; see the [module docs](self).
+    #[must_use]
+    pub fn alternative_validators(&self) -> Option<&[AlternativeValidator]> {
+        self.alternatives.as_deref()
     }
 
     /// How many findings the report carries: one for a load refusal, plus every
@@ -280,13 +297,17 @@ impl LintReport {
     ///   message TEXT                   (one per result message)
     /// functions N|unavailable
     /// call BINDING FUNCTION in OWNER
+    /// validators N|unavailable
+    /// alternative COMPONENT ATTACHMENT VALIDATOR LANGUAGE superseded-by-native
     /// findings N
     /// clean true|false
     /// ```
     ///
     /// Terms are N-Triples 1.2; an absent path or value is `-`. `BINDING` is
     /// [`FunctionBinding::label`](crate::function_resolution::FunctionBinding::label);
-    /// `functions unavailable` means the loader refused the graph. Every list is in the
+    /// `functions unavailable` means the loader refused the graph. `LANGUAGE` is
+    /// [`ValidatorLanguage::label`](crate::validator_alternatives::ValidatorLanguage::label);
+    /// `validators unavailable` means the loader refused the graph. Every list is in the
     /// order its accessor documents, so the text is a pure function of the shapes graph.
     #[must_use]
     pub fn render(&self) -> String {
@@ -333,6 +354,22 @@ impl LintReport {
                         site.binding.label(),
                         site.function,
                         site.owner
+                    );
+                }
+            }
+        }
+        match &self.alternatives {
+            None => out.push_str("validators unavailable\n"),
+            Some(alternatives) => {
+                let _ = writeln!(out, "validators {}", alternatives.len());
+                for alternative in alternatives {
+                    let _ = writeln!(
+                        out,
+                        "alternative <{}> <{}> {} {} superseded-by-native",
+                        alternative.component,
+                        alternative.attachment,
+                        alternative.validator,
+                        alternative.language.label(),
                     );
                 }
             }
@@ -419,14 +456,22 @@ pub fn lint(
         )
     });
     shacl_shacl.dedup();
-    let (load_error, functions) = match loaded {
-        Ok(shapes) => (None, Some(shapes.function_resolution())),
-        Err(error) => (Some(error), None),
+    let (load_error, functions, alternatives) = match loaded {
+        Ok(shapes) => {
+            // The load that just succeeded parsed the same registry, so this cannot
+            // refuse; were it to, the report says so rather than listing nothing.
+            match alternative_validators(dataset, &resolved.prefixes) {
+                Ok(alternatives) => (None, Some(shapes.function_resolution()), Some(alternatives)),
+                Err(error) => (Some(error), None, None),
+            }
+        }
+        Err(error) => (Some(error), None, None),
     };
     Ok(LintReport {
         load_error,
         shacl_shacl,
         functions,
+        alternatives,
     })
 }
 

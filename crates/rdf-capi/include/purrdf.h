@@ -2855,9 +2855,10 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
  * function call binds to — and write the report's deterministic text to `*out_report`
  * (free with `purrdf_buffer_free`): the `load`, `shacl-shacl` (`result …` lines,
- * `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed) and
- * `functions` (`call BINDING <IRI> in OWNER`) sections, then `findings N` and
- * `clean true|false`.
+ * `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed),
+ * `functions` (`call BINDING <IRI> in OWNER`) and `validators` (`alternative
+ * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
+ * declared for a built-in component) sections, then `findings N` and `clean true|false`.
  *
  * `*out_clean` receives 1 when the report carries no finding — the loader accepted the
  * graph and every `shacl-shacl.ttl` result is superseded — and 0 otherwise;
