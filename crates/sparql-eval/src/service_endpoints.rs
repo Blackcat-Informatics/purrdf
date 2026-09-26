@@ -436,6 +436,118 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     evaluated
 }
 
+/// Refuse a `LATERAL` whose right operand holds a variable-endpoint `SERVICE ?v` that
+/// some left solution cannot name an endpoint for — before the right operand is
+/// evaluated for any left solution, so no request of the clause goes out first.
+///
+/// A `LATERAL` (which `P . SERVICE ?v { … }` is parsed into) evaluates its right operand
+/// once per left solution with that solution substituted in. A solution that binds `?v`
+/// to an IRI resolves the clause; one that binds it to a literal or a blank node names no
+/// endpoint; one that leaves it unbound leaves the clause to the endpoints an enclosing
+/// operator lists, and is refused when none does. Found one solution at a time, the
+/// refusal came after the requests of the solutions before it, so whether a request —
+/// credentials included — went out for a query that is refused depended on row order.
+/// This finds it first, for the clauses whose variable nothing else in the right operand
+/// mentions ([`crate::expr::pattern_vars_outside`]), since only there is a left solution
+/// the one thing that can bind it: a clause whose variable the right operand may bind
+/// itself is left to its own evaluation. Every refusal made here is the one the
+/// per-solution evaluation would have reached, and a query it admits evaluates exactly as
+/// before.
+///
+/// # Errors
+///
+/// [`EvalError::Remote`] naming the value when a left solution binds `?v` to a term that
+/// is not an IRI ([`non_iri_endpoint`]), [`EvalError::Unsupported`] when one leaves it
+/// unbound and no enclosing operator lists its endpoints ([`unbound_endpoint`]), under
+/// `SILENT` too; [`EvalError::StackExhausted`] from the analysis walk.
+pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    if ctx.endpoint_scan == EndpointScan::Absent || left.rows.is_empty() {
+        return Ok(());
+    }
+    let uses = crate::stack::walk(|| {
+        let mut uses: Vec<(Variable, bool)> = Vec::new();
+        lateral_endpoint_uses(right, &mut uses);
+        uses.retain(|(variable, _)| {
+            let mut outside = crate::DetHashSet::default();
+            crate::expr::pattern_vars_outside(right, Some(variable), &mut outside);
+            !outside.contains(variable)
+        });
+        uses
+    })?;
+    for (variable, silent) in uses {
+        let column = left.schema.index_of(&variable);
+        let mut unbound = 0_usize;
+        for row in &left.rows {
+            match column.and_then(|c| row[c]) {
+                None => unbound += 1,
+                Some(term) => {
+                    let value = ctx.scratch.value_of(ctx.dataset, term);
+                    if !matches!(value, TermValue::Iri(_)) {
+                        return Err(non_iri_endpoint(&variable, &value, silent));
+                    }
+                }
+            }
+        }
+        if unbound == 0 {
+            continue;
+        }
+        match binding_for(&ctx.endpoint_frames, &variable) {
+            Some(EndpointBinding::Endpoints(_)) => {}
+            binding => {
+                let cause = if unbound < left.rows.len()
+                    || matches!(binding, Some(EndpointBinding::PartlyUnbound))
+                {
+                    "some solutions of the pattern before it leave it unbound"
+                } else {
+                    "it is not bound to an IRI where the SERVICE is evaluated"
+                };
+                return Err(unbound_endpoint(&variable, cause));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every variable-endpoint `SERVICE ?v` a per-solution evaluation of `pattern` reaches,
+/// with its `SILENT` flag, each variable once: not inside a `SERVICE` body (forwarded,
+/// never evaluated here) nor an expression, and not below a sub-`SELECT` that does not
+/// project `?v` (a different `?v`, which no substitution reaches).
+fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
+    match pattern {
+        GraphPattern::Service { name, silent, .. } => {
+            if let NamedNodePattern::Variable(variable) = name
+                && !uses.iter().any(|(seen, _)| seen == variable)
+            {
+                uses.push((variable.clone(), *silent));
+            }
+        }
+        GraphPattern::Project { inner, variables } => {
+            let before = uses.len();
+            lateral_endpoint_uses(inner, uses);
+            let mut index = before;
+            while index < uses.len() {
+                if variables.contains(&uses[index].0) {
+                    index += 1;
+                } else {
+                    uses.remove(index);
+                }
+            }
+        }
+        _ => {
+            crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                if let crate::governor::soundness::PatternPart::Child(child, _) = part {
+                    lateral_endpoint_uses(child, uses);
+                }
+                false
+            });
+        }
+    }
+}
+
 /// Evaluate a sub-`SELECT`'s `inner` with every endpoint variable it does not project
 /// hidden, so a `SERVICE ?v` below it — a different `?v` — is never answered over the
 /// outer operator's endpoints.
@@ -1082,5 +1194,61 @@ mod tests {
             ["e=down"]
         );
         assert_eq!(source.requests(), [format!("{EX}down")]);
+    }
+    /// A left solution that names no endpoint — `?e` unbound, or bound to a literal — is
+    /// refused before the clause asks any endpoint, whichever order the solutions come
+    /// in: before, the solutions ahead of it had already sent their requests.
+    #[test]
+    fn a_lateral_endpoint_some_solution_cannot_name_is_refused_before_any_request() {
+        for (shape, cause) in [
+            (
+                "VALUES ?g { ex:g1 ex:nobody } OPTIONAL { ?g ex:endpoint ?e } SERVICE ?e { ?s ?p ?x }",
+                "some solutions of the pattern before it leave it unbound",
+            ),
+            (
+                "VALUES ?g { ex:nobody ex:g1 } OPTIONAL { ?g ex:endpoint ?e } SERVICE ?e { ?s ?p ?x }",
+                "some solutions of the pattern before it leave it unbound",
+            ),
+            (
+                "VALUES ?g { ex:g1 ex:nobody } OPTIONAL { ?g ex:endpoint ?e } LATERAL { ?g ex:other ?o SERVICE ?e { ?s ?p ?x } }",
+                "some solutions of the pattern before it leave it unbound",
+            ),
+            (
+                "VALUES ?e { ex:e1 \"x\" } SERVICE ?e { ?s ?p ?x }",
+                "?e is bound to the literal \"x\", which is not an IRI",
+            ),
+            (
+                "VALUES ?e { \"x\" ex:e1 } SERVICE SILENT ?e { ?s ?p ?x }",
+                "?e is bound to the literal \"x\", which is not an IRI",
+            ),
+        ] {
+            let source = Endpoints::default();
+            let error = run(&source, &q(shape)).expect_err(shape);
+            assert!(error.to_string().contains(cause), "{shape}: {error}");
+            assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
+        }
+        // The valid neighbours: every solution names an endpoint, and the clause answers
+        // from each; a clause whose variable the right operand binds itself is left to
+        // its own evaluation, and answers too.
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("VALUES ?g { ex:g1 ex:g2 } OPTIONAL { ?g ex:endpoint ?e } SERVICE ?e { ?s ?p ?x }")
+            )
+            .expect("every solution names an endpoint"),
+            ["e=e1&g=g1&x=answer-from-e1", "e=e2&g=g2&x=answer-from-e2"]
+        );
+        assert_eq!(requested(&source), ["e1", "e2"]);
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("VALUES ?g { ex:g1 ex:nobody } LATERAL { ?g ex:endpoint ?e SERVICE ?e { ?s ?p ?x } }")
+            )
+            .expect("the right operand binds the endpoint itself"),
+            ["e=e1&g=g1&x=answer-from-e1"]
+        );
+        assert_eq!(requested(&source), ["e1"]);
     }
 }

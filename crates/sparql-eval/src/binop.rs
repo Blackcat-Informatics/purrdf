@@ -298,6 +298,11 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         });
     }
 
+    // A variable-endpoint `SERVICE` some left row names no endpoint for is refused before
+    // any row's evaluation sends a request, so a refused query never contacts a remote
+    // first, whatever order its left rows come in.
+    crate::service_endpoints::admit_lateral_endpoints(&l, right, ctx)?;
+
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 

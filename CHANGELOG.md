@@ -739,6 +739,16 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   endpoints and an offline `LOAD` resolver, standing in for the network the W3C
   suites assume (`service7`, `load-silent`, `load-into-silent` still pass).
 
+- **sparql-eval:** a query refused for a variable endpoint some solution could not
+  name still contacted a remote first. `?s ?p ?o OPTIONAL { ?s ex:ep ?e } SERVICE ?e
+  { … }` evaluates the clause once per left solution, so when an early solution bound
+  `?e` and a later one left it unbound (or bound it to a literal), the request for the
+  early one — with any credentials the host attaches — went out before the refusal,
+  and whether it did depended on row order. Every left solution is now checked before
+  the clause is evaluated for any of them, for each `SERVICE ?e` whose variable
+  nothing else in the right operand mentions; the refusal is the one the per-solution
+  evaluation would have reached, and a query it admits evaluates as before.
+
 - **sparql-eval:** `SERVICE ?e` was refused wherever `?e` was bound by the left side
   of an `OPTIONAL`, a `MINUS` or a group join rather than by a pattern earlier in
   the same group, although `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` is the same

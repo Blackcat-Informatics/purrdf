@@ -1123,6 +1123,20 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// `analyze_pattern(P).free_vars` for the same `P` — see [`expr_vars`]'s doc for
 /// why that one-directional divergence is safe for this walk's actual consumer.
 pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    pattern_vars_outside(pattern, None, out);
+}
+
+/// [`pattern_all_vars`], except that a `SERVICE ?endpoint { … }` clause on `endpoint`
+/// contributes nothing — neither its endpoint variable nor its body — when `endpoint` is
+/// given: what the rest of `pattern` mentions. A variable absent from that set is bound
+/// by nothing in `pattern` but those clauses, whose bodies never bind their own endpoint
+/// (see `crate::service_endpoints`). An `EXISTS` body is walked whole, as
+/// [`expr_vars`] walks it: a superset, which only ever reports a mention.
+pub(crate) fn pattern_vars_outside(
+    pattern: &GraphPattern,
+    endpoint: Option<&Variable>,
+    out: &mut DetHashSet<Variable>,
+) {
     use purrdf_sparql_algebra::NamedNodePattern;
 
     #[cfg(test)]
@@ -1156,23 +1170,26 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
             if let NamedNodePattern::Variable(v) = name {
                 out.insert(v.clone());
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Service { name, inner, .. } => {
             if let NamedNodePattern::Variable(v) = name {
+                if endpoint == Some(v) {
+                    return;
+                }
                 out.insert(v.clone());
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right } => {
-            pattern_all_vars(left, out);
-            pattern_all_vars(right, out);
+            pattern_vars_outside(left, endpoint, out);
+            pattern_vars_outside(right, endpoint, out);
         }
         GraphPattern::Union { arms } => {
             for arm in arms {
-                pattern_all_vars(arm, out);
+                pattern_vars_outside(arm, endpoint, out);
             }
         }
         GraphPattern::LeftJoin {
@@ -1183,12 +1200,12 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
             if let Some(e) = expression {
                 expr_vars(e, out);
             }
-            pattern_all_vars(left, out);
-            pattern_all_vars(right, out);
+            pattern_vars_outside(left, endpoint, out);
+            pattern_vars_outside(right, endpoint, out);
         }
         GraphPattern::Filter { expr, inner } => {
             expr_vars(expr, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Extend {
             inner,
@@ -1197,7 +1214,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
         } => {
             out.insert(variable.clone());
             expr_vars(expression, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Unfold {
             inner,
@@ -1210,7 +1227,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                 out.insert(companion.clone());
             }
             expr_vars(expression, out);
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::OrderBy { inner, expression } => {
             for oe in expression {
@@ -1219,7 +1236,7 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                     | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, out),
                 }
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Group {
             inner,
@@ -1237,14 +1254,14 @@ pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Vari
                     expr_vars(arg, out);
                 }
             }
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => pattern_all_vars(inner, out),
+        | GraphPattern::Slice { inner, .. } => pattern_vars_outside(inner, endpoint, out),
         GraphPattern::Project { inner, variables } => {
             out.extend(variables.iter().cloned());
-            pattern_all_vars(inner, out);
+            pattern_vars_outside(inner, endpoint, out);
         }
     }
 }

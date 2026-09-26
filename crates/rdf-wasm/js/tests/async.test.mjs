@@ -423,7 +423,7 @@ test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is 
   for (const [shape, message] of [
     [
       `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . BIND("x" AS ?e) SERVICE SILENT ?e { ?a ?b ?x } }`,
-      /SERVICE \?e with no endpoint: \?e names the endpoint, but it is not bound to an IRI.*SILENT does not change this/,
+      /SERVICE \?e: \?e is bound to the literal "x", which is not an IRI, so there is no endpoint to send the request to; SILENT does not apply/,
     ],
     [
       `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . VALUES ?e { "x" } OPTIONAL { SERVICE SILENT ?e { ?a ?b ?x } } }`,
@@ -464,6 +464,38 @@ const ENDPOINTS_NT = [
   .concat([""])
   .join("\n");
 const endpointsLocal = () => Dataset.parse(ENDPOINTS_NT, "nquads");
+
+// A left solution that names no endpoint — `?e` left unbound by an OPTIONAL, or bound to a
+// literal — refuses the clause before any endpoint is asked, in either row order. Before,
+// the solutions ahead of it had already sent their requests (with any credentials the
+// handler attaches), so whether a refused query contacted a remote depended on row order.
+test("a variable endpoint some solution cannot name refuses the query before any request, in either row order", async () => {
+  const engine = new QueryEngine();
+  for (const shape of [
+    `SELECT * WHERE { VALUES ?g { <${EX}g1> <${EX}nobody> } OPTIONAL { ?g <${EX}endpoint> ?e } SERVICE ?e { ?s ?p ?x } }`,
+    `SELECT * WHERE { VALUES ?g { <${EX}nobody> <${EX}g1> } OPTIONAL { ?g <${EX}endpoint> ?e } SERVICE ?e { ?s ?p ?x } }`,
+    `SELECT * WHERE { VALUES ?e { <${EX}e1> "x" } SERVICE ?e { ?s ?p ?x } }`,
+    `SELECT * WHERE { VALUES ?e { "x" <${EX}e1> } SERVICE ?e { ?s ?p ?x } }`,
+  ]) {
+    const mock = recordingResolver(answerWithEndpointName);
+    const error = await rejection(engine.queryAsync(endpointsLocal(), shape, { resolveService: mock.resolveService }));
+    assert.match(error.message, /some solutions of the pattern before it leave it unbound|which is not an IRI/, shape);
+    assert.equal(mock.calls.length, 0, `${shape}: nobody is asked`);
+    assert.equal(syncThrow(() => engine.query(endpointsLocal(), shape)).message, error.message, shape);
+  }
+  // The valid neighbour: every solution names an endpoint, and each is asked once.
+  const mock = recordingResolver(answerWithEndpointName);
+  const answered = await engine.queryAsync(
+    endpointsLocal(),
+    `SELECT ?g ?e ?x WHERE { VALUES ?g { <${EX}g1> <${EX}g2> } OPTIONAL { ?g <${EX}endpoint> ?e } SERVICE ?e { ?s ?p ?x } }`,
+    { resolveService: mock.resolveService },
+  );
+  assert.deepEqual(rowsOf(answered), [
+    `e=${EX}e1&g=${EX}g1&x=answer-from-e1`,
+    `e=${EX}e2&g=${EX}g2&x=answer-from-e2`,
+  ]);
+  assert.deepEqual(mock.calls.map((call) => call.request.endpoint).sort(), [`${EX}e1`, `${EX}e2`]);
+});
 const answerPerEndpoint = async (request) => {
   const name = request.endpoint.slice(EX.length);
   if (name === "down") return { kind: "transport", message: "endpoint unreachable" };
