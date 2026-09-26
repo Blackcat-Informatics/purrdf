@@ -12,9 +12,10 @@
 //! stack actually left at every recursive entry and refuse, typed, when less than
 //! [`MARGIN_BYTES`] remain. This crate is that measurement, in one place: one floor per
 //! thread, one margin, the walk scopes that let a recursion with no error channel refuse
-//! too ([`walk`], [`walk_is_low`]), and the functions hosts call to install the floor of a
-//! stack they switch onto ([`replace_floor`]) or to switch whole contexts
-//! ([`replace_context`]).
+//! too ([`walk`], [`walk_is_low`]), the stack a computation keeps out of reach of its
+//! own checks for walks it knows it will make ([`reserve`], [`widen`]), and the functions
+//! hosts call to install the floor of a stack they switch onto ([`replace_floor`]) or to
+//! switch whole contexts ([`replace_context`]).
 //!
 //! # The floor
 //!
@@ -214,7 +215,13 @@ thread_local! {
     static WALK: Cell<WalkState> = const { Cell::new(WalkState::Unscoped) };
     /// The bytes the open [`reserve`] scopes keep above the stack's real floor: `FLOOR`
     /// is the real floor raised by this much, and a floor read again is raised by it too.
+    /// [`WIDENED`] is part of it.
     static RESERVED: Cell<usize> = const { Cell::new(0) };
+    /// How many [`reserve`] scopes are open in the running context.
+    static SCOPES: Cell<usize> = const { Cell::new(0) };
+    /// The bytes [`widen`] added to the open scopes, given back when the outermost of
+    /// them closes.
+    static WIDENED: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The current stack pointer, as the address of a local of the calling frame.
@@ -268,6 +275,10 @@ pub struct Context {
     walk: WalkState,
     /// The bytes the context's open [`reserve`] scopes keep above its real floor.
     reserved: usize,
+    /// How many [`reserve`] scopes the context has open.
+    scopes: usize,
+    /// The bytes [`widen`] added to the context's open scopes.
+    widened: usize,
 }
 
 impl Context {
@@ -280,6 +291,8 @@ impl Context {
             floor,
             walk: WalkState::Unscoped,
             reserved: 0,
+            scopes: 0,
+            widened: 0,
         }
     }
 }
@@ -297,6 +310,8 @@ pub fn replace_context(context: Context) -> Context {
         floor: replace_floor(context.floor),
         walk: WALK.with(|state| state.replace(context.walk)),
         reserved: RESERVED.with(|reserved| reserved.replace(context.reserved)),
+        scopes: SCOPES.with(|scopes| scopes.replace(context.scopes)),
+        widened: WIDENED.with(|widened| widened.replace(context.widened)),
     }
 }
 
@@ -317,18 +332,88 @@ pub fn replace_context(context: Context) -> Context {
 /// host's [`replace_context`] carries the reserve with the computation that made it. On
 /// a platform whose stack bound cannot be read, where every guard of this crate is
 /// inactive, nothing is reserved either.
+///
+/// A reserve is also a *scope* — even one of zero bytes — that [`widen`] can add to while
+/// the computation runs: whatever it adds is given back when the outermost open scope
+/// closes, not the innermost, because what the computation built with it may reach every
+/// frame up to where the computation started.
 pub fn reserve(bytes: usize) -> Reserve {
     // Read the floor first, so what is raised is a real floor rather than the "not yet
     // read" marker.
     let _ = remaining();
     let floor = FLOOR.with(Cell::get);
-    let inactive = cfg!(not(target_arch = "wasm32")) && floor == 0;
-    if bytes == 0 || floor == EXHAUSTED || inactive {
-        return Reserve { bytes: 0 };
+    if floor == EXHAUSTED || inactive(floor) {
+        return Reserve {
+            bytes: 0,
+            scoped: false,
+        };
     }
     FLOOR.with(|cell| cell.set(floor.saturating_add(bytes)));
     RESERVED.with(|reserved| reserved.set(reserved.get() + bytes));
-    Reserve { bytes }
+    SCOPES.with(|scopes| scopes.set(scopes.get() + 1));
+    Reserve {
+        bytes,
+        scoped: true,
+    }
+}
+
+/// Whether `floor` is the "no readable bound" floor of a native platform, where every
+/// guard of this crate is inactive.
+const fn inactive(floor: usize) -> bool {
+    cfg!(not(target_arch = "wasm32")) && floor == 0
+}
+
+/// Keep `bytes` more stack out of reach of every check in the running computation, for
+/// as long as its outermost open [`reserve`] scope lives — when the computation finds, as
+/// it runs, that it needs more than it reserved when it started (the SPARQL evaluator
+/// admitting a triple term it built, deeper than any the request wrote).
+///
+/// Returns whether the bytes are kept. They are not, and nothing changes, when no scope
+/// is open (nothing would give them back), when a refusal is latched ([`EXHAUSTED`] is
+/// installed), or when the calling frame would be left with less than [`MARGIN_BYTES`]
+/// above the raised floor — the caller refuses then, typed. On a platform whose stack
+/// bound cannot be read nothing is measured, so nothing is kept and `true` is returned.
+///
+/// The bytes are given back when the outermost scope closes rather than the innermost,
+/// because what the computation built with them may be walked in any frame up to the
+/// one that opened the outermost scope: that frame is above the one that widened, so it
+/// has at least the margin and every widened byte above the real floor.
+#[must_use]
+pub fn widen(bytes: usize) -> bool {
+    let _ = remaining();
+    let floor = FLOOR.with(Cell::get);
+    if inactive(floor) || bytes == 0 {
+        return true;
+    }
+    if floor == EXHAUSTED || SCOPES.with(Cell::get) == 0 {
+        return false;
+    }
+    let raised = floor.saturating_add(bytes);
+    let sp = stack_pointer();
+    if sp
+        .checked_sub(raised)
+        .is_none_or(|left| left < MARGIN_BYTES)
+    {
+        return false;
+    }
+    FLOOR.with(|cell| cell.set(raised));
+    RESERVED.with(|reserved| reserved.set(reserved.get() + bytes));
+    WIDENED.with(|widened| widened.set(widened.get() + bytes));
+    true
+}
+
+/// The bytes the running computation's open [`reserve`] scopes keep above its stack's
+/// real floor, [`widen`]ed bytes included: `0` when none is open.
+#[must_use]
+pub fn reserved() -> usize {
+    RESERVED.with(Cell::get)
+}
+
+/// Whether the running computation has a [`reserve`] scope open — whether [`widen`] has
+/// anywhere to keep its bytes.
+#[must_use]
+pub fn scoped() -> bool {
+    SCOPES.with(Cell::get) > 0
 }
 
 /// Stack kept out of reach of every check while it lives; see [`reserve`]. Dropping it
@@ -338,6 +423,8 @@ pub fn reserve(bytes: usize) -> Reserve {
 pub struct Reserve {
     /// What this reserve raised the floor by.
     bytes: usize,
+    /// Whether it opened a scope (see [`reserve`]).
+    scoped: bool,
 }
 
 impl Reserve {
@@ -351,10 +438,24 @@ impl Reserve {
 
 impl Drop for Reserve {
     fn drop(&mut self) {
-        if self.bytes == 0 {
+        if !self.scoped {
             return;
         }
-        RESERVED.with(|reserved| reserved.set(reserved.get().saturating_sub(self.bytes)));
+        // The outermost scope gives back what `widen` added while any scope was open.
+        let outermost = SCOPES.with(|scopes| {
+            let open = scopes.get().saturating_sub(1);
+            scopes.set(open);
+            open == 0
+        });
+        let bytes = if outermost {
+            self.bytes + WIDENED.with(|widened| widened.replace(0))
+        } else {
+            self.bytes
+        };
+        if bytes == 0 {
+            return;
+        }
+        RESERVED.with(|reserved| reserved.set(reserved.get().saturating_sub(bytes)));
         match FLOOR.with(Cell::get) {
             // A walk scope inside this reserve refused and has not closed: it put
             // EXHAUSTED in place of the raised floor and puts that floor back when it
@@ -363,12 +464,12 @@ impl Drop for Reserve {
                 if let WalkState::Refused { construct, floor } = state.get() {
                     state.set(WalkState::Refused {
                         construct,
-                        floor: floor.saturating_sub(self.bytes),
+                        floor: floor.saturating_sub(bytes),
                     });
                 }
             }),
             UNKNOWN => {}
-            floor => FLOOR.with(|cell| cell.set(floor.saturating_sub(self.bytes))),
+            floor => FLOOR.with(|cell| cell.set(floor.saturating_sub(bytes))),
         }
     }
 }
@@ -864,6 +965,78 @@ mod tests {
             );
             drop(kept);
             assert!(remaining() + 1024 > before);
+        });
+    }
+
+    /// Widening needs an open scope, keeps its bytes until the OUTERMOST scope closes
+    /// (an inner scope closing gives back only its own), and refuses — changing nothing —
+    /// a widening that would leave the calling frame less than the margin, while the
+    /// neighbouring widening that leaves more is kept.
+    #[test]
+    fn a_widening_lasts_until_the_outermost_scope_closes() {
+        on_thread(4 * 1024 * 1024, || {
+            let before = remaining();
+            assert!(!scoped());
+            assert!(!widen(4096), "no scope: nothing would give the bytes back");
+            assert_eq!(reserved(), 0);
+            let outer = reserve(0);
+            assert!(scoped());
+            assert_eq!(outer.bytes(), 0);
+            let inner = reserve(64 * 1024);
+            assert!(
+                widen(256 * 1024),
+                "a widening that leaves the margin is kept"
+            );
+            assert_eq!(reserved(), 320 * 1024);
+            let left = remaining();
+            assert!(
+                !widen(left - MARGIN_BYTES / 2),
+                "a widening into the margin is refused"
+            );
+            assert_eq!(reserved(), 320 * 1024, "and changes nothing");
+            assert!(widen(left - MARGIN_BYTES - 8192), "its neighbour is kept");
+            let widened = 256 * 1024 + (left - MARGIN_BYTES - 8192);
+            drop(inner);
+            assert_eq!(
+                reserved(),
+                widened,
+                "the inner scope gives back its own only"
+            );
+            assert!(scoped());
+            drop(outer);
+            assert_eq!(
+                reserved(),
+                0,
+                "the outermost scope gives back every widening"
+            );
+            assert!(!scoped());
+            let after = remaining();
+            assert!(
+                (before - 1024..before + 1024).contains(&after),
+                "{before} bytes before, {after} after"
+            );
+        });
+    }
+
+    /// A widening travels with its context, like the scope it belongs to.
+    #[test]
+    fn a_widening_stays_with_its_context() {
+        on_thread(4 * 1024 * 1024, || {
+            let before = remaining();
+            let scope = reserve(0);
+            assert!(widen(1024 * 1024));
+            let real = FLOOR.with(Cell::get) - 1024 * 1024;
+            let job = replace_context(Context::on_floor(real));
+            assert!(!scoped(), "the waiting context has no scope");
+            assert!(!widen(4096));
+            assert!(remaining() + 1024 > before);
+            let back = replace_context(job);
+            assert_eq!(back, Context::on_floor(real));
+            assert!(scoped());
+            assert!(remaining() + 1024 * 1024 <= before + 1024);
+            drop(scope);
+            assert!(remaining() + 1024 > before);
+            assert_eq!(reserved(), 0);
         });
     }
 

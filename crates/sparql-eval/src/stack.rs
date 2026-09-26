@@ -62,8 +62,15 @@
 //!   deeper — in a pattern, a `VALUES` block, a template, or a chain of `TRIPLE` calls —
 //!   is evaluated under a [`purrdf_stack::reserve`] of [`TERM_LEVEL_BYTES`] a level past
 //!   that ([`reserve_terms`]), so every check the evaluation passes leaves room below it
-//!   for a walk over the deepest of them: what bounds such a term is the stack, measured,
-//!   and never a count. A pattern position whose triple terms nest deeper than any the
+//!   for a walk over the deepest of them. A term built at run time — `TRIPLE` calls
+//!   feeding each other through `BIND`, `LATERAL` or a function, or a value a user
+//!   function, a `SERVICE` or property-function row or an aggregate hands back — is
+//!   admitted as it enters the scratch interner, before anything walks it
+//!   ([`admit_term`]): one deeper than the evaluation covers widens its reserve
+//!   ([`purrdf_stack::widen`]) or is refused, typed. What bounds such a term is the
+//!   stack, measured, and never a count. A fork-join worker keeps no reserve, so an
+//!   evaluation holding deep terms never forks, and a worker that builds one refuses it
+//!   and the work runs on the evaluating thread instead (see `crate::parallel`). A pattern position whose triple terms nest deeper than any the
 //!   dataset holds matches nothing, and is answered so before it is walked (see
 //!   `bgp::compile_term`).
 //! * The one-level visitors do not recurse.
@@ -111,7 +118,9 @@ pub(crate) const TERM_LEVEL_BYTES: usize = if cfg!(target_arch = "wasm32") {
 /// lives, then check that the stack left still clears the margin.
 ///
 /// Nothing is reserved for a request whose triple terms nest [`MARGIN_TERM_LEVELS`] deep
-/// or less — every request a count used to admit — so the common case pays nothing.
+/// or less — every request a count used to admit — so the common case pays nothing but
+/// the scope the reserve opens, which [`admit_term`] widens for a deeper term the
+/// evaluation builds.
 ///
 /// # Errors
 ///
@@ -125,6 +134,92 @@ pub(crate) fn reserve_terms(levels: usize) -> Result<purrdf_stack::Reserve, Eval
     );
     check("triple term")?;
     Ok(reserve)
+}
+
+/// The construct a triple term deeper than the margin holds is refused as on a thread
+/// with no evaluation scope open — a fork-join worker (see `crate::parallel`), which
+/// cannot keep stack for it past its own work. The fork-join primitives read this refusal
+/// as "run the work sequentially" rather than reporting it.
+pub(crate) const UNSCOPED_TRIPLE_TERM: &str = "triple term built off the evaluating thread";
+
+/// Admit `value` into the running evaluation before anything walks it: every value the
+/// evaluator builds or receives at run time — a `TRIPLE` call's result, a user function's,
+/// a `SERVICE` or property-function row, an aggregate's — enters through the scratch
+/// interner, which calls this first.
+///
+/// A value that is no triple term costs one discriminant test. A triple term's nesting is
+/// counted without recursion; up to what the running evaluation already covers — the
+/// [`MARGIN_TERM_LEVELS`] the margin holds, plus whatever it reserved for the request's
+/// written terms or widened for terms it built before — nothing else happens. A deeper
+/// one widens the evaluation's reserve by [`TERM_LEVEL_BYTES`] a level past that
+/// ([`purrdf_stack::widen`]), so every check the evaluation passes from here on leaves
+/// room for walks over it, and every frame up to where the evaluation started has that
+/// room too: the term is bounded by the stack, measured, not by a count.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] naming triple terms when the thread has too little stack
+/// left for the widening and the margin both, or [`UNSCOPED_TRIPLE_TERM`] on a thread
+/// with no evaluation scope open.
+#[inline]
+pub(crate) fn admit_term(value: &purrdf_core::TermValue) -> Result<(), EvalError> {
+    if !matches!(value, purrdf_core::TermValue::Triple { .. }) {
+        return Ok(());
+    }
+    admit_levels(term_nesting(value))
+}
+
+/// The triple-term half of [`admit_term`].
+fn admit_levels(levels: usize) -> Result<(), EvalError> {
+    let covered = MARGIN_TERM_LEVELS + purrdf_stack::reserved() / TERM_LEVEL_BYTES;
+    if levels <= covered {
+        return Ok(());
+    }
+    if purrdf_stack::widen((levels - covered).saturating_mul(TERM_LEVEL_BYTES)) {
+        return Ok(());
+    }
+    Err(EvalError::StackExhausted {
+        construct: if purrdf_stack::scoped() {
+            "triple term"
+        } else {
+            UNSCOPED_TRIPLE_TERM
+        },
+    })
+}
+
+/// How many triple terms `value`'s longest chain holds, the outermost included, counted
+/// without recursion (and without allocating unless a triple term's subject is itself
+/// one).
+pub(crate) fn term_nesting(value: &purrdf_core::TermValue) -> usize {
+    use purrdf_core::TermValue;
+    let mut deepest = 0;
+    let mut pending: Vec<(&TermValue, usize)> = Vec::new();
+    let mut next = Some((value, 0));
+    while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+        if let TermValue::Triple { s, p, o } = term {
+            let depth = above + 1;
+            deepest = deepest.max(depth);
+            for part in [s, p] {
+                if matches!(**part, TermValue::Triple { .. }) {
+                    pending.push((part, depth));
+                }
+            }
+            next = Some((o, depth));
+        }
+    }
+    deepest
+}
+
+/// Drop `value` without recursing, so a triple term refused for being too deep for the
+/// stack is released without the walk it was refused for.
+pub(crate) fn drop_term(value: purrdf_core::TermValue) {
+    use purrdf_core::TermValue;
+    let mut pending = vec![value];
+    while let Some(term) = pending.pop() {
+        if let TermValue::Triple { s, p, o } = term {
+            pending.extend([*s, *p, *o]);
+        }
+    }
 }
 
 /// How deeply the triple terms of `template` nest: the deepest of its quads' subjects

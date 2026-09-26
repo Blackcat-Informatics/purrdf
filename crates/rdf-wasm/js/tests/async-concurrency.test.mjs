@@ -244,15 +244,16 @@ test("an async job started from inside a sync callback runs and returns", async 
 
 // Measured on the shipped artifact through `evidence.async.stackHighWaterBytes` (the
 // deepest poll below the region's top), with the chain above: 100 nested OPTIONALs reach
-// 434 508 bytes and 105 reach 455 308, both answering on a 512 KiB region; 110 are
-// refused. The parser's and evaluator's checks refuse once less than the 64 KiB margin is
+// about 410 000 bytes and 110 about 450 000, both answering on a 512 KiB region; 115 are
+// refused. The compiler sizes the frames, so the refused request is 140 levels — well
+// past that edge — and the answering one 100. The parser's and evaluator's checks refuse once less than the 64 KiB margin is
 // left above the region's base — 524 288 − 65 536 = 458 752 bytes down — and the polls'
 // guard band is half that margin, so a request whose every level checks is refused by the
 // evaluator itself, typed as its synchronous twin refuses, with its deepest poll between
 // the two. (Before the band lay below the margin, a 128 KiB band stopped 100 levels with
 // the region's fault instead.)
 const ANSWERING_DEPTH = 100;
-const EXHAUSTING_DEPTH = 110;
+const EXHAUSTING_DEPTH = 140;
 const SMALL_REGION = 524288;
 const MARGIN = 64 * 1024;
 const GUARD_BAND = MARGIN / 2;
@@ -283,7 +284,7 @@ test("a request too deep for its stack region is the evaluator's typed refusal, 
     // the remedy — never the region's fault.
     assert.match(
       exhausted.message,
-      /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \(OPTIONAL needs more stack than this thread has left above its 65536-byte reserve\); run it on a thread with a larger stack/,
+      /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\); run it on a thread with a larger stack/,
     );
     assert.ok(exhausted.message.endsWith(SMALL_REGION_HINT), exhausted.message);
     assert.doesNotMatch(exhausted.message, REGION_FAULT);

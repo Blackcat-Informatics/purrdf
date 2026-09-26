@@ -208,9 +208,30 @@ pub(crate) fn force_sequential_operation() -> SequentialOperationGuard {
     SequentialOperationGuard { previous }
 }
 
-/// Whether the current operation requires deterministic sequential evaluation.
+/// Whether the current operation requires sequential evaluation on this thread: a caller
+/// forced it ([`force_sequential_operation`]), or the evaluation holds triple terms
+/// deeper than the stack margin covers.
+///
+/// Those terms are covered only on the thread that measured them: the running
+/// evaluation kept stack for walks over them ([`crate::stack::admit_term`], the request's
+/// own reserve), and a fork-join worker — which clones the scratch interner holding them
+/// and walks them on a stack of its own — has kept none. So an evaluation with anything
+/// reserved stays on its thread. A worker that builds such a term itself is refused
+/// ([`crate::stack::UNSCOPED_TRIPLE_TERM`]), and the fork-join primitives run their work
+/// sequentially on the evaluating thread instead ([`is_unscoped_refusal`]).
 pub(crate) fn sequential_operation_required() -> bool {
-    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get)
+    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get) || purrdf_stack::reserved() > 0
+}
+
+/// Whether `result` is a worker's refusal of a triple term deeper than a thread with no
+/// evaluation scope can hold: work the fork-join primitives redo sequentially, on the
+/// evaluating thread, where the term is measured and kept like any other.
+pub(crate) fn is_unscoped_refusal<T>(result: &Result<T, EvalError>) -> bool {
+    matches!(
+        result,
+        Err(EvalError::StackExhausted { construct })
+            if *construct == crate::stack::UNSCOPED_TRIPLE_TERM
+    )
 }
 
 /// RAII restoration for [`force_sequential_operation`].
@@ -1137,14 +1158,17 @@ where
     R: Send,
     H: Send,
 {
-    if !should_parallelize(items.len()) {
+    let sequential = || {
         let mut state = init();
         let mut out = Vec::new();
         for item in items {
             push(&mut state, &mut out, item)?;
         }
         let harvested = harvest(&mut state);
-        return Ok((out, smallvec::smallvec![harvested]));
+        Ok((out, smallvec::smallvec![harvested]))
+    };
+    if !should_parallelize(items.len()) {
+        return sequential();
     }
 
     use rayon::prelude::*;
@@ -1162,6 +1186,11 @@ where
             Ok((acc, harvested))
         })
         .collect();
+    if per_chunk.iter().any(is_unscoped_refusal) {
+        drop(per_chunk);
+        let _sequential = force_sequential_operation();
+        return sequential();
+    }
 
     let mut out = Vec::with_capacity(
         per_chunk
@@ -1249,12 +1278,15 @@ where
     T: Sync,
     S: Send,
 {
-    if !should_parallelize(items.len()) {
+    let sequential = || {
         let mut state = init()?;
         for item in items {
             step(&mut state, item)?;
         }
-        return Ok(state);
+        Ok(state)
+    };
+    if !should_parallelize(items.len()) {
+        return sequential();
     }
 
     use rayon::prelude::*;
@@ -1270,6 +1302,11 @@ where
             Ok(state)
         })
         .collect();
+    if per_chunk.iter().any(is_unscoped_refusal) {
+        drop(per_chunk);
+        let _sequential = force_sequential_operation();
+        return sequential();
+    }
 
     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
     // wins (via `?` on the sequential `for` below), regardless of which worker
@@ -1381,7 +1418,19 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
             // function of the value, so this call cannot refuse what the child
             // accepted. Propagating the `Option` rather than asserting keeps the
             // cell shape honest if that ever stops being true.
-            Some(PortableTerm::Fresh(value)) => main.intern_checked(dataset, value),
+            //
+            // Nor can it refuse the value's depth: a worker holds no triple term deeper
+            // than the margin covers (it refuses one, and the primitive reruns the work
+            // on the evaluating thread — see `sequential_operation_required`), so the
+            // value is within what every thread covers, and admitting it changes
+            // nothing.
+            Some(PortableTerm::Fresh(value)) => {
+                debug_assert!(
+                    crate::stack::term_nesting(&value) <= crate::stack::MARGIN_TERM_LEVELS
+                        || purrdf_stack::reserved() > 0
+                );
+                main.intern_checked(dataset, value)
+            }
         })
         .collect()
 }

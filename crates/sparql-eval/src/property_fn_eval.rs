@@ -656,7 +656,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 // answer `unify_row` above gives a row that disagrees, and the
                 // same one `RowIngest::intern_row` documents for a producer that
                 // miscounts its own columns.
-                row[column] = ctx.scratch.intern_checked(ctx.dataset, value);
+                row[column] = ctx.scratch.try_intern_checked(ctx.dataset, value)?;
             }
             rows.push(row);
         }
@@ -2773,15 +2773,19 @@ impl CallCursor {
                             )));
                         };
                         let ctx = context.get_or_insert_with(|| filtering.context(dataset));
-                        let row: Vec<Option<crate::scratch::SolutionTerm<D::Id>>> = slots
-                            .iter()
-                            .map(|slot| {
-                                slot.and_then(|slot| self.values[slot].clone())
-                                    .and_then(|value| {
-                                        ctx.scratch.intern_checked(ctx.dataset, value)
-                                    })
-                            })
-                            .collect();
+                        let row =
+                            slots
+                                .iter()
+                                .map(|slot| {
+                                    slot.and_then(|slot| self.values[slot].clone())
+                                        .map_or(Ok(None), |value| {
+                                            ctx.scratch.try_intern_checked(ctx.dataset, value)
+                                        })
+                                })
+                                .collect::<Result<
+                                    Vec<Option<crate::scratch::SolutionTerm<D::Id>>>,
+                                    EvalError,
+                                >>()?;
                         if crate::expr::eval_ebv(expression, &row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }

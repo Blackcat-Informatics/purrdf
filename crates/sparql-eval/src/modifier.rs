@@ -177,7 +177,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
                 // being put back. See `ScratchInterner::intern`.
                 row[i] = Some(
                     ctx.scratch
-                        .intern(ctx.dataset, ground_term_to_value(ground)),
+                        .try_intern(ctx.dataset, ground_term_to_value(ground))?,
                 );
             }
         }
@@ -1421,7 +1421,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
         )?;
-        return Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)));
+        return value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v));
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -1550,7 +1550,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ));
         }
     };
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v))
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1772,7 +1772,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // this is where that value would otherwise become a solution term. `and_then`
     // routes a refused tag onto the same unbound answer an accumulator that
     // returned `None` gets — see `ScratchInterner::intern_checked`.
-    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
+    value.map_or(Ok(None), |v| ctx.scratch.try_intern_checked(ctx.dataset, v))
 }
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /

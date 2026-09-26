@@ -1114,7 +1114,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         }
     };
 
-    let (seq, tripped) = ingest(resolved, ctx);
+    let (seq, tripped) = ingest(resolved, ctx)?;
     Ok(match tripped {
         None => Evaluated::Complete(seq),
         Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
@@ -1148,7 +1148,7 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
 /// Returns the interned bag together with the governor that stopped the ingest, if one
-/// did: the `remote-row-ingested` charge point is charged per row **as it is interned**,
+/// did (or the stack refusal of a triple term deeper than the evaluation can hold): the `remote-row-ingested` charge point is charged per row **as it is interned**,
 /// so an unbounded remote response cannot walk past the caller's ceilings by arriving
 /// from outside the dataset. Charging in row order makes the ingested prefix a positional
 /// prefix of the endpoint's answer, which is what lets the caller certify it.
@@ -1166,7 +1166,7 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 fn ingest<D: DatasetView + Sync>(
     resolved: ResolvedBindings,
     ctx: &mut EvalCtx<'_, D>,
-) -> (SolutionSeq<D::Id>, Option<TrippedGovernor>) {
+) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
     let ResolvedBindings {
         variables,
         rows: resolved_rows,
@@ -1192,7 +1192,7 @@ fn ingest<D: DatasetView + Sync>(
             }
             crate::row_ingest::RowAdmission::Admitted => {}
         }
-        let row = ingest.intern_row(ctx, binding);
+        let row = ingest.intern_row(ctx, binding)?;
         rows.push(row);
     }
     if tripped.is_none()
@@ -1200,7 +1200,7 @@ fn ingest<D: DatasetView + Sync>(
     {
         tripped = ctx.observe_cell_count(attempted_cells).err();
     }
-    (SolutionSeq { schema, rows }, tripped)
+    Ok((SolutionSeq { schema, rows }, tripped))
 }
 
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.

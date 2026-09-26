@@ -396,10 +396,25 @@ fn lookup<I: ViewTermId>(
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the value is a triple term nested deeper than the
+/// evaluation can keep stack for (see [`crate::stack::admit_term`]).
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    ctx.scratch.try_intern_checked(ctx.dataset, value)
+}
+
+/// Intern a value that is no triple term — a constant atom the query wrote, a literal a
+/// string function built — so there is no depth to admit (see [`intern`]).
+fn intern_leaf<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
+    debug_assert!(!matches!(value, TermValue::Triple { .. }));
     ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
@@ -439,13 +454,13 @@ fn const_atom<D: DatasetView + Sync>(
     // here would silently return a stale, wrong-row constant. Bypass the cache
     // entirely for the duration of that window.
     if ctx.in_substituted_exists {
-        return intern(ctx, build());
+        return intern_leaf(ctx, build());
     }
     let key = std::ptr::from_ref::<Expression>(expr) as usize;
     if let Some(term) = ctx.const_atom_cache.get(&key) {
         return *term;
     }
-    let term = intern(ctx, build());
+    let term = intern_leaf(ctx, build());
     ctx.const_atom_cache.insert(key, term);
     term
 }
@@ -4096,7 +4111,7 @@ fn eval_function<D: DatasetView + Sync>(
             if let Some((func, body)) = ctx.user_functions.resolve(iri.as_str()) {
                 let result =
                     crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             // A caller-injected native (host-Rust closure) function, resolved from
             // the same registry's second table. Checked after the SPARQL-bodied
@@ -4106,7 +4121,7 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
             // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
@@ -4118,7 +4133,7 @@ fn eval_function<D: DatasetView + Sync>(
             // ordering, not a precedence rule.
             if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
                 let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
+                return result.map_or(Ok(None), |value| intern(ctx, value));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -4740,7 +4755,7 @@ fn make_string<D: DatasetView + Sync>(
     lang: Option<String>,
 ) -> Option<SolutionTerm<D::Id>> {
     match lang {
-        Some(l) => intern(
+        Some(l) => intern_leaf(
             ctx,
             TermValue::Literal {
                 lexical_form: lexical,
@@ -4763,7 +4778,7 @@ fn make_string_dir<D: DatasetView + Sync>(
     dir: Option<RdfTextDirection>,
 ) -> Option<SolutionTerm<D::Id>> {
     match (lang, dir) {
-        (Some(l), Some(d)) => intern(
+        (Some(l), Some(d)) => intern_leaf(
             ctx,
             TermValue::Literal {
                 lexical_form: lexical,
@@ -5067,7 +5082,7 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
         "rtl" => RdfTextDirection::Rtl,
         _ => return Ok(None),
     };
-    Ok(intern(
+    Ok(intern_leaf(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
@@ -5153,7 +5168,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         p: Box::new(p.clone()),
         o: Box::new(o.clone()),
     };
-    Ok(intern(ctx, triple))
+    intern(ctx, triple)
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -5165,7 +5180,7 @@ fn triple_part<D: DatasetView + Sync>(
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
             let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            Ok(intern(ctx, part))
+            intern(ctx, part)
         }
         _ => Ok(None),
     }
