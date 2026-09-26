@@ -2350,7 +2350,6 @@ struct JobInner {
     /// A SHACL product job's refusal, beside the error it also stored, until it is
     /// taken ([`AsyncJob::take_shacl_refusal`]).
     refusal: RefCell<Option<ShaclProductRefusal>>,
-    outer_sp: Cell<u32>,
 }
 
 impl fmt::Debug for JobInner {
@@ -2701,18 +2700,6 @@ impl AsyncJob {
     #[wasm_bindgen(getter, js_name = stackCanary)]
     pub fn stack_canary(&self) -> u32 {
         STACK_CANARY
-    }
-
-    /// The host's saved stack pointer for this job, as it last recorded it.
-    #[wasm_bindgen(getter, js_name = outerSp)]
-    pub fn outer_sp(&self) -> u32 {
-        self.inner.outer_sp.get()
-    }
-
-    /// Record the host's saved stack pointer for this job.
-    #[wasm_bindgen(js_name = setOuterSp)]
-    pub fn set_outer_sp(&self, sp: u32) {
-        self.inner.outer_sp.set(sp);
     }
 
     /// Whether the run has returned.
@@ -3817,7 +3804,6 @@ fn register_operation(
             error: RefCell::new(None),
             pending_commit: RefCell::new(None),
             refusal: RefCell::new(None),
-            outer_sp: Cell::new(0),
         }
     });
     AsyncJob { inner }

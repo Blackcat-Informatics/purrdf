@@ -83,6 +83,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 _REPO = Path(__file__).resolve().parent.parent
 _SCRIPTS = _REPO / "scripts"
@@ -353,12 +354,19 @@ def gate_reached(catalogue: Path, tree: Path) -> int:
     return 0
 
 
-def load_gate(name: str):  # noqa: ANN202 — a module object
-    """Import a sibling gate script as a module, for its own self-test specimens."""
+def load_gate(name: str) -> ModuleType:
+    """Import a sibling gate script as a module, for its own self-test specimens.
+
+    Fails naming the script when it is missing or cannot be imported as a module,
+    rather than with an ``AttributeError`` from deep inside ``importlib``.
+    """
     path = _SCRIPTS / name
+    if not path.is_file():
+        raise SystemExit(f"check-i18n-render: the gate script {path} does not exist")
     spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check-i18n-render: cannot import the gate script {path} as a module")
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module

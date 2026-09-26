@@ -435,7 +435,6 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
   if (poisonReason !== null) return never();
   // Rule 3: the resumer's context is this job's outer context from now on.
   record.outer = captureOuter();
-  record.job.setOuterSp(record.outer);
   new DataView(installed.exports.memory.buffer).setUint32(outPtr, 0, true);
   return status;
 }
@@ -946,7 +945,6 @@ function startRun(record) {
     record.reject = reject;
     // Rule 1.
     record.outer = captureOuter();
-    record.job.setOuterSp(record.outer);
     setSp(record.top);
     let pending;
     try {

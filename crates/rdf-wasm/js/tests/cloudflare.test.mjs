@@ -294,6 +294,51 @@ test("SparqlProtocolRequest reads an operation and its dataset parameters", () =
   assert.throws(() => SparqlProtocolRequest.offeredMediaTypes("rows"), /unknown result kind/);
 });
 
+test("SparqlProtocolRequest reads an update's USING and USING NAMED parameters in request order", () => {
+  const UPDATE = `DELETE { ?s <${EX}p> ?o } WHERE { ?s <${EX}p> ?o }`;
+  // Out of lexical order, and split between the query string and a form body (which the
+  // protocol reads in that order), so the getters can only pass by keeping request order.
+  const using = (name, iri) => `${name}=${encodeURIComponent(iri)}`;
+  const request = SparqlProtocolRequest.parse(
+    "POST",
+    "application/x-www-form-urlencoded",
+    [using("using-graph-uri", `${EX}g2`), using("using-named-graph-uri", `${EX}n2`)].join("&"),
+    encoder.encode(
+      [
+        `update=${encodeURIComponent(UPDATE)}`,
+        using("using-named-graph-uri", `${EX}n1`),
+        using("using-graph-uri", `${EX}g1`),
+      ].join("&"),
+    ),
+  );
+  try {
+    assert.equal(request.kind, "update");
+    assert.equal(request.hasDatasetParameters, true);
+    assert.deepEqual(request.usingGraphUris, [`${EX}g2`, `${EX}g1`]);
+    assert.deepEqual(request.usingNamedGraphUris, [`${EX}n2`, `${EX}n1`]);
+    assert.deepEqual(request.defaultGraphUris, []);
+    assert.deepEqual(request.namedGraphUris, []);
+    // The parameters are the ones the effective text applies.
+    const effective = request.effectiveText();
+    for (const clause of [`USING <${EX}g2>`, `USING <${EX}g1>`, `USING NAMED <${EX}n2>`, `USING NAMED <${EX}n1>`]) {
+      assert.ok(effective.includes(clause), `${clause} is missing from ${effective}`);
+    }
+  } finally {
+    request.free();
+  }
+  // The neighbour: the same update without dataset parameters reads none.
+  const bare = SparqlProtocolRequest.parse("POST", "application/sparql-update", undefined, encoder.encode(UPDATE));
+  try {
+    assert.equal(bare.kind, "update");
+    assert.equal(bare.hasDatasetParameters, false);
+    assert.deepEqual(bare.usingGraphUris, []);
+    assert.deepEqual(bare.usingNamedGraphUris, []);
+    assert.equal(bare.effectiveText().includes("USING"), false);
+  } finally {
+    bare.free();
+  }
+});
+
 test("refusal pair: a protocol refusal is a typed Error with name, status and parameter", () => {
   const missing = syncThrow(() =>
     SparqlProtocolRequest.parse("GET", undefined, "x=1", new Uint8Array(0)),

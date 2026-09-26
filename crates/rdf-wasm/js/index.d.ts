@@ -72,7 +72,16 @@ export type GovernorCeiling = number | bigint | string;
 export interface GovernorOptions {
   /** Abstract execution steps, priced by the engine's charge schedule. */
   readonly fuel?: GovernorCeiling | null;
-  /** A wall-clock evaluation budget in milliseconds. `0` expires on the first poll. */
+  /**
+   * A wall-clock evaluation budget in milliseconds. `0` expires on the first poll.
+   *
+   * The deadline is read from `Date.now()`. On Cloudflare Workers that clock does not
+   * advance during CPU-bound execution — it moves only across I/O — so on the
+   * synchronous calls (`queryGoverned`, `updateGoverned`, …) a deadline cannot trip
+   * during CPU-bound work there. Use the asynchronous twins (`queryGovernedAsync`, …),
+   * which check the deadline at every yield and every host effect, where the clock
+   * moves.
+   */
   readonly deadlineMs?: GovernorCeiling | null;
   /**
    * Units committed to the query form's own answer sequence: one solution row for
@@ -932,6 +941,10 @@ export class QueryEngine {
    *
    * `options.aggregateNamespace` registers purrdf's first-party statistical aggregate
    * set — see {@link AggregateNamespaceOption}.
+   *
+   * On Cloudflare Workers `Date.now()` does not advance during CPU-bound execution, so
+   * `options.deadlineMs` cannot trip here while the query computes; use
+   * `queryGovernedAsync` there (see {@link GovernorOptions.deadlineMs}).
    */
   queryGoverned(
     dataset: Dataset,

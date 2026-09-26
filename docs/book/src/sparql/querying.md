@@ -1448,11 +1448,11 @@ into an `AggregateRegistry` under an IRI of the caller's choosing:
 
 ```rust,ignore
 use std::sync::Arc;
-use purrdf_core::{SparqlRequest, TermValue};
-use purrdf_sparql_eval::{
+use purrdf::sparql::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    NativeSparqlEngine, QueryOptions, Volatility,
+    ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
+use purrdf::{SparqlRequest, TermValue};
 
 /// A running total over one numeric argument — `example.org`'s own
 /// `AGG(<https://example.org/agg#total>, ?x)`.
@@ -1525,6 +1525,9 @@ registry.register(
     "https://example.org/agg#total",
     Arc::new(TotalAggregate),
 );
+// The environment a query text is read in: `AGG(<iri>, …)` is admitted against
+// this registry.
+let env = ExtensionEnv::over_aggregates(registry)?;
 
 let engine = NativeSparqlEngine::new();
 let result = engine.query_with_options_view(
@@ -1534,10 +1537,7 @@ let result = engine.query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions {
-        aggregates: &registry,
-        ..QueryOptions::EMPTY
-    },
+    QueryOptions::new().with_env(&env),
 )?;
 ```
 

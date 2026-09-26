@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-25T20:00:40-06:00\n"
+"POT-Creation-Date: 2026-09-25T21:00:11-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -7446,7 +7446,14 @@ msgstr ""
 msgid "\"https://example.org/agg#total\""
 msgstr ""
 
-#: src/sparql/querying.md:1533
+#: src/sparql/querying.md:1527
+msgid ""
+"// The environment a query text is read in: `AGG(<iri>, …)` is admitted "
+"against\n"
+"// this registry.\n"
+msgstr ""
+
+#: src/sparql/querying.md:1536
 msgid ""
 "\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
 "<https://example.org/n> ?x }\""
@@ -8334,7 +8341,14 @@ msgstr ""
 msgid "\"https://example.org/pf/occurs\""
 msgstr ""
 
-#: src/sparql/full-text.md:98
+#: src/sparql/full-text.md:93
+msgid ""
+"// The environment a query text is read in: every registered IRI is claimed "
+"in\n"
+"// predicate position, and resolves against this registry.\n"
+msgstr ""
+
+#: src/sparql/full-text.md:101
 msgid ""
 "r#\"SELECT ?doc ?score ?rank WHERE {\n"
 "                    ?doc <https://example.org/pf/search> ( \"quick brown\" ?"
@@ -8342,7 +8356,7 @@ msgid ""
 "                  } LIMIT 3\"#"
 msgstr ""
 
-#: src/sparql/full-text.md:108
+#: src/sparql/full-text.md:111
 msgid ""
 "A registered IRI is recognized in predicate position exactly, so no parser "
 "option is needed to reach it. An IRI a query names that is declared through "
@@ -8350,7 +8364,7 @@ msgid ""
 "neither stays an ordinary triple pattern."
 msgstr ""
 
-#: src/sparql/full-text.md:113
+#: src/sparql/full-text.md:116
 msgid ""
 "This is a Rust-host seam. The index and its relations are host closures, so "
 "they do not cross the Python, WebAssembly or C boundary — only the data-"
@@ -8359,18 +8373,18 @@ msgid ""
 "(querying.md#reaching-extensions-from-other-hosts)."
 msgstr ""
 
-#: src/sparql/full-text.md:118
+#: src/sparql/full-text.md:121
 msgid "Every score is exact, and identical on every target"
 msgstr ""
 
-#: src/sparql/full-text.md:120
+#: src/sparql/full-text.md:123
 msgid ""
 "Ranking is done entirely in base-10 fixed-point integer arithmetic (`i128`, "
 "twelve fractional digits). No floating-point value enters the crate: its "
 "root denies `clippy::float_arithmetic`, so none can."
 msgstr ""
 
-#: src/sparql/full-text.md:124
+#: src/sparql/full-text.md:127
 msgid ""
 "That is a correctness requirement, not a preference. BM25 needs a natural "
 "logarithm, and a libm `ln` may differ by a unit in the last place between "
@@ -8385,7 +8399,7 @@ msgid ""
 "wasm32 against the same expectations `cargo test` asserts natively."
 msgstr ""
 
-#: src/sparql/full-text.md:136
+#: src/sparql/full-text.md:139
 msgid ""
 "The BM25 constants `k1 = 1.2` and `b = 0.75` are crate constants rather than "
 "caller parameters. PurRDF is a carrier, and optionality that changes "
@@ -8393,11 +8407,11 @@ msgid ""
 "ranks out of the same index and the same needle."
 msgstr ""
 
-#: src/sparql/full-text.md:141
+#: src/sparql/full-text.md:144
 msgid "Ordering, and the idioms that reproduce it"
 msgstr ""
 
-#: src/sparql/full-text.md:143
+#: src/sparql/full-text.md:146
 msgid ""
 "Corpus statistics are computed per `(graph, language)` partition, so a score "
 "is a number relative to one corpus and `?rank` is a position within that "
@@ -8409,11 +8423,11 @@ msgid ""
 "through the selector) or builds a single-partition index."
 msgstr ""
 
-#: src/sparql/full-text.md:152
+#: src/sparql/full-text.md:155
 msgid "Two consequences worth knowing:"
 msgstr ""
 
-#: src/sparql/full-text.md:154
+#: src/sparql/full-text.md:157
 msgid ""
 "**Bare `LIMIT k` is top-k.** Emission order _is_ rank order, so the "
 "evaluator's row-ceiling licence applies and the relation stops after `k` "
@@ -8422,7 +8436,7 @@ msgid ""
 "`ORDER BY` is redundant anyway."
 msgstr ""
 
-#: src/sparql/full-text.md:159
+#: src/sparql/full-text.md:162
 msgid ""
 "**`ORDER BY ?rank` is the reproducing idiom.** A score reaches the consumer "
 "as a decimal of fixed width, so two rows can report the same `?score` while "
@@ -8430,11 +8444,11 @@ msgid ""
 "with the exact internal order, and `?rank` cannot."
 msgstr ""
 
-#: src/sparql/full-text.md:164
+#: src/sparql/full-text.md:167
 msgid "RDF 1.2 first class"
 msgstr ""
 
-#: src/sparql/full-text.md:166
+#: src/sparql/full-text.md:169
 msgid ""
 "`RdfDataset::quads()` returns only the asserted triple table; annotations "
 "live in a separate side table. The index reads both layers, so text carried "
@@ -8444,18 +8458,18 @@ msgid ""
 "against exactly that."
 msgstr ""
 
-#: src/sparql/full-text.md:172
+#: src/sparql/full-text.md:175
 msgid "Stated limits"
 msgstr ""
 
-#: src/sparql/full-text.md:174
+#: src/sparql/full-text.md:177
 msgid ""
 "Document ids are a function of content _except_ through blank-node labels, "
 "which are a parsing artifact: two isomorphic datasets with different labels "
 "produce different index fingerprints."
 msgstr ""
 
-#: src/sparql/full-text.md:177
+#: src/sparql/full-text.md:180
 msgid ""
 "The index is in-memory and built over a frozen dataset. `verify_binding` "
 "checks that the index a query runs against was built over the dataset in "
@@ -8463,7 +8477,7 @@ msgid ""
 "that join back to zero rows."
 msgstr ""
 
-#: src/sparql/full-text.md:182
+#: src/sparql/full-text.md:185
 msgid ""
 "The scoring design record — including the fixed-point logarithm and the "
 "Unicode table versions folded into the index fingerprint — is [`docs/design/"
@@ -8557,11 +8571,17 @@ msgstr ""
 #: src/sparql/geosparql.md:59
 msgid ""
 "`functions::register` installs every `geof:` function into a "
-"`UserFunctionRegistry` under the vocabulary's function namespace, and the "
-"registry is handed to the engine through `QueryOptions::functions`:"
+"`UserFunctionRegistry` under the vocabulary's function namespace. The engine "
+"binds the registry with `NativeSparqlEngine::bind_functions`, and the bound "
+"registry is handed to a query through `QueryOptions::with_functions`:"
 msgstr ""
 
-#: src/sparql/geosparql.md:74
+#: src/sparql/geosparql.md:72
+msgid ""
+"// Every `geof:` function is a native closure, so binding parses nothing.\n"
+msgstr ""
+
+#: src/sparql/geosparql.md:79
 msgid ""
 "r#\"PREFIX geof: <http://www.opengis.net/def/function/geosparql/>\n"
 "                  PREFIX geo:  <http://www.opengis.net/ont/geosparql#>\n"
@@ -8572,7 +8592,7 @@ msgid ""
 "                  }\"#"
 msgstr ""
 
-#: src/sparql/geosparql.md:88
+#: src/sparql/geosparql.md:93
 msgid ""
 "A function's refusals travel exactly as far as SPARQL says they should. A "
 "malformed literal or a domain refusal — mixed CRSs, the measure of an empty "
@@ -8586,11 +8606,11 @@ msgid ""
 "`functions::compute`."
 msgstr ""
 
-#: src/sparql/geosparql.md:98
+#: src/sparql/geosparql.md:103
 msgid "Spatial relations on the property-function seam"
 msgstr ""
 
-#: src/sparql/geosparql.md:100
+#: src/sparql/geosparql.md:105
 msgid ""
 "GeoSPARQL's Query Rewrite rules let `?a geo:sfWithin ?b` hold between "
 "_features_ whose geometries satisfy the relation, not only where a triple "
@@ -8603,25 +8623,33 @@ msgid ""
 "matched nothing."
 msgstr ""
 
-#: src/sparql/geosparql.md:124
+#: src/sparql/geosparql.md:129
 msgid ""
-"// The parser must claim `geo:sfWithin` in predicate position; the "
-"registry's\n"
-"// own descriptors are exactly the IRIs it should claim.\n"
+"// The environment a query text is read in claims every registered relation "
+"IRI\n"
+"// — `geo:sfWithin` among them — in predicate position, so no parser option "
+"is\n"
+"// needed to reach it.\n"
 msgstr ""
 
-#: src/sparql/geosparql.md:134
+#: src/sparql/geosparql.md:138
+msgid ""
+"r#\"PREFIX geo: <http://www.opengis.net/ont/geosparql#>\n"
+"                  SELECT ?a ?b WHERE { ?a geo:sfWithin ?b }\"#"
+msgstr ""
+
+#: src/sparql/geosparql.md:147
 msgid ""
 "An asserted `geo:sfWithin` triple matches whether or not the geometries "
 "satisfy it — the rewrite rules are entailments, not definitions — and a "
 "relation the index refutes contributes no row beyond what the data asserts."
 msgstr ""
 
-#: src/sparql/geosparql.md:138
+#: src/sparql/geosparql.md:151
 msgid "Every answer is exact, and identical on every target"
 msgstr ""
 
-#: src/sparql/geosparql.md:140
+#: src/sparql/geosparql.md:153
 msgid ""
 "Geometry is where floating point normally destroys reproducibility: `f64` "
 "addition is not associative, so a different traversal order gives a "
@@ -8630,14 +8658,14 @@ msgid ""
 "than mitigating it."
 msgstr ""
 
-#: src/sparql/geosparql.md:146
+#: src/sparql/geosparql.md:159
 msgid ""
 "**Coordinates are read as exact rationals.** A lexical decimal is parsed "
 "digit by digit into an exact numerator and denominator; nothing is rounded "
 "on the way in."
 msgstr ""
 
-#: src/sparql/geosparql.md:149
+#: src/sparql/geosparql.md:162
 msgid ""
 "**Every geometric decision is integer arithmetic.** Orientation, segment "
 "intersection, point-in-ring, ring winding and the DE-9IM matrix are "
@@ -8645,14 +8673,14 @@ msgid ""
 "specifies completely and identically on every target."
 msgstr ""
 
-#: src/sparql/geosparql.md:153
+#: src/sparql/geosparql.md:166
 msgid ""
 "**Irrational measures are integer square roots** at a fixed internal scale, "
 "summed as integers — one rounding, at the end, of a value that was exact "
 "until then."
 msgstr ""
 
-#: src/sparql/geosparql.md:156
+#: src/sparql/geosparql.md:169
 msgid ""
 "**The single float boundary is the result literal.** An `xsd:double` result "
 "is the correctly rounded nearest double, computed with integer arithmetic "
@@ -8660,17 +8688,17 @@ msgid ""
 "`clippy::float_arithmetic`, so there is no second float path to find."
 msgstr ""
 
-#: src/sparql/geosparql.md:161
+#: src/sparql/geosparql.md:174
 msgid ""
 "The cross-target claim is executed, not argued: `make geo-determinism` runs "
 "the same corpus natively and on wasm32 and compares bytes."
 msgstr ""
 
-#: src/sparql/geosparql.md:164
+#: src/sparql/geosparql.md:177
 msgid "What is here, and what is not"
 msgstr ""
 
-#: src/sparql/geosparql.md:166
+#: src/sparql/geosparql.md:179
 msgid ""
 "Implemented: the WKT and GeoJSON codecs (with CRS and coordinate-dimension "
 "support); every topological relation of the Simple Features, Egenhofer and "
@@ -8678,7 +8706,7 @@ msgid ""
 "constructors that are exactly computable."
 msgstr ""
 
-#: src/sparql/geosparql.md:171
+#: src/sparql/geosparql.md:184
 msgid ""
 "Registered but **hard-erroring by name**: the operations that would require "
 "facilities the crate deliberately does not have — a coordinate-reference-"
@@ -8690,7 +8718,7 @@ msgid ""
 "exists to keep out."
 msgstr ""
 
-#: src/sparql/geosparql.md:179
+#: src/sparql/geosparql.md:192
 msgid ""
 "Like the full-text index, this is a Rust-host seam: the registrations are "
 "host closures and do not cross the Python, WebAssembly or C boundary. The "
@@ -8852,16 +8880,17 @@ msgstr ""
 
 #: src/sparql/embedding-knn.md:91
 msgid ""
-"The registry then reaches the engine through "
-"`QueryOptions::property_functions` exactly as on the [full-text](full-"
-"text.md) page. This is a Rust-host seam."
-msgstr ""
-
-#: src/sparql/embedding-knn.md:94
-msgid "Exact search, ordered under the declared metric"
+"The registry then reaches the engine through an `ExtensionEnv` "
+"(`ExtensionEnv::over_relations`, handed to the query with "
+"`QueryOptions::with_env`) exactly as on the [full-text](full-text.md) page. "
+"This is a Rust-host seam."
 msgstr ""
 
 #: src/sparql/embedding-knn.md:96
+msgid "Exact search, ordered under the declared metric"
+msgstr ""
+
+#: src/sparql/embedding-knn.md:98
 msgid ""
 "The search is **exact**: every candidate row is scored under the metric the "
 "space's family contract declares (`FamilyView::metric()` — cosine or squared "
@@ -8874,7 +8903,7 @@ msgid ""
 "than a property of a tuning parameter."
 msgstr ""
 
-#: src/sparql/embedding-knn.md:106
+#: src/sparql/embedding-knn.md:108
 msgid ""
 "Rank order is `(distance ASC, row ASC)`. Row numbers are distinct, so the "
 "order is strict and total, and the tie-break is meaningful: a PURREMB target "
@@ -8884,11 +8913,11 @@ msgid ""
 "answer byte for byte, serialized JSON included."
 msgstr ""
 
-#: src/sparql/embedding-knn.md:113
+#: src/sparql/embedding-knn.md:115
 msgid "Binary64, in a pinned order"
 msgstr ""
 
-#: src/sparql/embedding-knn.md:115
+#: src/sparql/embedding-knn.md:117
 msgid ""
 "The workspace's other ranked-retrieval surface forbids floating point "
 "entirely, because BM25 needs a logarithm and IEEE-754 does not require `ln` "
@@ -8910,7 +8939,7 @@ msgstr ""
 "其中之一，因此 k 近邻接口使用 `purrdf_core` 中规范性的范数归约，而不是它的一"
 "份副本。定点数会引入一个该格式本身并不具有的量化步骤。"
 
-#: src/sparql/embedding-knn.md:126
+#: src/sparql/embedding-knn.md:128
 msgid ""
 "The two residual hazards are closed structurally. Every dot product and "
 "squared Euclidean sum follows one pinned law, `purrdf_core::distance::Exact` "
@@ -8937,7 +8966,7 @@ msgstr ""
 "`xsd:double` 输出，其规范词法形式能往返还原精确的比特——舍入后的十进制表示会把"
 "两个相邻的 double 打印成同一个值，恰好掩盖本节所讨论的那种分歧。"
 
-#: src/sparql/embedding-knn.md:139
+#: src/sparql/embedding-knn.md:141
 msgid ""
 "One limit, stated rather than hidden: cosine self-distance is not exactly "
 "zero (`dot(v, v)` and `|v|·|v|` are two roundings of one real number), so a "
@@ -8945,11 +8974,11 @@ msgid ""
 "that is not there."
 msgstr ""
 
-#: src/sparql/embedding-knn.md:144
+#: src/sparql/embedding-knn.md:146
 msgid "What a search costs"
 msgstr ""
 
-#: src/sparql/embedding-knn.md:146
+#: src/sparql/embedding-knn.md:148
 msgid ""
 "The governor's earlier charge points priced a host relation by invocations "
 "driven and rows accepted. For a generator, neither is where the cost is: a "
@@ -8961,7 +8990,7 @@ msgid ""
 "and the planner's row bound honest."
 msgstr ""
 
-#: src/sparql/embedding-knn.md:155
+#: src/sparql/embedding-knn.md:157
 msgid ""
 "The design record — the four decisions that were not obvious and what fixed "
 "each — is [`docs/design/purrdf-embedding-knn.md`](https://github.com/"
