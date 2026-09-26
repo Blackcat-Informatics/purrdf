@@ -45,9 +45,6 @@ test("a panic in a synchronous call poisons every entry point, and typed errors 
   assert.deepEqual(report.sizeBefore, { settled: "returned", value: 2 });
   assert.equal(report.versionBefore.settled, "returned");
 
-  // The panicking call itself: the trap that follows the hook reaches its caller.
-  assert.deepEqual(report.panicked, { settled: "threw", name: "RuntimeError", message: "unreachable" });
-
   // The poison names the panic — its location and its message.
   const match = /^the wasm instance trapped \((panicked at [^)]+)\) and cannot be used again; /.exec(
     report.syncAfter.message ?? "",
@@ -59,6 +56,11 @@ test("a panic in a synchronous call poisons every entry point, and typed errors 
     "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
   const REJECTED = { settled: "rejected", name: "Error", message: POISON };
   const THREW = { settled: "threw", name: "Error", message: POISON };
+
+  // The panicking call itself: the trap that follows the hook reaches the export's guard,
+  // which throws the poison error in its place and keeps the panic as its reason rather
+  // than the trap's `unreachable`.
+  assert.deepEqual(report.panicked, THREW);
 
   // The job in flight when the panic happened rejects with it, and so does every later
   // call: asynchronous, synchronous — the typed-error call included — on objects created

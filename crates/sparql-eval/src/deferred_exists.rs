@@ -305,6 +305,12 @@ const PLACEHOLDER_VARIABLE: &str = "purrdf deferred exists";
 /// rows over a variable no query can name. Its address keys the window's [`DeferredMap`];
 /// its shape lets [`is_placeholder`] tell a placeholder that lost its entry (which would
 /// be a bug) from a body, so it can never be evaluated as one.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
+              and must be fixed before the placeholder moves into the substituted copy \
+              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
+)]
 pub(crate) fn placeholder() -> Box<GraphPattern> {
     Box::new(GraphPattern::Values {
         variables: vec![Variable::new(PLACEHOLDER_VARIABLE)],

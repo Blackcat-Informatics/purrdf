@@ -21,7 +21,9 @@ wasm-bindgen imports the module once per raw import the instance declares
 (`purrdf_jspi_suspend`, `purrdf_jspi_panicked`); every one of those namespaces is the
 same module instance, so the first serves.
 The runtime keeps the reassigning closure and, on poisoning, points `wasm` at an
-object that refuses every call; a live instance pays nothing per call.
+object that refuses every call. What it returns for a live instance is a copy of the
+exports whose functions poison the instance when a trap escapes them, so a trap out
+of a synchronous call is seen as well as one out of a job.
 
 The rewrite is exact or the build fails: the glue must import the runtime (at least
 once) and assign `wasm = instance.exports;` exactly once, inside

@@ -108,6 +108,11 @@ const HAS_JSPI =
 // abandoned whole, so there is nothing left for them to release.
 const RELEASE_EXPORT = /^__wbg_[a-z0-9_]+_free$/;
 
+// Exports the trap guard leaves as the instance's own functions. `purrdf_jspi_run` is
+// handed to `WebAssembly.promising`, which accepts only a wasm function, and its run's
+// trap is already seen — and poisoned — where `startRun` settles the promise.
+const UNGUARDED_EXPORTS = new Set(["purrdf_jspi_run"]);
+
 // ---------------------------------------------------------------------------
 // Instance state (one module instance per wasm instance: the glue imports this module
 // once, and the package root instantiates the wasm once)
@@ -180,8 +185,13 @@ function chooseYield() {
  * getter, a static, a free function, a finalizer — reads the exports through the one
  * variable `retarget` reassigns. Poisoning retargets it at an object that refuses every
  * call, which bars the whole package surface at once, synchronous calls and objects
- * created before the trap included, while a live instance pays nothing per call.
- * Returns `exports`, which the glue keeps as its handle.
+ * created before the trap included.
+ *
+ * Returns what the glue keeps as its handle: a frozen copy of `exports` in which every
+ * exported function except the asynchronous runner is guarded (see `guardTrap`), so a
+ * trap out of any synchronous call poisons the instance too. The copy is built by
+ * enumerating the exports, so an export added later is guarded without being named here;
+ * memory, globals and tables are copied as they are.
  */
 export function purrdf_jspi_bind_glue(exports, retarget) {
   if (glue !== null) {
@@ -193,8 +203,14 @@ export function purrdf_jspi_bind_glue(exports, retarget) {
   if (typeof retarget !== "function") {
     throw new TypeError("purrdf_jspi_bind_glue expects a function that reassigns the glue's exports");
   }
-  glue = { exports, retarget };
-  return exports;
+  const live = Object.create(null);
+  for (const name of Object.keys(exports)) {
+    const value = exports[name];
+    live[name] = typeof value === "function" && !UNGUARDED_EXPORTS.has(name) ? guardTrap(value) : value;
+  }
+  Object.freeze(live);
+  glue = { exports: live, retarget };
+  return live;
 }
 
 /**
@@ -1011,8 +1027,9 @@ function setSp(value) {
 /**
  * A trap out of a run leaves the instance in an unknown state: the job's stack context is
  * still in place of the caller's, every `RefCell` its frames borrowed stays borrowed, and
- * linear memory may hold a half-applied mutation. A Rust panic in any call — synchronous
- * or asynchronous — leaves the same state behind it, and its hook poisons before its trap
+ * linear memory may hold a half-applied mutation. A trap out of a synchronous call leaves
+ * the same state behind it and is poisoned by the export's guard (`guardTrap`); a Rust
+ * panic in any call — synchronous or asynchronous — poisons from its hook, before its trap
  * unwinds (`purrdf_jspi_panicked`). Nothing repairs that, so the instance is dead: the glue's exports are retargeted at an object that refuses every call —
  * synchronous calls, constructors, and objects created before the trap included — every
  * in-flight job is rejected, and every later call refuses with the same error. Suspended
@@ -1048,6 +1065,121 @@ function poisonedExports() {
       throw poisonError();
     },
   });
+}
+
+/**
+ * Wrap an exported function so that a trap out of it poisons the instance.
+ *
+ * A trap — allocation failure, an `unreachable`, any fault the engine raises as a
+ * `WebAssembly.RuntimeError` — unwinds every wasm frame of the call without restoring
+ * anything, leaving the instance in the same state a trapped job leaves it in. The
+ * wrapper catches it, poisons the instance naming the trap, and throws the poison error
+ * in its place. Every other throw passes through untouched: a typed PurRDF error is
+ * thrown by the glue after the export has returned and never reaches here, and an error
+ * that does cross the export (the poison error of a nested call, an exception a host
+ * callback raised) is not a trap. A panic's trap arrives here after its hook already
+ * poisoned the instance; `poison` keeps the first reason, so the panic stays named.
+ *
+ * The success path costs one extra JavaScript call frame and a `try` block, which V8
+ * enters for free: the wrapper allocates nothing (no rest-parameter array, no closure
+ * per call) because it is picked by the export's own arity, and it forwards exactly the
+ * arguments a wasm export reads — the first `length` of them, the rest being ignored by
+ * the export anyway. Only an export of more than eight parameters takes the generic
+ * rest-parameter wrapper.
+ */
+function guardTrap(fn) {
+  switch (fn.length) {
+    case 0:
+      return function guarded() {
+        try {
+          return fn();
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 1:
+      return function guarded(a) {
+        try {
+          return fn(a);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 2:
+      return function guarded(a, b) {
+        try {
+          return fn(a, b);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 3:
+      return function guarded(a, b, c) {
+        try {
+          return fn(a, b, c);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 4:
+      return function guarded(a, b, c, d) {
+        try {
+          return fn(a, b, c, d);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 5:
+      return function guarded(a, b, c, d, e) {
+        try {
+          return fn(a, b, c, d, e);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 6:
+      return function guarded(a, b, c, d, e, f) {
+        try {
+          return fn(a, b, c, d, e, f);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 7:
+      return function guarded(a, b, c, d, e, f, g) {
+        try {
+          return fn(a, b, c, d, e, f, g);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    case 8:
+      return function guarded(a, b, c, d, e, f, g, h) {
+        try {
+          return fn(a, b, c, d, e, f, g, h);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+    default: {
+      const guarded = function guarded(...args) {
+        try {
+          return fn(...args);
+        } catch (error) {
+          throw trapped(error);
+        }
+      };
+      Object.defineProperty(guarded, "length", { value: fn.length });
+      return guarded;
+    }
+  }
+}
+
+/** What a guarded export throws in place of `error`: the poison error for a trap. */
+function trapped(error) {
+  if (!(error instanceof WebAssembly.RuntimeError)) return error;
+  poison(describe(error));
+  return poisonError();
 }
 
 function never() {

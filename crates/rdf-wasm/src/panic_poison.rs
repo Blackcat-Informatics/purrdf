@@ -24,12 +24,12 @@
 //!
 //! A trap that is not a panic is not seen here. Allocation failure aborts without
 //! running the panic hook (only an unstable toolchain flag turns it into a panic), and an
-//! explicit `unreachable` or a host limit (V8's native stack) raises its trap directly.
-//! PurRDF's own code reaches none of them by design — the parser's and evaluator's stack
-//! guards refuse nesting before either stack runs out — and a synchronous call that does
-//! trap that way throws the engine's `WebAssembly.RuntimeError` (or `RangeError`) to its
-//! caller without the instance being poisoned: nothing sits between the glue's call and
-//! the export that could observe the trap without wrapping every call.
+//! explicit `unreachable` raises its trap directly. The JavaScript runtime catches those
+//! instead: every exported function the glue calls goes through a thin guard
+//! (`purrdf_jspi_bind_glue`) that poisons the instance when a `WebAssembly.RuntimeError`
+//! escapes the export, naming the trap. A panic reaches that guard too, as the trap that
+//! follows its hook; the instance is already poisoned by then, and the guard keeps the
+//! panic's reason.
 
 #![cfg_attr(
     not(target_arch = "wasm32"),
@@ -45,6 +45,10 @@ use core::panic::Location;
 /// The JavaScript global that arms `__purrdf_test_panic`: the test export panics only
 /// while this property of `globalThis` is `true`.
 pub(crate) const TEST_PANIC_FLAG: &str = "__purrdfArmTestPanic";
+
+/// The JavaScript global that arms `__purrdf_test_trap`: the test export executes
+/// `unreachable` only while this property of `globalThis` is `true`.
+pub(crate) const TEST_TRAP_FLAG: &str = "__purrdfArmTestTrap";
 
 /// The most bytes of a panic's description the poison error carries.
 const REASON_CAPACITY: usize = 1024;

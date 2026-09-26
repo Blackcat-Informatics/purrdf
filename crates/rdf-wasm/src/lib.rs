@@ -160,8 +160,31 @@ pub extern "C" fn __purrdf_test_panic() -> u32 {
         &JsValue::from_str(panic_poison::TEST_PANIC_FLAG),
     )
     .is_ok_and(|flag| flag.as_bool() == Some(true));
+    assert!(!armed, "the armed test panic fired");
+    0
+}
+
+/// Test-only: executes `unreachable` when the host has armed it, so the Node lane can prove
+/// that a trap which is not a panic, out of a synchronous call, poisons the instance.
+/// Returns 0, doing nothing, otherwise.
+///
+/// No PurRDF entry point traps on any input, and a panic goes through the panic hook
+/// (see [`__purrdf_test_panic`]); this raises the trap directly, with no hook running
+/// first, exactly as allocation failure or a stray `unreachable` would. The trap is the
+/// only thing it does: the JavaScript side has to recognize it from the error alone. Like
+/// the panic export it is a raw export the package root never exports, inert unless the
+/// JavaScript global `__purrdfArmTestTrap` is `true` when it is called.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __purrdf_test_trap() -> u32 {
+    let armed = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str(panic_poison::TEST_TRAP_FLAG),
+    )
+    .is_ok_and(|flag| flag.as_bool() == Some(true));
     if armed {
-        panic!("the armed test panic fired");
+        core::arch::wasm32::unreachable();
     }
     0
 }
