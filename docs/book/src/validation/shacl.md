@@ -315,16 +315,18 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 The last line of the scoreboard it prints is
 `W3C12 TOTAL: passed 547, xfailed 0, ledger 0`.
 
-One approved test expects a report that the normative SHACL 1.2 Core text
-does not produce. The harness grades it against the expectation with exactly
-one result amended, quotes the clause beside the amendment, and proves that a
-report without the amendment, or with a different one, fails:
-
-- `core/node/xone-003` expects a result from a property shape with no
-  `sh:resultPath`. Section 6.7.2.2 says: "For results produced by a property
-  shape, this SHACL property path is equivalent to the value of sh:path of the
-  shape, unless stated otherwise." The graded result carries the shape's
-  `sh:path`.
+Three vendored files carry test entries that no upstream manifest includes:
+`core/node/xone-002.ttl`, `core/node/xone-003.ttl` and
+`inference-rules/rdfs/rdfs1.ttl`. They are not part of the approved suite, so
+they are never counted among its passes. A separate test,
+`w3c_shacl12_unlisted_vendored_files`, grades them and reports them under their
+own label. Two are graded exactly as written. `core/node/xone-003` expects a
+result from a property shape with no `sh:resultPath`, but section 6.7.2.2 says:
+"For results produced by a property shape, this SHACL property path is
+equivalent to the value of sh:path of the shape, unless stated otherwise." The
+engine keeps the shape's `sh:path`. The harness grades the file's report with
+exactly that one result amended, quotes the clause beside the amendment, and
+proves that a report without the amendment, or with a different one, fails.
 
 A `sh:reifierShape` or `sh:reificationRequired` result carries the value node
 as `sh:value`. The textual definition in SHACL 1.2 Core section 7.8.5 uses the
