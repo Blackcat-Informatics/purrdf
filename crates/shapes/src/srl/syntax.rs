@@ -346,29 +346,27 @@ impl<'t> SrlParser<'t> {
     /// `[2] RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`,
     /// `[3] RuleOrData ::= Rule | Data`, `[4] Prologue ::= Prologue1*`.
     ///
-    /// Production [2] is read as written: once a declaration follows a rule or data
-    /// block, at most one rule or data block follows it before the next declaration.
+    /// Production [2] is read as its evident intent, not its letter: after the initial
+    /// prologue, declarations and rule or data blocks interleave freely, so any number
+    /// of rule or data blocks may follow each declaration and the accepted language is
+    /// `Prologue ( RuleOrData | Prologue1 )*`. Read literally, `( Prologue1
+    /// RuleOrData? )*` admits at most one block after a declaration that follows a
+    /// block: it refuses `RULE … PREFIX … RULE … RULE …` while accepting `RULE … PREFIX
+    /// … RULE … PREFIX … RULE …`, the same rules under one more declaration. A
+    /// declaration applies to the rest of the document either way, so the restriction
+    /// separates no two meanings; it only refuses documents. The editor's draft
+    /// grammar (<https://w3c.github.io/data-shapes/sparql12-rl/sparql-rl-grammar.bnf>)
+    /// states production [2] exactly as the Working Draft does.
     fn rule_set(&mut self) -> Parse<Parsed> {
         let mut out = Parsed::default();
-        while self.prologue1(&mut out)? {}
-        if self.at_rule_or_data() {
-            while self.at_rule_or_data() {
+        loop {
+            if self.at_rule_or_data() {
                 self.rule_or_data(&mut out)?;
-            }
-            while self.prologue1(&mut out)? {
-                if self.at_rule_or_data() {
-                    self.rule_or_data(&mut out)?;
-                }
+            } else if !self.prologue1(&mut out)? {
+                break;
             }
         }
         if self.pos < self.tokens.len() {
-            if self.at_rule_or_data() && !out.rules.is_empty() {
-                return self.error(
-                    "a second rule or data block after a declaration that follows a rule or \
-                     data block; SPARQL 1.2 RL grammar rule [2] `RuleOrDataBlock ::= Prologue \
-                     ( RuleOrData+ ( Prologue1 RuleOrData? )* )?` admits at most one there",
-                );
-            }
             return self.error(format!(
                 "expected RULE, DATA, BASE, PREFIX, VERSION or IMPORTS, found {}",
                 self.describe()

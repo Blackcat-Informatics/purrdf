@@ -372,8 +372,11 @@ import", never as a pass.
 
 SPARQL 1.2 RL grammar rule [2],
 `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is
-implemented as written: once a declaration follows a rule or data block, at
-most one rule or data block may follow it before the next declaration.
+implemented as its evident intent: after the initial prologue, declarations and
+rule or data blocks interleave freely, so any number of rule or data blocks may
+follow each declaration. Read literally, the rule would refuse
+`RULE … PREFIX … RULE … RULE …` while accepting the same rules with one more
+declaration between the last two.
 
 ## JSON-LD instance projection and JSON Schema
 
