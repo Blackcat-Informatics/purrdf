@@ -107,10 +107,7 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &functions,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates whatever the function returned");
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -185,10 +182,7 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &functions,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates");
     let SparqlResult::Solutions {
@@ -278,10 +272,7 @@ fn prebind_purr_tagged_via(tag: &str, prebinding: ShaclPrebinding) -> Result<usi
             base_iri: None,
             substitutions: &substitutions,
         },
-        QueryOptions {
-            prebinding,
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_prebinding(prebinding),
     );
     match result {
         Ok(SparqlResult::Solutions { rows, .. }) => Ok(rows.len()),

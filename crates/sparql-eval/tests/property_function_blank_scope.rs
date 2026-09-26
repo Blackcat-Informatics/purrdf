@@ -151,10 +151,7 @@ fn run_in(env: &ExtensionEnv, query: &str) -> Result<(Vec<String>, Vec<Vec<Strin
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(env),
         )
         .map_err(|e| e.to_string())?;
     match result {
@@ -392,10 +389,7 @@ fn an_update_where_joins_a_shared_blank_like_a_query() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
-                    env: &env(),
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_env(&env()),
             )
             .expect("the update applies");
         let answer = NativeSparqlEngine::new()

@@ -2235,9 +2235,15 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   float-environment refusal and the MSRV change released behaviour.
 
 - **BREAKING** **sparql-eval:** `QueryOptions` has two new public fields, `remote`
-  and `load`. The struct is not `#[non_exhaustive]`, so a struct literal that names
-  every field no longer compiles. The documented construction,
-  `QueryOptions { …, ..QueryOptions::EMPTY }`, is unaffected.
+  and `load`, and is now `#[non_exhaustive]`: a struct literal (with or without
+  `..QueryOptions::EMPTY`) no longer compiles from outside this crate, so a field
+  added in a future release cannot silently reopen this same break. Construct with
+  `QueryOptions::new()` (identical to `QueryOptions::EMPTY`/`Default::default`) and
+  a `with_<field>` builder method per field — `QueryOptions::new().with_env(&env)`
+  — which is `#[must_use]` and `const fn` where the field type allows it. The
+  fields stay ordinary `pub` and remain readable, matchable and directly
+  assignable on a `mut` value from outside the crate; only the struct-literal
+  construction form is restricted.
 
 - **BREAKING** **sparql-algebra:** a query or update that nests any recursive
   production more than `MAX_NESTING_DEPTH` (128) levels deep is now a parse error,

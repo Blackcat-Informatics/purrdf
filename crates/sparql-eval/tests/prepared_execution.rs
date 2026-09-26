@@ -952,10 +952,7 @@ fn relations_env(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
 }
 
 fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// Read `RELATION_QUERY`'s `(?person, ?team)` rows out of an interned outcome as
@@ -1179,10 +1176,7 @@ fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv {
 }
 
 fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// `ex:val` = {1, 2, 2, 10}: SUM = 15, PRODUCT = 40 — a PRODUCT answer here could

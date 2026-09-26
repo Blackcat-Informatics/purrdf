@@ -808,11 +808,10 @@ impl AggregateRegistry {
     ///             base_iri: None,
     ///             substitutions: &[],
     ///         },
-    ///         QueryOptions {
-    ///             env: &ExtensionEnv::over_aggregates(registry)
+    ///         QueryOptions::new().with_env(
+    ///             &ExtensionEnv::over_aggregates(registry)
     ///                 .expect("a registered aggregate declares cleanly"),
-    ///             ..QueryOptions::EMPTY
-    ///         },
+    ///         ),
     ///     )
     ///     .expect("evaluates");
     ///

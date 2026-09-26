@@ -433,12 +433,12 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
-                    .expect("the fixture's bodies parse and admit"),
-                focus_graph: Some(&data),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new()
+                .with_functions(
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                        .expect("the fixture's bodies parse and admit"),
+                )
+                .with_focus_graph(Some(&data)),
         )
         .expect("the registered function resolves");
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -477,11 +477,10 @@ fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+            QueryOptions::new().with_functions(
+                &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
                     .expect("the fixture's bodies parse and admit"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .expect_err("a call with no focus graph must be refused");
     let message = err.to_string();
@@ -517,12 +516,12 @@ fn the_focus_node_of_a_sparql_call_is_the_function_s_own_iri() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
-                    .expect("the fixture's bodies parse and admit"),
-                focus_graph: Some(&data),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new()
+                .with_functions(
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                        .expect("the fixture's bodies parse and admit"),
+                )
+                .with_focus_graph(Some(&data)),
         )
         .expect("the registered function resolves");
     let SparqlResult::Solutions { rows, .. } = result else {

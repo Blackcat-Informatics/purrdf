@@ -192,10 +192,7 @@ fn rewritten_calls_share_registry_and_arity_admission() {
     );
     let env =
         ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     assert!(PreparedQuery::rewritten(call(vec![], vec![]), options).is_err());
     let query = call(
         vec![TermPattern::Variable(Variable::new("s"))],
@@ -440,10 +437,7 @@ fn subject_bound_registry() -> ExtensionEnv {
 fn admission_reorders_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
     let env = registry;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
         iri: "http://example.org/relation".into(),
         subject_args: vec![TermPattern::Variable(Variable::new("s"))],
@@ -509,10 +503,7 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
 fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
     let env = registry;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let query = "SELECT (FOLD(?v ORDER BY ASC(EXISTS { \
                  ?s <http://example.org/relation> ?o . \
                  ?s <http://example.org/binding> ?bound \

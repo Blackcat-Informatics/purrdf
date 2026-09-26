@@ -213,10 +213,7 @@ impl<'a> RelationSpecs<'a> {
         let prepared = engine.prepare_query_with_options(
             self.query,
             self.base,
-            EngineQueryOptions {
-                env: &engine_env(aggregates, Some(&registry))?,
-                ..EngineQueryOptions::EMPTY
-            },
+            EngineQueryOptions::new().with_env(&engine_env(aggregates, Some(&registry))?),
         )?;
         Ok((Some(registry), Some(prepared)))
     }
@@ -244,10 +241,7 @@ fn engine_env(
 
 /// The evaluation options a lane runs under, over an environment the caller holds.
 fn engine_options(env: &ExtensionEnv) -> EngineQueryOptions<'_> {
-    EngineQueryOptions {
-        env,
-        ..EngineQueryOptions::EMPTY
-    }
+    EngineQueryOptions::new().with_env(env)
 }
 
 impl ViewOp for QueryOp<'_> {
@@ -882,10 +876,7 @@ pub(crate) fn run(
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
-        EngineQueryOptions {
-            env: &engine_env(aggregates.as_ref(), None)?,
-            ..EngineQueryOptions::EMPTY
-        },
+        EngineQueryOptions::new().with_env(&engine_env(aggregates.as_ref(), None)?),
     )?;
 
     if let Some(regime) = options.entailment {

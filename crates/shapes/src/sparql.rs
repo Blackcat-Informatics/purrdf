@@ -1112,34 +1112,36 @@ impl AmbientScopes {
         bnode_mint_prefix: Option<&'a str>,
     ) -> QueryOptions<'a> {
         let functions = self.functions();
-        QueryOptions {
-            prebinding,
-            functions,
-            env: &self.env,
-            bnode_mint_prefix,
-            // The graph THIS query is reading, handed to any expression-bodied
-            // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
-            // fixpoint round that rebuilt its dataset supplies the rebuilt one.
-            focus_graph: functions
-                .requires_focus_graph()
-                .then(|| dataset.focus_graph())
-                .flatten(),
-            call_depth: self.call_depth,
-            // A shapes graph's SPARQL runs over the data graph under validation. It
-            // reaches a `SERVICE` or `LOAD` source only when the validation's caller
-            // installed one through `enter_execution_scope`; otherwise none is
-            // configured, and a non-`SILENT` `SERVICE` fails by name.
-            remote: self
-                .sources
-                .as_deref()
-                .and_then(|sources| sources.remote.as_deref())
-                .map(|remote| remote as &(dyn ServiceResolver + Sync)),
-            load: self
-                .sources
-                .as_deref()
-                .and_then(|sources| sources.load.as_deref())
-                .map(|load| load as &(dyn GraphResolver + Sync)),
-        }
+        // The graph THIS query is reading, handed to any expression-bodied
+        // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
+        // fixpoint round that rebuilt its dataset supplies the rebuilt one.
+        let focus_graph = functions
+            .requires_focus_graph()
+            .then(|| dataset.focus_graph())
+            .flatten();
+        // A shapes graph's SPARQL runs over the data graph under validation. It
+        // reaches a `SERVICE` or `LOAD` source only when the validation's caller
+        // installed one through `enter_execution_scope`; otherwise none is
+        // configured, and a non-`SILENT` `SERVICE` fails by name.
+        let remote = self
+            .sources
+            .as_deref()
+            .and_then(|sources| sources.remote.as_deref())
+            .map(|remote| remote as &(dyn ServiceResolver + Sync));
+        let load = self
+            .sources
+            .as_deref()
+            .and_then(|sources| sources.load.as_deref())
+            .map(|load| load as &(dyn GraphResolver + Sync));
+        QueryOptions::new()
+            .with_prebinding(prebinding)
+            .with_functions(functions)
+            .with_env(&self.env)
+            .with_bnode_mint_prefix(bnode_mint_prefix)
+            .with_focus_graph(focus_graph)
+            .with_call_depth(self.call_depth)
+            .with_remote(remote)
+            .with_load(load)
     }
 
     /// The configuration a prepared plan's admission depends on, held so a handle
@@ -1302,16 +1304,10 @@ impl ShaclExecution {
             "a repeated parameter name has no single slot to bind and must fall back to the \
              `&str` door, which keeps a per-variable path for it"
         );
-        let options = QueryOptions {
-            prebinding: lane,
-            functions: scopes.functions(),
-            env: &scopes.env,
-            bnode_mint_prefix: None,
-            focus_graph: None,
-            call_depth: 0,
-            remote: None,
-            load: None,
-        };
+        let options = QueryOptions::new()
+            .with_prebinding(lane)
+            .with_functions(scopes.functions())
+            .with_env(&scopes.env);
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
             .map_err(|e| format!("query evaluation error: {e}"))?;

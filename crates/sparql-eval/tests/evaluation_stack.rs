@@ -391,10 +391,7 @@ fn evaluate_with_service(
             &dataset(),
             &prepared,
             &[],
-            QueryOptions {
-                remote: Some(&resolver),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_remote(Some(&resolver)),
         ))
     })
 }

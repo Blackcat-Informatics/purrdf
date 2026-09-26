@@ -320,15 +320,14 @@ fn run(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::new(
+            QueryOptions::new().with_env(
+                &ExtensionEnv::new(
                     options,
                     registry.clone(),
                     purrdf_sparql_eval::AggregateRegistry::EMPTY,
                 )
                 .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .map_err(|error| error.to_string())?;
     let SparqlResult::Solutions {

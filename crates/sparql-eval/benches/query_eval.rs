@@ -475,10 +475,7 @@ fn run_with_relations(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(env),
         )
         .expect("query evaluates");
     count(result)

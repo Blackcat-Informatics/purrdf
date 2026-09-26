@@ -3089,9 +3089,40 @@ pub enum ShaclPrebinding {
 /// configure pass [`QueryOptions::EMPTY`], which is exactly the behavior those
 /// entries had before the seam existed.
 ///
-/// Construct with struct-update syntax over the empty value, e.g.
-/// `QueryOptions { env: &env, ..QueryOptions::EMPTY }`.
+/// `#[non_exhaustive]`: this struct has already grown fields once on this crate's
+/// current major version (the `SERVICE`/`LOAD` sources below), and every prior field
+/// arrived the same way. A struct-literal (`QueryOptions { .. }`, with or without
+/// `..QueryOptions::EMPTY`) does not compile from another crate once a type is
+/// `#[non_exhaustive]` — that restriction is the entire point, since a
+/// functional-update base would otherwise make every future field invisible to a
+/// caller who never named it, and the next field added here would silently break
+/// every external construction site again. Inside this crate the fields stay
+/// ordinary `pub` fields: they may be read, matched, and assigned on a `mut` value
+/// exactly as before; only the struct-literal EXPRESSION is restricted, and only
+/// for callers outside this crate.
+///
+/// # Building one from outside this crate
+///
+/// Construct with [`QueryOptions::new`] (equivalent to [`QueryOptions::EMPTY`] and
+/// [`Default::default`]) and a `with_*` builder method per field — the door that
+/// stays open:
+///
+/// ```
+/// use purrdf_sparql_eval::{ExtensionEnv, QueryOptions, ShaclPrebinding};
+///
+/// let env = ExtensionEnv::empty();
+/// let options = QueryOptions::new()
+///     .with_env(env)
+///     .with_prebinding(ShaclPrebinding::Applied)
+///     .with_call_depth(3);
+/// assert_eq!(options.prebinding, ShaclPrebinding::Applied);
+/// assert_eq!(options.call_depth, 3);
+/// // Fields left unset keep `QueryOptions::EMPTY`'s values.
+/// assert!(options.remote.is_none());
+/// assert!(options.load.is_none());
+/// ```
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct QueryOptions<'a> {
     /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
     pub prebinding: ShaclPrebinding,
@@ -3232,11 +3263,90 @@ impl QueryOptions<'_> {
         remote: None,
         load: None,
     };
+
+    /// Configure nothing — identical to [`Self::EMPTY`] and to
+    /// [`Default::default`]. The construction path a caller outside this crate uses
+    /// now that [`QueryOptions`] is `#[non_exhaustive]`: chain `with_*` methods onto
+    /// this, e.g. `QueryOptions::new().with_env(&env)`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::EMPTY
+    }
 }
 
 impl Default for QueryOptions<'_> {
     fn default() -> Self {
         Self::EMPTY
+    }
+}
+
+impl<'a> QueryOptions<'a> {
+    /// Set which substitution rewrite applies (see [`ShaclPrebinding`]).
+    #[must_use]
+    pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
+        self.prebinding = prebinding;
+        self
+    }
+
+    /// Set the SHACL-AF function registry in scope.
+    #[must_use]
+    pub const fn with_functions(
+        mut self,
+        functions: &'a crate::user_fn::BoundFunctionRegistry,
+    ) -> Self {
+        self.functions = functions;
+        self
+    }
+
+    /// Set the extension environment (base [`ParserOptions`], property-function
+    /// registry, and custom-aggregate registry) this request is interpreted relative to.
+    #[must_use]
+    pub const fn with_env(mut self, env: &'a crate::extension_env::ExtensionEnv) -> Self {
+        self.env = env;
+        self
+    }
+
+    /// Set the deterministic prefix minted blank-node labels carry (`None` leaves
+    /// them unprefixed).
+    #[must_use]
+    pub const fn with_bnode_mint_prefix(mut self, bnode_mint_prefix: Option<&'a str>) -> Self {
+        self.bnode_mint_prefix = bnode_mint_prefix;
+        self
+    }
+
+    /// Set the frozen graph a dataset-aware user function's body is evaluated
+    /// against (`None` refuses such calls rather than answering from a graph never
+    /// read).
+    #[must_use]
+    pub const fn with_focus_graph(mut self, focus_graph: Option<&'a Arc<RdfDataset>>) -> Self {
+        self.focus_graph = focus_graph;
+        self
+    }
+
+    /// Set the user-function call depth this evaluation starts at.
+    #[must_use]
+    pub const fn with_call_depth(mut self, call_depth: u32) -> Self {
+        self.call_depth = call_depth;
+        self
+    }
+
+    /// Set the source this request's `SERVICE` clauses resolve through (`None` is
+    /// the engine with no federation).
+    #[must_use]
+    pub const fn with_remote(
+        mut self,
+        remote: Option<&'a (dyn crate::remote::ServiceResolver + Sync)>,
+    ) -> Self {
+        self.remote = remote;
+        self
+    }
+
+    /// Set the source this request's `LOAD` operations fetch through (`None` falls
+    /// back to the engine's own resolver).
+    #[must_use]
+    pub const fn with_load(mut self, load: Option<&'a (dyn GraphResolver + Sync)>) -> Self {
+        self.load = load;
+        self
     }
 }
 
@@ -7532,5 +7642,163 @@ mod tests {
             values.windows(2).any(|w| w[0] != w[1]),
             "expected live entropy to vary across queries, got identical values: {values:?}"
         );
+    }
+
+    // ── QueryOptions builder ────────────────────────────────────────────────────
+
+    /// A cheap, `PartialEq`-able fingerprint of every [`QueryOptions`] field: the
+    /// scalar/`Option<&str>` fields by value, everything else (registries, the focus
+    /// graph, the trait-object sources) by address. Good enough — and only used — to
+    /// answer "did touching field X leave every OTHER field bit-for-bit alone".
+    type QueryOptionsSignature<'a> = (
+        ShaclPrebinding,
+        *const crate::user_fn::BoundFunctionRegistry,
+        *const crate::extension_env::ExtensionEnv,
+        Option<&'a str>,
+        Option<*const RdfDataset>,
+        u32,
+        Option<*const ()>,
+        Option<*const ()>,
+    );
+
+    fn query_options_signature<'a>(options: &QueryOptions<'a>) -> QueryOptionsSignature<'a> {
+        (
+            options.prebinding,
+            std::ptr::from_ref(options.functions),
+            std::ptr::from_ref(options.env),
+            options.bnode_mint_prefix,
+            options.focus_graph.map(Arc::as_ptr),
+            options.call_depth,
+            options.remote.map(|r| std::ptr::from_ref(r).cast::<()>()),
+            options.load.map(|l| std::ptr::from_ref(l).cast::<()>()),
+        )
+    }
+
+    /// A `ServiceResolver` that is never actually called: [`QueryOptions::with_remote`]
+    /// only needs a valid trait-object reference to prove the field was set to it.
+    struct NeverCalledRemote;
+    impl crate::remote::ServiceResolver for NeverCalledRemote {
+        fn resolve(
+            &self,
+            _request: crate::remote::ServiceRequest<'_>,
+        ) -> Result<crate::remote::ResolvedBindings, crate::remote::RemoteError> {
+            unimplemented!("this stub only proves `with_remote` set the field")
+        }
+    }
+
+    /// [`QueryOptions::with_load`]'s twin of [`NeverCalledRemote`].
+    struct NeverCalledLoad;
+    impl GraphResolver for NeverCalledLoad {
+        fn resolve(
+            &self,
+            _request: crate::update::GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+            unimplemented!("this stub only proves `with_load` set the field")
+        }
+    }
+
+    /// Every `with_*` builder method changes the ONE field it names and leaves the
+    /// other seven exactly as [`QueryOptions::EMPTY`] carries them — the property a
+    /// builder chain relies on (`QueryOptions::new().with_a(..).with_b(..)` must not
+    /// have `with_b` clobber what `with_a` set).
+    #[test]
+    fn with_methods_set_exactly_their_field() {
+        let base = QueryOptions::EMPTY;
+        let base_signature = query_options_signature(&base);
+
+        // `with_prebinding`
+        {
+            let owned = base.with_prebinding(ShaclPrebinding::Applied);
+            assert_eq!(owned.prebinding, ShaclPrebinding::Applied);
+            let mut expected = base_signature;
+            expected.0 = ShaclPrebinding::Applied;
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_functions`
+        {
+            let owned_functions = crate::user_fn::BoundFunctionRegistry::EMPTY;
+            let owned = base.with_functions(&owned_functions);
+            assert!(std::ptr::eq(
+                owned.functions,
+                std::ptr::from_ref(&owned_functions)
+            ));
+            let mut expected = base_signature;
+            expected.1 = std::ptr::from_ref(&owned_functions);
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_env`
+        {
+            let owned_env = crate::extension_env::ExtensionEnv::over_relations(
+                crate::property_fn::PropertyFunctionRegistry::new(),
+            )
+            .expect("an empty relation registry declares without panicking");
+            let owned = base.with_env(&owned_env);
+            assert!(std::ptr::eq(owned.env, std::ptr::from_ref(&owned_env)));
+            let mut expected = base_signature;
+            expected.2 = std::ptr::from_ref(&owned_env);
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_bnode_mint_prefix`
+        {
+            let owned = base.with_bnode_mint_prefix(Some("tag"));
+            assert_eq!(owned.bnode_mint_prefix, Some("tag"));
+            let mut expected = base_signature;
+            expected.3 = Some("tag");
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_focus_graph`
+        {
+            let dataset = Arc::new(
+                RdfDatasetBuilder::new()
+                    .freeze()
+                    .expect("an empty default graph is structurally valid"),
+            );
+            let owned = base.with_focus_graph(Some(&dataset));
+            assert!(owned.focus_graph.is_some_and(|g| Arc::ptr_eq(g, &dataset)));
+            let mut expected = base_signature;
+            expected.4 = Some(Arc::as_ptr(&dataset));
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_call_depth`
+        {
+            let owned = base.with_call_depth(7);
+            assert_eq!(owned.call_depth, 7);
+            let mut expected = base_signature;
+            expected.5 = 7;
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_remote`
+        {
+            let remote = NeverCalledRemote;
+            let owned = base.with_remote(Some(&remote));
+            let expected_ptr = std::ptr::from_ref(&remote).cast::<()>();
+            assert_eq!(
+                owned.remote.map(|r| std::ptr::from_ref(r).cast::<()>()),
+                Some(expected_ptr)
+            );
+            let mut expected = base_signature;
+            expected.6 = Some(expected_ptr);
+            assert_eq!(query_options_signature(&owned), expected);
+        }
+
+        // `with_load`
+        {
+            let load = NeverCalledLoad;
+            let owned = base.with_load(Some(&load));
+            let expected_ptr = std::ptr::from_ref(&load).cast::<()>();
+            assert_eq!(
+                owned.load.map(|l| std::ptr::from_ref(l).cast::<()>()),
+                Some(expected_ptr)
+            );
+            let mut expected = base_signature;
+            expected.7 = Some(expected_ptr);
+            assert_eq!(query_options_signature(&owned), expected);
+        }
     }
 }

@@ -630,10 +630,7 @@ pub fn run(
                 ),
             )
             .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
-            let options = QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            };
+            let options = QueryOptions::new().with_env(&env);
             let result = match remote {
                 Some(source) => engine.query_with_source(&dataset, request, source, options),
                 None => engine.query_with_options_view(&*dataset, request, options),
@@ -659,14 +656,7 @@ pub fn run(
                 substitutions: &[],
             };
             engine
-                .update_with_options(
-                    &mut dataset,
-                    request,
-                    QueryOptions {
-                        env: &env,
-                        ..QueryOptions::EMPTY
-                    },
-                )
+                .update_with_options(&mut dataset, request, QueryOptions::new().with_env(&env))
                 .map_err(|e| format!("apply update {}: {e}", case.iri))?;
             Ok(RunOutcome::Update(dataset))
         }

@@ -191,10 +191,7 @@ fn options_remote_joins_remote_rows() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions {
-                remote: Some(&resolver),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_remote(Some(&resolver)),
         )
         .expect("the federated join evaluates");
     assert_eq!(rows(&federated), joined());
@@ -218,10 +215,7 @@ fn options_remote_matches_query_with_source() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions {
-                remote: Some(&resolver),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_remote(Some(&resolver)),
         )
         .expect("the options spelling evaluates");
     let through_source = engine
@@ -243,10 +237,7 @@ fn options_remote_matches_query_with_source() {
             &local(),
             request(&join_query(false)),
             &resolver,
-            QueryOptions {
-                remote: Some(&empty),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_remote(Some(&empty)),
         )
         .expect("the explicit source answers");
     assert_eq!(rows(&explicit_wins), joined());
@@ -257,10 +248,7 @@ fn options_remote_matches_query_with_source() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions {
-                remote: Some(&empty),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_remote(Some(&empty)),
         )
         .expect_err("a resolver with no endpoint cannot answer a non-SILENT SERVICE");
     assert!(
@@ -274,10 +262,7 @@ fn options_remote_matches_query_with_source() {
 fn options_remote_reaches_the_governed_entry() {
     let resolver = resolver();
     let engine = NativeSparqlEngine::new();
-    let options = QueryOptions {
-        remote: Some(&resolver),
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_remote(Some(&resolver));
     let outcome = engine
         .query_governed(
             &local(),
@@ -325,10 +310,7 @@ fn update_where_federates_through_options_remote() {
     let store = update(
         &NativeSparqlEngine::new(),
         &federating_insert(false),
-        QueryOptions {
-            remote: Some(&resolver),
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_remote(Some(&resolver)),
     )
     .expect("the federated INSERT applies");
     assert_eq!(quads(&store), federated_triples());
@@ -350,10 +332,7 @@ fn update_where_service_silent_without_a_source_inserts_nothing() {
     let federated = update(
         &NativeSparqlEngine::new(),
         &federating_insert(true),
-        QueryOptions {
-            remote: Some(&resolver),
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_remote(Some(&resolver)),
     )
     .expect("the federated SILENT INSERT applies");
     assert_eq!(quads(&federated), federated_triples());
@@ -381,10 +360,7 @@ fn update_where_service_without_a_source_is_a_hard_error() {
 fn update_governed_where_federation_is_governed() {
     let resolver = resolver();
     let engine = NativeSparqlEngine::new();
-    let options = QueryOptions {
-        remote: Some(&resolver),
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_remote(Some(&resolver));
 
     let mut store = local();
     let before = Arc::clone(&store);
@@ -433,10 +409,7 @@ fn options_load_resolves_without_an_engine_resolver() {
     let store = update(
         &engine,
         &load,
-        QueryOptions {
-            load: Some(&document),
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_load(Some(&document)),
     )
     .expect("LOAD resolves through the request's source");
     let mut expected = local_triples();
@@ -461,10 +434,7 @@ fn options_load_overrides_the_engine_resolver() {
     let overridden = update(
         &engine,
         &load,
-        QueryOptions {
-            load: Some(&per_request),
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_load(Some(&per_request)),
     )
     .expect("LOAD resolves through the request's source");
     let mut expected = local_triples();

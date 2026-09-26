@@ -602,10 +602,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions {
-                        env: &aggregate_env(aggregates.as_ref())?,
-                        ..QueryOptions::EMPTY
-                    },
+                    QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                     &governors,
                 )
                 .map_err(|diagnostic| {
@@ -706,10 +703,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                     substitutions: &[],
                 },
                 plan.entailment(),
-                QueryOptions {
-                    env: &aggregate_env(aggregates.as_ref())?,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                 // This surface registers no relation at all, so there is none to re-derive
                 // over the closure — `NONE` is the accurate claim here, not a default.
                 &ClosureRelations::NONE,
@@ -824,10 +818,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions {
-                        env: &aggregate_env(aggregates.as_ref())?,
-                        ..QueryOptions::EMPTY
-                    },
+                    QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                     &governors,
                 )
                 .map_err(|diagnostic| {

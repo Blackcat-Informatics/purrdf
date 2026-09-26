@@ -88,10 +88,7 @@ fn eval_case(
             .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let result = match remote {
         Some(source) => engine.query_with_source(dataset, request, source, options),
         None => engine.query_with_options_view(&**dataset, request, options),

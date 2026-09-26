@@ -470,7 +470,7 @@ pub fn query_with_entailment<D: DatasetView>(
         None => None,
     };
     let options = match rebound_env.as_ref() {
-        Some(env) => QueryOptions { env, ..options },
+        Some(env) => options.with_env(env),
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -825,7 +825,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
         None => None,
     };
     let options = match rebound_env.as_ref() {
-        Some(env) => QueryOptions { env, ..options },
+        Some(env) => options.with_env(env),
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -2046,11 +2046,10 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions {
-                env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
             &ClosureRelations::NONE,
         )
         .expect("the registered aggregate resolves over the entailed closure");

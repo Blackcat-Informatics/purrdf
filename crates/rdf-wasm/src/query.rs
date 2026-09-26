@@ -1398,10 +1398,7 @@ impl QueryEngine {
             .query_governed(
                 &frozen,
                 sparql_request(sparql, base.as_deref()),
-                QueryOptions {
-                    env: &aggregate_env(aggregates.as_ref())?,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;
@@ -1462,10 +1459,7 @@ impl QueryEngine {
             &frozen,
             sparql_request(sparql, base.as_deref()),
             plan.entailment(),
-            QueryOptions {
-                env: &aggregate_env(aggregates.as_ref())?,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
             // This surface registers no relation at all, so there is none to re-derive over
             // the closure — `NONE` is the accurate claim here, not a default.
             &ClosureRelations::NONE,
@@ -1537,10 +1531,7 @@ impl QueryEngine {
             .update_governed(
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
-                QueryOptions {
-                    env: &aggregate_env(aggregates.as_ref())?,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;

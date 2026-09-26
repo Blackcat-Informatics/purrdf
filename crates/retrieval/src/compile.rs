@@ -3048,10 +3048,7 @@ mod tests {
     /// prepares with the candidate as its one parameter.
     fn supplied_lookup(text: &str, registry: &PropertyFunctionRegistry) -> Result<String, String> {
         let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
-        let options = || QueryOptions {
-            env: &env,
-            ..QueryOptions::EMPTY
-        };
+        let options = || QueryOptions::new().with_env(&env);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
             .prepare_query_with_options(text, None, options())
@@ -3171,10 +3168,7 @@ mod tests {
     fn a_driven_call_keeps_the_pattern_binding_its_seed() {
         let registry = neighbours_registry(ExclusionBasis::Membership);
         let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
-        let options = || QueryOptions {
-            env: &env,
-            ..QueryOptions::EMPTY
-        };
+        let options = || QueryOptions::new().with_env(&env);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
             .prepare_query_with_options(
@@ -3322,14 +3316,7 @@ mod tests {
         let prepared_under = |registry: &PropertyFunctionRegistry, text: &str| {
             let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
             engine
-                .prepare_query_with_options(
-                    text,
-                    None,
-                    QueryOptions {
-                        env: &env,
-                        ..QueryOptions::EMPTY
-                    },
-                )
+                .prepare_query_with_options(text, None, QueryOptions::new().with_env(&env))
                 .map_err(|error| error.to_string())
         };
 
@@ -3374,10 +3361,7 @@ mod tests {
                 &lookup.text,
                 None,
                 &[CANDIDATE_NAME],
-                QueryOptions {
-                    env: &env,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_env(&env),
             )
             .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{}", lookup.text));
     }

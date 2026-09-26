@@ -191,10 +191,7 @@ fn the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free() {
     let (registry, _relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
 
     let undeclared = engine.prepare_execution(&free_subject_query(), None, &[], options);
     let diagnostic = undeclared.expect_err("a free subject reaches no declared mode");
@@ -230,10 +227,7 @@ fn a_declared_parameter_must_be_bound_and_the_refusal_names_it() {
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = empty_dataset();
     let mut execution = engine
         .prepare_execution(&free_subject_query(), None, &["subject"], options)
@@ -302,10 +296,7 @@ fn declaring_nothing_still_runs_and_one_execution_answers_many_bindings() {
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = empty_dataset();
 
     // An execution that declares nothing, run with nothing.
@@ -377,10 +368,7 @@ fn the_declaration_is_part_of_the_plan_identity() {
     let (registry, _relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
 
     engine
         .prepare_execution(&free_subject_query(), None, &["subject"], options)
@@ -446,10 +434,7 @@ fn a_call_after_a_data_atom_is_invoked_with_its_declared_parameter_bound() {
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = linked_dataset();
     let text = format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{RELATED}> ( ?x ) }}");
     let mut execution = engine
@@ -484,10 +469,7 @@ fn a_declared_parameter_does_not_reach_an_optional_arm_and_its_neighbours_still_
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = linked_dataset();
 
     let unreached = format!(
@@ -541,10 +523,7 @@ fn a_filter_exists_over_the_core_invokes_its_call_with_the_declared_parameter_bo
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let text = format!(
         "SELECT ?o WHERE {{ ?s <{LINKED}> ?o FILTER EXISTS {{ ( ?subject ) <{RELATED}> ( ?x ) }} }}"
     );
@@ -583,10 +562,7 @@ fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
     let (registry, relation) = registry();
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = linked_dataset();
 
     let refused_text =
@@ -776,10 +752,7 @@ fn a_parameter_bound_to_a_dataset_blank_node_reaches_the_call_bound() {
     registry.register(OWNS, registered);
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = blank_dataset();
 
     let alone = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
@@ -855,10 +828,7 @@ fn a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call() {
     registry.register(OWNS, registered);
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let dataset = blank_dataset();
     let text = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
     let mut execution = engine
@@ -908,14 +878,8 @@ fn a_call_in_an_optional_arm_is_bound_under_the_shacl_rewrite_and_only_there() {
     registry.register(OWNS, registered);
     let engine = NativeSparqlEngine::new();
     let env = environment(&registry);
-    let ordinary = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
-    let shacl = QueryOptions {
-        prebinding: ShaclPrebinding::Applied,
-        ..ordinary
-    };
+    let ordinary = QueryOptions::new().with_env(&env);
+    let shacl = ordinary.with_prebinding(ShaclPrebinding::Applied);
     let dataset = blank_dataset();
     let text = format!("SELECT ?x WHERE {{ OPTIONAL {{ ( ?subject ) <{OWNS}> ( ?x ) }} }}");
 

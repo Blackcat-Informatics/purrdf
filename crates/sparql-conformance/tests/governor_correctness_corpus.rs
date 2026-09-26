@@ -165,10 +165,7 @@ fn ungoverned(
         aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     match remote {
         Some(source) => engine.query_with_source(dataset, request(query), source, options),
         None => engine.query_with_options_view(&**dataset, request(query), options),
@@ -260,10 +257,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     source,
-                    QueryOptions {
-                        env: &governed_env,
-                        ..QueryOptions::EMPTY
-                    },
+                    QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
                 ),
                 // The relation table travels on the governed path too, in the same
@@ -275,10 +269,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 None => governed_engine.query_governed(
                     &dataset,
                     request(&query),
-                    QueryOptions {
-                        env: &governed_env,
-                        ..QueryOptions::EMPTY
-                    },
+                    QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
                 ),
             }

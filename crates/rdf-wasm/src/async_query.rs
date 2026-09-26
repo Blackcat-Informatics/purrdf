@@ -1716,18 +1716,18 @@ impl JobRun<'_> {
 
     /// Request options carrying the job's sources and `env`.
     fn options<'o>(&'o self, env: &'o purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'o> {
-        QueryOptions {
-            env,
-            remote: self
-                .remote
-                .as_deref()
-                .map(|remote| remote as &(dyn ServiceResolver + Sync)),
-            load: self
-                .load
-                .as_deref()
-                .map(|load| load as &(dyn GraphResolver + Sync)),
-            ..QueryOptions::EMPTY
-        }
+        QueryOptions::new()
+            .with_env(env)
+            .with_remote(
+                self.remote
+                    .as_deref()
+                    .map(|remote| remote as &(dyn ServiceResolver + Sync)),
+            )
+            .with_load(
+                self.load
+                    .as_deref()
+                    .map(|load| load as &(dyn GraphResolver + Sync)),
+            )
     }
 
     /// The job's sources, for an ambient execution scope.
@@ -5456,10 +5456,7 @@ mod tests {
                 .query_governed(
                     &frozen,
                     sparql_request(&query, None),
-                    QueryOptions {
-                        remote: Some(&source),
-                        ..QueryOptions::EMPTY
-                    },
+                    QueryOptions::new().with_remote(Some(&source)),
                     &governors,
                 )
                 .expect("the outer query evaluates");

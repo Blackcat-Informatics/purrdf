@@ -147,11 +147,10 @@ fn answer(
             substitutions: &[],
         },
         entailment,
-        QueryOptions {
-            env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+        QueryOptions::new().with_env(
+            &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                 .expect("the fixture declarations read cleanly"),
-            ..QueryOptions::EMPTY
-        },
+        ),
         relations,
         &QueryGovernors::UNBOUNDED,
     )?;

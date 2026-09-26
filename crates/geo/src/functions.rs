@@ -2854,10 +2854,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
-                    functions: &bound,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new().with_functions(&bound),
             )
             .map_err(|err| err.to_string())?;
         match result {
