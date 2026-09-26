@@ -241,10 +241,15 @@ ownership, and all limits. Complete examples are in
   the rounds that infer a new term; lower it for an untrusted rule set, which
   otherwise reaches the engine's fixed ceilings only slowly. Call `free()` when
   done.
-- `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?)` —
-  evaluates one node expression of the shapes graph (`expr` is an IRI or
-  `"_:label"`) against a focus node, with `scope` as `"NAME=TERM"` strings, and
-  returns the output nodes as N-Triples terms in sequence order.
+- `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
+  importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
+  one node expression of the shapes graph against a focus node, with `scope` as
+  `"NAME=TERM"` strings, and returns the output nodes as N-Triples terms in
+  sequence order. The expression is named one way: `expr` is an IRI or
+  `"_:label"`; or `expr` is `undefined` and `exprAt` plus `exprVia` walk from a
+  named node to an anonymous expression, each step reaching exactly one value;
+  or `exprTurtle` gives the expression inline as Turtle, whose one root blank
+  node is the expression.
 - `shaclLintShapes(shapesTtl, shapesBase?)` — certifies a shapes graph: the
   loader's verdict, every result of validating it against the W3C
   `shacl-shacl.ttl`, which implementation every function call binds to, and

@@ -1829,18 +1829,27 @@ class shapes:
     ) -> dict[str, str | None]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
     # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
-    # sequence order. `expr` is an absolute IRI or "_:label" (a blank node the shapes
-    # document labels so); `focus` and each `scope` value are an absolute IRI or an
-    # N-Triples term; `scope` maps each shnex:var name to its node. The name
-    # "focusNode", an unknown label and any parse or evaluation failure raise
-    # ValueError.
+    # sequence order. The expression is named exactly one way: `expr` is an absolute
+    # IRI or "_:label" (a blank node the shapes document labels so); or `expr` is None
+    # and `expr_at` names a node and `expr_via` the predicate IRIs a walk from it
+    # follows, each step reaching exactly one value (an anonymous `[ ... ]`
+    # expression); or `expr` is None and `expr_turtle` is the expression as a Turtle
+    # document, read under the shapes document's prefixes and base, whose one root
+    # blank node is the expression. `focus` and each `scope` value are an absolute
+    # IRI or an N-Triples term; `scope` maps each shnex:var name to its node. None or
+    # several selectors, a walk step reaching no value or several, an inline document
+    # without exactly one root, the name "focusNode", an unknown label and any parse
+    # or evaluation failure raise ValueError.
     @staticmethod
     def eval_node_expr(
         shapes_ttl: str,
         data_nt: str,
-        expr: str,
+        expr: str | None,
         focus: str,
         *,
+        expr_at: str | None = None,
+        expr_via: Sequence[str] = ...,
+        expr_turtle: str | None = None,
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,

@@ -116,6 +116,10 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// now refuses a shapes graph whose `owl:imports` closure is not in hand with the same
 /// typed refusal, where the C surface used to validate the importing document alone.
 ///
+/// `purrdf_shacl_eval_node_expr`, one of the symbols this bump adds, names its node
+/// expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
+/// `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

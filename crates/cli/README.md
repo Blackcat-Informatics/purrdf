@@ -783,7 +783,10 @@ purrdf rules --srl untrusted.srl --max-term-generating-rounds 64 --to ntriples d
 
 ```text
 purrdf node-expr --shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
-                 [--import <IRI>=<FILE>]... --expr <IRI|_:LABEL>
+                 [--import <IRI>=<FILE>]...
+                 (--expr <IRI|_:LABEL>
+                  | --expr-at <IRI|_:LABEL> --expr-via <IRI>...
+                  | --expr-turtle <TURTLE> | --expr-turtle-file <FILE>)
                  --focus <TERM> [--scope <NAME>=<TERM>]...
                  [--from <F>] [--base <IRI>] [IN] [OUT]
 ```
@@ -796,11 +799,33 @@ would inside a shape. The output nodes go to `OUT`, one N-Triples 1.2 term per
 line, in the order the expression's sequence semantics define.
 `node-expr outputs N` goes to stderr.
 
+The expression is named exactly one way:
+
 - `--expr` is the expression node: an absolute IRI, or `_:LABEL` for a blank
   node the shapes document labels `_:LABEL`. An IRI that is the subject of no
   triple is a constant expression and evaluates to itself. A label the document
   never wrote is refused (exit `1`) rather than evaluated as the empty
   expression.
+- `--expr-at NODE --expr-via PREDICATE...` names the node a walk reaches. It
+  starts from `NODE` (an absolute IRI or `_:LABEL`) and follows each
+  `--expr-via` predicate (an absolute IRI) in order. Every step must reach
+  exactly one value. A step reaching none or several is refused (exit `1`),
+  naming the step and the count. This is how an anonymous `[ … ]` expression
+  is named: `--expr-at http://example.org/Label --expr-via
+  http://www.w3.org/ns/shacl#values` is that property shape's `sh:values`
+  expression. A W3C `sht:EvalNodeExpr` entry's expression is `--expr-at ENTRY
+  --expr-via` `mf:action` `--expr-via` `sht:nodeExpr`, IRIs written in full.
+- `--expr-turtle TURTLE` (or `--expr-turtle-file FILE`) gives the expression
+  inline as a Turtle document, such as `'[ sh:path ex:name ] .'`. It is read
+  under the shapes document's prefixes and base, and its own directives outrank
+  them. It is merged into the shapes graph, so its shape references and function
+  calls bind there, and its blank nodes are kept apart from the shapes
+  document's. The expression is the document's one root: the blank node that is
+  the subject of a triple and the object of none. No root, several roots, or a
+  document that is not Turtle is refused (exit `1`).
+
+The other flags:
+
 - `--focus` is an absolute IRI or any N-Triples term, such as
   `'"-3"^^<http://www.w3.org/2001/XMLSchema#integer>'` or `_:b`. A blank node
   names the node the data document labels so.
@@ -811,14 +836,20 @@ line, in the order the expression's sequence semantics define.
 
 **Exit codes.** `0` when the expression evaluated, whether to nodes or to none.
 `1` for a malformed document, an expression that does not parse or fails to
-evaluate, or an unknown blank-node label. `2` for a usage error, including a
-malformed `--expr`, `--focus` or `--scope` value.
+evaluate, an unknown blank-node label, a walk step reaching no value or several,
+or an inline expression that is not Turtle or has no single root. `2` for a
+usage error, including a malformed `--expr`, `--expr-at`, `--expr-via`,
+`--focus` or `--scope` value, and a selector named twice or not at all.
 
 ```sh
 purrdf node-expr --shapes shapes.ttl --expr http://example.org/Tag \
   --focus http://example.org/a data.ttl
 purrdf node-expr --shapes shapes.ttl --expr _:suffix --focus http://example.org/a \
   --scope 'suffix="!"@en' data.ttl
+purrdf node-expr --shapes shapes.ttl --expr-at http://example.org/Label \
+  --expr-via http://www.w3.org/ns/shacl#values --focus http://example.org/a data.ttl
+purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
+  --focus http://example.org/a data.ttl
 ```
 
 ## `shapes lint`

@@ -142,6 +142,70 @@ def test_py_eval_node_expr() -> None:
         )
 
 
+_SH = "http://www.w3.org/ns/shacl#"
+
+
+def test_py_eval_node_expr_selectors() -> None:
+    """An anonymous expression is named by a walk from ex:Tagger, or inline as Turtle
+    whose sh:prefixes resolves in the shapes graph; each refusal sits beside a valid
+    neighbour."""
+    focus = "http://example.org/ns#a"
+    yes = ["<http://example.org/ns#yes>"]
+    assert (
+        purrdf.shapes.eval_node_expr(
+            _SHAPES,
+            _DATA,
+            None,
+            focus,
+            expr_at="http://example.org/ns#Tagger",
+            expr_via=[_SH + "rule", _SH + "object"],
+        )
+        == yes
+    )
+    assert (
+        purrdf.shapes.eval_node_expr(
+            _SHAPES,
+            _DATA,
+            None,
+            focus,
+            expr_turtle='[ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] .',
+        )
+        == yes
+    )
+    # One value beside two.
+    assert purrdf.shapes.eval_node_expr(
+        _SHAPES,
+        _DATA,
+        None,
+        focus,
+        expr_at=_SH + "SPARQLExprExpression",
+        expr_via=["http://www.w3.org/2000/01/rdf-schema#isDefinedBy"],
+    ) == [f"<{_SH}>"]
+    with pytest.raises(ValueError, match="reaches 2 values"):
+        purrdf.shapes.eval_node_expr(
+            _SHAPES,
+            _DATA,
+            None,
+            focus,
+            expr_at=_SH + "SPARQLExprExpression",
+            expr_via=[_SH + "parameter"],
+        )
+    with pytest.raises(ValueError, match="has 2 root blank nodes"):
+        purrdf.shapes.eval_node_expr(
+            _SHAPES, _DATA, None, focus, expr_turtle='[ shnex:var "a" ] . [ shnex:var "b" ] .'
+        )
+    with pytest.raises(ValueError, match="2 of the expression node"):
+        purrdf.shapes.eval_node_expr(
+            _SHAPES, _DATA, "http://example.org/ns#Tag", focus, expr_turtle='[ shnex:var "a" ] .'
+        )
+    with pytest.raises(ValueError, match="0 of the expression node"):
+        purrdf.shapes.eval_node_expr(_SHAPES, _DATA, None, focus)
+    with pytest.raises(ValueError, match="no walk start"):
+        purrdf.shapes.eval_node_expr(
+            _SHAPES, _DATA, "http://example.org/ns#Tag", focus, expr_via=[_SH + "rule"]
+        )
+
+
 def test_py_lint_shapes() -> None:
     clean = purrdf.shapes.lint_shapes(_SHAPES)
     assert clean["clean"] is True

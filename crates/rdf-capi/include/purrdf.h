@@ -131,6 +131,10 @@
  * now refuses a shapes graph whose `owl:imports` closure is not in hand with the same
  * typed refusal, where the C surface used to validate the importing document alone.
  *
+ * `purrdf_shacl_eval_node_expr`, one of the symbols this bump adds, names its node
+ * expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
+ * `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
+ *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
  * and never sees an enumerator's value move. The discriminants are therefore pinned
@@ -2819,7 +2823,17 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
  * define. N-Triples escapes every line break inside a term, so each line is one term; an
  * expression with no output writes an empty buffer.
  *
- * `expr` is an absolute IRI or `_:label` for a blank node the shapes document labels so;
+ * The expression is named exactly one way: exactly one of `expr`, `expr_at` and
+ * `expr_turtle` is non-NULL. `expr` is an absolute IRI or `_:label` for a blank node the
+ * shapes document labels so. `expr_at` names a node and `expr_via` / `expr_via_count` the
+ * predicate IRIs a walk from it follows, each step reaching exactly one value — how an
+ * anonymous `[ … ]` expression is named (`expr_via_count == 0` with `expr_at` is
+ * refused; `expr_via` may be NULL only when the count is 0). `expr_turtle` is the
+ * expression as a Turtle document, read under the shapes document's prefixes and base and
+ * merged into the shapes graph, whose one root blank node is the expression. None or
+ * several selectors, walk predicates with no `expr_at`, a walk step reaching no value or
+ * several, and an inline document without exactly one root are a `ParseError`.
+ *
  * `focus` is an absolute IRI or any N-Triples term. `scope` / `scope_count` are
  * `NAME=TERM` bindings read by `shnex:var "NAME"`, the term spelled as `focus` is;
  * `scope_count == 0` binds nothing (`scope` may then be NULL). A label the shapes
@@ -2831,8 +2845,10 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
  * and shapes are in scope.
  *
  * # Safety
- * `shapes_ttl`, `data_nt`, `expr` and `focus` must be non-null NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string; when `scope_count` is
+ * `shapes_ttl`, `data_nt` and `focus` must be non-null NUL-terminated C strings;
+ * `shapes_base_iri`, `expr`, `expr_at` and `expr_turtle` must each be null or a
+ * NUL-terminated C string; when `expr_via_count` is non-zero, `expr_via` must address
+ * that many NUL-terminated C strings; when `scope_count` is
  * non-zero, `scope` must address that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings;
  * `out_terms` must be writable; `out_error` must be null or writable.
@@ -2841,6 +2857,10 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
                                     const char *shapes_base_iri,
                                     const char *data_nt,
                                     const char *expr,
+                                    const char *expr_at,
+                                    const char *const *expr_via,
+                                    size_t expr_via_count,
+                                    const char *expr_turtle,
                                     const char *focus,
                                     const char *const *scope,
                                     size_t scope_count,

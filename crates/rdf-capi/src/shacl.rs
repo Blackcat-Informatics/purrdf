@@ -83,10 +83,10 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    ChangeScope, ConformanceDisallows, LintReport, NodeExprRequest, RulesOutcome, RulesRequest,
-    SarifOptions, ShapesError, ShapesProductRefusal, ValidationOptions, apply_rules_to_ntriples,
-    entail_to_ntriples_string, eval_node_expr_to_terms, lint_shapes_ttl, parse_scope_binding,
-    validate_changes_to_sarif_string, validate_to_sarif_string,
+    ChangeScope, ConformanceDisallows, ExprSelector, LintReport, NodeExprRequest, RulesOutcome,
+    RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal, ValidationOptions,
+    apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr_to_terms, lint_shapes_ttl,
+    parse_scope_binding, validate_changes_to_sarif_string, validate_to_sarif_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -575,7 +575,7 @@ fn eval_node_expr_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-    expr: &str,
+    expr: ExprSelector<'_>,
     focus: &str,
     scope: &[&str],
     imports: &[(&str, &str)],
@@ -608,7 +608,17 @@ fn eval_node_expr_bytes(
 /// define. N-Triples escapes every line break inside a term, so each line is one term; an
 /// expression with no output writes an empty buffer.
 ///
-/// `expr` is an absolute IRI or `_:label` for a blank node the shapes document labels so;
+/// The expression is named exactly one way: exactly one of `expr`, `expr_at` and
+/// `expr_turtle` is non-NULL. `expr` is an absolute IRI or `_:label` for a blank node the
+/// shapes document labels so. `expr_at` names a node and `expr_via` / `expr_via_count` the
+/// predicate IRIs a walk from it follows, each step reaching exactly one value — how an
+/// anonymous `[ … ]` expression is named (`expr_via_count == 0` with `expr_at` is
+/// refused; `expr_via` may be NULL only when the count is 0). `expr_turtle` is the
+/// expression as a Turtle document, read under the shapes document's prefixes and base and
+/// merged into the shapes graph, whose one root blank node is the expression. None or
+/// several selectors, walk predicates with no `expr_at`, a walk step reaching no value or
+/// several, and an inline document without exactly one root are a `ParseError`.
+///
 /// `focus` is an absolute IRI or any N-Triples term. `scope` / `scope_count` are
 /// `NAME=TERM` bindings read by `shnex:var "NAME"`, the term spelled as `focus` is;
 /// `scope_count == 0` binds nothing (`scope` may then be NULL). A label the shapes
@@ -620,8 +630,10 @@ fn eval_node_expr_bytes(
 /// and shapes are in scope.
 ///
 /// # Safety
-/// `shapes_ttl`, `data_nt`, `expr` and `focus` must be non-null NUL-terminated C strings;
-/// `shapes_base_iri` must be null or a NUL-terminated C string; when `scope_count` is
+/// `shapes_ttl`, `data_nt` and `focus` must be non-null NUL-terminated C strings;
+/// `shapes_base_iri`, `expr`, `expr_at` and `expr_turtle` must each be null or a
+/// NUL-terminated C string; when `expr_via_count` is non-zero, `expr_via` must address
+/// that many NUL-terminated C strings; when `scope_count` is
 /// non-zero, `scope` must address that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings;
 /// `out_terms` must be writable; `out_error` must be null or writable.
@@ -631,6 +643,10 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
     shapes_base_iri: *const c_char,
     data_nt: *const c_char,
     expr: *const c_char,
+    expr_at: *const c_char,
+    expr_via: *const *const c_char,
+    expr_via_count: usize,
+    expr_turtle: *const c_char,
     focus: *const c_char,
     scope: *const *const c_char,
     scope_count: usize,
@@ -642,18 +658,21 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if shapes_ttl.is_null()
-                || data_nt.is_null()
-                || expr.is_null()
-                || focus.is_null()
-                || out_terms.is_null()
-            {
+            if shapes_ttl.is_null() || data_nt.is_null() || focus.is_null() || out_terms.is_null() {
                 return Err(PurrdfError::new(
                     PurrdfStatus::NullPointer,
                     "null pointer argument to purrdf_shacl_eval_node_expr",
                 ));
             }
             let bindings = cstr_array(scope, scope_count, "purrdf_shacl_eval_node_expr")?;
+            let via = cstr_array(expr_via, expr_via_count, "purrdf_shacl_eval_node_expr")?;
+            let selector = ExprSelector::from_parts(
+                opt_cstr_to_str(expr)?,
+                opt_cstr_to_str(expr_at)?,
+                &via,
+                opt_cstr_to_str(expr_turtle)?,
+            )
+            .map_err(|error| PurrdfError::shapes(error.into()))?;
             let imports = import_pairs(
                 import_iris,
                 import_documents,
@@ -664,7 +683,7 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
                 cstr_to_str(shapes_ttl)?,
                 opt_cstr_to_str(shapes_base_iri)?,
                 cstr_to_str(data_nt)?,
-                cstr_to_str(expr)?,
+                selector,
                 cstr_to_str(focus)?,
                 &bindings,
                 &imports,
@@ -2160,6 +2179,10 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     data.as_ptr(),
                     expr.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
                     focus.as_ptr(),
                     if pointers.is_empty() {
                         std::ptr::null()
@@ -2208,9 +2231,156 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 std::ptr::null(),
                 data.as_ptr(),
                 expr.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
                 focus.as_ptr(),
                 std::ptr::null(),
                 1,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &raw mut terms,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::NullPointer as i32);
+        // SAFETY: the failed call wrote the error.
+        unsafe { purrdf_error_free(error) };
+    }
+
+    /// The expression selectors across the boundary: an anonymous expression named by a
+    /// walk and inline as Turtle, each refusal beside a valid neighbour — a step reaching
+    /// two values beside one reaching one, two roots beside one, two selectors beside
+    /// one — and a NULL walk array with a non-zero count refused as a `NullPointer`.
+    #[test]
+    fn capi_eval_node_expr_selectors() {
+        use std::ffi::CString;
+
+        const SH: &str = "http://www.w3.org/ns/shacl#";
+        let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let focus = CString::new("http://example.org/ns#a").expect("no NUL");
+        let c = |text: Option<&str>| text.map(|t| CString::new(t).expect("no NUL"));
+        let ptr = |text: &Option<CString>| text.as_ref().map_or(std::ptr::null(), |t| t.as_ptr());
+        let run = |expr: Option<&str>,
+                   at: Option<&str>,
+                   via: &[&str],
+                   turtle: Option<&str>|
+         -> (i32, String) {
+            let (expr, at, turtle) = (c(expr), c(at), c(turtle));
+            let owned: Vec<CString> = via
+                .iter()
+                .map(|p| CString::new(*p).expect("no NUL"))
+                .collect();
+            let pointers: Vec<*const c_char> = owned.iter().map(|p| p.as_ptr()).collect();
+            let mut terms: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, or a writable local; the walk
+            // array holds exactly `pointers.len()` elements.
+            unsafe {
+                let status = purrdf_shacl_eval_node_expr(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    ptr(&expr),
+                    ptr(&at),
+                    if pointers.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        pointers.as_ptr()
+                    },
+                    pointers.len(),
+                    ptr(&turtle),
+                    focus.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut terms,
+                    &raw mut error,
+                );
+                if status == PurrdfStatus::Ok as i32 {
+                    (status, take_text(terms))
+                } else {
+                    (status, take_error(error))
+                }
+            }
+        };
+        let yes = (
+            PurrdfStatus::Ok as i32,
+            "<http://example.org/ns#yes>\n".to_owned(),
+        );
+        let (rule, object) = (format!("{SH}rule"), format!("{SH}object"));
+        assert_eq!(
+            run(
+                None,
+                Some("http://example.org/ns#Tagger"),
+                &[&rule, &object],
+                None
+            ),
+            yes
+        );
+        let function = format!("{SH}SPARQLExprExpression");
+        assert_eq!(
+            run(
+                None,
+                Some(&function),
+                &["http://www.w3.org/2000/01/rdf-schema#isDefinedBy"],
+                None
+            ),
+            (PurrdfStatus::Ok as i32, format!("<{SH}>\n"))
+        );
+        let parameter = format!("{SH}parameter");
+        let (status, message) = run(None, Some(&function), &[&parameter], None);
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(message.contains("reaches 2 values"), "{message}");
+
+        assert_eq!(
+            run(
+                None,
+                None,
+                &[],
+                Some("[ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] .")
+            ),
+            yes
+        );
+        let (status, message) = run(
+            None,
+            None,
+            &[],
+            Some("[ shnex:var \"a\" ] . [ shnex:var \"b\" ] ."),
+        );
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(message.contains("has 2 root blank nodes"), "{message}");
+        let (status, message) = run(
+            Some("http://example.org/ns#Tag"),
+            None,
+            &[],
+            Some("[ shnex:var \"a\" ] ."),
+        );
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(message.contains("2 of the expression node"), "{message}");
+
+        let at = CString::new("http://example.org/ns#Tagger").expect("no NUL");
+        let mut terms: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: a NULL walk array with a non-zero count is refused before it is read.
+        let status = unsafe {
+            purrdf_shacl_eval_node_expr(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                std::ptr::null(),
+                at.as_ptr(),
+                std::ptr::null(),
+                2,
+                std::ptr::null(),
+                focus.as_ptr(),
+                std::ptr::null(),
+                0,
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
@@ -2460,6 +2630,10 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     data.as_ptr(),
                     who.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
                     alice.as_ptr(),
                     scope.as_ptr(),
                     scope.len(),
