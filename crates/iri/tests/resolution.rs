@@ -9,7 +9,6 @@
 //! same table every conformant URI library is measured against. See
 //! `tests/PROVENANCE.md` for the full source map of the IRI conformance corpus.
 
-use pretty_assertions::assert_eq;
 use purrdf_iri::parse;
 
 const BASE: &str = "http://a/b/c/d;p?q";

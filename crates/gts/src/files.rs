@@ -1191,12 +1191,10 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("mtime before unix epoch: {e}"))?;
     let secs = duration.as_secs();
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64)
-        .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))?;
-    let text = dt
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|e| format!("format datetime: {e}"))?;
-    Ok(text.replace("+00:00", "Z"))
+    i64::try_from(secs)
+        .map_err(|_| "out of range")
+        .and_then(|secs| crate::rfc3339::format(secs, 0))
+        .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))
 }
 
 /// Read typed files-profile entries from a folded graph, keyed by `files:path`.
@@ -1638,11 +1636,15 @@ fn write_file_without_following_symlink(
             .create_new(true)
             .open(&temp)
         {
-            Ok(mut file) => {
+            Ok(file) => {
                 let result = (|| {
-                    file.write_all(data)
-                        .map_err(|e| format!("write {temp:?}: {e}"))?;
-                    drop(file);
+                    // Scoped so the handle is closed before the rename replaces the
+                    // target.
+                    {
+                        let mut file = file;
+                        file.write_all(data)
+                            .map_err(|e| format!("write {temp:?}: {e}"))?;
+                    }
                     prepare_replace_target(target, archive_path)?;
                     fs::rename(&temp, target).map_err(|e| format!("replace {target:?}: {e}"))?;
                     Ok(())
@@ -1800,16 +1802,7 @@ fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> 
 }
 
 fn parse_datetime(text: &str) -> Result<(i64, u32), String> {
-    let text = text.strip_suffix('Z').unwrap_or(text);
-    let dt = time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-        .or_else(|_| {
-            time::OffsetDateTime::parse(
-                &(text.to_string() + "+00:00"),
-                &time::format_description::well_known::Rfc3339,
-            )
-        })
-        .map_err(|e| format!("parse datetime {text}: {e}"))?;
-    Ok((dt.unix_timestamp(), dt.nanosecond()))
+    crate::rfc3339::parse(text).map_err(|e| format!("parse datetime {text}: {e}"))
 }
 
 /// Compare an archive to a directory by content digest.

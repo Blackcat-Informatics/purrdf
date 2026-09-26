@@ -218,7 +218,7 @@ mod tests {
 
     // One step of the SplitMix64 mixing function — a pure, seed-driven integer
     // hash with no ambient state.
-    use crate::test_rng::splitmix64_next as mix;
+    use purrdf_testkit::rng::splitmix64_next as mix;
 
     /// A deterministic permutation of `items` selected by `seed`.
     ///

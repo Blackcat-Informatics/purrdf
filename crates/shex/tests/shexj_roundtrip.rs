@@ -19,7 +19,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pretty_assertions::assert_eq;
 use purrdf_shex::{parse_shexj, to_shexj};
 
 /// The URL prefix the vendored tree mirrors.

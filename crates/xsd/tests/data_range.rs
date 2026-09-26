@@ -680,13 +680,8 @@ fn value_space_identity_differs_from_sparql_equality_in_exactly_two_places() {
 
 mod prop {
     use super::{DataRange, Facet, Known, Satisfiability, contains, satisfiability, v};
-    use proptest::prelude::*;
-    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+    use purrdf_testkit::prop::prelude::*;
     use purrdf_xsd::{XsdDatatype as D, XsdValue};
-
-    /// A fixed RNG seed: this repository forbids a nondeterministic test outcome, so the
-    /// generated cases are the same on every run and every machine.
-    const SEED: [u8; 32] = *b"purrdf-xsd data range seed 00001";
 
     /// The values every generated range is probed with.
     fn probes() -> Vec<XsdValue> {
@@ -734,8 +729,8 @@ mod prop {
         leaf.prop_recursive(3, 16, 3, |inner| {
             prop_oneof![
                 inner.clone().prop_map(|r| DataRange::Not(Box::new(r))),
-                proptest::collection::vec(inner.clone(), 1..3).prop_map(DataRange::And),
-                proptest::collection::vec(inner, 1..3).prop_map(DataRange::Or),
+                prop::collection::vec(inner.clone(), 1..3).prop_map(DataRange::And),
+                prop::collection::vec(inner, 1..3).prop_map(DataRange::Or),
             ]
         })
     }
@@ -744,13 +739,15 @@ mod prop {
     /// range holds nothing, and a range that holds something is not proved empty.
     #[test]
     fn emptiness_and_membership_never_contradict() {
-        let config = Config {
-            cases: 1024,
-            failure_persistence: None,
-            ..Config::default()
-        };
-        let mut runner =
-            TestRunner::new_with_rng(config, TestRng::from_seed(RngAlgorithm::ChaCha, &SEED));
+        // The seed is derived from the test's name, so the generated cases are the same
+        // on every run and every machine.
+        let runner = prop::Runner::new(
+            Config::with_cases(1024),
+            concat!(
+                module_path!(),
+                "::emptiness_and_membership_never_contradict"
+            ),
+        );
         let values = probes();
         runner
             .run(&ranges(), |range| {

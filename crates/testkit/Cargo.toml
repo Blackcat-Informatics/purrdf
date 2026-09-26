@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-testkit"
+description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, a libtest-compatible runner for harness = false targets, and property-based testing on a recorded choice sequence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "testing", "golden", "harness", "property"]
+categories = ["development-tools::testing"]
+publish = false
+
+[lints]
+workspace = true
+
+# The fixture the harness oracle runs as a real child process, so the exit
+# status and the exact console output are observed rather than modelled.
+[[bin]]
+name = "testkit-harness-fixture"
+path = "src/bin/harness_fixture.rs"
+test = false
+doc = false
+
+# The fixture scripts/check-wasm-test-runner.sh runs on wasm32 to observe the
+# runner's host seal: a clock read outside the seal passes, the same read inside
+# it fails by name.
+[[bin]]
+name = "testkit-harness-print-fixture"
+path = "src/bin/harness_print_fixture.rs"
+test = false
+
+[[bin]]
+name = "testkit-wasm-host-fixture"
+path = "src/bin/wasm_host_fixture.rs"
+test = false
+doc = false
+
+[dependencies]
+# Every dependency here must stay external: a `purrdf-*` dependency would put a
+# dev-dependency cycle under every crate whose tests use this one.
+#
+# SHA-256 for the frozen-vector tamper evidence.
+sha2 = { workspace = true }
+# The parser behind `regex`: string generators walk its high-level IR, so a
+# pattern means to `prop::string::regex` exactly what it means to `regex`.
+regex-syntax = { workspace = true }
+
+[dev-dependencies]
+# The independent oracle for the string generators: every generated string must
+# be a full match of its pattern under the `regex` crate itself.
+regex = { workspace = true }
+
+# The harness's host on wasm32-unknown-unknown, where the standard library has
+# no command line, environment, console or clock: the test binary runs in Node
+# under scripts/wasm-test-runner.sh, and these reach Node's `process.argv`,
+# `process.env`, `console.log`/`console.error` and `Date.now`. Both are the
+# workspace's own wasm32 dependencies already, so this adds no package.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }

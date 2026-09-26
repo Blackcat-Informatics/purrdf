@@ -299,7 +299,7 @@ impl ExactSizeIterator for Int64Rows<'_> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_rng::mix;
+    use purrdf_testkit::rng::splitmix64_next as mix;
 
     /// Presence patterns that cross every word boundary shape: empty, all
     /// present, all null, alternating, seeded runs (short and word-spanning)

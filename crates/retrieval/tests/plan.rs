@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     CanonicalSection, DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
     ProducerBinding, ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason,

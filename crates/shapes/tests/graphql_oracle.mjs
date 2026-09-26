@@ -3,7 +3,8 @@
 
 /**
  * Validate generated SDL and execute real GraphQL variable coercion through
- * the locked official GraphQL.js implementation, with boon as source truth.
+ * the locked official GraphQL.js implementation, with purrdf-jsonschema as
+ * source truth.
  */
 
 import assert from "node:assert/strict";
@@ -68,7 +69,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
     if (actual !== probe.sourceValid) {
       throw new Error(
         `${fixtureName}/${probe.label} has an unlocated acceptance divergence: ` +
-          `boon=${probe.sourceValid}, GraphQL=${actual}`,
+          `jsonschema=${probe.sourceValid}, GraphQL=${actual}`,
       );
     }
     return;
@@ -82,7 +83,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
   if (actual === probe.sourceValid) {
     throw new Error(
       `${fixtureName}/${probe.label} was expected to expose ` +
-        `${probe.expectedLoss.code}, but boon and GraphQL both classified it as ${actual}`,
+        `${probe.expectedLoss.code}, but JSON Schema and GraphQL both classified it as ${actual}`,
     );
   }
 }
@@ -251,7 +252,7 @@ const codecCount = [...manifest.exact.probes, ...manifest.lossy.probes].filter(
 ).length;
 console.log(
   `GraphQL oracle: GraphQL.js ${graphqlVersion}; ` +
-    `${exactResults.length} exact boon/variable-coercion probes agree; ` +
+    `${exactResults.length} exact JSON Schema/variable-coercion probes agree; ` +
     `${divergenceCount} located divergences cover the complete ${profile.size}-code profile; ` +
     `${codecCount} probes exercise the production value codec; ` +
     "verified reverse SHACL import passes",

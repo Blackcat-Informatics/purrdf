@@ -107,6 +107,11 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "same as the geo determinism check: a native-versus-wasm32 comparison needing the "
         "wasm toolchain"
     ),
+    "scripts/check-wasm-test-runner.sh": (
+        "observes the wasm32 test runner failing a planted panic, a refused flag and a "
+        "sealed host read, so it needs the wasm32 target, the wasm-bindgen CLI and Node "
+        "that only the wasm job installs; `make wasm-test` is the local entry point"
+    ),
     "scripts/check-i18n-render.py --self-test": (
         "renders the book to check the translation, so it needs mdbook and the pinned "
         "mdbook-i18n-helpers; `make check-i18n` is the local entry point and says so"
@@ -137,7 +142,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 7
+ONE_SIDED_COUNT = 8
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:

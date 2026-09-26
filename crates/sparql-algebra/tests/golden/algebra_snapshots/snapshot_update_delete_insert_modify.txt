@@ -1,0 +1,57 @@
+Update {
+    operations: [
+        DeleteInsert {
+            delete: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                    graph: None,
+                },
+            ],
+            insert: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/q>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                    graph: None,
+                },
+            ],
+            with: None,
+            using: [],
+            pattern: Bgp {
+                patterns: [
+                    TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                ],
+            },
+        },
+    ],
+    base_iri: None,
+    version: None,
+}

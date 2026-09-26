@@ -1734,7 +1734,6 @@ fn project_out_blanks<I: ViewTermId>(
 mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
@@ -2571,7 +2570,7 @@ mod tests {
         let ops = precision.ops();
         let mut state = 0xc057_u64;
         for _ in 0..20_000 {
-            state = purrdf_core::test_rng::splitmix64_step(state);
+            state = purrdf_testkit::rng::splitmix64_step(state);
             // A term count and cardinalities anywhere a dataset can have them.
             let t = (state >> 11) as f64 / 4096.0 + 1.0;
             let running = (state & 0xffff_ffff) as f64 * 1.0e-3;

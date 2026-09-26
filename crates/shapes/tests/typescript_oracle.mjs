@@ -3,14 +3,14 @@
 
 /**
  * Compile emitted declarations with the locked TypeScript 7.0 compiler and
- * compare their JSON-literal acceptance with dev-only boon classifications.
+ * compare their JSON-literal acceptance with the purrdf-jsonschema
+ * classifications the fixture carries.
  */
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -237,7 +237,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
     if (actual !== probe.sourceValid) {
       throw new Error(
         `${fixtureName}/${probe.label} has an unlocated acceptance divergence: ` +
-          `boon=${probe.sourceValid}, TypeScript=${actual}`,
+          `jsonschema=${probe.sourceValid}, TypeScript=${actual}`,
       );
     }
     return;
@@ -251,7 +251,7 @@ function compareProbe(fixtureName, probe, actual, locatedLosses) {
   if (actual === probe.sourceValid) {
     throw new Error(
       `${fixtureName}/${probe.label} was expected to expose ` +
-        `${probe.expectedLoss.code}, but boon and TypeScript both classified it as ${actual}`,
+        `${probe.expectedLoss.code}, but JSON Schema and TypeScript both classified it as ${actual}`,
     );
   }
 }
@@ -358,7 +358,15 @@ if (manifest.exact.losses.losses.length !== 0) {
 const lossyCodes = new Set(manifest.lossy.losses.losses.map((entry) => entry.code));
 assert.deepEqual(lossyCodes, CLOSED_PROFILE, "lossy fixture no longer covers the closed profile");
 
-const directory = mkdtempSync(path.join(tmpdir(), "purrdf-typescript-oracle-"));
+// The scratch lives beside the build output, as scripts/build-scratch.sh sets
+// out, not under the system temporary directory, which is not guaranteed to
+// keep a directory for the length of the compiler runs below.
+const SCRATCH_ROOT = path.join(
+  process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : path.join(REPO, "target"),
+  "gate-scratch",
+);
+mkdirSync(SCRATCH_ROOT, { recursive: true });
+const directory = mkdtempSync(path.join(SCRATCH_ROOT, "typescript-oracle."));
 try {
   const exactResults = compileFixture("exact", manifest.exact, directory);
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);
@@ -372,7 +380,7 @@ try {
   }
   console.log(
     `TypeScript oracle: compiler ${compilerVersion}; ` +
-      `${manifest.exact.probes.length} exact boon probes and ` +
+      `${manifest.exact.probes.length} exact JSON Schema probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
       `${divergenceCount} divergences map to the complete 18-code loss profile; ` +
       "verified reverse SHACL import passes",

@@ -1281,7 +1281,6 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     fn toks(s: &str) -> Vec<Token<'_>> {
         tokenize(s).unwrap().into_iter().map(|s| s.token).collect()
@@ -1308,11 +1307,8 @@ mod tests {
 
     impl SplitMix {
         fn below(&mut self, n: usize) -> usize {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            usize::try_from((z ^ (z >> 31)) % 1_000_003).expect("small") % n
+            let z = purrdf_testkit::rng::splitmix64_next(&mut self.0);
+            usize::try_from(z % 1_000_003).expect("small") % n
         }
     }
 

@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-jsonschema"
+description = "Native JSON Schema validation for PurRDF: drafts 2020-12, 2019-09 and 07, every vocabulary, dynamic and recursive references, unevaluated keywords, standard output formats"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-jsonschema"
+rust-version.workspace = true
+keywords = ["json-schema", "validation", "json", "wasm", "rdf"]
+categories = ["encoding", "parser-implementations"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only leaf over three dependencies: the JSON value model, the regex engine
+# the ECMA-262 `pattern` translation targets, and the workspace's one RFC 3986
+# reference resolver. No threads, no filesystem, no clock: wasm32-clean.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_jsonschema"
+
+[dependencies]
+# Schemas and instances are `serde_json::Value`s; numbers are read exactly from
+# the workspace's `float_roundtrip` parse.
+serde_json = { workspace = true }
+# The engine every translated ECMA-262 `pattern` runs on.
+regex = { workspace = true }
+# `$id`/`$ref`/`$dynamicRef` resolution: the workspace's single RFC 3986 §5
+# resolver, never a second one.
+purrdf-iri = { workspace = true }
+
+[dev-dependencies]
+# The `harness = false` suite runner and the frozen differential vectors.
+# Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
+# Compile and validation baselines. DEV-DEPENDENCY ONLY: it never reaches the
+# published library's graph.
+criterion = { workspace = true }
+
+[[bench]]
+name = "validate"
+harness = false
+
+# The official JSON-Schema-Test-Suite, one libtest case per suite test: one
+# target per draft, so each is its own conformance row.
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
+harness = false
+
+[[test]]
+name = "suite_draft2019_09"
+path = "tests/suite_draft2019_09.rs"
+harness = false
+
+[[test]]
+name = "suite_draft7"
+path = "tests/suite_draft7.rs"
+harness = false

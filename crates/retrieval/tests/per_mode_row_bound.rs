@@ -32,7 +32,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, BoundMode, ExecutionError, Iri, ProducerStatus,

@@ -33,7 +33,7 @@ packages = [
   "purrdf-core", "purrdf-iri", "purrdf-xsd", "purrdf-json", "purrdf-rdf", "purrdf-sparql-algebra",
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
-  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice",
+  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-jsonschema",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -5992,6 +5992,30 @@ summary = "`json_schema::compile_schema`, the SHACL to JSON Schema compiler"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_shapes"
   symbol = "purrdf_shapes::json_schema::compile_schema"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "jsonschema.evaluate"
+summary = "`Evaluator::verdict`, the per-keyword assertion step of JSON Schema validation"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_jsonschema"
+  symbol = "<purrdf_jsonschema::validate::Evaluator>::verdict"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "jsonschema.compile"
+summary = "`compile::compile_unchecked`, the JSON Schema compile work queue over a registry"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_jsonschema"
+  symbol = "purrdf_jsonschema::compile::compile_unchecked"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

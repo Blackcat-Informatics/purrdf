@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The ledger of removed third-party dependencies.
+#
+# [inhouse_names]
+# ---------------
+# A removed package's name is checked for in the prose and source a reader
+# meets — AGENTS.md, README.md, docs/, every crate's README.md and src/ (never
+# a PROVENANCE.md or a frozen differential-vector file) — with
+#
+#     rg -n -w '<pkg>' AGENTS.md README.md docs crates/*/README.md crates/*/src \
+#         --glob '!**/PROVENANCE.md' --glob '!**/*differential_vectors*'
+#
+# and every line it prints must be matched by one of the regular expressions
+# listed here under that package's name. Each entry is an in-house identifier or
+# an unrelated word that legitimately shares the token, with the reason it is
+# not the removed package. A line no entry matches is a leftover reference to
+# the removed package and fails.
+
+[inhouse_names]
+rand = [
+    # SPARQL's RAND() function: the evaluator's parallel-safety test binds the
+    # call expression to a local named after it.
+    '\blet rand = call\(Function::Rand, vec!\[\]\);',
+    '\brand\.clone\(\)',
+    'call\(Function::Concat, vec!\[safe, rand\]\)',
+    # SPARQL's RAND() function, detected by name in captured query text.
+    'lower\.contains\("rand\("\)',
+    # SPARQL's RAND() function in the evaluator's own test messages.
+    '"(first|second) rand \{f[12]\} not in \[0,1\)"',
+    '"rand should differ across calls"',
+    # A CSV test string: a carriage return (`\r`) followed by the word "and".
+    'line\\rand second',
+    # The GTS ULID generator's statement that it depends on no RNG crate.
+    '`uuid`, `ulid`, `rand`, or `getrandom`',
+]
+url = [
+    # `url` is an ordinary word and an identifier throughout the tree: the
+    # CSVW `url` property and every `table.url`, the SVG `url(#…)` paint
+    # reference, the JavaScript `URL`/`import.meta.url` of the playground and
+    # the book, and local variables named `url`. A reference to the removed
+    # crate takes one of three shapes — a `url::` path, a manifest entry
+    # `url = "…"` / `url = { … }`, or the crate named as a crate or
+    # dependency — and a line holding any of them is not matched here.
+    '^(?!.*(?<![\w.-])url::)(?!.*(?<![\w.-])url\s*=\s*[{"])(?!.*`url` (?:crate|dependency)).*\burl\b',
+]

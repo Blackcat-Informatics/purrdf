@@ -34,6 +34,10 @@ purrdf-events = { workspace = true }
 # (its `[lib]` note states the contract) and is already wasm32-clean, so it drags
 # nothing in and `make wasm` stays green.
 purrdf-iri = { workspace = true }
+# Proleptic-Gregorian calendar arithmetic for the files/tar profiles' RFC 3339
+# `modified` timestamps (the grammar itself is `src/rfc3339.rs`). Another
+# zero-runtime-dependency, wasm32-clean leaf, so the edge adds nothing below it.
+purrdf-xsd = { workspace = true }
 # Fixed-key (no runtime RNG seeding) hasher for the segment-decode / event-bridge
 # dedup maps — mirrors the workspace's `FastHasher` policy (`crates/rdf-core/src/hash.rs`);
 # wasm-clean since `getrandom` is absent on wasm32 and `default-features = false` here.
@@ -59,7 +63,6 @@ flate2 = { workspace = true }
 structured-zstd = { workspace = true, features = ["dict_builder"] }
 # Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
 fastrand = { workspace = true }
-time = { workspace = true }
 filetime = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
 ed25519-dalek = { workspace = true }

@@ -11,6 +11,7 @@
 //! strict ASCII subset in URI mode.
 
 use crate::error::{IriError, Result};
+use crate::host::Mode;
 use crate::scan::{ByteRun, byte_runs, count_runs, in_runs};
 use core::ops::Range;
 
@@ -162,12 +163,6 @@ pub fn parse_uri(s: &str) -> Result<Iri> {
 /// ```
 pub fn is_absolute(s: &str) -> Result<bool> {
     Ok(classify(s)? == IriForm::Absolute)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Iri,
-    Uri,
 }
 
 /// Whether a VALIDATED IRI reference carries a scheme — the one bit of [`Iri`] a
@@ -447,7 +442,7 @@ fn iri_extra_ok(c: char, allow_iprivate: bool, mode: Mode) -> bool {
 /// The ASCII grammar check is a single [`CLASS`] table lookup + mask; only a
 /// non-ASCII byte (a UTF-8 lead byte, always a char boundary here) is decoded to a
 /// `char` and routed through the `ucschar`/`iprivate` range test.
-fn validate_component(
+pub(crate) fn validate_component(
     s: &str,
     base_off: usize,
     extra_mask: u8,
@@ -643,7 +638,7 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         }
     };
 
-    validate_host(host, host_off, mode)?;
+    crate::host::validate_host(host, host_off, mode)?;
     if let (Some(p), Some(poff)) = (port, port_off) {
         for (k, c) in p.char_indices() {
             if !c.is_ascii_digit() {
@@ -654,53 +649,6 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         // Transport ranges belong to a scheme's connection policy, not IRI
         // identity. Empty, long, and leading-zero digit strings remain lexical.
     }
-    Ok(())
-}
-
-fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
-    if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        // RFC 3986 §3.2.2: IP-literal = "[" (IPv6address / IPvFuture) "]".
-        // Character membership alone does not establish either production.
-        return validate_ip_literal(inner, base_off + 1);
-    }
-    // reg-name / IPv4: unreserved / pct / sub-delims (+ ucschar in IRI mode).
-    validate_component(s, base_off, 0, false, mode)
-}
-
-/// Validate an IP-literal's contents without normalizing its spelling.
-fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
-    if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
-        // ABNF string literals are case-insensitive. The version is nonempty
-        // hexadecimal; the address is a nonempty exact terminal class.
-        let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
-            IriError::BadAuthority(format!(
-                "IPvFuture at byte {base_off} requires a version and '.'"
-            ))
-        })?;
-        if version.is_empty() || address.is_empty() {
-            return Err(IriError::BadAuthority(format!(
-                "IPvFuture at byte {base_off} needs a nonempty version and address"
-            )));
-        }
-        for (at, ch) in version.char_indices() {
-            if !ch.is_ascii_hexdigit() {
-                return Err(IriError::DisallowedChar(ch, base_off + 1 + at));
-            }
-        }
-        let address_off = base_off + version.len() + 2;
-        for (at, ch) in address.char_indices() {
-            if !crate::terminals::is_ipvfuture_address_char(ch) {
-                return Err(IriError::DisallowedChar(ch, address_off + at));
-            }
-        }
-        return Ok(());
-    }
-    // The standard parser is pure address syntax: no lookup, socket, clock or
-    // other I/O. It handles every IPv6 compression and embedded IPv4 form on
-    // native and wasm targets, without adding a second address parser here.
-    inner.parse::<core::net::Ipv6Addr>().map_err(|_| {
-        IriError::BadAuthority(format!("invalid IPv6 address {inner:?} at byte {base_off}"))
-    })?;
     Ok(())
 }
 
@@ -1001,7 +949,7 @@ mod tests {
         ];
         let mut state = 0x01B1_C0DE_5EED_u64;
         let mut next = move || {
-            usize::try_from(crate::test_rng::splitmix64_next(&mut state) % 1_000_003)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut state) % 1_000_003)
                 .expect("small")
         };
         let mut verdicts = [0_usize; 3];

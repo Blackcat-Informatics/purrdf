@@ -775,7 +775,6 @@ fn bounded(candidates: Vec<Candidate>, keep: usize) -> Vec<ByRank> {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermValue;
 
     use super::{B, Constraint, HALF, K1, PartitionFilter, distinct_terms};

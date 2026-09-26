@@ -1,0 +1,56 @@
+Select {
+    pattern: Project {
+        inner: Extend {
+            inner: Group {
+                inner: Bgp {
+                    patterns: [
+                        TriplePattern {
+                            subject: Variable(
+                                ?x,
+                            ),
+                            predicate: NamedNode(
+                                <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                            ),
+                            object: Variable(
+                                ?t,
+                            ),
+                        },
+                    ],
+                },
+                variables: [
+                    ?t,
+                ],
+                aggregates: [
+                    (
+                        ?__purrdf_agg_0,
+                        AggregateExpression {
+                            function: Count,
+                            args: [
+                                Variable(
+                                    ?x,
+                                ),
+                            ],
+                            scalarvals: [],
+                            order_by: [],
+                            distinct: false,
+                        },
+                    ),
+                ],
+            },
+            variable: ?c,
+            expression: Variable(
+                ?__purrdf_agg_0,
+            ),
+        },
+        variables: [
+            ?t,
+            ?c,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+    version: None,
+}

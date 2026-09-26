@@ -6,21 +6,25 @@
 
 Two independent rules, matched to how each dependency was actually replaced:
 
-* **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``, and
-  ``petgraph`` have a first-party replacement good for every edge kind, so
-  reappearing ANYWHERE in the resolved dependency graph — runtime, build,
+* **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
+  ``petgraph``, ``tempfile``, ``proptest`` (with the random-number,
+  fork-mode and bit-set stack it alone pulled in), ``boon`` (with the
+  URL, IDNA and ICU4X stack it alone pulled in), ``datatest-stable``
+  (with the path, runner and regex stack it alone pulled in),
+  ``wasm-bindgen-test`` (with the macro, executor and coverage stack it alone
+  pulled in) and the futures stack js-sys's ``std`` feature pulled in have a
+  first-party replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
   reintroduction through a dev-dependency or a transitive edge is caught the
   same way as a direct one.
 
   It reads **every** ``Cargo.lock`` tracked by git, not just the root one.
-  The repository commits more than one: directories in the root manifest's
-  ``exclude`` list (``crates/geo/determinism``, and ``crates/gts/fuzz`` if it
-  ever gains a lock) are their own workspace roots with their own resolution,
-  so a root-only scan is blind to exactly the corners least likely to be
-  noticed — an excluded crate's lock drifted to a stale resolution carrying
-  ``oxilangtag`` and nothing said so. Each failure names the lock it came
+  A directory in the root manifest's ``exclude`` list (``crates/gts/fuzz``,
+  should it ever commit a lock) is its own workspace root with its own
+  resolution, so a root-only scan is blind to exactly the corners least likely
+  to be noticed — an excluded crate's lock once drifted to a stale resolution
+  carrying ``oxilangtag`` and nothing said so. Each failure names the lock it came
   from, so the message points at the file to fix.
 
 * **Direct-edge ban** (``BANNED_DIRECT_ONLY``): ``hex`` was removed only from
@@ -38,11 +42,10 @@ Two independent rules, matched to how each dependency was actually replaced:
   still never opens a lockfile, so the over-refusal the tier split exists to
   prevent stays prevented.
 
-  "First-party manifest" is **not** "workspace member". Two first-party roots
-  are committed but deliberately kept out of the root workspace via its
-  ``exclude`` list — ``crates/geo/determinism`` (the wasm32 determinism
-  harness) and ``crates/gts/fuzz`` — and a member-only scan cannot see either,
-  so a direct ``hex`` in one of them passed the gate silently. That is the
+  "First-party manifest" is **not** "workspace member". A first-party root
+  is committed but deliberately kept out of the root workspace via its
+  ``exclude`` list — ``crates/gts/fuzz`` — and a member-only scan cannot see
+  it, so a direct ``hex`` in such a root once passed the gate silently. That is the
   same corner the tier-1 scan had to be widened for. The manifest set is
   therefore the union of two derivations, so neither can narrow it alone:
 
@@ -98,6 +101,88 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "oxrdf": "purrdf-core",
     "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
+    "tempfile": "purrdf_testkit::{TempDir, NamedTempFile} (temp_dir!/temp_file!, for_unit_test)",
+    "proptest": "purrdf_testkit::prop (the choice-sequence property harness, prop_test!)",
+    # proptest's own closure: its RNG stack, its fork/timeout runner and its
+    # array helpers. Nothing else in the graph pulled any of them in.
+    "rand": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "rand_chacha": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "rand_xorshift": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "ppv-lite86": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "unarray": "purrdf_testkit::prop (no array strategies are needed)",
+    "rusty-fork": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "wait-timeout": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "quick-error": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "fnv": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    # Pulled in by proptest's bit-set strategies and by fancy-regex; with both
+    # gone nothing else in the graph resolves them.
+    "bit-set": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    "bit-vec": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    "datatest-stable": "purrdf_testkit::harness fed by purrdf_sparql_conformance::paths::suite_manifests",
+    # datatest-stable's own closure: its UTF-8 path type, its libtest runner,
+    # the runner's JSON string escaper, and the backtracking regex engine its
+    # file pattern was matched with. Nothing else in the graph pulled any of them in.
+    "camino": "std::path (case names are the UTF-8-checked, /-joined relative path)",
+    "libtest-mimic": "purrdf_testkit::harness (the libtest-compatible harness = false runner)",
+    "escape8259": "purrdf_testkit::harness (the libtest-compatible harness = false runner)",
+    "fancy-regex": "purrdf_sparql_conformance::paths::suite_manifests (an exact file-name match)",
+    "boon": "purrdf-jsonschema (native JSON Schema 2020-12, 2019-09 and draft-07 validation)",
+    # boon's own closure: its URL/IDNA stack (url, idna and the ICU4X Unicode
+    # data it normalizes with), its URI parser and its append-only list. Nothing
+    # else in the graph pulled any of them in; purrdf-jsonschema resolves every
+    # reference through purrdf-iri.
+    "appendlist": "purrdf-jsonschema (compiled subschemas live in one arena)",
+    "fluent-uri": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "borrow-or-share": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "ref-cast": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "ref-cast-impl": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "base64": "purrdf-jsonschema (the draft-07 contentEncoding check decodes RFC 4648 base64 in-house)",
+    "url": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "form_urlencoded": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "percent-encoding": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "idna": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "idna_adapter": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "utf8_iter": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "icu_collections": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_locale_core": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_normalizer": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_normalizer_data": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_properties": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_properties_data": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_provider": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "litemap": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "potential_utf": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "tinystr": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "writeable": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "yoke": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "yoke-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerofrom": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerofrom-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerotrie": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerovec": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerovec-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "stable_deref_trait": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "displaydoc": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "synstructure": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "wasm-bindgen-test": "purrdf_testkit::harness run on wasm32 by scripts/wasm-test-runner.sh",
+    # wasm-bindgen-test's own closure: its attribute macro and shared descriptor
+    # crate, its async test executor, its coverage hook and its console colours.
+    # Nothing else in the graph pulled any of them in.
+    "wasm-bindgen-test-macro": "purrdf_testkit::harness_main! (cases named by their functions)",
+    "wasm-bindgen-test-shared": "purrdf_testkit::harness run on wasm32 by scripts/wasm-test-runner.sh",
+    "wasm-bindgen-futures": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "async-trait": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "scoped-tls": "purrdf_testkit::harness (wasm32 cases run synchronously)",
+    "minicov": "purrdf_testkit::harness (no coverage hook in the wasm32 test binaries)",
+    "nu-ansi-term": "purrdf_testkit::harness (libtest's own ANSI colour codes)",
+    # js-sys's `std` feature pulled futures-util and its closure in for a stream
+    # adapter nothing here uses; the workspace takes js-sys with default features
+    # off, so nothing else resolves them.
+    "futures-util": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "futures-core": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "futures-task": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "pin-project-lite": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "slab": "js-sys with default-features = false (its `std` feature pulled it in)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency
@@ -105,6 +190,10 @@ BANNED_ANY_EDGE: dict[str, str] = {
 # transitive third-party use is out of scope (see module docstring).
 BANNED_DIRECT_ONLY: dict[str, str] = {
     "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
+    # proptest's rand_core 0.9 left with it; rand_core 0.6 stays in Cargo.lock as
+    # an optional dependency of `signature` (under ed25519-dalek), so only a
+    # direct edge is refused.
+    "rand_core": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
 }
 
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")
@@ -471,7 +560,7 @@ def self_test() -> int:
         [
             "Cargo.toml",
             "Cargo.lock",
-            "crates/geo/determinism/Cargo.lock",
+            "crates/excluded-root/Cargo.lock",
             "crates/gts/fuzz/Cargo.lock",
             # Near misses that are NOT lockfiles and must not be scanned.
             "docs/Cargo.lock.md",
@@ -483,7 +572,7 @@ def self_test() -> int:
     discovered = lockfile_paths_from_ls_files(listing)
     expected_discovered = [
         "Cargo.lock",
-        "crates/geo/determinism/Cargo.lock",
+        "crates/excluded-root/Cargo.lock",
         "crates/gts/fuzz/Cargo.lock",
     ]
     if discovered != expected_discovered:
@@ -515,10 +604,10 @@ def self_test() -> int:
     # --- (C) a tier-1 failure names the lockfile it came from, so a violation
     #     in a non-root lock points at the right file.
     nested_failures = lock_failures(
-        "crates/geo/determinism/Cargo.lock",
+        "crates/excluded-root/Cargo.lock",
         'name = "oxilangtag"\nversion = "0.1.6"\n',
     )
-    if len(nested_failures) != 1 or "crates/geo/determinism/Cargo.lock" not in (
+    if len(nested_failures) != 1 or "crates/excluded-root/Cargo.lock" not in (
         nested_failures[0]
     ):
         failures.append(
@@ -540,12 +629,28 @@ def self_test() -> int:
         )
         if "Cargo.lock" not in relative:
             failures.append(f"the root Cargo.lock was not discovered: {relative}")
-        if len(relative) < 2:
+        # An independent derivation of the same set: git's own pathspec match
+        # for a `Cargo.lock` at any depth. Discovery that narrowed back to the
+        # root lock would disagree with it the moment a second lock is committed.
+        pathspec = subprocess.run(
+            ["git", "ls-files", "-z", "--", "Cargo.lock", ":(glob)**/Cargo.lock"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if pathspec.returncode != 0:
             failures.append(
-                "only one committed lockfile was discovered in this repository; "
-                "the excluded-directory locks are exactly what this scan exists "
-                f"to reach (found {relative})"
+                "git ls-files could not list this repository's lockfiles: "
+                f"{pathspec.stderr.decode(errors='replace').strip()}"
             )
+        else:
+            listed = sorted(
+                path for path in pathspec.stdout.decode().split("\0") if path
+            )
+            if relative != listed:
+                failures.append(
+                    f"lockfile discovery found {relative}, but git lists {listed}"
+                )
         for lock in repo_locks:
             if not lock.is_file():
                 failures.append(f"discovered lockfile does not exist: {lock}")
@@ -557,7 +662,7 @@ def self_test() -> int:
         [
             "Cargo.toml",
             "crates/iri/Cargo.toml",
-            "crates/geo/determinism/Cargo.toml",
+            "crates/excluded-root/Cargo.toml",
             "crates/gts/fuzz/Cargo.toml",
             "docs/Cargo.toml.md",
             "vendor/Cargo.toml.orig",
@@ -567,7 +672,7 @@ def self_test() -> int:
     discovered_manifests = manifest_paths_from_ls_files(manifest_listing)
     expected_manifests = [
         "Cargo.toml",
-        "crates/geo/determinism/Cargo.toml",
+        "crates/excluded-root/Cargo.toml",
         "crates/gts/fuzz/Cargo.toml",
         "crates/iri/Cargo.toml",
     ]
@@ -598,7 +703,6 @@ def self_test() -> int:
     #     a members-only scan cannot see them. A direct `hex` in either one
     #     passed the gate silently before they were included.
     excluded_roots = [
-        "crates/geo/determinism/Cargo.toml",
         "crates/gts/fuzz/Cargo.toml",
     ]
     try:

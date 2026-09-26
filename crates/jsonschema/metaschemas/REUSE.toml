@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+version = 1
+
+# The JSON Schema draft 2020-12, draft 2019-09 and draft-07 meta-schemas,
+# vendored verbatim from the json-schema-org/json-schema-spec `2020-12`,
+# `2019-09` and `draft-07` branches (see crates/jsonschema/PROVENANCE.md for
+# the commits). The upstream repository
+# offers its material under the AFL or the BSD license and carries no per-file
+# notice; it is taken here under BSD-3-Clause.
+[[annotations]]
+path = ["draft2020-12/**/*.json", "draft2019-09/**/*.json", "draft-07/**/*.json"]
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "BSD-3-Clause"

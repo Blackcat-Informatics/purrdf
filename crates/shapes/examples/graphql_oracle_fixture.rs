@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::error::Error;
 
-use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
@@ -290,11 +289,7 @@ fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool,
         "$ref": format!("#/$defs/{escaped}")
     });
     let location = "mem:///graphql-oracle.schema.json";
-    let mut schemas = Schemas::new();
-    let mut compiler = Compiler::new();
-    compiler.add_resource(location, wrapper)?;
-    let compiled = compiler.compile(location, &mut schemas)?;
-    Ok(schemas.validate(instance, compiled).is_ok())
+    Ok(purrdf_jsonschema::Schema::from_document(location, wrapper)?.is_valid(instance))
 }
 
 fn has_loss(package: &GraphqlPackage, code: &str, location: &str) -> bool {

@@ -94,7 +94,7 @@ fn sorted_lines(p: &str) -> Vec<String> {
 /// Simple entailment adds nothing beyond a faithful reproduction of the source.
 #[test]
 fn simple_is_identity_closure() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let input = concat!(
         "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
@@ -119,7 +119,7 @@ fn simple_is_identity_closure() {
 /// contains `ex:knows a rdf:Property`.
 #[test]
 fn rdf_infers_predicate_is_property() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -152,7 +152,7 @@ fn rdf_infers_predicate_is_property() {
 /// property; and `rdfs:subPropertyOf` propagates the base triple onto the super-property.
 #[test]
 fn rdfs_infers_subclass_domain_range_and_subproperty() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -211,7 +211,7 @@ fn rdfs_infers_subclass_domain_range_and_subproperty() {
 /// closes a two-hop chain.
 #[test]
 fn owl_rl_infers_symmetric_and_transitive() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -255,7 +255,7 @@ fn owl_rl_infers_symmetric_and_transitive() {
 /// while the CLI still refused a regime the library, Python, wasm and C ABI all close.
 #[test]
 fn d_materializes_the_datatype_map() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -297,7 +297,7 @@ fn d_materializes_the_datatype_map() {
 /// on this same input.
 #[test]
 fn owl_direct_materializes_the_tableau_augmentation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -331,7 +331,7 @@ fn owl_direct_materializes_the_tableau_augmentation() {
 /// Falsifiable against the old behavior: this exited 3 with "cannot be materialized".
 #[test]
 fn rif_materializes_under_the_supplied_rule_document() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -356,7 +356,7 @@ fn rif_materializes_under_the_supplied_rule_document() {
 /// usage error (exit 2) — never a silently-ignored argument and never a refused regime.
 #[test]
 fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -400,7 +400,7 @@ fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
 /// inferred RDFS type appears just as it does from a text source.
 #[test]
 fn pack_input_is_reconstructed_and_reasoned() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -450,7 +450,7 @@ fn pack_input_is_reconstructed_and_reasoned() {
 /// there, and refusing it would reject a flag doing real work.
 #[test]
 fn base_with_pack_from_or_to_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -579,7 +579,7 @@ fn stdin_to_stdout_with_from_and_to() {
 /// file->stdout half of the same gap (`OUT` defaults to `-`, which requires `--to`).
 #[test]
 fn file_to_stdout_with_to() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -611,7 +611,7 @@ fn file_to_stdout_with_to() {
 /// deterministic.
 #[test]
 fn reason_output_is_deterministic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -647,7 +647,7 @@ fn reason_output_is_deterministic() {
 /// relative IRI terms, reasoned under `--base`, yields absolute IRIs in the output.
 #[test]
 fn base_resolves_relative_iris_before_reasoning() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     // Turtle carries relative IRIs (N-Triples would reject them); `--base` resolves them.
     let seed = write_file(
@@ -682,7 +682,7 @@ fn base_resolves_relative_iris_before_reasoning() {
 /// carry the inferred triple (re-converting the pack back to text shows the inference).
 #[test]
 fn pack_output_is_a_valid_pack_carrying_the_inference() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -725,7 +725,7 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
 
 #[test]
 fn configured_jsonld_options_reach_reason_output() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -769,7 +769,7 @@ fn configured_jsonld_options_reach_reason_output() {
 /// seventeen `false`-headed rules found anything.
 #[test]
 fn report_bare_writes_the_certificate_to_stderr() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -811,7 +811,7 @@ fn report_bare_writes_the_certificate_to_stderr() {
 /// `--report=PATH` writes the SAME bytes to a file, and two runs agree byte for byte.
 #[test]
 fn report_to_a_path_is_byte_identical_across_runs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -846,7 +846,7 @@ fn report_to_a_path_is_byte_identical_across_runs() {
 /// refused, on which triples, after how much work — was the only one who got none of it.
 #[test]
 fn an_inconsistent_run_writes_the_report_and_still_fails() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -905,7 +905,7 @@ fn an_inconsistent_run_writes_the_report_and_still_fails() {
 /// where the CLI states which choice a run made.
 #[test]
 fn the_report_names_the_named_graph_boundary() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -936,7 +936,7 @@ fn the_report_names_the_named_graph_boundary() {
 /// certificate, so the flag is not a `reason`-only afterthought.
 #[test]
 fn convert_and_query_surface_the_report_too() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -982,7 +982,7 @@ fn convert_and_query_surface_the_report_too() {
 /// a flag that quietly does nothing.
 #[test]
 fn report_without_entailment_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,

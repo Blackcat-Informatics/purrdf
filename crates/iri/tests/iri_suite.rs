@@ -8,7 +8,6 @@
 //! W3C `rdf-tests` IRI handling cases. The CURIE cases pin the semantics this crate
 //! subsumes from the SSSOM serializer (`sssom::curie_prefix`/`resolve_iri`).
 
-use pretty_assertions::assert_eq;
 use purrdf_iri::{PrefixMap, contract, curie_prefix, expand_curie, parse, parse_uri, resolve};
 
 #[test]

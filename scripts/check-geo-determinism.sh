@@ -12,23 +12,28 @@
 # failure mode the crate exists to prevent is exactly the one that produces no
 # symptom.
 #
-# So this script computes ONE number two ways:
-#   * natively, via `cargo run --example geo_digest`;
-#   * under wasm32-unknown-unknown, by building a one-function cdylib
-#     (crates/geo/determinism, excluded from the workspace) and calling its
-#     export from Node's WebAssembly host;
-# and fails unless they are equal to each other AND to the golden constant that
-# crates/geo/tests/determinism.rs pins natively.
+# So this script runs ONE test target, crates/geo/tests/determinism.rs, twice:
+#   * natively, under `cargo test`;
+#   * on wasm32-unknown-unknown, in Node, under the same cargo runner every
+#     wasm32 test uses (scripts/wasm-test-runner.sh).
+# The target is `harness = false` on the shared test runner, so both runs execute
+# the same named cases. Each case that computes the digest prints a
+# `determinism-digest case=<name> digest=<hex> corpus_len=<n>` line, and this
+# script fails unless both runs report the same named cases with the same digests,
+# every one of them equal to the golden constant the test file pins.
 #
 # The digest is folded over SERIALIZED BYTES — WKT and GeoJSON renderings, DE-9IM
 # matrix strings, exact decimal measures, and the IEEE bit patterns of the
 # xsd:double boundary — because byte identity of the answer a consumer sees is
 # the only claim that covers the coordinate lexical forms, the matrix renderings
-# and the double renderings at once. See crates/geo/src/determinism.rs.
+# and the double renderings at once. See crates/geo/src/determinism.rs. On wasm32
+# the digest is computed with every host clock and entropy source sealed, so a
+# digest that reached one fails by that source's name instead of agreeing by
+# accident.
 #
-# Not part of `make check`: it needs the wasm32 target and Node, and `make check`
-# must stay runnable without either. `make geo-determinism` runs it, and CI runs
-# it in the wasm job where both are already present.
+# Not part of `make check`: it needs the wasm32 target, the wasm-bindgen CLI and
+# Node, and `make check` must stay runnable without them. `make geo-determinism`
+# runs it, and CI runs it in the wasm job where all three are already present.
 
 set -euo pipefail
 
@@ -49,58 +54,18 @@ if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknow
 	exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# 1. The native digest.
-# ---------------------------------------------------------------------------
-native_output="$(cargo run --quiet --locked -p purrdf-geo --example geo_digest)"
-native_digest="$(printf '%s\n' "$native_output" | sed -n 's/^digest=//p')"
-native_corpus="$(printf '%s\n' "$native_output" | sed -n 's/^corpus_len=//p')"
-[ -n "$native_digest" ] || fail "the native example printed no digest"
-[ -n "$native_corpus" ] || fail "the native example printed no corpus length"
+if ! command -v wasm-bindgen >/dev/null 2>&1; then
+	if [ -n "${CI:-}" ]; then
+		fail "the wasm-bindgen CLI is absent in CI"
+	fi
+	echo "SKIP: the wasm-bindgen CLI is not on PATH — install wasm-bindgen-cli $(sed -n 's/^wasm-bindgen = "=\([0-9][0-9.]*\)"$/\1/p' Cargo.toml) to enable ('make doctor')"
+	exit 0
+fi
+
+runner="$PWD/scripts/wasm-test-runner.sh"
 
 # ---------------------------------------------------------------------------
-# 2. The wasm digest.
-#
-# The helper is OUTSIDE the workspace, so it is built from its own directory with
-# its own lock file. `--target-dir` keeps its artifacts out of the workspace's,
-# so a stale workspace build can never be mistaken for a fresh wasm one, and the
-# module folded is the one cargo reports it just wrote.
-# ---------------------------------------------------------------------------
-helper_dir="$PWD/crates/geo/determinism"
-# CARGO_TARGET_DIR may be absolute (shared caches usually are), so it cannot be
-# pasted after $PWD unconditionally — that would silently build into a nested
-# path inside the repo rather than the cache, and the freshness the separate
-# target directory buys would be lost.
-case "${CARGO_TARGET_DIR:-}" in
-/*) target_dir="$CARGO_TARGET_DIR/geo-determinism" ;;
-"") target_dir="$PWD/target/geo-determinism" ;;
-*) target_dir="$PWD/$CARGO_TARGET_DIR/geo-determinism" ;;
-esac
-mkdir -p "$target_dir"
-
-# The module's path is read from cargo's own `compiler-artifact` message, never
-# assumed from `--target-dir`: a cargo wrapper is entitled to place final artifacts
-# somewhere else, and then the assumed path is either empty or, worse, holds a stale
-# module from an earlier build that the digest would silently fold instead. The
-# module is copied out at once into a file this script owns.
-messages="$(cd "$helper_dir" && cargo build --quiet --release \
-	--target wasm32-unknown-unknown --target-dir "$target_dir" \
-	--message-format=json-render-diagnostics)" || fail "the wasm helper did not build"
-built="$(printf '%s\n' "$messages" | grep '"reason":"compiler-artifact"' |
-	sed -n 's/.*"\([^"]*\/purrdf_geo_determinism\.wasm\)".*/\1/p' | tail -n 1)"
-[ -n "$built" ] || fail "cargo reported no purrdf_geo_determinism.wasm artifact"
-[ -f "$built" ] || fail "cargo reported the wasm module at $built, which does not exist"
-wasm="$target_dir/purrdf_geo_determinism.wasm"
-cp "$built" "$wasm"
-
-wasm_output="$(node scripts/geo-determinism.mjs "$wasm")"
-
-wasm_digest="$(printf '%s\n' "$wasm_output" | sed -n 's/^digest=//p')"
-wasm_corpus="$(printf '%s\n' "$wasm_output" | sed -n 's/^corpus_len=//p')"
-[ -n "$wasm_digest" ] || fail "the wasm module printed no digest"
-
-# ---------------------------------------------------------------------------
-# 3. The golden, read from the test that pins it natively.
+# 1. The golden, read from the test that pins it.
 #
 # Read out of the test source rather than restated here, so the two cannot
 # diverge: there is exactly one copy of the constant in the tree.
@@ -109,30 +74,57 @@ golden_file="crates/geo/tests/determinism.rs"
 golden="$(sed -n 's/^const GOLDEN_DIGEST: u64 = 0x\([0-9a-f_]*\);.*/\1/p' "$golden_file" | tr -d '_')"
 [ -n "$golden" ] || fail "no GOLDEN_DIGEST constant found in $golden_file"
 
+# The `determinism-digest` lines a run printed, one per reporting case, sorted by
+# case name. A line may follow libtest's `test <name> ... ` on the same console
+# line, so the record is matched wherever it starts.
+digests() {
+	grep -o 'determinism-digest case=[A-Za-z0-9_]* digest=[0-9a-f]\{16\} corpus_len=[0-9]*' |
+		sed 's/^determinism-digest //' | sort
+}
+
 # ---------------------------------------------------------------------------
-# 4. Compare. All three, and a non-vacuity check on the corpus.
+# 2. Both runs. Each must pass on its own: every case asserts the golden.
 # ---------------------------------------------------------------------------
-echo "native   digest=$native_digest corpus_len=$native_corpus"
-echo "wasm32   digest=$wasm_digest corpus_len=$wasm_corpus"
+native_output="$(cargo test --locked -p purrdf-geo --test determinism)" ||
+	fail "the native determinism target failed"
+wasm_output="$(CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$runner" \
+	cargo test --locked --target wasm32-unknown-unknown -p purrdf-geo --test determinism)" ||
+	fail "the wasm32 determinism target failed"
+
+native="$(printf '%s\n' "$native_output" | digests)"
+wasm="$(printf '%s\n' "$wasm_output" | digests)"
+
+echo "native:"
+printf '%s\n' "$native" | sed 's/^/  /'
+echo "wasm32:"
+printf '%s\n' "$wasm" | sed 's/^/  /'
 echo "golden   digest=$golden"
 
-[ "$native_corpus" -ge 20 ] || fail "the corpus is too small to be worth hashing ($native_corpus members)"
-[ "$native_corpus" = "$wasm_corpus" ] ||
-	fail "the two targets folded different corpus sizes ($native_corpus vs $wasm_corpus)"
+# ---------------------------------------------------------------------------
+# 3. Compare, case by case, plus a non-vacuity check on the corpus.
+# ---------------------------------------------------------------------------
+[ -n "$native" ] || fail "the native run reported no digest"
+[ -n "$wasm" ] || fail "the wasm32 run reported no digest"
 
-if [ "$native_digest" != "$wasm_digest" ]; then
-	fail "NATIVE AND WASM DISAGREE: $native_digest vs $wasm_digest.
+if [ "$native" != "$wasm" ]; then
+	fail "NATIVE AND WASM DISAGREE:
+$(diff <(printf '%s\n' "$native") <(printf '%s\n' "$wasm") || true)
   purrdf-geo's determinism claim is that these are equal by construction, so a
   difference is a real defect, not a tolerance to widen. Look for floating-point
   arithmetic that escaped the crate root's deny(clippy::float_arithmetic), for a
   usize-width assumption, or for iteration over a hash map reaching an output."
 fi
 
-if [ "$native_digest" != "$golden" ]; then
-	fail "the digest moved: computed $native_digest, golden $golden.
+while read -r case digest corpus; do
+	digest="${digest#digest=}"
+	corpus="${corpus#corpus_len=}"
+	[ "$corpus" -ge 20 ] || fail "$case folded too small a corpus to be worth hashing ($corpus members)"
+	if [ "$digest" != "$golden" ]; then
+		fail "the digest moved: $case computed $digest, golden $golden.
   Both targets agree with each other, so this is a deliberate behaviour change
   rather than a portability defect. Update GOLDEN_DIGEST in $golden_file and say
   in the pull request WHICH output changed and why."
-fi
+	fi
+done <<<"$native"
 
-echo "OK: native and wasm32 digests are identical, and match the pinned golden"
+echo "OK: every named case reports the same digest natively and on wasm32, and it matches the pinned golden"

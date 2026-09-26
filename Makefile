@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -238,7 +238,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 25 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -278,7 +278,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -365,9 +365,12 @@ typescript-oracle: ## Compile emitted declarations with TypeScript 7.0 and compa
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/typescript_oracle.mjs
 
-graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and boon.
+graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and purrdf-jsonschema.
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/graphql_oracle.mjs
+
+jsonschema-pattern-oracle: node-prerequisite ## Re-ask JavaScript's RegExp for every frozen purrdf-jsonschema pattern verdict; fails if any answer moved.
+	node crates/jsonschema/tests/pattern_oracle.mjs
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
@@ -486,7 +489,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -534,10 +537,18 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	else \
 		echo "NOT installed — \`make wasm\` SKIPs; 'rustup target add wasm32-unknown-unknown'"; \
 	fi
-	@printf 'wasm-bindgen-test-runner:            '
-	@command -v wasm-bindgen-test-runner >/dev/null 2>&1 \
-		&& echo "on PATH — \`make wasm-test\` runs for real" \
-		|| echo "absent — \`make wasm-test\` SKIPs"
+	@printf 'wasm-bindgen CLI:                    '
+	@PIN=$$(sed -n 's/^wasm-bindgen = "=\([0-9][0-9.]*\)"$$/\1/p' Cargo.toml); \
+	if ! command -v wasm-bindgen >/dev/null 2>&1; then \
+		echo "absent — \`make wasm-test\`, \`make geo-determinism\` and \`make hnsw-determinism\` SKIP; install wasm-bindgen-cli $$PIN"; \
+	else \
+		FOUND=$$(wasm-bindgen --version | sed -n 's/^wasm-bindgen \([0-9][0-9.]*\).*$$/\1/p'); \
+		if [ "$$FOUND" = "$$PIN" ]; then \
+			echo "$$FOUND on PATH — the wasm32 test runner (scripts/wasm-test-runner.sh) runs for real"; \
+		else \
+			echo "$$FOUND on PATH, but Cargo.toml pins $$PIN — the wasm32 test runner refuses it; install wasm-bindgen-cli $$PIN"; \
+		fi; \
+	fi
 	@printf 'node:                                '
 	@command -v node >/dev/null 2>&1 && node --version || echo "absent — make check and make test FAIL; the wasm test harness SKIPs"
 	@printf 'cargo build directory:               '
@@ -545,6 +556,9 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	@echo
 	@echo "A SKIP is not a pass. In CI every line above is a hard failure instead."
 
+# Both determinism gates run their crate's `determinism` test target natively and on
+# wasm32 through the same cargo runner `make wasm-test` uses
+# (scripts/wasm-test-runner.sh), and compare the digest every named case reports.
 geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identical (own gate, NOT part of `check`).
 	bash scripts/check-geo-determinism.sh
 
@@ -579,7 +593,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# then FUSES those ranked lists: a fused score is a sum of truncated reciprocals,
 	@# and a last bit moved anywhere in that sum swaps two near-tied candidates, so the
 	@# composition needs the same executed proof its inputs do. So this lane
-	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
+	@# compiles the cross-target test targets to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
 	@#
@@ -589,8 +603,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# never hits and an `open` that refuses perfectly valid bytes. That row
 	@# compares the bytes wasm32 writes against the golden a native build committed.
 	@#
-	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
-	@# wasm lane already installs, so there is no second version to keep in step.
+	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
+	@# same named cases run natively under `cargo test` and here. Cargo hands each
+	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
+	@# bindings with the wasm-bindgen CLI (the exact version the root Cargo.toml
+	@# pins the library to, the one the wasm lane already installs) and runs it in
+	@# Node, reporting libtest's console lines and exit status. The runner is
+	@# observed first (scripts/check-wasm-test-runner.sh): a panicking case, a
+	@# refused flag and a sealed host clock read must each fail the run, beside a
+	@# neighbour that passes, before any result below is trusted.
 	@#
 	@# The kNN file runs twice: on the baseline build, and on a +simd128 build, where
 	@# LLVM packs the exact fold's sixteen lanes into f64x2 operations. Both assert the
@@ -618,39 +639,40 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		else \
 			echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 		fi; \
-	elif ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then \
-		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm-bindgen-test-runner absent in CI"; exit 1; fi; \
-		echo "SKIP: wasm-bindgen-test-runner not on PATH — install wasm-bindgen-cli $$(grep -oE 'wasm-bindgen = \"=[0-9.]+' Cargo.toml | cut -d= -f3) to enable"; \
+	elif ! command -v wasm-bindgen >/dev/null 2>&1; then \
+		if [ -n "$${CI:-}" ]; then echo "FAIL: the wasm-bindgen CLI is absent in CI"; exit 1; fi; \
+		echo "SKIP: the wasm-bindgen CLI is not on PATH — install wasm-bindgen-cli $$(sed -n 's/^wasm-bindgen = \"=\([0-9][0-9.]*\)\"$$/\1/p' Cargo.toml) to enable"; \
 	elif ! command -v node >/dev/null 2>&1; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: node absent in CI"; exit 1; fi; \
 		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
 	else \
-		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		bash scripts/check-wasm-test-runner.sh \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
 		&& env -u RUSTFLAGS \
-			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
 		&& env -u RUSTFLAGS \
-			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-retrieval --test wasm_determinism \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-json --test roundtrip \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-shapes --test product_wasm; \
 	fi

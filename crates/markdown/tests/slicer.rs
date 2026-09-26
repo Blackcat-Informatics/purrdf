@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
     derive_chunking_contract_id,

@@ -47,12 +47,10 @@ purrdf-cdt = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions = { workspace = true }
-# Property tests (lexer round-trips, parser robustness).
-proptest = { workspace = true }
-# Byte-unit AST snapshots for representative queries (repo golden convention).
-insta = { workspace = true }
+# Byte-exact golden files for the algebra snapshots, and the property harness
+# (lexer round-trips, parser robustness). Path-only and unpublished, so it is
+# stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Tokenizer hot-path baselines (dev-dep only).
 criterion = { workspace = true }
 # Text extraction for `tests/shipped_sparql_examples.rs` — the gate that pulls

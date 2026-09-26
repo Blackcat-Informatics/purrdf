@@ -43,6 +43,17 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else repo_root() / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def find_vendored_roots(root: Path) -> list[Path]:
     roots: list[Path] = []
     for area in SCAN_AREAS:
@@ -373,7 +384,7 @@ def self_test() -> int:
     #    diff, or published. In the change whose entire subject is not misrepresenting the
     #    offer. Every function here already takes `root` as a parameter, so no mutation was
     #    ever needed.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         (fixture / "scripts").mkdir()
         (fixture / "scripts" / "probe.py").write_text(
@@ -427,7 +438,7 @@ def self_test() -> int:
     #    all. All three shapes execute here.
     # IN A FIXTURE ROOT, for the same reason as case 2: this mutated the tracked
     # `crates/iri/README.md` and relied on a `finally` to put it back.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-readme-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-readme-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         crate = fixture / "crates" / "probe"
         crate.mkdir(parents=True)
@@ -480,7 +491,7 @@ def self_test() -> int:
     #    the reader at a FIXTURE manifest rather than by rewriting the real one. The first
     #    version wrote `license = "Zlib OR WTFPL"` into the root `Cargo.toml` and restored
     #    it in a `finally`; see case 2 for why that is not acceptable in a gate.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-expr-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-expr-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         (fixture / "Cargo.toml").write_text(
             '[workspace.package]\nlicense = "Zlib OR WTFPL"\n', encoding="utf-8"
@@ -500,7 +511,7 @@ def self_test() -> int:
             ok = False
 
     # 6. A literal-string license parses. `split('"')[1]` raised IndexError here.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-toml-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-toml-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         (fixture / "Cargo.toml").write_text(
             "[workspace.package]\nlicense = 'MIT OR Apache-2.0'\n", encoding="utf-8"

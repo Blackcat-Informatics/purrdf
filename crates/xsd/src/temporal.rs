@@ -346,18 +346,17 @@ impl Gregorian {
 /// (max `~9.2e18`) but is comfortably inside `i128::MAX` (`~1.7e38`) — over sixteen
 /// orders of magnitude of headroom, so no `i128` operation in this function is
 /// reachably close to its own overflow boundary and none of them are `checked_*`.
-/// This is the fix for a real, reachable defect (not a hypothetical one): the prior
-/// `i64` version's unchecked `era * 146_097` multiply wrapped silently in a release
-/// build and panicked in a debug/overflow-checks build for well-formed large-year
-/// input reachable straight from the public arithmetic surface — e.g.
-/// `"<huge-year>-01-01"^^xsd:date + "P1D"` (`op:add-dayTimeDuration-to-date`, via
-/// [`add_seconds_decimal`]) with no `gMonthDay`/duration exotica involved at all.
+/// An `i64` computation would wrap in a release build (and panic under overflow
+/// checks) for well-formed large-year input reachable from the public arithmetic
+/// surface, e.g. `"<huge-year>-01-01"^^xsd:date + "P1D"`
+/// (`op:add-dayTimeDuration-to-date`).
 ///
 /// Callers that need an `i64` (to populate a `DateTime`/`Date`/`Gregorian` field)
 /// narrow the *final* day-count arithmetic with a checked conversion at the point
 /// where it is actually used, so a result that is truly out of `i64` range is a
 /// typed `OutOfRange` error, never a silent wrap or a panic.
-fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
+#[must_use]
+pub fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
     let y = i128::from(y);
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
@@ -493,8 +492,10 @@ fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i
 /// Number of days in a given month for a proleptic-Gregorian year.
 /// Uses the signed year directly; negative years follow the same leap-year rule as
 /// positive ones (proleptic Gregorian: leap iff divisible by 4, except centuries
-/// unless also divisible by 400).
-fn days_in_month(year: i64, month: u8) -> u8 {
+/// unless also divisible by 400). A `month` outside 1..=12 answers `0`, which no
+/// day number satisfies, so a caller range-checking a day against it refuses.
+#[must_use]
+pub fn days_in_month(year: i64, month: u8) -> u8 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -3333,7 +3334,6 @@ impl Gregorian {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn datetime_parse_canonical_roundtrip() {

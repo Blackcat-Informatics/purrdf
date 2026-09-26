@@ -10,3 +10,12 @@ crates/rdf/tests/fixtures/obographs-0.3.2/README.upstream.md -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/pom.upstream.xml -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/obographs-schema.json -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff
+
+# Test goldens hold a serializer's exact bytes, CRLF record ends included (see
+# crates/testkit/src/golden.rs), so no end-of-line conversion applies.
+crates/*/tests/golden/** -text
+
+# The vendored JSON-Schema-Test-Suite and draft 2020-12 meta-schemas are frozen
+# by digest (scripts/check-corpus-frozen.py), so no end-of-line conversion applies.
+crates/jsonschema/tests/suite/** -text
+crates/jsonschema/metaschemas/** -text

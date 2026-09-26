@@ -713,16 +713,11 @@ mod tests {
         assert_eq!(a, BigInt::zero());
     }
 
-    /// A deterministic SplitMix64 counter stream for the float-conversion tests —
-    /// this zero-dependency crate carries no RNG, so the three-line mixer lives
-    /// here.
-    fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
+    // A deterministic SplitMix64 counter stream for the float-conversion
+    // tests — this zero-dependency crate ships no RNG; the workspace's
+    // shared test-only stream comes in through `purrdf-testkit`, a
+    // dev-dependency.
+    use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// The exact `BigInt` `Σ words[i] × 2^(64 i)`, negated when `negative`.
     fn from_words(words: &[u64], negative: bool) -> BigInt {

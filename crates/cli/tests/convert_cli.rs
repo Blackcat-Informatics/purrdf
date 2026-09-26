@@ -156,7 +156,7 @@ fn canonical(dir: &Path, from: &str, input: &str) -> Vec<u8> {
 /// with exit 0, non-empty output, and output RDFC-1.0-isomorphic to SEED A.
 #[test]
 fn matrix_seed_a_every_pair_is_isomorphic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_a = write_file(dir, "seedA.nq", SEED_A);
     let canon_a = canonical(dir, "nquads", &seed_a);
@@ -206,7 +206,7 @@ fn matrix_seed_a_every_pair_is_isomorphic() {
 /// (the whole dataset stays isomorphic).
 #[test]
 fn seed_b_named_graph_preserved_by_dataset_targets() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_b = write_file(dir, "seedB.nq", SEED_B);
     let canon_b = canonical(dir, "nquads", &seed_b);
@@ -234,7 +234,7 @@ fn seed_b_named_graph_preserved_by_dataset_targets() {
 /// (only the default-graph quad survives) and, under `--loss-ledger`, records the drop.
 #[test]
 fn seed_b_named_graph_projected_away_by_single_graph_targets() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_b = write_file(dir, "seedB.nq", SEED_B);
 
@@ -278,7 +278,7 @@ fn seed_b_named_graph_projected_away_by_single_graph_targets() {
 /// target (isomorphism holds, so the reifier + annotation survive).
 #[test]
 fn seed_c_statement_layer_roundtrips_star_capable_targets() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_c = write_file(dir, "seedC.nq", SEED_C);
     let canon_c = canonical(dir, "nquads", &seed_c);
@@ -334,7 +334,7 @@ fn expanded_jsonld_and_yamlld_cli_bytes_are_frozen() {
         "    '@value': Alice\n",
     );
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "baseline.nq", INPUT);
     for (format, expected) in [("jsonld", JSONLD), ("yamlld", YAMLLD)] {
         let output = path(dir.path(), &format!("baseline.{format}"));
@@ -352,7 +352,7 @@ fn expanded_jsonld_and_yamlld_cli_bytes_are_frozen() {
 
 #[test]
 fn configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let input = write_file(
         dir,
@@ -570,7 +570,7 @@ fn configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema() {
 
 #[test]
 fn jsonld_options_file_is_rejected_at_the_shared_byte_ceiling() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "input.nq", SEED_A);
     let options = path(dir.path(), "oversized-options.json");
     let limit = JsonLdContextLimits::default().max_options_bytes();
@@ -601,7 +601,7 @@ fn jsonld_options_file_is_rejected_at_the_shared_byte_ceiling() {
 /// the CLI's serialization path — see the module docs.)
 #[test]
 fn seed_c_statement_layer_projected_by_star_incapable_targets() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_c = write_file(dir, "seedC.nq", SEED_C);
 
@@ -645,7 +645,7 @@ fn seed_c_statement_layer_projected_by_star_incapable_targets() {
 /// language slot but no direction surface). Documents the real per-format behavior.
 #[test]
 fn directional_literal_per_format_behavior() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -694,7 +694,7 @@ fn directional_literal_per_format_behavior() {
 /// [`directional_literal_per_format_behavior`], which pins the emitted bytes.
 #[test]
 fn directional_literal_drop_recorded_in_loss_ledger() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
         dir,
@@ -763,7 +763,7 @@ fn directional_literal_drop_recorded_in_loss_ledger() {
 /// An extensionless input with explicit `--from`/`--to` converts correctly.
 #[test]
 fn explicit_formats_on_extensionless_input() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA_no_ext", SEED_A);
     let out = path(dir, "out.ttl");
@@ -783,7 +783,7 @@ fn explicit_formats_on_extensionless_input() {
 /// An extensionless input with NO `--from` is unresolvable — a usage error (exit 2).
 #[test]
 fn extensionless_input_without_from_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA_no_ext", SEED_A);
     let out = path(dir, "out.ttl");
@@ -799,7 +799,7 @@ fn extensionless_input_without_from_is_a_usage_error() {
 /// actually holds Turtle, and a `.nt` file that actually holds N-Quads, both convert.
 #[test]
 fn explicit_from_overrides_a_misleading_extension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     // A `.txt` file that is really Turtle.
@@ -849,7 +849,7 @@ fn stdin_to_stdout_with_explicit_formats() {
 /// identically).
 #[test]
 fn text_via_pack_equals_direct_text() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
 
@@ -889,7 +889,7 @@ fn text_via_pack_equals_direct_text() {
 /// serialization path.
 #[test]
 fn pack_to_trig_equals_direct_dataset_to_trig() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedB.nq", SEED_B);
 
@@ -930,7 +930,7 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
 /// `crates/cli/src/source.rs::verified_pack_mmap`).
 #[test]
 fn disk_pack_to_pack_is_byte_identical_passthrough() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
 
@@ -965,7 +965,7 @@ fn disk_pack_to_pack_is_byte_identical_passthrough() {
 /// bytes are written to the output.
 #[test]
 fn disk_pack_to_pack_corrupt_input_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
     let out = path(dir, "out.purrpck");
@@ -989,7 +989,7 @@ fn disk_pack_to_pack_corrupt_input_fails_closed() {
 /// triple present and the exact count preserved (correctness at volume, not zero-copy).
 #[test]
 fn large_ntriples_ingress_preserves_every_triple() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     let mut big = String::new();
@@ -1024,7 +1024,7 @@ fn large_ntriples_ingress_preserves_every_triple() {
 /// different serializations of the same data canonicalize to the same bytes).
 #[test]
 fn canonical_output_is_stable_and_serialization_independent() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_nq = write_file(dir, "seedA.nq", SEED_A);
 
@@ -1067,7 +1067,7 @@ fn canonical_output_is_stable_and_serialization_independent() {
 /// A plain conversion run twice is byte-identical: the serializers are deterministic.
 #[test]
 fn conversion_is_deterministic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let a = path(dir, "a.trig");
@@ -1092,7 +1092,7 @@ fn conversion_is_deterministic() {
 /// `--base` resolves relative IRIs in the input against the supplied base while parsing.
 #[test]
 fn base_resolves_relative_iris_on_parse() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     // Turtle with a relative IRI subject/object, resolved against `--base`.
     let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> <other> .\n");
@@ -1131,7 +1131,7 @@ fn base_resolves_relative_iris_on_parse() {
 /// graph, which is only possible if the document carries its own base.
 #[test]
 fn base_relativizes_on_serialize_and_the_document_round_trips_through_its_own_base() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> <other> .\n");
 
@@ -1208,7 +1208,7 @@ fn base_relativizes_on_serialize_and_the_document_round_trips_through_its_own_ba
 /// the ingress half, which is the whole reason the operator passed `--base`.
 #[test]
 fn base_with_a_base_less_target_succeeds_and_emits_absolute_iris() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> <other> .\n");
     let out = path(dir, "absolute.nt");
@@ -1247,7 +1247,7 @@ fn base_with_a_base_less_target_succeeds_and_emits_absolute_iris() {
 /// transform lane) — refused by name instead, naming `--rules` in the message.
 #[test]
 fn rules_without_entailment_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
     let rules = write_file(dir, "unused.rif", "<rdf:RDF xmlns:rdf=\"x\"></rdf:RDF>");
@@ -1275,7 +1275,7 @@ fn rules_without_entailment_is_refused_by_name() {
 /// the base they are handed. Refused by name instead of accepted and ignored.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
     let pack = path(dir, "seedA.purrpck");
@@ -1315,7 +1315,7 @@ fn base_with_pack_from_is_refused_by_name() {
 /// N-Triples source, so neither leg can spend the base either way round.
 #[test]
 fn base_with_pack_to_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
     let out = path(dir, "out.purrpck");
@@ -1346,7 +1346,7 @@ fn base_with_pack_to_is_refused_by_name() {
 /// that is ABSENT without the flag — from a TEXT input.
 #[test]
 fn entailment_rdfs_infers_type_from_text_input() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -1408,7 +1408,7 @@ fn entailment_rdfs_infers_type_from_text_input() {
 /// same inferred triple (the reconstruct-then-entail path).
 #[test]
 fn entailment_rdfs_infers_type_from_pack_input() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -1458,7 +1458,7 @@ fn entailment_rdfs_infers_type_from_pack_input() {
 /// containing the inferred triple.
 #[test]
 fn entailment_then_canonical_composes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -1524,7 +1524,7 @@ fn entailment_then_canonical_composes() {
 /// replaced, in a quieter form.
 #[test]
 fn every_entailment_regime_materializes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let rules = write_file(dir, "seedA.rif", RIF_RULES);
@@ -1573,7 +1573,7 @@ fn every_entailment_regime_materializes() {
 /// this fail with a nonzero `PIPESTATUS[0]` and a "Broken pipe" stderr message.
 #[test]
 fn stdout_broken_pipe_exits_clean() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     // A big-enough N-Triples source (well past the OS pipe buffer, typically 64 KiB
@@ -1623,7 +1623,7 @@ fn stdout_broken_pipe_exits_clean() {
 /// `--canonical`).
 #[test]
 fn canonical_with_to_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.canon");
@@ -1650,7 +1650,7 @@ fn canonical_with_to_is_refused_by_name() {
 /// omitted, since canonical output is always N-Quads.
 #[test]
 fn canonical_without_to_emits_canonical_nquads() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.canon");
@@ -1686,7 +1686,7 @@ fn canonical_without_to_emits_canonical_nquads() {
 /// would take the whole process down over a caller-supplied document.
 #[test]
 fn canonical_refuses_reserved_vocabulary_without_aborting() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     const RESERVED_VOCAB_NQUADS: &str = concat!(
         "<http://example.org/s> <http://example.org/p> ",
@@ -1742,7 +1742,7 @@ fn retrieval_iri(path: &str) -> String {
 /// file's own `file://` IRI, so the reporter's exact command now succeeds.
 #[test]
 fn empty_iri_reference_from_a_file_resolves_to_the_files_own_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "empty-subject.ttl",
@@ -1825,7 +1825,7 @@ fn a_base_in_scope_still_resolves_the_same_reference() {
     );
 
     // 2. Derived from the input file's own retrieval IRI, with no flag at all.
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "rel.ttl",
@@ -1851,7 +1851,7 @@ fn a_base_in_scope_still_resolves_the_same_reference() {
 /// base is valid even when the OUTPUT format cannot express one (N-Triples cannot).
 #[test]
 fn an_explicit_base_wins_over_the_derived_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "empty-subject.ttl",
@@ -1880,7 +1880,7 @@ fn an_explicit_base_wins_over_the_derived_retrieval_iri() {
 /// emitted as invalid N-Triples.
 #[test]
 fn a_relative_reference_from_a_file_resolves_rather_than_emitting_invalid_ntriples() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "rel.ttl",
@@ -1911,7 +1911,7 @@ fn a_relative_reference_from_a_file_resolves_rather_than_emitting_invalid_ntripl
 /// every relative reference in the document.
 #[test]
 fn a_path_with_reserved_and_non_ascii_bytes_derives_an_encoded_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let awkward = dir.path().join("a b#c?d%e\u{e9}");
     std::fs::create_dir(&awkward).expect("create the awkward directory");
     let input = write_file(
@@ -1951,7 +1951,7 @@ fn a_path_with_reserved_and_non_ascii_bytes_derives_an_encoded_retrieval_iri() {
 /// query or fragment delimiter.
 #[test]
 fn a_relative_reference_resolves_against_an_encoded_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let awkward = dir.path().join("q?r#s t");
     std::fs::create_dir(&awkward).expect("create the awkward directory");
     let input = write_file(&awkward, "rel.ttl", "<foo> a <http://example.org/t> .\n");
@@ -1974,7 +1974,7 @@ fn a_relative_reference_resolves_against_an_encoded_retrieval_iri() {
 /// carries both a query and a fragment.
 #[test]
 fn rfc3986_reference_corners_resolve_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let cases: &[(&str, &str)] = &[
         // The empty reference keeps the base's query and drops its fragment.
         ("", "http://example.org/d?q=1"),
@@ -2012,7 +2012,7 @@ fn rfc3986_reference_corners_resolve_through_the_cli() {
 /// not a codec diagnostic from somewhere that no longer knows where the value came from.
 #[test]
 fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "d.ttl", "<> a <http://example.org/test> .\n");
 
     let out = run(&[
@@ -2051,7 +2051,7 @@ fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
 fn base_is_refused_exactly_when_neither_leg_can_consume_it() {
     use purrdf_rdf::NativeRdfFormat;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_a = write_file(dir, "seedA.nq", SEED_A);
     // One valid document per source syntax, so an ACCEPTED pair runs to completion and the
@@ -2127,7 +2127,7 @@ fn base_is_refused_exactly_when_neither_leg_can_consume_it() {
 /// nowhere to go on that lane either.
 #[test]
 fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.canon");
@@ -2252,7 +2252,7 @@ fn streams(token: &str) -> bool {
 /// test of the wording: without it, a message that hardcoded either half would pass.
 #[test]
 fn an_absolute_only_refusal_names_the_base_the_caller_supplied() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     for (token, name, text) in ABSOLUTE_ONLY_RELATIVE_SUBJECT {
@@ -2326,7 +2326,7 @@ fn an_absolute_only_refusal_names_the_base_the_caller_supplied() {
 /// for byte.
 #[test]
 fn the_streamed_and_buffered_lanes_word_the_refusal_identically() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     let mut streamed = Vec::new();
@@ -2404,7 +2404,7 @@ fn the_streamed_and_buffered_lanes_word_the_refusal_identically() {
 /// reaching the diagnostic, which is a fact about this binary that no library test can pin.
 #[test]
 fn an_rdfxml_qualified_name_refusal_names_whichever_base_is_in_scope() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let text = concat!(
         "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
@@ -2482,7 +2482,7 @@ fn run_in(cwd: &Path, args: &[&str]) -> Output {
 /// directory at the filesystem root that has nothing to do with the operator's tree.
 #[test]
 fn the_base_hint_for_a_dot_relative_value_names_the_directory_that_was_written() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
     std::fs::create_dir(root.join("vocab")).expect("create ./vocab");
     std::fs::create_dir(root.join("work")).expect("create ./work");
@@ -2517,7 +2517,7 @@ fn the_base_hint_for_a_dot_relative_value_names_the_directory_that_was_written()
 /// cannot place, and inventing one is the defect this hint had.
 #[test]
 fn an_unresolvable_dot_relative_base_is_given_the_rule_and_no_invented_path() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
 
     let out = run_in(&root, &["convert", "--base", "./no/such/dir/", "-"]);
@@ -2556,7 +2556,7 @@ fn the_base_hint_for_an_absolute_path_is_derived_and_encoded() {
 /// take, so the partial file is removed and the message says so.
 #[test]
 fn file_target_partial_output_is_removed_on_failure() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let source = dir.path().join("in.nt");
     // Many good rows, then a literal carrying U+FFFF — a scalar XML 1.0 cannot
     // represent even by character reference. The refusal therefore fires PART WAY
@@ -2611,7 +2611,7 @@ fn file_target_partial_output_is_removed_on_failure() {
 #[cfg(unix)]
 #[test]
 fn file_target_symlink_is_not_unlinked() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let source = dir.path().join("in.nt");
     // The same mid-document refusal the control uses: many good rows, then a
     // literal carrying U+FFFF, which XML 1.0 cannot represent by any escape. The
@@ -2669,7 +2669,7 @@ fn file_target_symlink_is_not_unlinked() {
 /// `fs::write` gave this for free; streaming has to keep it.
 #[test]
 fn file_target_overwrite_truncates() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let source = dir.path().join("in.nt");
     std::fs::write(
         &source,

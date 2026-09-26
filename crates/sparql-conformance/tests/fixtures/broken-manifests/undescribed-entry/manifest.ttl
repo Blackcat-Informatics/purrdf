@@ -8,9 +8,8 @@
 # manifest.rs`, around the `list_entry_iris`/`missing` logic).
 #
 # Deliberately placed OUTSIDE `suite/`: `crates/sparql-conformance/tests/
-# sparql_conformance.rs`'s `datatest_stable::harness!` only discovers
-# `suite/**/manifest.ttl`, so this file is never picked up as a live
-# conformance case — it exists ONLY to be fed to `manifest::load` directly by
+# sparql_conformance.rs` only discovers `suite/**/manifest.ttl`, so this file
+# is never picked up as a live conformance case — it exists ONLY to be fed to `manifest::load` directly by
 # `crates/sparql-conformance/tests/suite_inventory.rs`'s
 # `broken_manifest_with_an_undescribed_entry_is_rejected` test, proving the
 # guard actually fires rather than merely existing unexercised.

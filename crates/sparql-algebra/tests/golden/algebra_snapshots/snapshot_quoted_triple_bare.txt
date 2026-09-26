@@ -1,0 +1,49 @@
+Select {
+    pattern: Project {
+        inner: Bgp {
+            patterns: [
+                TriplePattern {
+                    subject: BlankNode(
+                        _:__purrdf_anon_0,
+                    ),
+                    predicate: NamedNode(
+                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>,
+                    ),
+                    object: Triple(
+                        TriplePattern {
+                            subject: Variable(
+                                ?s,
+                            ),
+                            predicate: NamedNode(
+                                <https://x/p>,
+                            ),
+                            object: Variable(
+                                ?o,
+                            ),
+                        },
+                    ),
+                },
+                TriplePattern {
+                    subject: Variable(
+                        ?r,
+                    ),
+                    predicate: NamedNode(
+                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>,
+                    ),
+                    object: BlankNode(
+                        _:__purrdf_anon_0,
+                    ),
+                },
+            ],
+        },
+        variables: [
+            ?r,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+    version: None,
+}

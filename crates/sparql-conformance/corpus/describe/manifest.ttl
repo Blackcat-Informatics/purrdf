@@ -14,7 +14,7 @@
 # / bound variable / `*`), and the fact that a non-IRI binding describes nothing.
 #
 # Run by `crates/sparql-conformance/tests/describe_corpus.rs`, NOT by the
-# datatest harness (which is rooted at `suite/`), so this corpus reports its own
+# `sparql_conformance` harness (which is rooted at `suite/`), so this corpus reports its own
 # row in the conformance matrix.
 
 @prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .

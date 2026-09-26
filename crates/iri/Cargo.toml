@@ -30,10 +30,10 @@ path = "src/lib.rs"
 name = "purrdf_iri"
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
-pretty_assertions = { workspace = true }
-# Round-trip / idempotency property tests (parse -> serialize, normalize twice).
-proptest = { workspace = true }
+# Round-trip / idempotency property tests (parse -> serialize, normalize twice)
+# on the shared property harness. Path-only and unpublished, so it is stripped
+# from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Parse hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
 # `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
 # breach the crate's zero-runtime-dependency contract.

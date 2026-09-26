@@ -107,7 +107,7 @@ fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
 /// neighbours would pass every trip test and still be wrong.
 #[test]
 fn every_governor_flag_reaches_the_engines_ceiling_vector() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let out = run(&[
         "query",
@@ -164,7 +164,7 @@ fn every_governor_flag_reaches_the_engines_ceiling_vector() {
 /// different label on purpose: nothing ran, so nothing was consumed.
 #[test]
 fn each_numeric_ceiling_trips_under_its_own_governor() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let scratch_query =
         "SELECT (CONCAT(STR(?o), \"!\") AS ?x) WHERE { ?s <http://example.org/knows> ?o }";
@@ -207,7 +207,7 @@ fn each_numeric_ceiling_trips_under_its_own_governor() {
 /// normally, which is what proves the flag is not simply always tripping.
 #[test]
 fn a_deadline_stops_the_query_and_names_the_stop_cause() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let expired = run(&["query", "--data", &ttl, "--deadline", "0ms", KNOWS]);
@@ -235,7 +235,7 @@ fn a_deadline_stops_the_query_and_names_the_stop_cause() {
 
 #[test]
 fn a_nonzero_deadline_stops_work_inside_the_final_operator() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
     for index in 0..120 {
         writeln!(&mut ttl, "ex:s{index} ex:p ex:o{index} .")
@@ -262,7 +262,7 @@ fn a_nonzero_deadline_stops_work_inside_the_final_operator() {
 /// the spelling. Exit 2, the usage code, because the command line is what is wrong.
 #[test]
 fn a_deadline_without_a_unit_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     for spelling in ["30", "30x", "1m30"] {
         let out = run(&["query", "--data", &ttl, "--deadline", spelling, KNOWS]);
@@ -282,7 +282,7 @@ fn a_deadline_without_a_unit_is_a_usage_error() {
 /// hand-written expectation — a check that cannot pass by accident and cannot drift.
 #[test]
 fn a_trip_exits_3_and_prints_the_certified_partial_answers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let whole = run(&["query", "--data", &ttl, "--results-format", "tsv", KNOWS]);
@@ -334,7 +334,7 @@ fn a_trip_exits_3_and_prints_the_certified_partial_answers() {
 /// the stream (or require inventing a non-W3C extension to four serializations).
 #[test]
 fn a_partial_answer_does_not_corrupt_the_machine_readable_stream() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let capped = |format: &str| {
         run(&[
@@ -406,7 +406,7 @@ fn a_partial_answer_does_not_corrupt_the_machine_readable_stream() {
 /// turned a partial result into no result — is on stderr.
 #[test]
 fn withheld_answers_print_no_rows_and_name_the_barrier() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let out = run(&[
         "query",
@@ -439,7 +439,7 @@ fn withheld_answers_print_no_rows_and_name_the_barrier() {
 /// nobody set.
 #[test]
 fn a_complete_governed_run_exits_0_and_answers_identically() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let ungoverned = run(&["query", "--data", &ttl, "--results-format", "json", KNOWS]);
     assert_eq!(code(&ungoverned), 0, "stderr:\n{}", stderr(&ungoverned));
@@ -480,7 +480,7 @@ fn a_complete_governed_run_exits_0_and_answers_identically() {
 /// and no governor vocabulary anywhere.
 #[test]
 fn an_ungoverned_invocation_is_unchanged() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let out = run(&["query", "--data", &ttl, "--results-format", "tsv", KNOWS]);
     assert_eq!(code(&out), 0, "stderr:\n{}", stderr(&out));
@@ -501,7 +501,7 @@ fn an_ungoverned_invocation_is_unchanged() {
 /// that is stably empty from passing a stability test.
 #[test]
 fn explain_renders_the_ledger_and_is_byte_identical_across_runs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o . \
                  ?s <http://example.org/name> ?n }";
@@ -557,7 +557,7 @@ fn explain_renders_the_ledger_and_is_byte_identical_across_runs() {
 /// address leakage, hash-iteration-order dependence, etc.) into the rendered charge ledger.
 #[test]
 fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let trig = write_file(
         dir.path(),
         "data.trig",
@@ -607,7 +607,7 @@ fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
 /// test's assertions directly against `expected/exists-inner-counters.charges`.
 #[test]
 fn exists_counters_render_in_cli_explain() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(
         dir.path(),
         "data.ttl",
@@ -682,7 +682,7 @@ fn exists_counters_render_in_cli_explain() {
 /// exercised as a WORKING one by the tests below rather than pinned as a refusal here.
 #[test]
 fn unenforceable_flag_combinations_are_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let explain_and_ceiling = run(&["query", "--data", &ttl, "--explain", "--fuel", "100", KNOWS]);
@@ -719,7 +719,7 @@ fn unenforceable_flag_combinations_are_refused_by_name() {
 /// triples and re-types every term, so a scan over it costs far more than one charge.
 #[test]
 fn an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let out = run(&[
@@ -751,7 +751,7 @@ fn an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three() {
 /// governor doing its job rather than the entailment lane having broken.
 #[test]
 fn an_ungoverned_entailment_query_is_unchanged() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let out = run(&[
@@ -797,7 +797,7 @@ fn an_ungoverned_entailment_query_is_unchanged() {
 /// the raw view or against nothing.
 #[test]
 fn an_answer_cap_cuts_a_query_over_an_entailed_closure() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let out = run(&[
@@ -837,7 +837,7 @@ fn an_answer_cap_cuts_a_query_over_an_entailed_closure() {
 /// expensive half.
 #[test]
 fn an_expired_deadline_stops_the_closure_and_claims_nothing() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
 
     let out = run(&[
@@ -871,7 +871,7 @@ fn an_expired_deadline_stops_the_closure_and_claims_nothing() {
 /// over base triples.
 #[test]
 fn a_reifier_query_certifies_its_partial_rows() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "star.ttl", STAR_TTL);
 
     let whole = run(&[
@@ -919,7 +919,7 @@ fn a_reifier_query_certifies_its_partial_rows() {
 /// governor that governs nothing this denomination exists to prevent.
 #[test]
 fn construct_answer_cap_counts_rdf12_statements_not_solution_rows() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "star.ttl", STAR_TTL);
     let construct = "CONSTRUCT { ?s <http://example.org/friend> ?o \
                      {| <http://example.org/via> \"star\" |} } \
@@ -983,7 +983,7 @@ fn construct_answer_cap_counts_rdf12_statements_not_solution_rows() {
 /// report are byte-identical to the text source's.
 #[test]
 fn a_governed_query_over_a_pack_trips_identically() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let pack = write_file(dir, "data.purrpck", "");
@@ -1017,7 +1017,7 @@ fn a_governed_query_over_a_pack_trips_identically() {
 /// frozen corpus can pin rather than merely something a human can read.
 #[test]
 fn the_governor_report_is_byte_identical_across_runs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
     let capped = || {
         run(&[

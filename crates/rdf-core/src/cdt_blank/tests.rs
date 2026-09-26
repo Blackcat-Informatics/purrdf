@@ -12,8 +12,6 @@ use super::{
 use crate::blank_label::{LabelAlphabet, encode_blank_label};
 use crate::ir::term::BlankScope;
 
-use pretty_assertions::assert_eq;
-
 const LIST: &str = purrdf_cdt::CDT_LIST;
 const MAP: &str = purrdf_cdt::CDT_MAP;
 

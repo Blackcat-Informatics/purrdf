@@ -38,7 +38,6 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
     ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer,

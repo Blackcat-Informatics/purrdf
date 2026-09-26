@@ -3146,15 +3146,15 @@ mod tests {
         assert!(cursor.next().is_none());
     }
 
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
-    proptest! {
+    prop_test! {
         /// Build → freeze a random *valid* dataset (IRI subjects/predicates/objects
         /// over a small pool, with optional named graphs), then assert:
         /// - `quads().count()` equals the number of DISTINCT quads pushed (C0.5);
         /// - every yielded `TermId` is in range (`< term_count()`).
         #[test]
-        fn proptest_freeze_quads_count_and_in_range(
+        fn property_freeze_quads_count_and_in_range(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3200,7 +3200,7 @@ mod tests {
         /// GraphMatch` shape. The index only narrows candidates; the residual filter is
         /// the same predicate the scan applies, so any divergence is a range-math bug.
         #[test]
-        fn proptest_indexed_pattern_matches_linear_scan(
+        fn property_indexed_pattern_matches_linear_scan(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3262,7 +3262,7 @@ mod tests {
         /// residual filter can only over-count, never under-count, and never exceeds
         /// the table size.
         #[test]
-        fn proptest_cardinality_estimate_upper_bounds_count(
+        fn property_cardinality_estimate_upper_bounds_count(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3308,7 +3308,7 @@ mod tests {
         /// into the read-path selectivity-guard fallback (which returns the whole-table
         /// size for a low-selectivity prefix).
         #[test]
-        fn proptest_cardinality_estimate_exact_on_index_prefix(
+        fn property_cardinality_estimate_exact_on_index_prefix(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 1..48,
@@ -3857,7 +3857,7 @@ mod tests {
     #[test]
     fn chunked_scan_filter_matches_per_row_filter() {
         let mut state = 0x0DA7_A5E7_u64;
-        let mut next = move |bound: u64| crate::test_rng::splitmix64_next(&mut state) % bound;
+        let mut next = move |bound: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % bound;
         let mut sequential = 0_usize;
         let mut permuted = 0_usize;
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {

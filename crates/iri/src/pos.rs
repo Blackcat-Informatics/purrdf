@@ -116,8 +116,7 @@ impl LineIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     #[test]
     fn empty_source_is_line_one_column_one() {
@@ -189,11 +188,11 @@ mod tests {
         );
     }
 
-    proptest! {
+    prop_test! {
         // `locate` is monotonic in byte offset: a larger offset never resolves to
         // an earlier position (line, then column, then byte_offset ordering).
         #[test]
-        fn locate_is_monotonic(src in ".{0,200}", a in 0usize..256, b in 0usize..256) {
+        fn locate_is_monotonic(src in prop::string::regex(".{0,200}"), a in 0usize..256, b in 0usize..256) {
             let idx = LineIndex::new(&src);
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             let pa = idx.locate(&src, lo);
@@ -203,7 +202,7 @@ mod tests {
 
         // Never panics and always yields 1-based coordinates for any offset.
         #[test]
-        fn locate_never_panics_and_is_one_based(src in ".{0,200}", off in 0usize..1024) {
+        fn locate_never_panics_and_is_one_based(src in prop::string::regex(".{0,200}"), off in 0usize..1024) {
             let idx = LineIndex::new(&src);
             let p = idx.locate(&src, off);
             prop_assert!(p.line >= 1);

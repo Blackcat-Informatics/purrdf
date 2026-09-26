@@ -39,8 +39,10 @@ from pathlib import Path
 # 489-row upstream `census.tsv`) the OWL 2 RL row grades against, the vendored
 # W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
 # N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
-# language-tag and base-direction negative vector lives — and the vendored W3C
-# SPARQL 1.1 and 1.2 suites the conformance matrix grades against — all declared
+# language-tag and base-direction negative vector lives — the vendored W3C
+# SPARQL 1.1 and 1.2 suites the conformance matrix grades against, and the
+# official JSON-Schema-Test-Suite and the draft 2020-12, 2019-09 and draft-07
+# meta-schemas that `purrdf-jsonschema` is graded against and compiles in — all declared
 # byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
@@ -84,6 +86,12 @@ GUARDED_ROOTS: dict[str, str] = {
     ),
     "crates/rdf/tests/corpus/w3c": (
         "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
+    ),
+    "crates/jsonschema/tests/suite": (
+        "scripts/conformance-frozen/jsonschema-suite.sha256"
+    ),
+    "crates/jsonschema/metaschemas": (
+        "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
     ),
 }
 

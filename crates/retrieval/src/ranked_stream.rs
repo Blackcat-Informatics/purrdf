@@ -626,12 +626,11 @@ pub enum ProducerReceipt {
 /// Every variant names the exact dimension that failed. The fusion engine
 /// returns these unchanged; it never repairs a malformed stream into a
 /// plausible order.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProtocolError {
     /// A rank arrived below the next expected rank — a producer that went
     /// backwards.
-    #[error("stream rank went backwards: expected {expected}, got {got}")]
     OutOfOrderRanks {
         /// The rank fusion expected next.
         expected: u64,
@@ -641,7 +640,6 @@ pub enum ProtocolError {
 
     /// A rank arrived above the next expected rank — a producer that skipped
     /// ranks.
-    #[error("stream ranks are not contiguous: skipped {gap} rank(s)")]
     NonContiguousRanks {
         /// How many ranks were skipped.
         gap: u64,
@@ -677,7 +675,6 @@ pub enum ProtocolError {
     /// that stratum's ranks are not trustworthy — and can act on neither half
     /// alone: the item alone does not say which of five strata to go and fix,
     /// and the stratum alone does not say which of its rows to look at.
-    #[error("stream for stratum {stratum} emitted item {item:?} more than once")]
     DuplicateItem {
         /// The repeated item's canonical text.
         item: String,
@@ -727,10 +724,6 @@ pub enum ProtocolError {
     /// applied, put the candidate out of this one's reach. Without the third a
     /// reader sees a producer refused for naming one of its own documents and
     /// has no way to find the declaration it collided with.
-    #[error(
-        "stream for stratum {stratum} named item {item:?}, which its declared candidate domains \
-         cannot reach; stratum {named_by} already named it"
-    )]
     OutsideDeclaredDomain {
         /// The candidate's canonical text.
         item: String,
@@ -783,10 +776,6 @@ pub enum ProtocolError {
     /// was measured, and it is not always the first: a stream may back its
     /// declaration for a hundred rows and then stop, and a refusal that named no
     /// rank would send a reader to row one.
-    #[error(
-        "stream for stratum {stratum} restricted its candidates to {declared:?} but the row at \
-         rank {rank} names no block, so nothing backs that restriction"
-    )]
     UnbackedDomainDeclaration {
         /// The stratum whose stream emitted the blockless row, exactly as that
         /// stream was tagged when it was handed to fusion.
@@ -822,10 +811,6 @@ pub enum ProtocolError {
     /// two are the contradiction itself and neither half states it: a reader
     /// holding only the named block cannot see which set it fell outside, and a
     /// reader holding only the set cannot see what arrived.
-    #[error(
-        "stream for stratum {stratum} named item {item:?} in block {block}, which its declared \
-         domains {declared:?} do not include"
-    )]
     BlockOutsideDeclaredDomain {
         /// The candidate's canonical text.
         item: String,
@@ -874,11 +859,6 @@ pub enum ProtocolError {
     /// sees two strata that both legitimately hold the candidate and no reason
     /// they were refused. None of the five is derivable from the others, and no
     /// subset makes the report actionable.
-    #[error(
-        "streams for strata {stratum} and {named_by} name item {item:?} from two different \
-         blocks, {block} and {named_by_block}: a candidate lies in exactly one block, so this \
-         tagging cannot be true"
-    )]
     CandidateInTwoBlocks {
         /// The candidate's canonical text.
         item: String,
@@ -928,7 +908,6 @@ pub enum ProtocolError {
     /// deterministic there — the declared tie-break is total — at a lower rank
     /// resolution, which the fused trailer reports per stratum rather than
     /// refusing.
-    #[error("stream contribution {got:?} does not match the profile's {expected:?}")]
     ContributionMismatch {
         /// The value the profile computes for the stratum and rank.
         expected: Fixed,
@@ -939,7 +918,6 @@ pub enum ProtocolError {
     /// A producer supplied a terminal receipt that contradicts what it emitted
     /// — declaring fewer rows than were pulled, or claiming it emitted none
     /// after it emitted some.
-    #[error("producer receipt is inconsistent: declared {declared}, actually emitted {actual}")]
     ForgedReceipt {
         /// The row count the receipt declared (zero for the zero-row statuses).
         declared: u64,
@@ -950,7 +928,6 @@ pub enum ProtocolError {
     /// A producer failed after it had already emitted rows. A clean
     /// [`ProducerReceipt`] cannot follow rows; this is the only honest way to
     /// report a mid-stream failure.
-    #[error("producer failed after emitting {rows_before} row(s)")]
     ErrorAfterRows {
         /// How many rows the producer emitted before failing.
         rows_before: u64,
@@ -958,7 +935,6 @@ pub enum ProtocolError {
 
     /// A producer did not terminate within its declared contribution budget.
     /// The producer reports this itself; fusion never invents an end for it.
-    #[error("producer did not terminate")]
     NeverEndingSource,
 
     /// A row's contribution could not be formed at all, so the producer has no
@@ -980,7 +956,6 @@ pub enum ProtocolError {
     /// on a library path a caller reaches with its own stream, and a wrong
     /// argument here should fail that caller's request rather than abort its
     /// process.
-    #[error("no contribution can be formed at rank {rank}: {reason}")]
     UncomputableContribution {
         /// The 1-based rank whose contribution could not be formed.
         rank: u64,
@@ -1006,7 +981,6 @@ pub enum ProtocolError {
     /// score a consumer may already have certified as final *on the strength of
     /// this producer's own word*; dropping it would silently discard a row the
     /// producer emitted under the rank law.
-    #[error("stratum {stratum} excluded item {item} and then named it")]
     ExclusionContradicted {
         /// The candidate, in its canonical lexical form.
         item: String,
@@ -1022,7 +996,6 @@ pub enum ProtocolError {
     /// this candidate. It fails the fused request, because the alternative is
     /// reading a failed measurement as [`ExclusionVerdict::Possible`], which is
     /// a swallowed error wearing the costume of a conservative answer.
-    #[error("exclusion lookup for stratum {stratum} failed: {reason}")]
     ExclusionLookupFailed {
         /// The stratum whose lookup failed.
         stratum: String,
@@ -1038,7 +1011,6 @@ pub enum ProtocolError {
     /// caller assembled by hand whose contract and whose implementation of
     /// [`RankedStream::exclusion`] disagree, and it is that disagreement — not a
     /// fabricated [`ExclusionVerdict::Possible`] — that is reported.
-    #[error("stream was asked for an exclusion verdict but declares no exclusion basis")]
     ExclusionUnavailable,
 
     /// The read behind a stream failed after the consumer had started merging its
@@ -1064,7 +1036,6 @@ pub enum ProtocolError {
     /// It is not [`Self::ErrorAfterRows`], which is a hand-built stream's own report
     /// and carries no reason: a producer read through this layer always has one, and
     /// dropping it would leave a host with a count and nothing to fix.
-    #[error("stratum {stratum}: the read failed after {rows_before} row(s): {reason}")]
     ReadFailed {
         /// The stratum whose read failed.
         stratum: String,
@@ -1093,10 +1064,6 @@ pub enum ProtocolError {
     /// The same family as [`Self::ContributionMismatch`] and for the same reason: a
     /// value the consumer holds is checked against the value the producer ends up
     /// standing behind, and a disagreement is named with both sides, repaired never.
-    #[error(
-        "stratum {stratum}: the read ended under a different attestation from the one it \
-         announced before its first row: {reason}"
-    )]
     AttestationMoved {
         /// The stratum whose read moved.
         stratum: String,
@@ -1129,10 +1096,6 @@ pub enum ProtocolError {
     /// promise broken at a different instant: that one is the read disagreeing with
     /// its own announcement when it stops, this is a point answer disagreeing with
     /// the read it was asked beside, at the moment it is asked.
-    #[error(
-        "stratum {stratum}: an exclusion lookup was answered under a different attestation \
-         from the one its stream's read pinned: {reason}"
-    )]
     ExclusionAttestationMoved {
         /// The stratum whose lookup was answered elsewhere.
         stratum: String,
@@ -1141,6 +1104,110 @@ pub enum ProtocolError {
         reason: String,
     },
 }
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OutOfOrderRanks { expected, got } => write!(
+                f,
+                "stream rank went backwards: expected {expected}, got {got}"
+            ),
+            Self::NonContiguousRanks { gap } => {
+                write!(f, "stream ranks are not contiguous: skipped {gap} rank(s)")
+            }
+            Self::DuplicateItem { item, stratum } => write!(
+                f,
+                "stream for stratum {stratum} emitted item {item:?} more than once"
+            ),
+            Self::OutsideDeclaredDomain {
+                item,
+                stratum,
+                named_by,
+            } => write!(
+                f,
+                "stream for stratum {stratum} named item {item:?}, which its declared candidate domains \
+         cannot reach; stratum {named_by} already named it"
+            ),
+            Self::UnbackedDomainDeclaration {
+                stratum,
+                declared,
+                rank,
+            } => write!(
+                f,
+                "stream for stratum {stratum} restricted its candidates to {declared:?} but the row at \
+         rank {rank} names no block, so nothing backs that restriction"
+            ),
+            Self::BlockOutsideDeclaredDomain {
+                item,
+                stratum,
+                block,
+                declared,
+            } => write!(
+                f,
+                "stream for stratum {stratum} named item {item:?} in block {block}, which its declared \
+         domains {declared:?} do not include"
+            ),
+            Self::CandidateInTwoBlocks {
+                item,
+                stratum,
+                block,
+                named_by,
+                named_by_block,
+            } => write!(
+                f,
+                "streams for strata {stratum} and {named_by} name item {item:?} from two different \
+         blocks, {block} and {named_by_block}: a candidate lies in exactly one block, so this \
+         tagging cannot be true"
+            ),
+            Self::ContributionMismatch { expected, got } => write!(
+                f,
+                "stream contribution {got:?} does not match the profile's {expected:?}"
+            ),
+            Self::ForgedReceipt { declared, actual } => write!(
+                f,
+                "producer receipt is inconsistent: declared {declared}, actually emitted {actual}"
+            ),
+            Self::ErrorAfterRows { rows_before } => {
+                write!(f, "producer failed after emitting {rows_before} row(s)")
+            }
+            Self::NeverEndingSource => write!(f, "producer did not terminate"),
+            Self::UncomputableContribution { rank, reason } => {
+                write!(f, "no contribution can be formed at rank {rank}: {reason}")
+            }
+            Self::ExclusionContradicted { item, stratum } => write!(
+                f,
+                "stratum {stratum} excluded item {item} and then named it"
+            ),
+            Self::ExclusionLookupFailed { stratum, reason } => {
+                write!(f, "exclusion lookup for stratum {stratum} failed: {reason}")
+            }
+            Self::ExclusionUnavailable => write!(
+                f,
+                "stream was asked for an exclusion verdict but declares no exclusion basis"
+            ),
+            Self::ReadFailed {
+                stratum,
+                rows_before,
+                reason,
+            } => write!(
+                f,
+                "stratum {stratum}: the read failed after {rows_before} row(s): {reason}"
+            ),
+            Self::AttestationMoved { stratum, reason } => write!(
+                f,
+                "stratum {stratum}: the read ended under a different attestation from the one it \
+         announced before its first row: {reason}"
+            ),
+            Self::ExclusionAttestationMoved { stratum, reason } => write!(
+                f,
+                "stratum {stratum}: an exclusion lookup was answered under a different attestation \
+         from the one its stream's read pinned: {reason}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {}
 
 /// What a stream's read stands behind at the instant its consumer stops reading it.
 ///

@@ -2151,7 +2151,7 @@ mod carrier_law_tests {
     #[allow(unused_imports)]
     use std::io::Write as _;
 
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use serde_json::json;
 
     use super::*;
@@ -2298,10 +2298,10 @@ mod carrier_law_tests {
         assert!(error.message.contains("working bytes"));
     }
 
-    proptest! {
+    prop_test! {
         #[test]
         fn generated_carriers_obey_exact_compact_expand_equality(
-            rows in prop::collection::btree_set(("[a-z]{1,8}", "[a-z]{1,8}"), 1..32)
+            rows in prop::collection::btree_set((prop::string::regex("[a-z]{1,8}"), prop::string::regex("[a-z]{1,8}")), 1..32)
         ) {
             let mut source = String::new();
             for (predicate, object) in rows {

@@ -258,7 +258,6 @@ mod tests {
     use super::{
         CANDIDATE_TABLE, escape, find_first_candidate, is_iriref_escape_required, push_escaped,
     };
-    use pretty_assertions::assert_eq;
     use std::borrow::Cow;
     use std::fmt::Write as _;
 
@@ -356,7 +355,7 @@ mod tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {

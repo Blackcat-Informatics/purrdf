@@ -30,25 +30,25 @@
 //!   digest-chained container that `validate --shapes-product` restores. `pack` writes
 //!   one, `verify` runs the codec's cold-path canonical certification over one, and
 //!   `explain` decodes what one says it was compiled from without admitting it — see
-//!   [`shacl`] for why an untrusted product is an admission boundary rather than a cache.
+//!   the `shacl` module for why an untrusted product is an admission boundary rather than a cache.
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
 //! asking many questions of one premise, and `entails` decides ONE question, which
 //! is not the membership test in that closure it looks like — see
-//! [`entails`] for why. `consistency` is the question neither of those two can
+//! the `entails` module for why. `consistency` is the question neither of those two can
 //! answer: an inconsistent ontology has no closure for `reason` to materialize and
 //! no closure for `entails` to decide a conclusion against, so it is its own
-//! subcommand rather than a mode of either — see [`consistency`].
+//! subcommand rather than a mode of either — see the `consistency` module.
 //!
 //! `validate` and `shex` are the two SHAPE languages, and neither is the other's
 //! dialect: SHACL decides a data graph against target-selected focus nodes and answers
 //! with an RDF validation report, while ShEx decides a caller-supplied `(node, shape)`
 //! shape map and answers with a result shape map. Neither entails anything — see
-//! [`validate`] and [`shex`] for what each refuses rather than answering weakly.
+//! the `validate` and `shex` modules for what each refuses rather than answering weakly.
 //! `describe` is the one verb that transforms without deciding: it extracts a resource's
 //! Symmetric Concise Bounded Description through the same `Describer` SPARQL `DESCRIBE`
-//! evaluates to — see [`describe`] for why that earns a verb.
+//! evaluates to — see the `describe` module for why that earns a verb.
 //!
 //! plus the global `--loss-ledger` flag, which surfaces the machine-readable
 //! loss ledger for a conversion, projection, or lift, and the `--report` flag the
@@ -58,11 +58,11 @@
 //!
 //! Exit codes: clap rejects a malformed command line with **2**; the pipeline maps
 //! its own failures the same way — usage errors → **2**, every other runtime
-//! failure → **1** (see [`error::CliError`]). Nothing is swallowed: the error's
+//! failure → **1** (see `CliError` in the `error` module). Nothing is swallowed: the error's
 //! message is printed to stderr and its category becomes the process exit code.
 //! A `query` or `update` whose caller-set governor tripped is not a failure and exits
 //! **3**. A query carries its certified answers on stdout; an update emits no dataset
-//! because the mutation was not applied — see [`error::CliOutcome`]. `consistency`
+//! because the mutation was not applied — see `CliOutcome` in the `error` module. `consistency`
 //! reuses the same **3**, for the same reason, when its answer is `unknown`: the
 //! hypertableau reached its round cap rather than saturating, and `true`/`false` both
 //! exit **0** as decided verdicts. `validate` reuses it once more when a SHACL-SPARQL

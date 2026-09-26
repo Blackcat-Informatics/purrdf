@@ -31,7 +31,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };

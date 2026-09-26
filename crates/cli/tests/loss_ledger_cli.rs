@@ -114,7 +114,7 @@ fn ledger_is_empty(json: &str) -> bool {
 /// `rdf12-star-unrepresentable` code — both are asserted against the real output.
 #[test]
 fn lossy_nq_to_rdfxml_reifier_records_the_star_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
     let out = path(dir, "out.rdf");
@@ -156,7 +156,7 @@ fn lossy_nq_to_rdfxml_reifier_records_the_star_drop() {
 /// `named-graph-dropped` code into a non-empty ledger under bare `--loss-ledger`.
 #[test]
 fn lossy_trig_to_turtle_records_the_named_graph_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "named.trig", NAMED_GRAPH_TRIG);
     let out = path(dir, "out.ttl");
@@ -193,7 +193,7 @@ fn lossy_trig_to_turtle_records_the_named_graph_drop() {
 /// (SEED C's statement layer round-trips, so nothing is dropped.)
 #[test]
 fn lossless_nq_to_trig_has_empty_losses() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
     let out = path(dir, "out.trig");
@@ -226,7 +226,7 @@ fn lossless_nq_to_trig_has_empty_losses() {
 /// the `losses` array EMPTY.
 #[test]
 fn lossless_ttl_to_nt_has_empty_losses() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "plain.ttl", PLAIN_TTL);
     let out = path(dir, "out.nt");
@@ -260,7 +260,7 @@ fn lossless_ttl_to_nt_has_empty_losses() {
 /// the converted document. (trig -> turtle to stdout `-` drops a named graph.)
 #[test]
 fn absent_flag_is_silent_and_stdout_is_clean() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "named.trig", NAMED_GRAPH_TRIG);
 
@@ -296,7 +296,7 @@ fn absent_flag_is_silent_and_stdout_is_clean() {
 /// STDOUT — the two streams are cleanly separated.
 #[test]
 fn bare_flag_separates_ledger_on_stderr_from_conversion_on_stdout() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "named.trig", NAMED_GRAPH_TRIG);
 
@@ -340,7 +340,7 @@ fn bare_flag_separates_ledger_on_stderr_from_conversion_on_stdout() {
 /// clean conversion output.
 #[test]
 fn path_flag_matches_bare_stderr_byte_for_byte_and_leaves_streams_clean() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
 
@@ -406,7 +406,7 @@ fn path_flag_matches_bare_stderr_byte_for_byte_and_leaves_streams_clean() {
 /// ledger files across two runs.
 #[test]
 fn ledger_json_is_deterministic_across_runs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
     let out = path(dir, "out.rdf");
@@ -443,7 +443,7 @@ fn ledger_json_is_deterministic_across_runs() {
 /// and both positions surface the SAME ledger.
 #[test]
 fn global_flag_works_before_and_after_the_subcommand() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "named.trig", NAMED_GRAPH_TRIG);
     let out = path(dir, "out.ttl");
@@ -507,7 +507,7 @@ fn global_flag_works_before_and_after_the_subcommand() {
 /// codec, so the drop is recorded as the realized `statement-rows-dropped`.
 #[test]
 fn query_construct_reifier_to_rdfxml_via_path_records_the_universal_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -559,7 +559,7 @@ fn query_construct_reifier_to_rdfxml_via_path_records_the_universal_drop() {
 /// proving the `reason` lane records losses exactly like `convert`/`query`.
 #[test]
 fn reason_closure_to_star_incapable_target_surfaces_the_ledger() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
     let out = path(dir, "closure.rdf");
@@ -606,7 +606,7 @@ fn reason_closure_to_star_incapable_target_surfaces_the_ledger() {
 /// claim against the behaviour it describes, in the same run.
 #[test]
 fn the_named_graph_dropped_note_matches_what_convert_actually_does() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let trig = write_file(dir, "graphs.trig", NAMED_GRAPH_TRIG);
 
@@ -680,7 +680,7 @@ fn the_named_graph_dropped_note_matches_what_convert_actually_does() {
 /// entry nor any other loss.
 #[test]
 fn no_named_graph_rows_dropped_entry_when_the_source_has_no_named_graph() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "plain.ttl", PLAIN_TTL);
 
@@ -707,7 +707,7 @@ fn no_named_graph_rows_dropped_entry_when_the_source_has_no_named_graph() {
 /// case where the caller NAMED the graph is closed one step earlier.
 #[test]
 fn a_named_graph_construct_never_reaches_the_sink_with_an_empty_ledger() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "seed.nt", PLAIN_TTL);
 

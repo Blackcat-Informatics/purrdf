@@ -438,7 +438,6 @@ fn xml_escape_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), 
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";

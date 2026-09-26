@@ -39,17 +39,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions = { workspace = true }
+# Byte-exact golden files for the scanner boundary sweep. Path-only and
+# unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Turtle parsing for the validation conformance harness only (the library
 # itself depends on the ring-fenced kernel, never the codec stack).
 purrdf-rdf = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
-# Tracked range snapshots for the shape-map content class this crate transcribes
-# for itself, so a transcription edit reaches review as a diff. Test-only; see
-# tests/scanner_boundary_sweep.rs.
-insta = { workspace = true }
 
 [[bench]]
 name = "prepared_validate"

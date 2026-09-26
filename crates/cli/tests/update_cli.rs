@@ -28,7 +28,7 @@ fn fixture(dir: &std::path::Path) -> String {
 
 #[test]
 fn update_applies_then_serializes_the_committed_dataset() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = fixture(dir.path());
     let output = run(&["update", "--data", &input, "--to", "ntriples", INSERT]);
 
@@ -41,7 +41,7 @@ fn update_applies_then_serializes_the_committed_dataset() {
 
 #[test]
 fn governed_update_trip_writes_no_dataset_and_exits_three() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = fixture(dir.path());
     let target = dir.path().join("must-not-exist.nt");
     let target = target.to_str().expect("UTF-8 path");

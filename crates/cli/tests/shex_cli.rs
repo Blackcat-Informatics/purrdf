@@ -87,7 +87,7 @@ const ALICE: &str = "<http://example.org/alice>@<http://example.org/UserShape>";
 /// A conformant association: the result shape map says so, and the run exits 0.
 #[test]
 fn a_conformant_node_reports_and_exits_zero() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -122,7 +122,7 @@ fn a_conformant_node_reports_and_exits_zero() {
 /// still exits 0 — the same position `validate`, `consistency` and a `false` ASK hold.
 #[test]
 fn a_nonconformant_node_reports_a_reason_and_still_exits_zero() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -145,7 +145,7 @@ fn a_nonconformant_node_reports_a_reason_and_still_exits_zero() {
 /// selects are reported in one map.
 #[test]
 fn a_query_selector_expands_against_the_data() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -179,7 +179,7 @@ fn a_query_selector_expands_against_the_data() {
 /// EVERY native data syntax, plus the pack container, reaches the identical verdict.
 #[test]
 fn every_native_data_format_reaches_the_same_verdict() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let seed = write_file(dir.path(), "seed.ttl", DATA);
 
@@ -222,7 +222,7 @@ fn every_native_data_format_reaches_the_same_verdict() {
 /// path whose extension says nothing.
 #[test]
 fn shexj_schemas_reach_the_same_verdict() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     // The ShExJ spelling of `ex:UserShape { ex:age xsd:integer ? }`.
     let shexj = concat!(
@@ -273,7 +273,7 @@ fn shexj_schemas_reach_the_same_verdict() {
 /// map may name one as the focus node.
 #[test]
 fn rdf12_triple_terms_are_ordinary_nodes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(
         dir.path(),
         "claim.shex",
@@ -343,7 +343,7 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
 /// document. Pinning it here keeps the three surfaces answering alike.
 #[test]
 fn the_statement_layer_is_an_arc_to_shex() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(
         dir.path(),
         "anno.shex",
@@ -410,7 +410,7 @@ fn the_statement_layer_is_an_arc_to_shex() {
 /// The data graph may arrive on stdin, and `-` requires `--from`.
 #[test]
 fn stdin_data_requires_an_explicit_from_and_then_validates() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
 
     // Keep the writer active until the early argument refusal closes stdin;
@@ -436,7 +436,7 @@ fn stdin_data_requires_an_explicit_from_and_then_validates() {
 /// The SCHEMA may arrive on stdin instead, under `--schema-from`; both on stdin is refused.
 #[test]
 fn stdin_schemas_are_read_under_schema_from_and_two_stdins_are_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let bare = pipe(&["shex", "--schema", "-", "--data", &data, ALICE], SCHEMA);
@@ -491,7 +491,7 @@ fn stdin_schemas_are_read_under_schema_from_and_two_stdins_are_refused() {
 /// [`a_malformed_map_is_a_usage_error_decided_before_any_document_is_read`].
 #[test]
 fn malformed_inputs_are_runtime_failures() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let bad_shexc = write_file(dir.path(), "bad.shex", "ex:Broken { { { ");
@@ -518,7 +518,7 @@ fn malformed_inputs_are_runtime_failures() {
 /// correctly the whole time.
 #[test]
 fn a_malformed_map_is_a_usage_error_decided_before_any_document_is_read() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let good = write_file(dir.path(), "schema.shex", SCHEMA);
 
@@ -572,7 +572,7 @@ fn a_malformed_map_is_a_usage_error_decided_before_any_document_is_read() {
 /// that and nothing else.
 #[test]
 fn a_relative_map_iri_with_no_base_names_the_base_flag_once() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -647,7 +647,7 @@ fn a_relative_map_iri_with_no_base_names_the_base_flag_once() {
 /// follow each other, and this half must stay where it is.
 #[test]
 fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconformant() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -734,7 +734,7 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
 /// read — a classification accident rather than a judgement.
 #[test]
 fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -797,7 +797,7 @@ fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
 /// section, rather than validated against a dangling reference.
 #[test]
 fn a_structurally_invalid_schema_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let schema = write_file(
         dir.path(),
@@ -825,7 +825,7 @@ fn a_structurally_invalid_schema_is_refused() {
 /// resolver is a host callback and cannot cross a command line, so the schema is refused.
 #[test]
 fn an_external_shape_is_refused_rather_than_reported_nonconformant() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     for (name, source) in [
@@ -859,7 +859,7 @@ fn an_external_shape_is_refused_rather_than_reported_nonconformant() {
 /// granted.
 #[test]
 fn a_semantic_action_is_refused_rather_than_treated_as_an_inert_success() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let schema = write_file(
         dir.path(),
@@ -889,7 +889,7 @@ fn a_semantic_action_is_refused_rather_than_treated_as_an_inert_success() {
 /// a pair the closure never reaches is refused as unused.
 #[test]
 fn imports_are_caller_supplied_and_both_halves_are_enforced() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let imported = write_file(
         dir.path(),
@@ -967,7 +967,7 @@ fn imports_are_caller_supplied_and_both_halves_are_enforced() {
 /// naming the argument — never a silently skipped import.
 #[test]
 fn malformed_import_pairs_are_usage_errors() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let imported = write_file(
@@ -1015,7 +1015,7 @@ fn malformed_import_pairs_are_usage_errors() {
 /// usage one. The exit code is asserted explicitly because it is the part that drifted.
 #[test]
 fn an_import_iri_half_must_be_absolute_and_is_blamed_on_the_argument() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let imported = write_file(
@@ -1127,7 +1127,7 @@ fn an_import_iri_half_must_be_absolute_and_is_blamed_on_the_argument() {
 /// can agree on one namespace now that `--base` no longer reaches the schema.
 #[test]
 fn base_resolves_relative_iris_everywhere_it_applies() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(
         dir.path(),
         "relative.shex",
@@ -1262,7 +1262,7 @@ fn file_iri(dir: &Path, name: &str) -> String {
 /// though the CLI was holding both documents' retrieval IRIs the whole time.
 #[test]
 fn a_schema_file_resolves_relative_iris_against_its_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "relative.shex", "<UserShape> { <age> . }\n");
     let data = write_file(dir.path(), "relative.ttl", "<alice> <age> \"nope\" .\n");
     let map = format!(
@@ -1298,7 +1298,7 @@ fn a_schema_file_resolves_relative_iris_against_its_retrieval_iri() {
 /// moved every shape in the schema onto the data document's namespace.
 #[test]
 fn a_data_graph_base_does_not_leak_into_the_schema() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "relative.shex", "<UserShape> { <age> . }\n");
     let relative_data = "<alice> <age> \"nope\" .\n";
     let by_retrieval_iri = format!(
@@ -1348,7 +1348,7 @@ fn a_data_graph_base_does_not_leak_into_the_schema() {
 /// that reached only one of the two syntaxes would make the same schema mean two things.
 #[test]
 fn a_shexj_schema_file_resolves_against_its_retrieval_iri_too() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(
         dir.path(),
         "relative.shexj",
@@ -1385,7 +1385,7 @@ fn a_shexj_schema_file_resolves_against_its_retrieval_iri_too() {
 /// and predicate would turn every constraint in the schema into a vacuous one.
 #[test]
 fn a_schema_on_stdin_with_a_relative_iri_is_refused_not_vacuously_decided() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     for extra in [Vec::new(), vec!["--base", "http://example.org/"]] {
@@ -1448,7 +1448,7 @@ fn a_schema_on_stdin_with_a_relative_iri_is_refused_not_vacuously_decided() {
 /// working from a relative-admitting source.
 #[test]
 fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let pack = dir
@@ -1528,7 +1528,7 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
 /// nothing and runs no RDF serializer.
 #[test]
 fn the_global_document_flags_are_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let options = write_file(
@@ -1574,7 +1574,7 @@ fn the_global_document_flags_are_refused_by_name() {
 /// The result shape map can be written to a FILE, leaving stdout untouched.
 #[test]
 fn the_result_map_can_be_written_to_a_file() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let out_path = dir
@@ -1599,7 +1599,7 @@ fn the_result_map_can_be_written_to_a_file() {
 /// `--schema`, `--data` and the `MAP` positional are all required; none of them is invented.
 #[test]
 fn the_required_inputs_are_required() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
 

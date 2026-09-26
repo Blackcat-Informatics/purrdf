@@ -172,7 +172,7 @@ fn mmap_backed_pack_view_matches_heap_and_source_by_value() {
     let bytes = PackBuilder::build_bytes(&dataset).expect("pack build must succeed");
 
     // Write the pack bytes to a real temp file the OS can mmap.
-    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    let mut tmp = purrdf_testkit::temp_file!().expect("create temp file");
     tmp.write_all(&bytes).expect("write pack bytes");
     tmp.flush().expect("flush temp file");
     let path = tmp.path().to_path_buf();

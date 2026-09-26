@@ -136,8 +136,6 @@ pub mod stat_agg;
 mod statement_layer;
 mod substitute;
 mod template;
-#[doc(hidden)]
-pub mod test_rng;
 pub mod update;
 pub mod user_fn;
 // The per-query record of what the relations a query invoked attested about the

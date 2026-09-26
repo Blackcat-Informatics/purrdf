@@ -992,7 +992,6 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     fn toks(s: &str) -> Vec<Token> {
         tokenize(s)

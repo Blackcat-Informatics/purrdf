@@ -461,7 +461,6 @@ fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
@@ -506,7 +505,7 @@ mod tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {

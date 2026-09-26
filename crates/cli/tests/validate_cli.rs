@@ -167,7 +167,7 @@ fn conforms_triple(value: bool) -> String {
 /// bucket as a corrupt pack, which is the flattening [`crate::error`] argues against.
 #[test]
 fn a_non_conforming_graph_reports_and_still_exits_zero() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -207,7 +207,7 @@ fn a_non_conforming_graph_reports_and_still_exits_zero() {
 /// exit 0.
 #[test]
 fn a_conforming_graph_reports_conforms_true() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "ok.ttl", CONFORMING_DATA);
 
@@ -234,7 +234,7 @@ fn a_conforming_graph_reports_conforms_true() {
 /// lost the type assertion or the offending literal would change the result count.
 #[test]
 fn every_native_source_format_reaches_the_same_verdict() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let seed = write_file(dir.path(), "seed.ttl", DATA);
 
@@ -288,7 +288,7 @@ fn every_native_source_format_reaches_the_same_verdict() {
 /// reaches the same shapes.
 #[test]
 fn a_non_turtle_shapes_graph_is_read_through_the_native_codec() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let turtle = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let as_nt = dir
@@ -336,7 +336,7 @@ fn a_non_turtle_shapes_graph_is_read_through_the_native_codec() {
 /// would vacuously conform — which is exactly the silent pass this asserts against.
 #[test]
 fn rdf12_statement_metadata_is_validated() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "star-shapes.ttl", STAR_SHAPES);
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
 
@@ -366,7 +366,7 @@ fn rdf12_statement_metadata_is_validated() {
 /// is the one carrier that stores the star layer losslessly.
 #[test]
 fn rdf12_statement_metadata_survives_a_pack_source() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "star-shapes.ttl", STAR_SHAPES);
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
     let pack = dir
@@ -391,7 +391,7 @@ fn rdf12_statement_metadata_survives_a_pack_source() {
 /// same run.
 #[test]
 fn every_output_format_describes_the_same_run() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -453,7 +453,7 @@ fn every_output_format_describes_the_same_run() {
 /// was never evaluated at all.
 #[test]
 fn shapes_graph_exposes_the_shapes_to_shacl_sparql() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -490,7 +490,7 @@ fn shapes_graph_exposes_the_shapes_to_shacl_sparql() {
 /// same 3 a governed `query` uses.
 #[test]
 fn a_tripped_governor_writes_no_report_and_exits_three() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "sparql-shapes.ttl", SPARQL_SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -543,7 +543,7 @@ fn a_tripped_governor_writes_no_report_and_exits_three() {
 /// test above could be passing because `--fuel 0` trips everything.
 #[test]
 fn a_core_only_validation_is_unbothered_by_a_zero_budget() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -560,7 +560,7 @@ fn a_core_only_validation_is_unbothered_by_a_zero_budget() {
 /// The data graph may arrive on stdin, and `-` requires `--from` because it has no extension.
 #[test]
 fn stdin_data_requires_an_explicit_from_and_then_validates() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
 
     let bare = pipe(&["validate", "--shapes", &shapes, "-"], DATA);
@@ -583,7 +583,7 @@ fn stdin_data_requires_an_explicit_from_and_then_validates() {
 /// The SHAPES graph may arrive on stdin instead, under `--shapes-from`.
 #[test]
 fn stdin_shapes_are_read_under_shapes_from() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let bare = pipe(&["validate", "--shapes", "-", &data], SHAPES);
@@ -632,7 +632,7 @@ fn two_stdin_documents_are_refused_by_name() {
 /// distinct from the usage errors above and from a non-conforming verdict.
 #[test]
 fn malformed_documents_are_runtime_failures() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let good_shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let good_data = write_file(dir.path(), "data.ttl", DATA);
     let bad_shapes = write_file(dir.path(), "bad-shapes.ttl", "@@@ not turtle at all");
@@ -662,7 +662,7 @@ fn malformed_documents_are_runtime_failures() {
 /// omits one constraint.
 #[test]
 fn a_structurally_incomplete_shape_hard_fails() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
         "pathless.ttl",
@@ -699,7 +699,7 @@ fn a_structurally_incomplete_shape_hard_fails() {
 /// that were never resolved.
 #[test]
 fn base_resolves_relative_iris_in_the_data_graph() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let relative = concat!(
         "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
@@ -757,7 +757,7 @@ fn base_resolves_relative_iris_in_the_data_graph() {
 /// has no relative-IRI syntax, so the base would be accepted and silently unread.
 #[test]
 fn base_with_a_pack_data_source_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let pack = dir
@@ -792,7 +792,7 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
 /// nothing: `validate` never hands the report writer this base.
 #[test]
 fn base_with_a_relative_incapable_data_graph_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(
         dir.path(),
@@ -830,7 +830,7 @@ fn base_with_a_relative_incapable_data_graph_is_refused_by_name() {
 /// serializer — and refused for `--format sarif`, which runs none.
 #[test]
 fn the_loss_ledger_is_live_for_rdf_and_refused_for_sarif() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let ledger_path = dir
@@ -880,7 +880,7 @@ fn the_loss_ledger_is_live_for_rdf_and_refused_for_sarif() {
 /// every other RDF syntax rather than accepted and ignored.
 #[test]
 fn jsonld_options_are_refused_unless_the_format_is_jsonld() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let options = write_file(
@@ -929,7 +929,7 @@ fn jsonld_options_are_refused_unless_the_format_is_jsonld() {
 /// The report can be written to a FILE, leaving stdout untouched and the verdict on stderr.
 #[test]
 fn the_report_can_be_written_to_a_file() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let report = dir
@@ -953,7 +953,7 @@ fn the_report_can_be_written_to_a_file() {
 /// concrete payoff of making the results graph the default artifact rather than SARIF.
 #[test]
 fn the_report_is_a_graph_the_binary_can_query() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let report = dir
@@ -985,7 +985,7 @@ fn the_report_is_a_graph_the_binary_can_query() {
 /// An unknown `--format` token is a clap usage error (exit 2), not a silently defaulted run.
 #[test]
 fn an_unknown_format_token_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -998,7 +998,7 @@ fn an_unknown_format_token_is_a_usage_error() {
 /// vacuously conform).
 #[test]
 fn shapes_are_required() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = run(&["validate", &data]);
@@ -1043,7 +1043,7 @@ const RELATIVE_SHAPES_DATA: &str = concat!(
 /// other syntax resolved through the shared seam.
 #[test]
 fn a_turtle_shapes_graph_resolves_relative_iris_against_its_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", RELATIVE_SHAPES);
     let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
 
@@ -1085,7 +1085,7 @@ fn a_turtle_shapes_graph_resolves_relative_iris_against_its_retrieval_iri() {
 /// while TriG resolved, over one file copied under two names.
 #[test]
 fn the_turtle_and_non_turtle_shapes_routes_resolve_a_relative_iri_identically() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
     let as_turtle = write_file(dir.path(), "shapes.ttl", RELATIVE_SHAPES);
     let as_trig = write_file(dir.path(), "shapes.trig", RELATIVE_SHAPES);
@@ -1122,7 +1122,7 @@ fn the_turtle_and_non_turtle_shapes_routes_resolve_a_relative_iri_identically() 
 /// instead, and the refusal must name the condition.
 #[test]
 fn a_shapes_graph_on_stdin_with_a_relative_iri_is_refused_not_vacuously_passed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
 
     let out = pipe(
@@ -1166,7 +1166,7 @@ fn a_shapes_graph_on_stdin_with_a_relative_iri_is_refused_not_vacuously_passed()
 /// usable at all.
 #[test]
 fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
     let based = format!("@base <http://example.org/shapes/> .\n{RELATIVE_SHAPES}");
 
@@ -1230,7 +1230,7 @@ fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
 /// the IRI the binary derived, so a resolution that landed anywhere else would fail here.
 #[test]
 fn a_relative_shapes_graph_resolves_against_the_shapes_document_base() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     // The retrieval IRI comes from the binary's OWN derivation, never a second
     // transcription of it in this harness — and it is derived from a path that already
@@ -1262,7 +1262,7 @@ fn a_relative_shapes_graph_resolves_against_the_shapes_document_base() {
 /// nothing for an already-absolute invocation.
 #[test]
 fn an_absolute_shapes_graph_is_carried_verbatim() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -1292,7 +1292,7 @@ fn an_absolute_shapes_graph_is_carried_verbatim() {
 /// diagnostic's `detail`, so the sentence was printed twice in one line.
 #[test]
 fn a_relative_shapes_graph_with_no_base_names_the_command_line_once() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = pipe(
@@ -1350,7 +1350,7 @@ fn a_relative_shapes_graph_with_no_base_names_the_command_line_once() {
 /// than an IR-internment failure attributed to a term the operator never wrote.
 #[test]
 fn a_malformed_shapes_graph_is_a_named_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -1422,7 +1422,7 @@ const IMPORT_DATA: &str = concat!(
 /// shapes that only exist in imported documents decide the verdict.
 #[test]
 fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let a = write_file(dir.path(), "a.ttl", IMPORT_A);
     let b = write_file(dir.path(), "b.ttl", IMPORT_B);
@@ -1458,7 +1458,7 @@ fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
 /// diagnostic rather than a refusal — see the neighbouring-valid-case test below.
 #[test]
 fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
@@ -1485,7 +1485,7 @@ fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {
 /// name, and a pair the closure never reaches is refused as unused.
 #[test]
 fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let a = write_file(dir.path(), "a.ttl", IMPORT_A);
     let b = write_file(dir.path(), "b.ttl", IMPORT_B);
@@ -1555,7 +1555,7 @@ fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
 /// reject them, and `make conformance` would go red for input that is valid.
 #[test]
 fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
     // 1. A shapes graph with an INERT owl:imports and its own shapes: the shapes decide, and
@@ -1643,7 +1643,7 @@ fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
 /// imported document, and the `sh:select` that uses it is in that same document.
 #[test]
 fn an_imported_documents_prefixes_and_message_templates_survive_the_fold() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(
         dir.path(),
         "sp-root.ttl",
@@ -1705,7 +1705,7 @@ fn an_imported_documents_prefixes_and_message_templates_survive_the_fold() {
 /// is opened — never a silently skipped import.
 #[test]
 fn malformed_shapes_import_pairs_are_usage_errors() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let a = write_file(dir.path(), "a.ttl", IMPORT_A);
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
@@ -1779,7 +1779,7 @@ const CHANGE_MERGED: &str = concat!(
 /// report would still have changed what this command emits.
 #[test]
 fn the_change_lane_reports_exactly_what_a_full_validation_of_the_merged_graph_does() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
     let added = write_file(dir.path(), "added.ttl", CHANGE_ADDED);
@@ -1811,7 +1811,7 @@ fn the_change_lane_reports_exactly_what_a_full_validation_of_the_merged_graph_do
 /// joining it does, and the same identity against a full validation holds.
 #[test]
 fn removing_a_row_moves_a_verdict_and_reports_what_a_full_validation_would() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
     let retracted = write_file(
@@ -1859,7 +1859,7 @@ fn removing_a_row_moves_a_verdict_and_reports_what_a_full_validation_would() {
 /// clean bill of health are the same report.
 #[test]
 fn an_unbounded_change_footprint_falls_back_to_a_full_validation_and_says_so() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_SHAPES);
     let base = write_file(
         dir.path(),
@@ -1902,7 +1902,7 @@ fn an_unbounded_change_footprint_falls_back_to_a_full_validation_and_says_so() {
 /// report of a whole-graph validation.
 #[test]
 fn a_run_with_no_change_documents_is_unchanged() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -1925,7 +1925,7 @@ fn a_run_with_no_change_documents_is_unchanged() {
 /// refuses everything.
 #[test]
 fn a_governor_trips_the_change_lane_and_an_ample_ceiling_leaves_it_alone() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_SHAPES);
     let base = write_file(
         dir.path(),
@@ -1967,7 +1967,7 @@ fn a_governor_trips_the_change_lane_and_an_ample_ceiling_leaves_it_alone() {
 /// same flag over a change document whose extension carries no syntax — runs beside it.
 #[test]
 fn a_changes_format_with_no_change_document_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
     let added = write_file(dir.path(), "added.unknown", CHANGE_ADDED);
@@ -2010,7 +2010,7 @@ fn a_changes_format_with_no_change_document_is_refused_by_name() {
 /// beside it.
 #[test]
 fn a_change_document_may_have_stdin_but_only_if_nothing_else_does() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
 

@@ -22,12 +22,15 @@
 //!
 //! # How it runs on both
 //!
-//! One test body, two attributes. Natively it is an ordinary `#[test]` picked up by
-//! `cargo test --workspace`. On `wasm32-unknown-unknown` it is a `#[wasm_bindgen_test]`,
-//! compiled to wasm and executed in Node by `make wasm-test` (and by CI's wasm job):
+//! One test body per case, one runner on both targets. The target is `harness = false`,
+//! and its `main` hands the named cases to `purrdf_testkit::harness`: natively they run
+//! under `cargo test --workspace`, and on `wasm32-unknown-unknown` the same named cases
+//! run in Node through `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test`
+//! (and CI's wasm job) sets:
 //!
 //! ```text
-//! cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_determinism
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_determinism
 //! ```
 //!
 //! Both runs assert the *same* literal expectations — the ones written below. A target
@@ -73,9 +76,6 @@ use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, KnnGuard, NativeSparqlEngine,
     PropertyFunctionRegistry, QueryOptions,
 };
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
 
 /// The fixture's data namespace.
 const EX: &str = "https://example.org/d/";
@@ -383,8 +383,6 @@ fn assert_pinned(rows: &[(String, String)], expected: &[(&str, &str)]) {
 
 /// The pinned answer, asserted row for row and bit for bit — on whichever target is
 /// executing this.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_pinned_answer_is_reproduced_on_this_target() {
     let rows = answer(space(&vectors(), DistanceMetric::Cosine), QUERY);
     assert_pinned(&rows, &EXPECTED);
@@ -392,8 +390,6 @@ fn the_pinned_answer_is_reproduced_on_this_target() {
 
 /// The lane fixture's pinned cosine answer: sixteen lanes, the tree and the tail, on
 /// whichever target (and, on wasm, whichever SIMD build) is executing this.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_lane_tree_cosine_answer_is_reproduced_on_this_target() {
     let rows = answer(space(&lane_vectors(), DistanceMetric::Cosine), LANE_QUERY);
     assert_pinned(&rows, &EXPECTED_LANES_COSINE);
@@ -401,8 +397,6 @@ fn the_lane_tree_cosine_answer_is_reproduced_on_this_target() {
 
 /// The lane fixture's pinned squared-Euclidean answer, through the bounded fold's body
 /// and its 64-element checkpoint.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target() {
     let rows = answer(
         space(&lane_vectors(), DistanceMetric::SquaredEuclidean),
@@ -410,3 +404,9 @@ fn the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target() {
     );
     assert_pinned(&rows, &EXPECTED_LANES_SQUARED);
 }
+
+purrdf_testkit::harness_main!(
+    the_lane_tree_cosine_answer_is_reproduced_on_this_target,
+    the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target,
+    the_pinned_answer_is_reproduced_on_this_target,
+);

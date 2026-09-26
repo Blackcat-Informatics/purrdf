@@ -17,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ciborium::value::Value;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
@@ -1093,7 +1091,12 @@ fn term_value(graph: &Graph, term_id: usize) -> &str {
 }
 
 fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|since| {
+            let secs = i64::try_from(since.as_secs()).ok()?;
+            crate::rfc3339::format(secs, since.subsec_nanos()).ok()
+        })
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }

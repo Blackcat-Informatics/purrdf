@@ -917,7 +917,7 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     // Collect-into-a-`String` shims. Production has no such function any more: every
     // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
@@ -1550,11 +1550,7 @@ mod tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {
@@ -1617,7 +1613,7 @@ mod tests {
         assert!(borrowed > 0 && owned > 0, "{borrowed} {owned}");
     }
 
-    proptest! {
+    prop_test! {
         /// The scan-first `escape_iri` equals the frozen per-char oracle on every
         /// arbitrary string (controls, C1, multi-byte unicode, and clean runs).
         #[test]

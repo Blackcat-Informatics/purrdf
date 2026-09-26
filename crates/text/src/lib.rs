@@ -48,7 +48,7 @@
 //! The two halves of what that buys are proven in different places, so they are
 //! claimed separately rather than as one sentence. The **ranking** — the row
 //! order together with every score's decimal lexical — is pinned by a single
-//! test body carrying both `#[test]` and `#[wasm_bindgen_test]`, so `make
+//! test body per case on one shared `harness = false` runner, so `make
 //! wasm-test` executes it on `wasm32-unknown-unknown` against the very
 //! expectations `cargo test` asserts natively. That is the half a divergent
 //! `ln` could actually move, and it is proven on both targets. Byte identity of

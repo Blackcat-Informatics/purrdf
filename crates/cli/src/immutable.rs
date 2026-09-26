@@ -142,12 +142,12 @@ impl ImmutableInput {
     /// Acquire immutable bytes from a disk `path`, tiered (Tier 0 → 1 → 2).
     ///
     /// The path is opened **exactly once**; the acquisition is then performed by
-    /// [`from_opened_file`](Self::from_opened_file) against that single descriptor,
+    /// the private `from_opened_file` against that single descriptor,
     /// which has no path to re-resolve — so a hostile pathname swap cannot divert it.
     ///
     /// # Errors
     ///
-    /// Returns a [`CliError`] if the path cannot be opened or read. A tier that is
+    /// Returns a `CliError` if the path cannot be opened or read. A tier that is
     /// *unavailable* (no seals, no `memfd`, an empty or non-regular file) is not an
     /// error — it degrades to the next tier; only an actual I/O failure surfaces.
     pub fn from_disk_path(path: &str) -> Result<Self, CliError> {
@@ -212,7 +212,7 @@ impl ImmutableInput {
     ///
     /// # Errors
     ///
-    /// Returns a [`CliError`] if stdin cannot be read.
+    /// Returns a `CliError` if stdin cannot be read.
     pub fn from_stdin() -> Result<Self, CliError> {
         let mut buffer = Vec::new();
         std::io::stdin().read_to_end(&mut buffer)?;
@@ -348,14 +348,14 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
-    fn temp_with(payload: &[u8]) -> tempfile::NamedTempFile {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    fn temp_with(payload: &[u8]) -> purrdf_testkit::NamedTempFile {
+        let mut file = purrdf_testkit::NamedTempFile::for_unit_test().expect("temp file");
         file.write_all(payload).expect("write payload");
         file.flush().expect("flush");
         file
     }
 
-    fn path_of(file: &tempfile::NamedTempFile) -> &str {
+    fn path_of(file: &purrdf_testkit::NamedTempFile) -> &str {
         file.path().to_str().expect("utf-8 path")
     }
 

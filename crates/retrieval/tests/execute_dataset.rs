@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, TermValue,
 };

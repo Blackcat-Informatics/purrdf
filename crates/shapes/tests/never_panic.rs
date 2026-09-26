@@ -9,13 +9,13 @@
 //! parse cannot become a spurious timeout. See `crates/rdf/tests/never_panic.rs`
 //! for the contract rationale.
 
-use proptest::prelude::*;
 use purrdf_shapes::engine::parse_shapes;
 use purrdf_shapes::json_schema::Namespaces;
 use purrdf_shapes::{
     LinkmlDocument, SchemaDatatypeMap, SchemaImportConfig, import_json_schema, import_linkml,
     parse_linkml,
 };
+use purrdf_testkit::prop::prelude::*;
 use serde_json::{Map, Number, Value};
 
 fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
@@ -114,14 +114,14 @@ fn arbitrary_json() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i64>().prop_map(|value| Value::Number(Number::from(value))),
-        ".{0,64}".prop_map(Value::String),
+        prop::string::regex(".{0,64}").prop_map(Value::String),
     ];
     leaf.prop_recursive(5, 128, 8, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
-            prop::collection::btree_map(".{0,24}", inner, 0..8).prop_map(|entries| {
-                Value::Object(entries.into_iter().collect::<Map<String, Value>>())
-            }),
+            prop::collection::btree_map(prop::string::regex(".{0,24}"), inner, 0..8).prop_map(
+                |entries| { Value::Object(entries.into_iter().collect::<Map<String, Value>>()) }
+            ),
         ]
     })
 }
@@ -147,8 +147,8 @@ fn schema_import_config() -> SchemaImportConfig {
     SchemaImportConfig::new(namespaces, datatypes)
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+prop_test! {
+    #![prop_config(Config { cases: 256, ..Config::default() })]
 
     #[test]
     fn parse_shapes_never_panics_raw(data in arbitrary_bytes()) {

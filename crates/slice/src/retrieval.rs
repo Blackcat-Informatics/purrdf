@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn a_real_file_yields_an_absolute_file_iri() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("doc.ttl");
         std::fs::write(&path, b"# empty\n").expect("write");
 
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn dot_segments_and_the_working_directory_do_not_leak_in() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
         let path = dir.path().join("sub").join("doc.ttl");
         std::fs::write(&path, b"# empty\n").expect("write");
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn a_space_bearing_name_is_percent_encoded() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("a doc#1.ttl");
         std::fs::write(&path, b"# empty\n").expect("write");
 
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_a_hard_error_not_a_silent_no_base() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let missing = dir.path().join("nope.ttl");
         match retrieval_base_iri(&missing) {
             Err(SliceError::InvalidPath(message)) => {
@@ -366,7 +366,7 @@ mod tests {
     /// the latter applied to a canonicalized path, not a second transformation.
     #[test]
     fn the_two_entry_points_agree_on_a_canonicalized_path() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("doc.ttl");
         std::fs::write(&path, b"# empty\n").expect("write");
 

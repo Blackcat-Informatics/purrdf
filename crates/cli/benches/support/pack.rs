@@ -6,7 +6,7 @@
 use std::io::Write as _;
 
 use purrdf_core::{PackBuilder, RdfDatasetBuilder};
-use tempfile::NamedTempFile;
+use purrdf_testkit::{NamedTempFile, temp_file};
 
 /// The number of instances in the fixture. Each is typed to the bottom class of a
 /// shallow `subClassOf` hierarchy, so RDFS re-types every instance up the hierarchy —
@@ -50,7 +50,7 @@ pub(crate) fn large_pack() -> (NamedTempFile, Vec<u8>) {
     let dataset = builder.freeze().expect("freeze bench dataset");
     let bytes = PackBuilder::build_bytes(&dataset).expect("build pack bytes");
 
-    let mut file = NamedTempFile::new().expect("temp file");
+    let mut file = temp_file!().expect("temp file");
     file.write_all(&bytes).expect("write pack bytes");
     file.flush().expect("flush pack bytes");
     (file, bytes)

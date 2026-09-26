@@ -6,7 +6,7 @@
 //!
 //! A single, realistic "books" running-example dataset (the shape from the W3C
 //! SPARQL Results spec) is serialized to ALL FOUR formats (JSON/XML/CSV/TSV) and
-//! snapshotted with `insta`, exercising every RDF term kind in one coherent
+//! pinned byte-for-byte as a checked-in golden, exercising every RDF term kind in one coherent
 //! dataset: bound IRIs, plain `xsd:string` literals, an unbound cell, a
 //! language-tagged literal, a typed (`xsd:integer`) literal, and a blank node.
 //! Beyond the SELECT corpus this also pins the ASK boolean paths, the maximal
@@ -149,30 +149,35 @@ fn text(
 
 #[test]
 fn select_books_json() {
-    insta::assert_snapshot!(text(
-        &books(),
-        SparqlResultsFormat::Json,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_json.json",
+        &text(
+            &books(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
 fn select_books_xml() {
-    insta::assert_snapshot!(text(
-        &books(),
-        SparqlResultsFormat::Xml,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_xml.xml",
+        &text(
+            &books(),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
 fn select_books_csv() {
-    // `insta` normalizes CRLF→LF in text snapshots, so the snapshot pins the
-    // content shape (bare header, bare values, `_:draft`, empty unbound field,
-    // RFC-4180 form) while the byte-level CRLF requirement is asserted here on
-    // the raw bytes.
+    // The golden pins the exact bytes, CRLF record ends included (bare header,
+    // bare values, `_:draft`, empty unbound field, RFC-4180 form); the CRLF
+    // requirement is also asserted here so a failure names the rule it breaks.
     let outcome = serialize(
         &books(),
         SparqlResultsFormat::Csv,
@@ -185,7 +190,7 @@ fn select_books_csv() {
         raw.contains("\r\n") && !raw.contains("\n\n") && !raw.replace("\r\n", "").contains('\n'),
         "CSV records must be CRLF-terminated (RFC 4180): {raw:?}"
     );
-    insta::assert_snapshot!(raw);
+    purrdf_testkit::assert_golden!("results_corpus/select_books_csv.csv", &raw);
 }
 
 #[test]
@@ -205,7 +210,7 @@ fn select_books_tsv() {
         "TSV must use bare LF line ends, no CR: {raw:?}"
     );
     assert!(raw.starts_with("?book\t?title\n"), "TSV header: {raw:?}");
-    insta::assert_snapshot!(raw);
+    purrdf_testkit::assert_golden!("results_corpus/select_books_tsv.tsv", &raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,22 +221,28 @@ fn select_books_tsv() {
 
 #[test]
 fn ask_true_json() {
-    insta::assert_snapshot!(text(
-        &SparqlResult::Boolean(true),
-        SparqlResultsFormat::Json,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/ask_true_json.json",
+        &text(
+            &SparqlResult::Boolean(true),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
 fn ask_true_xml() {
-    insta::assert_snapshot!(text(
-        &SparqlResult::Boolean(true),
-        SparqlResultsFormat::Xml,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/ask_true_xml.xml",
+        &text(
+            &SparqlResult::Boolean(true),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
@@ -302,12 +313,15 @@ fn starred_graph() -> SparqlResult {
 
 #[test]
 fn construct_starred_graph_json() {
-    insta::assert_snapshot!(text(
-        &starred_graph(),
-        SparqlResultsFormat::Json,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/construct_starred_graph_json.json",
+        &text(
+            &starred_graph(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -317,22 +331,28 @@ fn construct_starred_graph_json() {
 
 #[test]
 fn select_books_json_with_provenance() {
-    insta::assert_snapshot!(text(
-        &books(),
-        SparqlResultsFormat::Json,
-        &populated_provenance(),
-        Some(&provenance_namespace()),
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_json_with_provenance.json",
+        &text(
+            &books(),
+            SparqlResultsFormat::Json,
+            &populated_provenance(),
+            Some(&provenance_namespace()),
+        ),
+    );
 }
 
 #[test]
 fn select_books_xml_with_provenance() {
-    insta::assert_snapshot!(text(
-        &books(),
-        SparqlResultsFormat::Xml,
-        &populated_provenance(),
-        Some(&provenance_namespace()),
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_xml_with_provenance.xml",
+        &text(
+            &books(),
+            SparqlResultsFormat::Xml,
+            &populated_provenance(),
+            Some(&provenance_namespace()),
+        ),
+    );
 }
 
 #[test]
@@ -450,28 +470,34 @@ fn edge_cases() -> SparqlResult {
 
 #[test]
 fn edge_cases_json() {
-    insta::assert_snapshot!(text(
-        &edge_cases(),
-        SparqlResultsFormat::Json,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/edge_cases_json.json",
+        &text(
+            &edge_cases(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
 fn edge_cases_xml() {
-    insta::assert_snapshot!(text(
-        &edge_cases(),
-        SparqlResultsFormat::Xml,
-        &ResultProvenance::default(),
-        None,
-    ));
+    purrdf_testkit::assert_golden!(
+        "results_corpus/edge_cases_xml.xml",
+        &text(
+            &edge_cases(),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
 }
 
 #[test]
 fn edge_cases_csv() {
-    // `insta` normalizes CRLF→LF in text snapshots, so the snapshot pins the
-    // content shape while the byte-level CRLF requirement is asserted on raw bytes.
+    // The golden pins the exact bytes, CRLF record ends included; the CRLF
+    // requirement is also asserted here so a failure names the rule it breaks.
     let outcome = serialize(
         &edge_cases(),
         SparqlResultsFormat::Csv,
@@ -484,7 +510,7 @@ fn edge_cases_csv() {
         raw.contains("\r\n") && !raw.replace("\r\n", "").contains('\n'),
         "edge-case CSV must use exclusive CRLF line endings (RFC 4180): {raw:?}"
     );
-    insta::assert_snapshot!(raw);
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_csv.csv", &raw);
 }
 
 #[test]
@@ -507,5 +533,5 @@ fn edge_cases_tsv() {
         raw.contains("--rtl") || raw.contains("--ltr"),
         "TSV must carry direction suffix from the serializer kernel: {raw:?}"
     );
-    insta::assert_snapshot!(raw);
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_tsv.tsv", &raw);
 }

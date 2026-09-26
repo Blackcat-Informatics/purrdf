@@ -234,7 +234,6 @@ fn push_field_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -262,7 +261,7 @@ mod tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {

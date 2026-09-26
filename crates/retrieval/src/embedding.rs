@@ -82,21 +82,16 @@ const SEPARATOR: char = ' ';
 /// [`RequestTerm`](crate::RequestTerm) is: a caller routing these refusals wants
 /// the compile error when a third one appears, not a wildcard arm that swallows
 /// it.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EmbeddingError {
     /// The text carries no component at all.
     ///
     /// An embedding with no components names no point in any space, and a
     /// request carrying one is refused when it is planned, so this text cannot
     /// have been written by [`encode_embedding`].
-    #[error("an embedding lexical carries no components")]
     Empty,
 
     /// A component is not exactly eight upper-case hexadecimal digits.
-    #[error(
-        "component {index} of an embedding lexical is {token:?}, which is not \
-         eight upper-case hexadecimal digits"
-    )]
     MalformedComponent {
         /// The zero-based index of the offending component.
         index: usize,
@@ -104,6 +99,21 @@ pub enum EmbeddingError {
         token: String,
     },
 }
+
+impl std::fmt::Display for EmbeddingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "an embedding lexical carries no components"),
+            Self::MalformedComponent { index, token } => write!(
+                f,
+                "component {index} of an embedding lexical is {token:?}, which is not \
+         eight upper-case hexadecimal digits"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EmbeddingError {}
 
 /// Write `embedding` as the lexical form this module documents.
 ///

@@ -158,9 +158,9 @@ kernel that is target-independent from one that is merely self-consistent wherev
 was last compiled. `make wasm` has the same limit in the other direction — it proves
 the release crates *build* for wasm32, never that they *answer* the same way there.
 
-So `crates/sparql-eval/tests/knn_wasm_determinism.rs` carries test bodies with two
-attributes each: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32.
-They run real SPARQL kNN queries over real PURREMB artifacts whose components are
+So `crates/sparql-eval/tests/knn_wasm_determinism.rs` is a `harness = false` target on
+the shared test runner (`purrdf_testkit::harness`), whose named cases run natively and
+on wasm32 alike. They run real SPARQL kNN queries over real PURREMB artifacts whose components are
 deliberately *not* exactly representable in binary64 — every product, every partial sum
 and both norms round — and assert five pinned `xsd:double` lexicals each, in order. One
 fixture is six-dimensional, which reaches only the exact fold's sequential tail; the
@@ -168,9 +168,9 @@ other is seventy-dimensional, which fills all sixteen lanes and the 64-element b
 checkpoint and leaves a six-element tail, asked under cosine and under squared
 Euclidean. `cargo test` executes them on the host; `make wasm-test` compiles them to
 wasm32 twice — on the baseline target and with `+simd128`, where the lanes become
-`f64x2` operations — and runs both in Node through `wasm-bindgen-test-runner` (which
-ships in the wasm-bindgen archive the wasm lane already installs, so there is no second
-pin to keep in step). CI's wasm job runs that lane. A target that computes a different last bit renders a different lexical
+`f64x2` operations — and runs both in Node through `scripts/wasm-test-runner.sh`, the
+cargo runner that generates each test binary's bindings with the wasm-bindgen CLI the
+wasm lane already installs, at the one pinned version. CI's wasm job runs that lane. A target that computes a different last bit renders a different lexical
 and fails there, rather than surfacing later as an unexplained reordering.
 
 ### The limit of the claim, stated

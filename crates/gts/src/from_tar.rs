@@ -300,9 +300,8 @@ fn require_seek_link_target(entry: &SeekTarEntry) -> Result<(), TarError> {
 }
 
 fn format_mtime(seconds: u64) -> Result<String, TarError> {
-    let dt = time::OffsetDateTime::from_unix_timestamp(seconds as i64)
-        .map_err(|err| TarError::new(format!("invalid tar mtime {seconds}: {err}")))?;
-    dt.format(&time::format_description::well_known::Rfc3339)
-        .map(|text| text.replace("+00:00", "Z"))
-        .map_err(|err| TarError::new(format!("format tar mtime {seconds}: {err}")))
+    i64::try_from(seconds)
+        .map_err(|_| "out of range")
+        .and_then(|secs| crate::rfc3339::format(secs, 0))
+        .map_err(|err| TarError::new(format!("invalid tar mtime {seconds}: {err}")))
 }

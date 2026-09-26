@@ -29,7 +29,7 @@ use std::process::{Command, Output};
 
 mod support;
 
-use tempfile::TempDir;
+use purrdf_testkit::{TempDir, temp_dir};
 
 /// A minimal RDFS-bearing document: `tom a Cat`, `Cat subClassOf Animal`.
 const SAMPLE_TTL: &str = concat!(
@@ -89,7 +89,7 @@ fn make_ttl_and_pack(dir: &TempDir, ttl: &str) -> (String, String) {
 
 #[test]
 fn reason_rdfs_over_pack_matches_text_byte_for_byte() {
-    let dir = TempDir::new().expect("temp dir");
+    let dir = temp_dir!().expect("temp dir");
     let (ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
     let from_text = run(&[
@@ -121,7 +121,7 @@ fn reason_rdfs_over_pack_matches_text_byte_for_byte() {
 
 #[test]
 fn reason_over_pack_is_deterministic() {
-    let dir = TempDir::new().expect("temp dir");
+    let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
     let first = run(&[
@@ -139,7 +139,7 @@ fn reason_over_pack_is_deterministic() {
 
 #[test]
 fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
-    let dir = TempDir::new().expect("temp dir");
+    let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
     let pack_bytes = std::fs::read(&pack).expect("read pack bytes");
 
@@ -168,7 +168,7 @@ fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
 
 #[test]
 fn large_pack_reasons_end_to_end() {
-    let dir = TempDir::new().expect("temp dir");
+    let dir = temp_dir!().expect("temp dir");
     let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
     for i in 0..20_000 {
         writeln!(ttl, "ex:s{i} ex:p ex:o{i} .").expect("write triple to fixture string");
@@ -200,7 +200,7 @@ fn large_pack_reasons_end_to_end() {
 
 #[test]
 fn tampered_pack_is_rejected_by_verify_and_fails_closed_on_read() {
-    let dir = TempDir::new().expect("temp dir");
+    let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
     // A good pack verifies and prints its 64-hex canonical digest.

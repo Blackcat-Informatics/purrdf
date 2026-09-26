@@ -103,7 +103,7 @@ pub struct Xfail {
     /// The tail of the case IRI this entry governs — conventionally
     /// `<group>/manifest#<local-name>`, which cannot cross-match between groups.
     ///
-    /// Matched by [`matches`]: the case IRI must END with this string and the
+    /// Matched by [`matches()`]: the case IRI must END with this string and the
     /// match must START at an IRI path-segment boundary, so a tail can never
     /// capture the back half of a longer segment.
     pub iri_tail: &'static str,

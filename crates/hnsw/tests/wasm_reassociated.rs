@@ -29,11 +29,14 @@
 //!   [`HnswError::ArithmeticPathUnavailable`], while the unaltered image beside it decodes.
 //!
 //! `make wasm-test` runs it twice on wasm32: on the baseline build, whose path is
-//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`. Natively it is
-//! an ordinary `#[test]` along whatever path the host resolves.
+//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`, each time in
+//! Node through `scripts/wasm-test-runner.sh`. The target is `harness = false` on
+//! `purrdf_testkit::harness`, so natively the same named cases run under `cargo test`,
+//! along whatever path the host resolves.
 //!
 //! ```text
-//! cargo test -p purrdf-hnsw --target wasm32-unknown-unknown --test wasm_reassociated
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-hnsw --target wasm32-unknown-unknown --test wasm_reassociated
 //! ```
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
@@ -42,9 +45,6 @@ use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated, Resolved};
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix};
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
 
 /// Rows in the fixture.
 const ROWS: usize = 40;
@@ -230,8 +230,6 @@ fn assert_searches_match_oracle(
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_image_records_the_path_and_shape_this_build_was_made_for() {
     let arithmetic = resolved();
     assert!(
@@ -282,8 +280,6 @@ fn the_image_records_the_path_and_shape_this_build_was_made_for() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_image_decodes_verifies_and_searches_as_the_kernel_ranks() {
     let arithmetic = resolved();
     for (metric, kernel) in metrics() {
@@ -310,8 +306,6 @@ fn the_image_decodes_verifies_and_searches_as_the_kernel_ranks() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_payload_one_distance_bit_away_does_not_verify() {
     let index =
         HnswIndex::build_reassociated(matrix(), &DistanceMetric::SquaredEuclidean, params())
@@ -338,8 +332,6 @@ fn a_payload_one_distance_bit_away_does_not_verify() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn an_image_recorded_on_another_wasm_path_is_refused_by_name() {
     let here = code_of(resolved().path());
     let index =
@@ -370,3 +362,10 @@ fn an_image_recorded_on_another_wasm_path_is_refused_by_name() {
         );
     }
 }
+
+purrdf_testkit::harness_main!(
+    a_payload_one_distance_bit_away_does_not_verify,
+    an_image_recorded_on_another_wasm_path_is_refused_by_name,
+    the_image_decodes_verifies_and_searches_as_the_kernel_ranks,
+    the_image_records_the_path_and_shape_this_build_was_made_for,
+);

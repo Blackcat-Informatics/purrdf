@@ -4540,7 +4540,6 @@ pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     /// The backward re-derivation runs on the PRODUCTION surface and says so.
     ///

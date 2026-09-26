@@ -149,8 +149,8 @@ bits may depend on the target and build — and every ordering is canonical:
 document ids are assigned after sorting on
 `(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
 and kNN ties break on the content-derived `TargetId`. The claim is executed,
-not argued: the text and kNN determinism tests are one body carrying both
-`#[test]` and `#[wasm_bindgen_test]`, run natively by `cargo test` and on
+not argued: the text and kNN determinism tests are one body per case on one
+shared test runner, run natively by `cargo test` and on
 `wasm32-unknown-unknown` by `make wasm-test`, and `make geo-determinism` runs
 the same corpus on both targets and compares bytes.
 
@@ -689,6 +689,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-retrieval`](./crates/retrieval/) | The composition layer over the ranked producers: one request planned, admitted, executed and fused into one ordered answer across every ranked relation a caller registered on the property-function seam. Pure-data plans with a canonical BLAKE3 identity, an exact content-addressed fusion law, per-row per-stratum provenance and per-term unserved evidence; producers, strata and weights are caller-supplied and nothing is defaulted. Re-exported by the umbrella as `purrdf::retrieval`. |
 | [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 codec under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile — and the graph decodes back to the document byte for byte, proven against its own source digest. Re-exported by the umbrella as `purrdf::markdown`. |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, and the flag/basic/detailed output formats, with ECMA-262 `pattern` translated to `regex` over the exact ECMA-262 character sets. Checked against the official JSON-Schema-Test-Suite for all three drafts; depends on `serde_json`, `regex` and `purrdf-iri` only, and builds for wasm32. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
