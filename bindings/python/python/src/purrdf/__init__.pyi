@@ -1582,7 +1582,7 @@ class _Shapes:
         shapes_ttl: str,
         *,
         base: str | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
@@ -1752,7 +1752,7 @@ class shapes:
         shapes_ttl: str,
         *,
         shapes_base: str | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> bytes: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
@@ -1777,7 +1777,7 @@ class shapes:
     # the document's own @base) naming the imported document, or by the closure
     # declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
     # owl:versionIRI is `<X>`); anything else — or a table entry no import names —
-    # raises ShapesImportError. PurRDF fetches nothing; the default `()` still
+    # raises ShapesImportError. PurRDF fetches nothing; an omitted table still
     # enforces the rule.
     @staticmethod
     def validate(
@@ -1786,7 +1786,7 @@ class shapes:
         *,
         shapes_base: str | None = None,
         conformance_disallows: Sequence[str] | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -1802,7 +1802,7 @@ class shapes:
         data_nt: str,
         *,
         shapes_base: str | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> str: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
@@ -1824,7 +1824,7 @@ class shapes:
         srl_base: str | None = None,
         explain: bool = False,
         max_term_generating_rounds: int | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, str | None]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
     # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
@@ -1842,7 +1842,7 @@ class shapes:
         *,
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> list[str]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
@@ -1857,7 +1857,7 @@ class shapes:
         shapes_ttl: str,
         *,
         shapes_base: str | None = None,
-        imports: Sequence[tuple[str, str]] = (),
+        imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, builtins.object]: ...
 
 # Back-compat alias for the native submodule's own name.
