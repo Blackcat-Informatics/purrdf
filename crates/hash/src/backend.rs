@@ -8,6 +8,12 @@
 //! exists so a test can run each path the host supports and compare it with
 //! the others and with the frozen vectors, and so a bench can time each one.
 //! MD5 and SHA-3 have a single, portable path.
+//!
+//! The fixed hasher's paths are not a run-time choice: a build whose target
+//! enables AES runs `AesFixedHasher`'s function (present only there) as
+//! [`FixedHasher`](crate::fixed::FixedHasher), every other build runs
+//! [`PortableFixedHasher`]'s. Both are named here so tests and the bench can
+//! run the portable function on an AES build too.
 
 use crate::arch::{self, Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{self, Crc32};
@@ -218,3 +224,28 @@ impl HexBackend {
         }
     }
 }
+
+crate::fixed::hasher!(
+    /// [`FixedHasher`](crate::fixed::FixedHasher)'s portable function
+    /// (folded multiplies on every length), available on every build.
+    PortableFixedHasher,
+    crate::fixed::Portable
+);
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+crate::fixed::hasher!(
+    /// [`FixedHasher`](crate::fixed::FixedHasher)'s AES function (AES rounds
+    /// on slices longer than 16 bytes), present only in builds whose target
+    /// enables AES, where it is the selected function.
+    AesFixedHasher,
+    crate::fixed::Aes
+);
+
+/// The name of the function this build's
+/// [`FixedHasher`](crate::fixed::FixedHasher) computes: `"aes"` or
+/// `"portable"`.
+pub const FIXED_HASHER_PATH: &str = crate::fixed::SELECTED_NAME;

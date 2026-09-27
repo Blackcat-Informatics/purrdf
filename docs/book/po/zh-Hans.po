@@ -1342,8 +1342,8 @@ msgstr ""
 
 #: src/concepts/interned-dataset.md:20
 msgid ""
-"Hot maps use fixed-key `ahash` — deterministic hashing is part of the [byte-"
-"determinism discipline](codecs.md), not just a speed choice."
+"Hot maps use the fixed-key `FixedHasher` — deterministic hashing is part of "
+"the [byte-determinism discipline](codecs.md), not just a speed choice."
 msgstr ""
 
 #: src/concepts/interned-dataset.md:23
@@ -3231,8 +3231,9 @@ msgid ""
 "Every serializer is **byte-deterministic**: the same dataset always produces "
 "the same bytes, on every platform and in every language binding. This is a "
 "hard workspace invariant, not a best effort — no iteration-order, time, or "
-"RNG dependence is allowed in any output path (hashers are fixed-key `ahash` "
-"for exactly this reason), and golden-file tests pin the emitted bytes."
+"RNG dependence is allowed in any output path (hashers are the fixed-key "
+"`FixedHasher` for exactly this reason), and golden-file tests pin the emitted "
+"bytes."
 msgstr ""
 
 #: src/concepts/codecs.md:67
@@ -3427,7 +3428,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
 #: src/sparql/querying.md:1928 src/validation/shacl.md:419
-#: src/validation/shex.md:64 src/entailment.md:289
+#: src/validation/shex.md:64 src/entailment.md:290
 msgid "Conformance"
 msgstr ""
 
@@ -11634,23 +11635,24 @@ msgstr ""
 #: src/entailment.md:281
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
-"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two "
-"fixed-key hashers (`ahash`, `hashbrown`) — every one of them `wasm32-unknown-"
-"unknown`\\-clean, so the engines carry into Rust, Python, WebAssembly, and C "
-"unchanged, with no threads, filesystem, or RNG dependency."
+"[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and "
+"`hashbrown`'s raw hash table, keyed by `purrdf-core`'s fixed-key hasher — "
+"every one of them `wasm32-unknown-unknown`\\-clean, so the engines carry "
+"into Rust, Python, WebAssembly, and C unchanged, with no threads, filesystem, "
+"or RNG dependency."
 msgstr ""
 
-#: src/entailment.md:286
+#: src/entailment.md:287
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 
-#: src/entailment.md:291
+#: src/entailment.md:292
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr ""
 
-#: src/entailment.md:293
+#: src/entailment.md:294
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -11658,7 +11660,7 @@ msgid ""
 "through the SPARQL conformance harness."
 msgstr ""
 
-#: src/entailment.md:297
+#: src/entailment.md:298
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -11669,7 +11671,7 @@ msgid ""
 "has started agreeing, are both hard failures."
 msgstr ""
 
-#: src/entailment.md:305
+#: src/entailment.md:306
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -11685,7 +11687,7 @@ msgid ""
 "over a corpus rather than over what W3C published."
 msgstr ""
 
-#: src/entailment.md:318
+#: src/entailment.md:319
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -11695,7 +11697,7 @@ msgid ""
 "rather than part of the gate."
 msgstr ""
 
-#: src/entailment.md:324
+#: src/entailment.md:325
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -11704,7 +11706,7 @@ msgid ""
 "reported separately."
 msgstr ""
 
-#: src/entailment.md:330
+#: src/entailment.md:331
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -11712,13 +11714,13 @@ msgid ""
 "none were filtered by profile."
 msgstr ""
 
-#: src/entailment.md:335
+#: src/entailment.md:336
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 
-#: src/entailment.md:342
+#: src/entailment.md:343
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -11730,7 +11732,7 @@ msgid ""
 "unsoundness found\", never as \"23 non-entailments proved\"."
 msgstr ""
 
-#: src/entailment.md:351
+#: src/entailment.md:352
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -11739,14 +11741,14 @@ msgid ""
 "`imports-unresolved`, and **0 are actionable** (0 `missing-rule`)."
 msgstr ""
 
-#: src/entailment.md:358
+#: src/entailment.md:359
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
 "five of the six are not matching:"
 msgstr ""
 
-#: src/entailment.md:362
+#: src/entailment.md:363
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -11761,7 +11763,7 @@ msgid ""
 "the `schema-conclusion` class with them."
 msgstr ""
 
-#: src/entailment.md:373
+#: src/entailment.md:374
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -11773,7 +11775,7 @@ msgid ""
 "half would claim conclusions the semantics does not license."
 msgstr ""
 
-#: src/entailment.md:381
+#: src/entailment.md:382
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -11782,7 +11784,7 @@ msgid ""
 "minted, over blank nodes checked absent from both documents."
 msgstr ""
 
-#: src/entailment.md:386
+#: src/entailment.md:387
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -11791,7 +11793,7 @@ msgid ""
 "instead."
 msgstr ""
 
-#: src/entailment.md:391
+#: src/entailment.md:392
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -11801,7 +11803,7 @@ msgid ""
 "the counterexample range being exactly decided."
 msgstr ""
 
-#: src/entailment.md:398
+#: src/entailment.md:399
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -11810,7 +11812,7 @@ msgid ""
 "still fetches nothing."
 msgstr ""
 
-#: src/entailment.md:404
+#: src/entailment.md:405
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -11823,7 +11825,7 @@ msgid ""
 "checker that re-decides the whole thing without running a reasoner."
 msgstr ""
 
-#: src/entailment.md:414
+#: src/entailment.md:415
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -11840,7 +11842,7 @@ msgid ""
 "and `OWL-RL 78 / 78` remains a claim about Tables 4–9 and nothing else."
 msgstr ""
 
-#: src/entailment.md:428
+#: src/entailment.md:429
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -13321,7 +13323,7 @@ msgstr ""
 msgid ""
 "Serializers and the GTS writer are byte-deterministic. No iteration-order, "
 "time, or RNG dependence is permitted in any output path; hot maps use fixed-"
-"key `ahash` for this reason. Changes that alter emitted bytes must update "
+"key `FixedHasher` for this reason. Changes that alter emitted bytes must update "
 "the affected golden files, visibly."
 msgstr ""
 
@@ -13700,7 +13702,8 @@ msgstr ""
 msgid ""
 "The engine-level speed comes from the IR design ([The Interned Dataset IR]"
 "(../concepts/interned-dataset.md)): every term stored once in a string arena "
-"addressed by copyable `NonZeroU32` ids, fixed-key `ahash` everywhere hot, "
+"addressed by copyable `NonZeroU32` ids, fixed-key `FixedHasher` everywhere "
+"hot, "
 "frozen `Box<[QuadRow]>` quad tables with lazy ordinal permutation indexes "
 "(~4 bytes/quad per axis), and evaluation in `TermId` space so solution "
 "comparison is an integer compare."

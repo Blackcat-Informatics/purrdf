@@ -9,7 +9,7 @@
 //! engine intern terms from the source dataset and re-materialize them into a fresh
 //! builder soundly.
 
-use std::hash::{Hash, Hasher};
+use std::hash::BuildHasher;
 
 use hashbrown::HashTable;
 
@@ -23,9 +23,7 @@ pub(crate) struct Interner {
 }
 
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
+    purrdf_core::FastHasher::default().hash_one(value)
 }
 
 impl Interner {

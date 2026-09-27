@@ -11,6 +11,10 @@
 //! processor or target the accessor returns `None`. The wasm32 `simd128`
 //! kernel is the exception to run-time detection: wasm has none, so it is
 //! compiled only when `simd128` is enabled for the whole build.
+//!
+//! The other exception is the fixed hasher's AES `Block`, which exists only
+//! in builds whose target enables `aes` at compile time: such a build has one
+//! hash function, never a run-time choice between two.
 
 /// Processes a run of whole 64-byte SHA-1 blocks.
 pub(crate) type Sha1Blocks = fn(&mut [u32; 5], &[u8]);
@@ -79,3 +83,13 @@ pub(crate) use wasm32::hex_wasm32_simd128;
 pub(crate) const fn hex_wasm32_simd128() -> Option<HexEncode> {
     None
 }
+
+#[cfg(all(target_arch = "x86_64", target_feature = "aes"))]
+pub(crate) use x86_64::Block;
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
+pub(crate) use aarch64::Block;

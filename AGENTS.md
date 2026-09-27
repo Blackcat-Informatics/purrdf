@@ -54,7 +54,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
-| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it |
+| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, with AES rounds for byte slices over 16 bytes on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors |
 | `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema draft 2020-12 validation: every vocabulary, `$dynamicRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, ECMA-262 `pattern` translated to `regex` with the ECMA-262 class sets spelled out; depends on `serde_json`, `regex` and `purrdf-iri` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash` | Zero-dependency foundations |
@@ -105,7 +105,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Byte determinism.** Serializers and the GTS writer are byte-deterministic.
   If your change alters emitted bytes, you must update the affected goldens and
   say why in the PR. Never introduce iteration-order, time, or RNG dependence
-  into output paths (hashers are fixed-key `ahash` for this reason).
+  into output paths (hashers are the fixed-key `purrdf_hash::fixed::FixedHasher`
+  for this reason).
 * **Conformance corpora are the contract**: W3C SPARQL 1.1
   (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
   shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
@@ -208,7 +209,8 @@ interner). When touching parse/serialize/eval paths:
   assertion. Add or extend a bench when you claim a win.
 * Avoid per-token/per-term `String` allocation; move values out of buffers
   instead of cloning; pre-size collections in parse loops.
-* Hot maps use fixed-key `ahash` (see `crates/rdf-core/src/ir/builder.rs` for
+* Hot maps use the fixed-key `purrdf_hash::fixed::FixedHasher` (`FixedState`,
+  or `purrdf_core::FastHasher`; see `crates/rdf-core/src/ir/builder.rs` for
   the canonical store-once interner pattern) — never default SipHash in a hot
   path, and never a randomly-seeded hasher in an output path.
 

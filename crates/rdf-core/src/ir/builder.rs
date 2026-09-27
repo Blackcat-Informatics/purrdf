@@ -36,21 +36,21 @@ use crate::RdfLocation;
 
 /// A fixed-key hash of a value, so the store-once tables are deterministic across
 /// runs. The frozen output is sorted by id, not hash-iteration order, so any hash
-/// would do; fixed-key `AHasher` just avoids SipHash on the hot interning path.
+/// would do; the fixed-key `FixedHasher` just avoids SipHash on the hot interning path.
 fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     hash_lookup(lookup, &mut hasher);
     hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     hash_stored(arena, term, &mut hasher);
     hasher.finish()
 }

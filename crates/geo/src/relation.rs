@@ -126,10 +126,11 @@ const PRESENT: u8 = 0x21;
 
 /// A hand-rolled FNV-1a accumulator.
 ///
-/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `ahash`
+/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `FixedHasher`
 /// because a fingerprint is compared against one computed by a *different run* of
 /// this code: `DefaultHasher`'s algorithm is explicitly unspecified across
-/// releases, and `ahash`'s output is a function of its version. Either would make
+/// releases, and `FixedHasher` computes a different function on a build whose
+/// target enables AES than on one that does not. Either would make
 /// [`verify_binding`] answer "different dataset" for a dataset that is in fact
 /// identical, the moment a toolchain moved. FNV-1a is a few lines of fully
 /// specified integer arithmetic, so the fingerprint is a pure function of the

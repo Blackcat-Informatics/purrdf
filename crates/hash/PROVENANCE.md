@@ -34,9 +34,20 @@ ported or consulted, in any language.
   distances, the reduction to 64 bits and Barrett's quotient) was worked out
   independently from GF(2) polynomial arithmetic, and no code listing of any
   kind was used.
+- **Fixed-key table hasher (`fixed`)** — designed from first principles for
+  this crate. The sources are: arithmetic facts about the folded multiply
+  (an odd multiplier makes the low half of the product a bijection, and the
+  high half depends on every input bit); the golden ratio, whose 64-bit
+  fraction `⌊2^64/φ⌋` is pinned exactly in a test by `x² + x = 1`; and the
+  AES round as the `aesenc`, `AESE` and `AESMC` instructions define it. No
+  third-party non-cryptographic hash function was read, ported or
+  consulted, in any language or from memory. The design, the key schedule
+  and the measured decision to ship an AES path are recorded in
+  `src/fixed.rs`, `src/fixed/*.rs` and `benches/hasher.rs`.
 - **Instruction semantics** — the Rust `core::arch` reference
-  (doc.rust-lang.org) for the x86 SHA and `pclmulqdq` intrinsics and the
-  AArch64 SHA1, CRC32 and PMULL intrinsics.
+  (doc.rust-lang.org) for the x86 SHA, `pclmulqdq` and `aesenc` intrinsics
+  and the AArch64 SHA1, CRC32, PMULL, `vaeseq_u8` and `vaesmcq_u8`
+  intrinsics.
 
 ## Known-answer values (`tests/known_answers.rs`)
 
@@ -68,3 +79,15 @@ file's header states its input recipe (the little-endian `u64` stream of
 `purrdf_testkit::vectors` verifies before replay. A disagreement between a
 file and this crate is a defect in this crate; the files are never edited to
 match it.
+
+## Fixed-hasher self-vectors (`tests/vectors/fixed_hasher_*_vectors.txt`)
+
+These two files record what this crate's own portable and AES table-hash
+functions answered when they were written. Their `oracle` header names
+purrdf-hash itself. No third-party output is involved, and a replay proves
+stability across targets and edits rather than correctness.
+`tests/fixed_hasher.rs` writes them when `PURRDF_RECORD_FIXED_HASHER=1` is
+set.
+
+`tests/vectors/corpus_iris.txt` holds input keys only: the 1,000 most
+frequent IRIs of the repository's RDF test corpora.

@@ -22,7 +22,7 @@
 //! parse order, so the whole table is reproducible run to run. The store-once lookup
 //! table contains only dense ids and no result is ever derived from hash iteration.
 
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash};
 
 use hashbrown::HashTable;
 
@@ -303,9 +303,7 @@ pub(crate) struct ConceptTable {
 }
 
 fn hash_concept(concept: &Concept) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    concept.hash(&mut hasher);
-    hasher.finish()
+    purrdf_core::FastHasher::default().hash_one(concept)
 }
 
 impl ConceptTable {

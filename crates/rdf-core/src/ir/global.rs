@@ -16,7 +16,7 @@
 //! The dictionary mirrors the immutable IR's interning discipline exactly, one
 //! width up: a store-once byte arena (each interned string owned ONCE), a dense
 //! `GlobalInternedTerm` table, a value→dense-index [`HashTable`] using fixed-key
-//! ahash, and a lazily-built reverse value index. Ids are minted in insertion order,
+//! `FixedHasher`, and a lazily-built reverse value index. Ids are minted in insertion order,
 //! so a fixed push sequence is reproducible; no observable output depends on hash
 //! iteration order (buckets are populated in ascending-id order and reads return the
 //! first match).
@@ -192,7 +192,7 @@ enum GlobalTermLookup<'a> {
     },
 }
 
-/// Fixed-key ahash of a lookup (id-based dedup path). MUST hash byte-identically to
+/// Fixed-key `FixedHasher` hash of a lookup (id-based dedup path). MUST hash byte-identically to
 /// [`hash_stored`] for equal values — explicit discriminant tags + `str::hash`.
 fn hash_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
     match lookup {
@@ -226,7 +226,7 @@ fn hash_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
     }
 }
 
-/// Fixed-key ahash of a stored term, resolving its `StrRange`s through `arena`
+/// Fixed-key `FixedHasher` hash of a stored term, resolving its `StrRange`s through `arena`
 /// (id-based dedup path). MUST match [`hash_lookup`] for equal values.
 fn hash_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H) {
     match term {
@@ -256,13 +256,13 @@ fn hash_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H
 }
 
 fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     hash_lookup(lookup, &mut hasher);
     hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &GlobalInternedTerm) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     hash_stored(arena, term, &mut hasher);
     hasher.finish()
 }
@@ -316,7 +316,7 @@ type GlobalValueIndex = HashMap<u64, Vec<GlobalTermId>, FastHasher>;
 /// A `u64`-scaled value-interner keyed on the dataset-independent [`TermValue`] — the
 /// global-identity twin of the frozen IR's `Interner`. Owns a store-once byte arena,
 /// a dense `GlobalInternedTerm` table, a value→dense-index [`HashTable`] (fixed-key
-/// ahash, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
+/// `FixedHasher`, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
 /// value index. `Send + Sync` (the lazy index rides an [`OnceLock`], like
 /// [`RdfDataset`](super::RdfDataset)).
 ///
@@ -754,7 +754,7 @@ impl GlobalDictionary {
                 let id = GlobalTermId::from_index(
                     u64::try_from(i).expect("dense index fits u64 for a Vec-bounded table"),
                 );
-                let mut hasher = ahash::AHasher::default();
+                let mut hasher = purrdf_hash::fixed::FixedHasher::default();
                 self.hash_term_value(id, &mut hasher);
                 map.entry(hasher.finish()).or_default().push(id);
             }
@@ -777,11 +777,11 @@ impl GlobalDictionary {
     }
 }
 
-/// Fixed-key ahash of a dataset-independent [`TermValue`] (value-based path). Uses
+/// Fixed-key `FixedHasher` hash of a dataset-independent [`TermValue`] (value-based path). Uses
 /// [`TermValue`]'s hand-written `Hash`, so it matches
 /// [`GlobalDictionary::hash_term_value`] for equal values.
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }

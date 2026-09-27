@@ -192,7 +192,7 @@ fn is_query_scoped_blank(value: &TermValue) -> bool {
 }
 
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }

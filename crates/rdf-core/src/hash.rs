@@ -3,10 +3,11 @@
 
 //! The workspace's single, fixed-key hashing policy for in-memory lookup tables.
 //!
-//! Every hash map / set on a hot IR or evaluator path uses [`FastHasher`] — a
-//! **fixed-key**, non-cryptographic [`ahash`] hasher. The key is fixed (no
-//! runtime RNG seeding), which keeps the dependency tree wasm-clean and free of
-//! per-process nondeterminism.
+//! Every hash map / set on a hot IR or evaluator path uses [`FastHasher`] —
+//! the workspace's **fixed-key**, non-cryptographic
+//! [`FixedHasher`](purrdf_hash::fixed::FixedHasher). The keys are compile-time
+//! constants (no runtime RNG seeding), which keeps the dependency tree
+//! wasm-clean and free of per-process nondeterminism.
 //!
 //! # Determinism is never hash-order
 //!
@@ -18,9 +19,10 @@
 //! order. Use these types for lookup and membership; sort explicitly when order
 //! matters.
 
-/// The workspace fixed-key [`ahash`] hasher builder. Non-cryptographic, no
+/// The workspace's fixed-key hasher builder,
+/// [`FixedState`](purrdf_hash::fixed::FixedState). Non-cryptographic, no
 /// runtime RNG seeding — see the [module docs](self) for the determinism policy.
-pub type FastHasher = core::hash::BuildHasherDefault<ahash::AHasher>;
+pub type FastHasher = purrdf_hash::fixed::FixedState;
 
 /// A [`std::collections::HashMap`] keyed by the workspace [`FastHasher`].
 pub type FastMap<K, V> = std::collections::HashMap<K, V, FastHasher>;

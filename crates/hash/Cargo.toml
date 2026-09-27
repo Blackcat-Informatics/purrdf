@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, and lowercase hex rendering"
+description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, lowercase hex rendering, and the fixed-key table hasher"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -30,16 +30,25 @@ path = "src/lib.rs"
 name = "purrdf_hash"
 
 [dev-dependencies]
-# The frozen differential vectors and the deterministic input stream they are
-# drawn from. Path-only and unpublished, so it is stripped from the packaged
-# manifest; the zero-dep leaf gate checks normal edges only.
+# The frozen differential vectors, the deterministic input stream they are
+# drawn from, and the `harness = false` runner `tests/fixed_hasher.rs` runs on,
+# natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so
+# it is stripped from the packaged manifest; the zero-dep leaf gate checks
+# normal edges only.
 purrdf-testkit = { workspace = true }
-# Digest throughput baselines. DEV-DEPENDENCY ONLY: it never reaches the
-# published library's graph.
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Digest and hasher throughput baselines. DEV-DEPENDENCY ONLY, and native-only:
+# `make wasm-test` builds this crate's wasm32 test target, cargo builds every
+# declared dev-dependency for it, and criterion is not wasm32-clean.
 criterion = { workspace = true }
 
 [[bench]]
 name = "digests"
+harness = false
+
+[[bench]]
+name = "hasher"
 harness = false
 
 # The frozen-vector replay runs on purrdf_testkit's `harness = false` runner so
@@ -55,4 +64,12 @@ harness = false
 # `simd128` kernel as well as the portable path.
 [[test]]
 name = "hex"
+harness = false
+
+# The one test in this crate that must EXECUTE on wasm32-unknown-unknown: the
+# portable hasher's frozen answers, which wasm32 computes from 32-bit halves.
+# `harness = false` on the shared runner, so `make wasm-test` runs the same
+# named cases in Node through scripts/wasm-test-runner.sh.
+[[test]]
+name = "fixed_hasher"
 harness = false

@@ -3,7 +3,8 @@
 
 //! Armv8 kernels: SHA-1 on the SHA1 instructions, CRC-32 on the CRC32
 //! instructions, alone or behind `pmull` folding, base16 encoding on the NEON
-//! table lookup `tbl`.
+//! table lookup `tbl`, and the fixed hasher's AES round on builds whose
+//! target enables `aes`.
 
 use core::arch::aarch64::{
     __crc32b, __crc32d, uint8x16_t, uint32x4_t, uint64x2_t, vaddq_u32, vandq_u8, vdupq_n_u8,
@@ -249,4 +250,71 @@ fn hex_kernel(input: &[u8], output: &mut [u8]) {
     }
     let done = chunks.len() * 16;
     encode_portable(tail, &mut output[2 * done..]);
+}
+
+// --- The fixed hasher's AES round ------------------------------------------
+
+/// A 128-bit block for the fixed hasher's AES path, byte `i` in lane `i`.
+///
+/// Compiled only when the build's target enables `aes` (and with it NEON),
+/// so every intrinsic below runs on a processor the whole build already
+/// requires; no run-time detection is involved and no other path exists in
+/// such a build.
+#[cfg(all(target_endian = "little", target_feature = "aes"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Block(core::arch::aarch64::uint8x16_t);
+
+// SAFETY (every `unsafe` block below): the intrinsics need NEON and AES, which
+// this item's `cfg(target_feature = "aes")` proves the build's target enables
+// for every function in the crate (`aes` implies `neon`). Rust still asks for
+// an `unsafe` block because these functions carry no `#[target_feature]`
+// attribute of their own: adding one would make every caller outside this
+// module `unsafe` in turn.
+#[cfg(all(target_endian = "little", target_feature = "aes"))]
+impl Block {
+    /// The block whose low eight bytes are `low` and high eight are `high`,
+    /// both little-endian.
+    #[inline]
+    pub(crate) fn from_words(low: u64, high: u64) -> Self {
+        use core::arch::aarch64::{vcombine_u64, vcreate_u64, vreinterpretq_u8_u64};
+        // SAFETY: see the impl comment.
+        Self(unsafe { vreinterpretq_u8_u64(vcombine_u64(vcreate_u64(low), vcreate_u64(high))) })
+    }
+
+    /// Sixteen bytes, in order.
+    #[inline]
+    pub(crate) fn load(bytes: &[u8; 16]) -> Self {
+        // SAFETY: `bytes` is sixteen readable bytes and `vld1q_u8` needs only
+        // byte alignment; NEON as in the impl comment.
+        Self(unsafe { vld1q_u8(bytes.as_ptr()) })
+    }
+
+    /// One AES encryption round (ShiftRows, SubBytes, MixColumns) followed
+    /// by XOR with `key`: the x86 `aesenc` order. `AESE` XORs its key
+    /// *first*, so it runs with a zero key and `key` is added after
+    /// `AESMC`; ShiftRows and SubBytes commute, so the result is the
+    /// function the x86-64 block computes.
+    #[inline]
+    pub(crate) fn round(self, key: Self) -> Self {
+        use core::arch::aarch64::{vaeseq_u8, vaesmcq_u8, vdupq_n_u8, veorq_u8};
+        // SAFETY: see the impl comment.
+        Self(unsafe { veorq_u8(vaesmcq_u8(vaeseq_u8(self.0, vdupq_n_u8(0))), key.0) })
+    }
+
+    /// Lane-wise XOR.
+    #[inline]
+    pub(crate) fn xor(self, other: Self) -> Self {
+        // SAFETY: see the impl comment.
+        Self(unsafe { core::arch::aarch64::veorq_u8(self.0, other.0) })
+    }
+
+    /// The low and high eight bytes as little-endian words.
+    #[inline]
+    pub(crate) fn words(self) -> (u64, u64) {
+        // SAFETY: see the impl comment.
+        unsafe {
+            let words = vreinterpretq_u64_u8(self.0);
+            (vgetq_lane_u64::<0>(words), vgetq_lane_u64::<1>(words))
+        }
+    }
 }

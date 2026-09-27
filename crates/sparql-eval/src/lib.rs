@@ -277,7 +277,7 @@ pub use user_fn::{
 // receipt itself, because a field a caller cannot name is a field it cannot read.
 pub use witness::{RelationAttestations, RelationWitness};
 
-/// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
+/// A deterministic, seed-free hasher builder: the workspace's fixed-key `FixedHasher`.
 ///
 /// Used for every internal map/set whose construction order or membership could
 /// otherwise depend on a per-process random seed. Two reasons:
@@ -287,11 +287,11 @@ pub use witness::{RelationAttestations, RelationWitness};
 ///    result. We always drive *output* order from `Vec`s, but fixed-key hashing
 ///    removes the hazard entirely (cf. the repo `mappings-determinism` lesson).
 /// 2. **wasm-cleanliness.** `std`'s default `RandomState` would pull a random
-///    source; fixed-key `AHasher` needs none, keeping the crate clean on
+///    source; the fixed-key `FixedHasher` needs none, keeping the crate clean on
 ///    `wasm32-unknown-unknown`.
 ///
 /// This mirrors `purrdf-core`'s own fixed-key value-index hashing.
-pub(crate) type DetHasher = std::hash::BuildHasherDefault<ahash::AHasher>;
+pub(crate) type DetHasher = purrdf_hash::fixed::FixedState;
 
 /// A deterministic, seed-free [`HashMap`](std::collections::HashMap). See [`DetHasher`].
 pub(crate) type DetHashMap<K, V> = std::collections::HashMap<K, V, DetHasher>;

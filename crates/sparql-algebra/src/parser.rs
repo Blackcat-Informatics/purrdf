@@ -5045,7 +5045,7 @@ fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) 
 /// (recomputing it from scratch on every `BIND`/`LATERAL`, discussed at this
 /// module's group-loop) and a single [`visible_variables`] call over a
 /// `BIND`-heavy pattern quadratic; the `BTreeSet` (not a hash set — this
-/// crate is wasm32-clean and deliberately does not depend on `ahash`, and a
+/// crate is wasm32-clean and deliberately depends on no hasher crate, and a
 /// membership set that is never iterated for its OWN order — only `order`
 /// ever is — needs no hash at all) removes both.
 #[derive(Default)]

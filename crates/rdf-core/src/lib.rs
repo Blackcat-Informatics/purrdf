@@ -93,7 +93,7 @@ pub mod graph;
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,
 // allocation-free, wasm-clean.
 pub mod governor;
-// The workspace's single fixed-key ahash determinism policy: FastHasher and the
+// The workspace's single fixed-key hashing policy (purrdf-hash's FixedHasher): FastHasher and the
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;

@@ -101,12 +101,12 @@ pub enum NodeData {
 
 /// The interning hash of one node's shape.
 ///
-/// Fixed-key `ahash`, exactly as [`crate::proof::ProofArena`]'s `term_hash` uses:
+/// The fixed-key `FixedHasher`, exactly as [`crate::proof::ProofArena`]'s `term_hash` uses:
 /// seeded from constants rather than ambient entropy, which does not exist on
 /// `wasm32-unknown-unknown`. The table this feeds is never iterated.
 fn node_hash(data: &NodeData) -> u64 {
     use core::hash::{Hash, Hasher};
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     data.hash(&mut hasher);
     hasher.finish()
 }
@@ -114,7 +114,7 @@ fn node_hash(data: &NodeData) -> u64 {
 /// The interning hash of one symbol string.
 fn symbol_hash(symbol: &str) -> u64 {
     use core::hash::{Hash, Hasher};
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     symbol.hash(&mut hasher);
     hasher.finish()
 }

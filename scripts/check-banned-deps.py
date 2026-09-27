@@ -192,6 +192,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "sha3": "purrdf_hash::sha3 (FIPS 202)",
     # sha3's permutation crate; nothing else in the graph pulled it in.
     "keccak": "purrdf_hash::sha3::keccak_f1600 (FIPS 202 Keccak-f[1600])",
+    "ahash": "purrdf_hash::fixed::FixedHasher",
     "filetime": "std::fs::File::set_times (purrdf-gts restores file and directory mtimes)",
     "memmap2": "purrdf_cli::mmap::Mmap (read-only mmap/munmap through libc)",
     "rustix": "purrdf_cli::mmap (memfd_create and fcntl F_ADD_SEALS/F_GET_SEALS through libc)",

@@ -1290,7 +1290,7 @@ impl RdfDataset {
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
     #[must_use]
     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         0u8.hash(&mut hasher);
         iri.hash(&mut hasher);
         self.find_term_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
@@ -1299,7 +1299,7 @@ impl RdfDataset {
     /// The id of an interned blank node, without allocating its label.
     #[must_use]
     pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         1u8.hash(&mut hasher);
         label.hash(&mut hasher);
         scope.hash(&mut hasher);
@@ -1343,7 +1343,7 @@ impl RdfDataset {
         let language = lowered.as_deref().or(language);
 
         let datatype_id = self.term_id_by_iri(datatype)?;
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         2u8.hash(&mut hasher);
         lexical_form.hash(&mut hasher);
         datatype_id.hash(&mut hasher);
@@ -1372,7 +1372,7 @@ impl RdfDataset {
         {
             return None;
         }
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         3u8.hash(&mut hasher);
         s.hash(&mut hasher);
         p.hash(&mut hasher);

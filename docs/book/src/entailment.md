@@ -279,8 +279,9 @@ cannot hand the function a value it accepts and get a refusal instead of an answ
   themselves — the crate fabricates none, per the
   [toolkit-not-ontology rule](project/design-rules.md).
 - **Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`,
-  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two
-  fixed-key hashers (`ahash`, `hashbrown`) — every one of them
+  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and
+  `hashbrown`'s raw hash table, keyed by `purrdf-core`'s fixed-key hasher —
+  every one of them
   `wasm32-unknown-unknown`-clean, so the engines carry into Rust, Python,
   WebAssembly, and C unchanged, with no threads, filesystem, or RNG dependency.
 - **Deterministic.** Same input + regime → same closure, always — and the same

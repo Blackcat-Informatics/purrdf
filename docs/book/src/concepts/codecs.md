@@ -61,8 +61,8 @@ pinpointed explicitly when writing.
 Every serializer is **byte-deterministic**: the same dataset always produces
 the same bytes, on every platform and in every language binding. This is a
 hard workspace invariant, not a best effort — no iteration-order, time, or RNG
-dependence is allowed in any output path (hashers are fixed-key `ahash` for
-exactly this reason), and golden-file tests pin the emitted bytes.
+dependence is allowed in any output path (hashers are the fixed-key `FixedHasher`
+for exactly this reason), and golden-file tests pin the emitted bytes.
 
 Determinism is what makes the rest of the toolkit composable: content
 addressing in [GTS](../gts.md) and the [slice catalog](../slices.md), diffable

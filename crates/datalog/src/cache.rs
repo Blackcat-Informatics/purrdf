@@ -13,9 +13,9 @@
 //! one cache entry no matter how they were built, and two programs that differ anywhere an
 //! execution can observe never share one.
 //!
-//! BLAKE3 rather than the crate's `ahash` interner hasher: `ahash` is explicitly not
-//! version-stable, so its output cannot address content — an `ahash` key would silently
-//! change meaning across a dependency bump. Only [`blake3::Hasher::update`] is used, never
+//! BLAKE3 rather than the crate's `FixedHasher` interner hasher: that is a table hasher
+//! whose function depends on the build's target features, so its output cannot address
+//! content — a `FixedHasher` key would silently change meaning between two builds. Only [`blake3::Hasher::update`] is used, never
 //! `update_rayon`, so hashing is sequential on every target and the `wasm32` build carries
 //! no thread pool.
 //!

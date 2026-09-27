@@ -422,7 +422,8 @@ payload, and folds the **bytes** with a hand-rolled FNV-1a `u64`.
 
 FNV-1a is chosen because it is six lines of integer arithmetic with published
 constants and no state. `DefaultHasher` is SipHash with an unspecified
-per-process key and `ahash` is seed- and version-sensitive by design; either
+per-process key, and the workspace's table hasher `FixedHasher` computes a
+different function on a build with AES than on one without; either
 would make the digest move for reasons unrelated to the graph, which is exactly
 the false signal the harness exists to remove. A golden that moves under a
 toolchain bump is therefore a serialization defect, never a hasher change.

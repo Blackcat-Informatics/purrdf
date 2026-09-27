@@ -51,10 +51,12 @@ purrdf-xsd = { workspace = true }
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
 # is dependency-free and uses the same `MIT OR Apache-2.0 OR MulanPSL-2.0` license as this crate.
 purrdf-events = { workspace = true }
-# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables. The tables
+# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables
+# (`purrdf_hash::fixed::FixedHasher`, re-exported as `FastHasher`). The tables
 # never persist hash values and equality still resolves collisions; this replaces
-# SipHash on hot value-index paths without introducing runtime randomness.
-ahash = { workspace = true }
+# SipHash on hot value-index paths without introducing runtime randomness. A
+# zero-dependency leaf, so the kernel's graph gains no third-party package.
+purrdf-hash = { workspace = true }
 # Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
 # introduced in hashbrown 0.14.2; the workspace tracks 0.17.)

@@ -18,7 +18,7 @@ live in
 The engine-level speed comes from the IR design
 ([The Interned Dataset IR](../concepts/interned-dataset.md)): every term
 stored once in a string arena addressed by copyable `NonZeroU32` ids,
-fixed-key `ahash` everywhere hot, frozen `Box<[QuadRow]>` quad tables with
+fixed-key `FixedHasher` everywhere hot, frozen `Box<[QuadRow]>` quad tables with
 lazy ordinal permutation indexes (~4 bytes/quad per axis), and evaluation in
 `TermId` space so solution comparison is an integer compare.
 

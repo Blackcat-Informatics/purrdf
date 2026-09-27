@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! x86-64 kernels: SHA-1 on the SHA extensions, CRC-32 on `pclmulqdq`,
-//! base16 encoding on SSSE3 `pshufb`.
+//! base16 encoding on SSSE3 `pshufb`, and the fixed hasher's AES round on
+//! builds whose target enables `aes`.
 
+#[cfg(target_feature = "aes")]
+use core::arch::x86_64::_mm_aesenc_si128;
 use core::arch::x86_64::{
     __m128i, _mm_add_epi32, _mm_and_si128, _mm_clmulepi64_si128, _mm_cvtsi32_si128,
     _mm_cvtsi64_si128, _mm_cvtsi128_si64, _mm_extract_epi32, _mm_extract_epi64, _mm_loadu_si128,
@@ -244,4 +247,65 @@ fn hex_kernel(input: &[u8], output: &mut [u8]) {
     }
     let done = chunks.len() * 16;
     encode_portable(tail, &mut output[2 * done..]);
+}
+
+// --- The fixed hasher's AES round ------------------------------------------
+
+/// A 128-bit block for the fixed hasher's AES path, byte `i` in lane `i`.
+///
+/// Compiled only when the build's target enables `aes`
+/// (`-C target-feature=+aes`, or a `target-cpu` that has it), so every
+/// intrinsic below runs on a processor the whole build already requires; no
+/// run-time detection is involved and no other path exists in such a build.
+#[cfg(target_feature = "aes")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Block(__m128i);
+
+// SAFETY (every `unsafe` block below): the intrinsics need SSE2, part of the
+// x86-64 baseline, and AES, which this item's `cfg(target_feature = "aes")`
+// proves the build's target enables for every function in the crate. Rust
+// still asks for an `unsafe` block because these functions carry no
+// `#[target_feature]` attribute of their own: adding one would make every
+// caller outside this module `unsafe` in turn.
+#[cfg(target_feature = "aes")]
+impl Block {
+    /// The block whose low eight bytes are `low` and high eight are `high`,
+    /// both little-endian.
+    #[inline]
+    pub(crate) fn from_words(low: u64, high: u64) -> Self {
+        // SAFETY: see the impl comment.
+        Self(unsafe { _mm_set_epi64x(high as i64, low as i64) })
+    }
+
+    /// Sixteen bytes, in order.
+    #[inline]
+    pub(crate) fn load(bytes: &[u8; 16]) -> Self {
+        Self(load(bytes))
+    }
+
+    /// One AES encryption round (ShiftRows, SubBytes, MixColumns) followed
+    /// by XOR with `key`.
+    #[inline]
+    pub(crate) fn round(self, key: Self) -> Self {
+        // SAFETY: see the impl comment.
+        Self(unsafe { _mm_aesenc_si128(self.0, key.0) })
+    }
+
+    /// Lane-wise XOR.
+    #[inline]
+    pub(crate) fn xor(self, other: Self) -> Self {
+        // SAFETY: see the impl comment.
+        Self(unsafe { _mm_xor_si128(self.0, other.0) })
+    }
+
+    /// The low and high eight bytes as little-endian words.
+    #[inline]
+    pub(crate) fn words(self) -> (u64, u64) {
+        // SAFETY: see the impl comment.
+        unsafe {
+            let low = _mm_cvtsi128_si64(self.0) as u64;
+            let high = _mm_cvtsi128_si64(_mm_unpackhi_epi64(self.0, self.0)) as u64;
+            (low, high)
+        }
+    }
 }

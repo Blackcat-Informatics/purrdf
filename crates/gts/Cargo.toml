@@ -38,10 +38,6 @@ purrdf-iri = { workspace = true }
 # `modified` timestamps (the grammar itself is `src/rfc3339.rs`). Another
 # zero-runtime-dependency, wasm32-clean leaf, so the edge adds nothing below it.
 purrdf-xsd = { workspace = true }
-# Fixed-key (no runtime RNG seeding) hasher for the segment-decode / event-bridge
-# dedup maps — mirrors the workspace's `FastHasher` policy (`crates/rdf-core/src/hash.rs`);
-# wasm-clean since `getrandom` is absent on wasm32 and `default-features = false` here.
-ahash = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
 visual-hashing = { workspace = true }
@@ -66,7 +62,9 @@ fastrand = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
 ed25519-dalek = { workspace = true }
 # SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
-# general-purpose hash. The workspace's zero-dependency digest leaf, wasm-clean.
+# general-purpose hash — and the fixed-key `FixedHasher` (no runtime seeding,
+# wasm-clean) for the segment-decode / event-bridge dedup maps and the digest
+# index. The workspace's zero-dependency hashing leaf.
 purrdf-hash = { workspace = true }
 # pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
 # through the portable core API, so this crate does not need an OS RNG.

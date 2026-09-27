@@ -731,7 +731,7 @@ for drift. Built with cargo-c: `make capi-build`.
 ## Fast by measurement, not by assertion
 
 The IR keeps every term **once** in a string arena addressed by copyable
-`NonZeroU32` ids, hashes with fixed-key `ahash` everywhere hot, and freezes datasets
+`NonZeroU32` ids, hashes with the fixed-key `FixedHasher` everywhere hot, and freezes datasets
 into `Box<[QuadRow]>` tables with lazy ordinal permutation indexes (~4 bytes/quad
 per axis). Performance claims are backed by criterion benchmarks rather than
 adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.

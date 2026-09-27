@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-hash` — Zero-Dependency MD5, SHA-1, SHA-3 and CRC-32
+# `purrdf-hash` — Zero-Dependency MD5, SHA-1, SHA-3, CRC-32 and a Fixed-Key Table Hasher
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-hash.svg)](https://crates.io/crates/purrdf-hash)
 [![docs.rs](https://docs.rs/purrdf-hash/badge.svg)](https://docs.rs/purrdf-hash)
@@ -18,8 +18,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 `purrdf-hash` is the PurRDF toolkit's digest leaf: the SPARQL `MD5()`,
 `SHA1()` and `SHA3-*()` built-ins, OpenPGP v4 key fingerprints and Datalog
-derivation identities all compute through it. It has **no runtime
-dependencies**, allocates nothing, and builds for `wasm32-unknown-unknown`.
+derivation identities all compute through it, and `fixed::FixedHasher` is
+the workspace's in-memory table hasher. It has **no runtime dependencies**,
+allocates nothing, and builds for `wasm32-unknown-unknown`.
 
 | Module | Algorithm | Specification | Output |
 |---|---|---|---|
@@ -75,11 +76,47 @@ the CRC tables and the carry-less folding and Barrett constants — is computed
 at compile time from its definition rather than typed.
 
 All `unsafe` code lives in one private module (the processor kernels, their
-detection and their vector loads); the rest of the crate is
+detection, their vector loads and the table hasher's AES block); the rest of
+the crate is
 `#![deny(unsafe_code)]`.
 
 MD5 and SHA-1 are here because protocols name them, not as security
 primitives: both are broken for collision resistance.
+
+## Fixed-key table hasher
+
+`fixed::FixedHasher` is a `Hasher`, and `fixed::FixedState` is the
+`BuildHasher` for `HashMap<K, V, FixedState>`. The keys are compile-time
+constants derived from `⌊2^64/φ⌋`, with no run-time seeding, so a build
+hashes equal inputs equally on every run.
+
+```rust
+use core::hash::BuildHasher;
+use std::collections::HashMap;
+use purrdf_hash::fixed::FixedState;
+
+let mut map: HashMap<&str, u32, FixedState> = HashMap::with_hasher(FixedState::new());
+map.insert("http://example.org/p", 1);
+assert_eq!(FixedState::new().hash_one(7u32), FixedState::new().hash_one(7u32));
+```
+
+| Input | Function |
+|---|---|
+| integers, and byte slices of 0–16 bytes | folded multiplies (the low and high halves of a 128-bit product XOR-ed), every build |
+| byte slices over 16 bytes | four AES-round lanes when the build's target enables AES (x86-64, little-endian AArch64); four folded-multiply lanes otherwise |
+
+The choice between the two is made at compile time, never at run time. On
+32-bit targets (i686, wasm32) the 128-bit product is built from 32-bit
+multiplies with identical output. The AES function was added because the
+bench (`benches/hasher.rs`) measured it faster on every length class where
+the two functions differ. Both functions are pinned by frozen self-vectors,
+which are replayed natively, on i686 and on wasm32. The test suite also
+measures avalanche, collisions and χ² uniformity.
+
+Because the function depends on the build, a table hash must never be
+persisted, sent over the wire or used as a content address. Use a digest
+for any of those. The keys are public, so the hasher offers no resistance
+to deliberately colliding input.
 
 ## License
 

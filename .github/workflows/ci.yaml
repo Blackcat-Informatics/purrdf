@@ -662,6 +662,14 @@ jobs:
           PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
         run: cargo test --locked -p purrdf-hash
 
+      - name: Run the AES-round FixedHasher path on Arm
+        # The fixed-key table hasher's AES function exists only in builds whose
+        # target enables AES; this is the job that compiles and runs it on
+        # AArch64, against its own frozen vectors.
+        env:
+          RUSTFLAGS: "-C target-feature=+aes"
+        run: cargo test --locked -p purrdf-hash --test fixed_hasher
+
       # The CSV field scanner's explicit NEON kernel against the portable kernel and
       # the per-byte scan at every alignment and length (the test asserts the NEON
       # kernel is among those compared), then the reader, writer and frozen-vector

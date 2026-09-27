@@ -51,13 +51,10 @@ purrdf-xsd = { workspace = true }
 # in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr
 # (no oxigraph-family edge — gated by `make rdf-core-hygiene`).
 regex = { workspace = true }
-# Fixed-key, non-cryptographic hashing for deterministic in-memory evaluator maps.
-# Keeps the wasm-clean dependency path by disabling ahash's runtime RNG feature
-# (default-features = false in the workspace table).
-ahash = { workspace = true }
 # The SPARQL MD5()/SHA1() built-ins and the SEP-0008 SHA-3 built-ins
-# (SHA3-224/256/384/512): the workspace's zero-dependency digest leaf, pure
-# integer arithmetic, wasm32-unknown-unknown-clean.
+# (SHA3-224/256/384/512), and the fixed-key `FixedHasher` behind every
+# deterministic in-memory evaluator map: the workspace's zero-dependency hashing
+# leaf, pure integer arithmetic, wasm32-unknown-unknown-clean.
 purrdf-hash = { workspace = true }
 # The SHA256()/SHA384()/SHA512() built-ins. Pure software with
 # default-features = false in the workspace table, so no getrandom and the tree

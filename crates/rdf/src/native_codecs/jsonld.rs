@@ -31,7 +31,6 @@ use purrdf_core::sink::TextSink;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
-use std::hash::BuildHasherDefault;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
@@ -175,8 +174,8 @@ struct Indexes<'a> {
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
 /// Reifier id to every `(subject, predicate, object, graph)` binding it owns.
 type BindingsByReifier = BTreeMap<usize, Vec<(usize, usize, usize, Option<usize>)>>;
-type FixedHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<ahash::AHasher>>;
-type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
+type FixedHashMap<K, V> = std::collections::HashMap<K, V, purrdf_core::FastHasher>;
+type FixedHashSet<T> = HashSet<T, purrdf_core::FastHasher>;
 
 // ── serialize-side helpers over the first-party SerGraph ────────────────────────────
 

@@ -626,6 +626,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# never hits and an `open` that refuses perfectly valid bytes. That row
 	@# compares the bytes wasm32 writes against the golden a native build committed.
 	@#
+	@# The fixed-key table hasher's portable path computes its folded multiplies
+	@# from 32-bit halves on wasm32; its frozen answers are replayed there too.
+	@#
 	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
 	@# same named cases run natively under `cargo test` and here. Cargo hands each
 	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
@@ -701,6 +704,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hash --test digest_differential --test hex \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash --test fixed_hasher \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

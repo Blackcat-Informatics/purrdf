@@ -26,8 +26,9 @@ path = "src/lib.rs"
 
 [dependencies]
 # Content addressing for the plan cache: a plan's cache key is a BLAKE3 digest of
-# the DL-clause IR. NOT ahash — ahash is explicitly not version-stable, so its
-# output cannot address content. Only the sequential `Hasher::update` is used
+# the DL-clause IR. NOT the interning hasher — `FixedHasher` is a table hasher
+# whose function depends on the build's target features, so its output cannot
+# address content. Only the sequential `Hasher::update` is used
 # (never `update_rayon`), so the workspace's `rayon` feature on blake3 costs this
 # crate no thread pool on any target, wasm32 included.
 blake3 = { workspace = true }
@@ -43,10 +44,10 @@ purrdf-hash = { workspace = true }
 # demand keying, forward evaluator query-plan index selection) lives in the
 # shared kernel now that a second, non-Datalog consumer needs it too.
 purrdf-core = { workspace = true }
-# Fixed-key store-once interners and the arrangement's probe tables. Fixed-key
-# (not RandomState) because getrandom is absent on wasm32 and because iteration
-# order must never reach an output path.
-ahash = { workspace = true }
+# Fixed-key store-once interners and the arrangement's probe tables hash with
+# purrdf-hash's `FixedHasher` (declared above). Fixed-key (not RandomState)
+# because wasm32 has no entropy source and because iteration order must never
+# reach an output path.
 hashbrown = { workspace = true }
 # Rule-parallel semi-naive rounds. Used ONLY in indexed, order-stable form
 # (`par_iter` over a rule-index slice, collected and reduced in program order);
