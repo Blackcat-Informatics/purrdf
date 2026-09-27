@@ -4387,8 +4387,11 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
                 f"not in the release set defined by scripts/release-crates.sh"
             )
 
-    # The anchor the tag instructions link to is GitHub's slug of that heading.
-    slug = "outstanding-bootstrap-" + "-".join(named)
+    # GitHub's slug follows the whole visible heading, including joining words
+    # such as "and". Deriving it from crate names alone missed that word and
+    # certified a dead link while the heading and ledger otherwise agreed.
+    visible_heading = heading.group(0).removeprefix("### ").replace("`", "").lower()
+    slug = re.sub(r"\s+", "-", re.sub(r"[^a-z0-9\s-]", "", visible_heading)).strip("-")
     if f"(#{slug})" not in text:
         found = re.findall(r"\(#(outstanding-bootstrap-[a-z0-9-]+)\)", text)
         problems.append(

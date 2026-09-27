@@ -308,7 +308,7 @@ git push origin rust-v0.1.5
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
 not locked to Trusted Publishing (see
-[bootstrap status](#outstanding-bootstrap-purrdf-jsonschema-purrdf-hash-purrdf-deflate-purrdf-hnsw-purrdf-retrieval)).
+[bootstrap status](#outstanding-bootstrap-purrdf-jsonschema-purrdf-hash-purrdf-deflate-purrdf-hnsw-and-purrdf-retrieval)).
 The ledger names `purrdf-jsonschema`, `purrdf-hash`, `purrdf-deflate`, `purrdf-hnsw` and `purrdf-retrieval`, so
 every other release crate must have its record and lock before packaging. The lane publishes crates
 in dependency order and skips any
