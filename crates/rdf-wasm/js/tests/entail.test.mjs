@@ -212,14 +212,51 @@ function parseVectors(text) {
   return cases;
 }
 
+// The artifact is written under the NATIVE default evaluation limits, which a report's
+// contract hash folds; wasm32's defaults are smaller, so this host states the native
+// values, exactly as `entailCheckGoldenVectors` does inside the module.
+const NATIVE_MAX_STORED_FACTS = 4194304n;
+const NATIVE_MAX_JOIN_STEPS = 1048576n;
+
 test("every golden case is byte-identical across the wasm/JS boundary", async () => {
   const cases = parseVectors(await readFile(VECTORS, "utf8"));
   assert.ok(cases.length > 0, "the artifact must hold cases");
   for (const vector of cases) {
-    const closed = entailMaterialize(vector.input, vector.regime, vector.program ?? "");
+    const closed = entailMaterialize(
+      vector.input,
+      vector.regime,
+      vector.program ?? "",
+      NATIVE_MAX_STORED_FACTS,
+      NATIVE_MAX_JOIN_STEPS,
+    );
     assert.equal(closed.nquads, vector.closure, `${vector.name}: closure`);
     assert.equal(closed.report, vector.report, `${vector.name}: report`);
   }
+});
+
+test("entailMaterialize's evaluation limits refuse naming this host's arguments", () => {
+  const closed = entailMaterialize(SCHEMA, "rdfs", "");
+  const stored = BigInt(
+    closed.report
+      .split("\n")
+      .find((line) => line.startsWith("budget stored-facts "))
+      .slice("budget stored-facts ".length),
+  );
+  assert.throws(
+    () => entailMaterialize(SCHEMA, "rdfs", "", stored - 1n),
+    (error) =>
+      error.message.includes("evaluation exceeded the stored-fact limit: ") &&
+      error.message.includes(`${stored - 1n} permitted (the caller's limit)`) &&
+      error.message.endsWith("raise it with entailMaterialize's maxStoredFacts"),
+  );
+  const exact = entailMaterialize(SCHEMA, "rdfs", "", stored);
+  assert.equal(exact.nquads, closed.nquads);
+  assert.throws(
+    () => entailMaterialize(SCHEMA, "owl-rl", "", undefined, 1n),
+    (error) =>
+      error.message.includes("evaluation exceeded the join-step limit: ") &&
+      error.message.endsWith("raise it with entailMaterialize's maxJoinSteps"),
+  );
 });
 
 test("entailMaterialize closes under rdfs and always returns a report", () => {

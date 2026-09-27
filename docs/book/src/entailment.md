@@ -215,6 +215,21 @@ DL clauses and `materialize` evaluates exactly those clauses through
 [`purrdf-datalog`](datalog.md)'s semi-naive evaluator, so the contract hash a
 report carries identifies the clauses that actually ran.
 
+The `RDF`, `RDFS`, `OWL-RL` and `D` lanes run under `purrdf-datalog`'s
+[evaluation limits](datalog.md#limits-refuse-they-never-truncate): the facts
+each graph's store may hold and the candidate solutions its rules may
+enumerate. The defaults are 4,194,304 facts and 1,048,576 join steps
+natively, and 131,072 and 1,048,576 in WebAssembly. A caller that needs other
+limits states them — `materialize_with(ds, plan, &options, stop)` in Rust,
+`--max-stored-facts` and `--max-join-steps` on `purrdf reason` and `purrdf
+convert --entailment`, `max_stored_facts=` and `max_join_steps=` on Python's
+`materialize` and `materialize_nt`, `maxStoredFacts` and `maxJoinSteps` on
+`entailMaterialize`, and `max_stored_facts` and `max_join_steps` on
+`purrdf_entail_materialize_to_nquads`. A run past a limit is refused, naming the
+limit, the numbers and that host's knob; a run inside the limits returns the
+same closure any larger limits would, and its report's contract hash names the
+calculus under the limits in force.
+
 ## Every run says what it did
 
 `materialize` returns `(closure, ReasoningReport)`. There is deliberately no
@@ -229,11 +244,11 @@ complete one. The report carries:
   contributed;
 - **`Boundary`s** — the constructs the run met and could not close over, each
   with its reason;
-- **the evaluation budget** — what the run consumed of the evaluator's fixed
-  ceilings;
-- **a contract hash** — `purrdf-datalog`'s digest of the clause program, so a
-  cached closure minted under a different calculus can be *refused* rather than
-  trusted;
+- **the evaluation budget** — what the run consumed against the evaluation
+  limits it ran under;
+- **a contract hash** — `purrdf-datalog`'s digest of the clause program and the
+  evaluation limits in force, so a cached closure minted under a different
+  calculus, or under different limits, can be *refused* rather than trusted;
 - **an inconsistency witness**, when a rule that concludes `false` matched: the
   rule id, the asserted triples that satisfied its premises in premise order, and
   the graph they were read from.

@@ -157,6 +157,19 @@ pub fn run() {
 /// Every arm but `query` and `update` reports [`CliOutcome::Complete`]: a governor bounds
 /// a SPARQL evaluation or mutation, and the remaining subcommands run neither, so there
 /// is no outcome of theirs a third exit code could describe.
+/// The `--max-stored-facts` and `--max-join-steps` a materializing command states, with
+/// the command line's own spelling for the knob a refusal names.
+const fn cli_materialize_limits(
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
+) -> purrdf_validate::regime::MaterializeLimits {
+    purrdf_validate::regime::MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: purrdf_validate::regime::RegimeHost::Cli,
+    }
+}
+
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     let ledger_target = cli.ledger_target();
     let jsonld_options = cli
@@ -186,6 +199,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             entailment,
             rules,
             report,
+            max_stored_facts,
+            max_join_steps,
             canonical,
             input,
             output,
@@ -198,6 +213,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 base: base.as_deref(),
                 entailment: *entailment,
                 rules: rules.as_deref(),
+                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
                 canonical: *canonical,
                 jsonld_options: jsonld_options.as_ref(),
             },
@@ -292,6 +308,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             regime,
             rules,
             report,
+            max_stored_facts,
+            max_join_steps,
             from,
             to,
             base,
@@ -300,6 +318,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         } => reason::run(
             *regime,
             rules.as_deref(),
+            &cli_materialize_limits(*max_stored_facts, *max_join_steps),
             *from,
             *to,
             base.as_deref(),
@@ -540,6 +559,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             explain,
             max_term_generating_rounds,
             max_generated_terms,
+            max_stored_facts,
+            max_join_steps,
             from,
             to,
             base,
@@ -556,6 +577,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 explain: ReportTarget::decode(explain.as_ref()),
                 max_term_generating_rounds: *max_term_generating_rounds,
                 max_generated_terms: *max_generated_terms,
+                max_stored_facts: *max_stored_facts,
+                max_join_steps: *max_join_steps,
                 from: *from,
                 to: *to,
                 base: base.as_deref(),

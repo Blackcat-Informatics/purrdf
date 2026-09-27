@@ -233,7 +233,8 @@ ownership, and all limits. Complete examples are in
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
 - `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-  maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?)` —
+  maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
+  maxStoredFacts?, maxJoinSteps?)` —
   runs exactly one rule source, the SHACL 1.2 rules of `shapesTtl` or the SPARQL 1.2
   RL rule set `srl`, and returns a `ShaclRulesInference`: `inferred` is the
   inference graph (the inferred triples only) as N-Triples, and `proof` is the proof
@@ -244,6 +245,14 @@ ownership, and all limits. Complete examples are in
   `max(65536, 4 × N)` for `N` distinct input terms). A run past either throws
   naming the limit, the numbers, the rules that inferred a new term last, and the
   argument that raises it; a rule set that needs more states it here.
+  `maxStoredFacts` (a `bigint`) bounds the facts the evaluation store holds — the
+  data graph, a rule set's data and every inferred triple — and `maxJoinSteps` (a
+  `bigint`) the candidate solutions the rule bodies enumerate. Omitted, each is the
+  WebAssembly default: 131072 facts and 1048576 join steps, sized for one linear
+  memory (a native build's defaults are 4194304 and 1048576). A rule copying a
+  predicate over 70,000 triples holds 140,000 facts and is refused here naming
+  `maxStoredFacts`; stating `140000n` admits it. A run past either throws naming
+  the limit, the numbers and the argument.
   `importIris` / `importDocuments` are the rule source's import table: the shapes
   graph's `owl:imports` table (Turtle documents) beside `shapesTtl`, the rule set's
   `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
@@ -264,7 +273,8 @@ ownership, and all limits. Complete examples are in
   every validator declared for a built-in component (superseded by the native
   implementation, never run). Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
   deterministic `report` text. Call `free()` when done.
-- `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
+- `entailMaterialize(document, regime, program, maxStoredFacts?, maxJoinSteps?)` —
+  SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning
   `{ nquads, report }`: the canonical N-Quads closure and a byte-stable reasoning
@@ -273,7 +283,12 @@ ownership, and all limits. Complete examples are in
   it names which rules fired, which specification rules did **not**, which
   constructs were left at a boundary, the evaluation budget and the calculus's
   contract hash, so "OWL-RL entailment" can never be claimed without saying how
-  much of OWL-RL actually ran.
+  much of OWL-RL actually ran. `maxStoredFacts` and `maxJoinSteps` (`bigint`s) are
+  the evaluation limits of the `rdf`, `rdfs`, `owl-rl` and `d` lanes — omitted, the
+  WebAssembly defaults of 131072 facts and 1048576 join steps. A run past either
+  throws naming the limit and the argument; the report's contract hash names the
+  calculus under the limits in force, so it differs from a native build's report
+  unless the native defaults (4194304 and 1048576) are stated.
 - `entailRules(regime)` / `entailImplementedRules(regime)` — the rule table the
   specification *defines* the regime by, and the subset this build fires. The
   difference is the measurable gap, and is exactly the report's `missing` lines.

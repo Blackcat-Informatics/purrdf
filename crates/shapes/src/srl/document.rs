@@ -104,11 +104,12 @@ pub enum SrlError {
         cycle: Vec<String>,
     },
     /// The rule set passed a rule-evaluation limit ([`InferOptions`]): the
-    /// term-generating round limit or the generated-term budget. Names the limit, the
-    /// numbers and the rules that inferred a new term in the last round.
+    /// term-generating round limit, the generated-term budget, the stored-fact limit or
+    /// the join-step limit. Names the limit, the numbers, the knob that raises it and, for
+    /// the two term limits, the rules that inferred a new term in the last round.
     LimitExceeded(crate::rules::RuleLimitExceeded),
-    /// Evaluation failed: a guard error, a fixed term-generating round limit passed, or
-    /// an inferred triple that is not an RDF triple.
+    /// Evaluation failed: a guard error, the fixed term-arena ceiling passed, or an
+    /// inferred triple that is not an RDF triple.
     Evaluation {
         /// Why.
         message: String,
@@ -285,7 +286,7 @@ pub fn parse_and_check(text: &str, base: Option<&str>) -> Result<RuleSetDocument
     Ok(document)
 }
 
-/// Options for [`infer`]: the two rule-evaluation limits, and how the host names their
+/// Options for [`infer`]: the four rule-evaluation limits, and how the host names their
 /// knobs.
 #[derive(Debug, Clone)]
 pub struct InferOptions {
@@ -299,6 +300,8 @@ impl Default for InferOptions {
             rules: RuleOptions::default().with_limit_knobs(crate::rules::LimitKnobs::new(
                 "InferOptions::with_max_term_generating_rounds",
                 "InferOptions::with_max_generated_terms",
+                "InferOptions::with_max_stored_facts",
+                "InferOptions::with_max_join_steps",
             )),
         }
     }
@@ -329,7 +332,26 @@ impl InferOptions {
         self
     }
 
-    /// Name the two limits' knobs as the host exposes them (see
+    /// Permit an evaluation store of exactly `facts` facts — the base graph, the data
+    /// blocks and every inferred triple; the default and its reasoning are
+    /// [`RuleOptions::with_max_stored_facts`]'s, and a run past the limit is refused as
+    /// [`SrlError::LimitExceeded`].
+    #[must_use]
+    pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
+        self.rules = self.rules.with_max_stored_facts(facts);
+        self
+    }
+
+    /// Permit exactly `steps` candidate solutions enumerated by the rule bodies; the
+    /// default and its reasoning are [`RuleOptions::with_max_join_steps`]'s, and a run past
+    /// the limit is refused as [`SrlError::LimitExceeded`].
+    #[must_use]
+    pub fn with_max_join_steps(mut self, steps: u64) -> Self {
+        self.rules = self.rules.with_max_join_steps(steps);
+        self
+    }
+
+    /// Name the limits' knobs as the host exposes them (see
     /// [`RuleOptions::with_limit_knobs`]).
     #[must_use]
     pub fn with_limit_knobs(mut self, knobs: crate::rules::LimitKnobs) -> Self {

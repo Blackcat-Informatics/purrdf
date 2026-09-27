@@ -22,49 +22,62 @@
 //! `par_bridge`, which are not order-stable — and degrades to inline-sequential
 //! on `wasm32-unknown-unknown`.
 //!
-//! # Budgets are constants, not knobs
+//! # Limits refuse; they never truncate
 //!
-//! Step, fact and arena ceilings are fixed constants and their consumption is
-//! *reported*, never configured. A caller-supplied ceiling would mean two callers
-//! running the same program over the same input get different answers — the same
-//! semantic optionality that the no-Cargo-features rule exists to prevent, merely
-//! arriving through a parameter instead. **That rule holds for every ceiling that prices
-//! work — steps, facts, arena bytes — and none of them is caller-settable.**
+//! Every evaluation runs under limits, and passing one is a typed refusal carrying an
+//! accurate report of what the run consumed — never a truncated model presented as a
+//! complete one. Five limits exist:
 //!
-//! ## The two caller-set limits: term-generating rounds and generated terms
+//! * the **stored-fact** and **join-step** limits bound what a run holds and how many
+//!   candidate solutions it may enumerate. They are the caller's, on
+//!   [`EvalOptions`](seminaive::EvalOptions)
+//!   ([`with_max_stored_facts`](seminaive::EvalOptions::with_max_stored_facts),
+//!   [`with_max_join_steps`](seminaive::EvalOptions::with_max_join_steps)), with a default
+//!   sized for the target: 131,072 facts on `wasm32`, where the store lives in one linear
+//!   memory, and 4,194,304 facts everywhere else
+//!   ([`seminaive::DEFAULT_MAX_STORED_FACTS`], chosen at compile time from the target
+//!   architecture, never by a Cargo feature), and 1,048,576 join steps on every target
+//!   ([`seminaive::DEFAULT_MAX_JOIN_STEPS`]). The join-step default does not grow
+//!   natively because it is what refuses a divergent rule promptly, and because a body's
+//!   candidates are materialised before it is checked; see
+//!   [`seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS`]. A program that needs more work states it.
+//! * the **term-arena** ceiling ([`seminaive::MAX_TERM_ARENA_BYTES`]) bounds the bytes of
+//!   interned term surfaces. It is a constant, the same on every target.
+//! * the **term-generating round** limit and the **generated-term** budget bound a guarded
+//!   program that keeps computing new terms; see below.
+//!
+//! A limit a caller can set could make the answer the caller's choice, and it does not
+//! here, for one reason: a limit can only REFUSE. A run inside its limits returns the
+//! program's least model, which is the same model under every limit that admits it and on
+//! every target; a run past one returns no model at all. Every caller passing the same
+//! options gets the same answer or the same refusal, and the effective values of the
+//! limits in force are folded into the result's contract hash
+//! ([`cache::contract_hash_with`]), so a result computed under one set of limits — or on
+//! one target under its defaults — never claims the identity of another.
+//!
+//! What the limits do NOT promise is that a refusal is stable across releases. A
+//! join-step count is an artifact of the evaluator's plan as well as of the program, so a
+//! limit sized tightly against one release's count can refuse under the next one's plan.
+//! The completed answer cannot move; the point at which a tight limit refuses can. A
+//! caller that needs a stable refusal leaves headroom, and a caller that needs a stable
+//! answer needs nothing at all.
+//!
+//! ## The two term limits: term-generating rounds and generated terms
 //!
 //! A guard ([`guard`]) can compute a new term every round, and whether a program that
 //! does so terminates is undecidable, so every FIXED limit on such rounds refuses some
-//! program that terminates. A limit this crate hard-coded would make that refusal a
-//! property of the build instead of the request, so the two limits on term generation —
-//! the rounds that commit a new term, and the terms added beyond the input's — are the
-//! caller's, on [`EvalOptions`](seminaive::EvalOptions), with generous defaults. They
-//! count rounds and terms, not work, so they drag no charge schedule behind them; they
-//! only ever REFUSE — a refused run returns no model, as every ceiling's does — and say
-//! which limit a run passed, never that it diverges; they cannot bind a guard-free
-//! program at all; and the limits in force are folded into a guarded program's contract
-//! hash ([`cache::contract_hash_with`]), so two runs under different limits never claim
-//! one calculus.
+//! program that terminates. The two limits on term generation — the rounds that commit a
+//! new term, and the terms added beyond the input's — are therefore the caller's too, on
+//! [`EvalOptions`](seminaive::EvalOptions), with generous defaults. They count rounds and
+//! terms, not work; they only ever REFUSE and say which limit a run passed, never that it
+//! diverges; they cannot bind a guard-free program at all; and the limits in force are
+//! folded into a guarded program's contract hash ([`cache::contract_hash_with`]).
 //!
-//! ## What the rule is actually about: a charge schedule, not a stop
+//! ## A stop signal is not a limit
 //!
-//! It is about **numbers that price work**, and it has to be, because a number is what
-//! makes two runs disagree. A caller-settable ceiling is only half of such a parameter;
-//! the other half is the schedule that decides what counts as a step, a fact or a byte.
-//! Ship the ceiling and the schedule ships with it — it becomes a contract that must be
-//! named, versioned, content-digested and frozen against a corpus, or every caller's
-//! number quietly means something different from every other caller's. PurRDF's SPARQL
-//! tier now carries exactly that apparatus for its own fuel budget
-//! (`GOVERNOR_PROFILE_ID` / `GOVERNOR_PROFILE_VERSION` / `GOVERNOR_PROFILE_DIGEST` and a
-//! frozen vector corpus), which is the price of admitting one honestly. This crate
-//! declines to pay it, and the reason is specific rather than stylistic: a reasoner's
-//! step and fact counts are artifacts of the *plan*, so freezing them would freeze the
-//! planner, and a caller who sized a ceiling against one build's join order would find
-//! their **model** — not merely their receipt — different under the next one.
-//!
-//! A latching [`stop::StopSignal`] is admitted, and is admitted for exactly the reason a
-//! ceiling is refused rather than in spite of it. It is **answer-blind**: it carries no
-//! number, prices nothing, and cannot be asked *where* to stop — only whether to. An
+//! A latching [`stop::StopSignal`] is a different thing from a limit. It is
+//! **answer-blind**: it carries no number, prices nothing, and cannot be asked *where* to
+//! stop — only whether to. An
 //! unstopped run returns precisely what it would have returned with no signal attached,
 //! and a stopped one returns **nothing at all** — a typed refusal, never a truncated
 //! model. Because there is no third outcome, there is no schedule to version, no profile
@@ -256,7 +269,7 @@
 //!   cache is owned by the caller's planner and is never a process global: a hidden global
 //!   would make a result depend on evaluation history.
 //!   [`contract_hash`](cache::contract_hash) is the crate's own answer to "which calculus
-//!   produced this result": the clause program, the three fixed budgets and a
+//!   produced this result": the clause program, the limits in force and a
 //!   hand-maintained [`CALCULUS_VERSION`](cache::CALCULUS_VERSION), hashed as DATA rather
 //!   than as source text.
 //!

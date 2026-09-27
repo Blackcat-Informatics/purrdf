@@ -10,6 +10,44 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **datalog, shapes, entail, validate, cli, python, wasm, capi:** the
+  stored-fact and join-step limits are the caller's. `EvalOptions` gains
+  `with_max_stored_facts` and `with_max_join_steps`; `RuleOptions` and
+  `InferOptions` gain the same two; `chase::chase_with` and
+  `purrdf_entail::materialize_with` run under the caller's options. Each host
+  takes both limits for rules and for regime materialization: `--max-stored-facts`
+  and `--max-join-steps` on `purrdf rules`, `purrdf reason` and `purrdf convert
+  --entailment`; `max_stored_facts=` and `max_join_steps=` on Python's
+  `shapes.apply_rules`, `entail.materialize` and `entail.materialize_nt`;
+  `maxStoredFacts` and `maxJoinSteps` on WebAssembly's `shaclApplyRules` and
+  `entailMaterialize`; and `max_stored_facts` / `max_join_steps` on C's
+  `purrdf_shacl_apply_rules` and `purrdf_entail_materialize_to_nquads`. Each
+  stored-fact default is sized for the target: 131,072 facts on `wasm32` (the
+  value every target used while the limit was fixed) and 4,194,304 natively
+  (`DEFAULT_MAX_STORED_FACTS`, chosen from the target architecture at compile
+  time). The join-step default stays 1,048,576 on every target
+  (`DEFAULT_MAX_JOIN_STEPS`): it is what refuses a rule minting a new term every
+  round promptly (about 9 s, against more than 590 s at 268,435,456), and a
+  body's candidates are materialised before the check. A program that needs
+  more work states it — the non-linear closure of a 1,000-node chain completes
+  with `--max-join-steps` raised. A single rule copying a predicate over 70,000
+  triples, and the transitive closure of a thousand-node chain through SHACL
+  rules or SPARQL 1.2 RL, now complete natively; both were refused. A run past
+  either limit is refused naming the limit, the observed and permitted numbers,
+  and the knob that raises it in the calling host's spelling (`LimitKnobs`,
+  `RulesHost`, `RegimeHost`, `MaterializeLimits`); a run inside the limits
+  returns exactly what larger limits would. The term-arena ceiling
+  (`MAX_TERM_ARENA_BYTES`) is unchanged.
+- **datalog:** a semi-naive round skips a decomposition whose anchoring atom
+  gained no row since the last round, instead of enumerating every atom planned
+  before it and then matching nothing. A linear recursion — `connected(x, z) :-
+  connected(x, y), link(y, z)` — no longer rescans its whole closure every round:
+  the closure of a 1,000-edge chain enumerates under 1,048,576 join steps where it
+  passed 268,435,456. Solutions, derivations and every other budget coordinate are
+  unchanged; join-step counts fall (OWL-RL join steps across the entailment golden
+  corpus: 285,412 to 244,208). The `srl_closure` bench gains `infer_linear`, and
+  `rules_divergence` gains `complete/copy` and `complete/closure`.
+
 - **datalog, shapes, validate, cli, python, wasm, capi:** a guarded rule set
   that keeps generating new terms is stopped by two limits, each the caller's.
   The term-generating round limit defaults to 16,384 rounds
@@ -2590,6 +2628,28 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
+
+- **BREAKING** **datalog, shapes, entail, validate, cli, python, wasm, capi:** the
+  stored-fact and join-step ceilings are no longer constants. `MAX_STORED_FACTS`
+  and `MAX_JOIN_STEPS` are removed; the limits are `EvalOptions` parameters with
+  per-target defaults (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`,
+  `WASM_DEFAULT_*`, `NATIVE_DEFAULT_*`). `BudgetReport` carries the limits a run
+  was governed by (`join_step_limit`, `stored_fact_limit` and their `_stated`
+  twins, `governed_by`). `EvalError::BudgetExhausted` and
+  `ChaseError::BudgetExhausted` render as "evaluation exceeded the stored-fact
+  limit: N facts observed, M permitted (…); raise it with …" rather than "the
+  fixed … ceiling". `LimitKnobs::new` takes four knob names, `RuleLimit` gains
+  `StoredFacts` and `JoinSteps`, and `RulesRequest` gains `max_stored_facts` and
+  `max_join_steps`. The contract hash folds the EFFECTIVE limits into every
+  program's digest, so every native contract hash moves (the `wasm32` digests
+  are the previous values) and every entailment report's `contract-hash` line
+  moves with it; the entailment golden corpus, the tri-host regime vectors and
+  the pinned calculus hashes are regenerated. The regime vectors are checked
+  under the native defaults stated (`REGIME_GOLDEN_VECTOR_LIMITS`), so a
+  `wasm32` host reproduces them byte for byte. The C functions
+  `purrdf_shacl_apply_rules` and `purrdf_entail_materialize_to_nquads` gain two
+  nullable parameters, riding the unshipped ABI 0.8.0 bump; the WebAssembly
+  functions gain two trailing optional arguments.
 
 - **BREAKING** **shapes:** the JSON-LD instance projection
   (`instance::project_graph`, `project_subject`) changes shape so that it drops

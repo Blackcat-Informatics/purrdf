@@ -31,8 +31,9 @@
 //!   provenance and emits derivations in lexical order, so the closure and the report are
 //!   byte-stable across runs whatever the input's term order.
 //! * **the multiplier** — a class of size `k` multiplies every triple it touches by up to
-//!   `k³`, and the growth is bounded by [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS),
-//!   not by the step budget. Passing it is [`EntailError::Evaluate`](crate::EntailError):
+//!   `k³`, and the growth is bounded by the stored-fact limit
+//!   ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts)),
+//!   not by the join-step limit. Passing it is [`EntailError::Evaluate`](crate::EntailError):
 //!   a REFUSAL carrying the observation, never a truncated closure.
 //! * **the predicate position** — [`equal_predicate`] rewrites a triple's PREDICATE, which
 //!   is expressible only because a [`ClauseAtom`](purrdf_datalog::clause::ClauseAtom)

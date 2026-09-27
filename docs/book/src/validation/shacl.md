@@ -895,7 +895,7 @@ proof of every inferred triple. The proof is one block per triple: `derived S P
 O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
-Every host takes the same two **rule-evaluation limits**:
+Every host takes the same four **rule-evaluation limits**:
 
 - The **term-generating round limit** bounds the evaluation rounds that infer a
   term the graph did not already hold. The default is 16384 rounds. A counter
@@ -906,16 +906,32 @@ Every host takes the same two **rule-evaluation limits**:
   in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
   whose new terms double every iteration reaches it within a few iterations,
   long before the round limit.
+- The **stored-fact limit** bounds the facts the evaluation store holds: the
+  data graph, a rule set's data and every inferred triple. The default is
+  4,194,304 facts natively and 131,072 in WebAssembly, where the store lives in
+  one linear memory. A rule copying a predicate over 70,000 triples, or the
+  transitive closure of a thousand-node chain (500,500 triples), completes
+  natively.
+- The **join-step limit** bounds the candidate solutions the rule bodies
+  enumerate. The default is 1,048,576 on every host. It is the limit that
+  refuses a rule minting a new term every round promptly, and it bounds a rule
+  body that enumerates far more candidates than it infers triples. A rule set
+  that needs more work — the non-linear transitive closure of a thousand-node
+  chain enumerates over 67 million candidates — states a larger limit.
 
-A run past either limit is refused. The error names the limit, the numbers, the
-rules that inferred a new term in the last iteration, and the knob that raises
-the limit, spelled the way the calling host spells it: `--max-term-generating-rounds`
-and `--max-generated-terms` on the command line, the `max_term_generating_rounds`
-and `max_generated_terms` keyword arguments in Python, `maxTermGeneratingRounds`
-and `maxGeneratedTerms` in WebAssembly, and the `max_term_generating_rounds` and
-`max_generated_terms` parameters in C. Whether a rule set that keeps inferring
-new terms would stop is undecidable, so the error never calls it divergent. A
-stated limit is exact.
+A run past any limit is refused. The error names the limit, the numbers, the
+knob that raises it and, for the two term limits, the rules that inferred a new
+term in the last iteration. The knob is spelled the way the calling host spells
+it: `--max-term-generating-rounds`, `--max-generated-terms`,
+`--max-stored-facts` and `--max-join-steps` on the command line; the
+`max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+`max_join_steps` keyword arguments in Python; `maxTermGeneratingRounds`,
+`maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps` in WebAssembly; and
+the `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+`max_join_steps` parameters in C. Whether a rule set that keeps inferring new
+terms would stop is undecidable, so the error never calls it divergent. A
+stated limit is exact, and a limit can only refuse: a run it admits infers
+exactly what it would under any larger limit.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph

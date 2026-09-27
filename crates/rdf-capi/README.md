@@ -146,6 +146,10 @@ executes that example against the generated shared library and committed header.
   `owl:imports` table, `import_iris` / `import_documents` / `import_count`, before its
   out-parameters; appends `PURRDF_STATUS_SHAPES_IMPORT_ERROR`; and adds its three
   accessors (see [The shapes graph's `owl:imports`](#the-shapes-graphs-owlimports)).
+  The same bump gives `purrdf_shacl_apply_rules` the nullable `max_stored_facts` /
+  `max_join_steps` limits between `max_generated_terms` and `import_iris`, and
+  `purrdf_entail_materialize_to_nquads` the same two between `program` and
+  `out_nquads`.
   It bumps in any case because `0.7.0` is the ABI of the released
   `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
@@ -158,8 +162,9 @@ Beside validation, three entry points reach the same engine every other PurRDF h
 does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 
 - `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
-  max_term_generating_rounds, max_generated_terms, import_iris, import_documents,
-  import_count, out_inferred, out_proof, out_error)` runs exactly one
+  max_term_generating_rounds, max_generated_terms, max_stored_facts, max_join_steps,
+  import_iris, import_documents, import_count, out_inferred, out_proof, out_error)`
+  runs exactly one
   rule source — the SHACL 1.2 rules of `shapes_ttl`, or the SPARQL 1.2 RL rule set
   `srl` — and writes the **inference graph** (the inferred triples only, never the
   data graph) as canonical N-Triples. A non-NULL `out_proof` also receives the proof
@@ -168,7 +173,13 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   terms inferred beyond the input's. NULL keeps the default: 16384 rounds, and
   `max(65536, 4 × N)` terms for `N` distinct input terms. A run past either fails
   naming the limit, the numbers, the rules that inferred a new term last, and the
-  parameter that raises it.
+  parameter that raises it. `max_stored_facts` and `max_join_steps` are nullable
+  `uint64_t *` limits on the facts the evaluation store holds and the candidate
+  solutions the rule bodies enumerate; NULL keeps the default of 4194304 facts and
+  1048576 join steps. A run past either fails naming the limit, the numbers and
+  the parameter. `purrdf_entail_materialize_to_nquads(document, regime, program,
+  max_stored_facts, max_join_steps, out_nquads, out_report, out_error)` takes the
+  same two limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes.
 - `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
   expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
   import_iris, import_documents, import_count, out_terms, out_error)` evaluates

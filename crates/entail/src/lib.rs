@@ -118,6 +118,7 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset};
 use purrdf_datalog::StopSignal;
+use purrdf_datalog::seminaive::EvalOptions;
 
 pub(crate) mod axioms;
 pub(crate) mod calculus;
@@ -331,12 +332,14 @@ pub enum EntailError {
     /// [`materialize`] runs [`calculus_program`] through `purrdf-datalog`'s semi-naive
     /// evaluator, and that evaluator refuses rather than approximates: a program it has no
     /// semantics for, and — the case a caller will actually meet — an input that passes
-    /// one of its three fixed evaluation ceilings. A budget refusal is TOTAL, which is why
+    /// the stored-fact or join-step limit in force ([`materialize_with`] states them; the
+    /// target's defaults otherwise) or the fixed term-arena ceiling. A limit refusal is
+    /// TOTAL, which is why
     /// it is an error and not a boundary: there is no partial closure to hand back with a
     /// note attached, and a truncated closure presented as a complete one is exactly the
     /// failure a [`ReasoningReport`] exists to prevent. The carried
-    /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which ceiling and what
-    /// the run had consumed when it stopped.
+    /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which limit, what the run
+    /// had consumed when it stopped, and the knob that raises it.
     Evaluate(purrdf_datalog::seminaive::EvalError),
     /// The declared calculus states an EXISTENTIAL rule the restricted chase refused.
     ///
@@ -344,7 +347,7 @@ pub enum EntailError {
     /// least-fixpoint evaluator over definite clauses has no semantics for that head form,
     /// so the `RDF` and `RDFS` lanes run through `purrdf-datalog`'s restricted chase
     /// instead. The chase refuses rather than approximates, and the refusal a caller will
-    /// actually meet is one of the three fixed evaluation ceilings —
+    /// actually meet is a passed evaluation limit —
     /// [`ChaseError::BudgetExhausted`](purrdf_datalog::chase::ChaseError::BudgetExhausted)
     /// — carrying an accurate report. The one refusal that is about the CALCULUS rather
     /// than the input is
@@ -438,17 +441,18 @@ pub enum EntailError {
     ///
     /// # Not a budget, and not a partial closure
     ///
-    /// This crate's ceilings are constants for the reason
-    /// [`purrdf_datalog`](purrdf_datalog#budgets-are-constants-not-knobs) states: a
-    /// caller-supplied ceiling would make the ANSWER depend on the caller. A stop signal
-    /// does not — it either lets the run finish, in which case the closure is bit-for-bit
+    /// The evaluation limits are numbers the caller states before the run
+    /// ([`materialize_with`]; see
+    /// [`purrdf_datalog`](purrdf_datalog#limits-refuse-they-never-truncate)), and they are
+    /// part of the closure's contract hash. A stop signal carries no number and is part of
+    /// no identity — it either lets the run finish, in which case the closure is bit-for-bit
     /// the one an ungoverned run produces, or it ends the run with nothing. This variant is
     /// the "with nothing" case, and it carries no partial closure by construction: there is
     /// no field on it a caller could read one out of.
     ///
     /// It is deliberately distinct from [`Self::Evaluate`] and [`Self::Chase`], which report
-    /// a FIXED ceiling being passed by the program and the data. That is a reason to change
-    /// the input; this is not a statement about the input at all.
+    /// an evaluation limit being passed by the program and the data. That is a reason to
+    /// change the input or raise the limit; this is not a statement about the input at all.
     ///
     /// Reachable only from the `*_until` entry points ([`materialize_until`]); an ungoverned
     /// call names no signal and so can never see it.
@@ -602,8 +606,9 @@ impl std::error::Error for EntailError {
 /// # Errors
 ///
 /// [`EntailError::Inconsistent`] if a rule that concludes `false` matched;
-/// [`EntailError::Evaluate`] if the run passes one of `purrdf-datalog`'s three fixed
-/// evaluation ceilings; [`EntailError::Build`] if the derived dataset cannot be frozen. The
+/// [`EntailError::Evaluate`] or [`EntailError::Chase`] if the run passes the default
+/// stored-fact or join-step limit ([`materialize_with`] states others) or the fixed
+/// term-arena ceiling; [`EntailError::Build`] if the derived dataset cannot be frozen. The
 /// two delegated lanes add their own: [`EntailError::Unsatisfiable`] and
 /// [`EntailError::Parse`].
 ///
@@ -664,12 +669,12 @@ pub fn materialize<D: DatasetView>(
 ///
 /// # What a stop signal is, and what it is emphatically not
 ///
-/// It is **not** a budget. `purrdf-datalog`'s three ceilings are constants for a stated
-/// reason — [budgets are constants, not
-/// knobs](purrdf_datalog#budgets-are-constants-not-knobs) — and nothing here weakens it: no
-/// charge is configurable, no schedule is named, and no number a caller passes can change
-/// which triples a closure holds. A [`purrdf_datalog::StopSignal`] is answer-blind by
-/// construction. There are exactly two outcomes:
+/// It is **not** a limit. The evaluation limits are numbers the caller states before the
+/// run ([`materialize_with`]) and are folded into the closure's contract hash — see
+/// [limits refuse; they never
+/// truncate](purrdf_datalog#limits-refuse-they-never-truncate). A
+/// [`purrdf_datalog::StopSignal`] carries no number and is answer-blind by construction.
+/// There are exactly two outcomes:
 ///
 /// * the signal never fires, and this function returns **bit-for-bit** what [`materialize`]
 ///   returns for the same input — the poll is a load and a branch at a boundary the fixpoint
@@ -688,9 +693,9 @@ pub fn materialize<D: DatasetView>(
 /// Every lane, at the finest boundary that lane HAS:
 ///
 /// * `Rdf`, `Rdfs` — once per restricted-chase round (`purrdf-datalog`'s
-///   [`chase_until`](purrdf_datalog::chase::chase_until));
+///   [`chase_with`](purrdf_datalog::chase::chase_with));
 /// * `OwlRl`, `D` — once per semi-naive round
-///   ([`evaluate_until`](purrdf_datalog::seminaive::evaluate_until));
+///   ([`evaluate_guarded`](purrdf_datalog::seminaive::evaluate_guarded));
 /// * every rule-table lane, additionally once per NAMED GRAPH, because a dataset is closed
 ///   graph by graph and the copying between two evaluations is otherwise unpollable;
 /// * `OwlDirect` — once per hypertableau derivation round and once per work item of the
@@ -709,22 +714,64 @@ pub fn materialize_until<D: DatasetView>(
     plan: Materialization<'_>,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    materialize_with(ds, plan, &EvalOptions::default(), stop)
+}
+
+/// [`materialize_until`] under the caller's evaluation limits: the stored-fact and
+/// join-step limits of `options`
+/// ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts),
+/// [`EvalOptions::with_max_join_steps`](purrdf_datalog::seminaive::EvalOptions::with_max_join_steps)).
+///
+/// # What the limits govern
+///
+/// The four rule-table lanes — `Rdf`, `Rdfs`, `OwlRl` and `D` — are evaluated by
+/// `purrdf-datalog`, each graph of the dataset in its own store, and every one of those
+/// evaluations runs under `options`. Unstated, a limit is the target's default: 4,194,304
+/// stored facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`
+/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
+/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). A run
+/// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the
+/// limit, the numbers and `EvalOptions`' knob; a run inside them returns exactly the
+/// closure any larger limits would, and its report's
+/// [`contract_hash`](ReasoningReport::contract_hash) names the calculus under `options`.
+///
+/// `Simple` evaluates nothing, `OwlDirect` is the tableau under its own step and work
+/// caps, and `Rif` is evaluated by this crate's RIF forward chainer, so none of the three
+/// is governed by `options`: their closures are exactly [`materialize_until`]'s. Their
+/// reports still name the calculus under `options`, so every report one call produces
+/// carries an identity computed the same way on every target. The term limits of
+/// `options` govern no lane, because no lane's calculus carries a guard.
+///
+/// # Errors
+///
+/// Every error [`materialize_until`] returns.
+pub fn materialize_with<D: DatasetView>(
+    ds: &D,
+    plan: Materialization<'_>,
+    options: &EvalOptions,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     if stop.is_some_and(|stop| stop.stopped()) {
         return Err(EntailError::Stopped);
     }
     let regime = plan.regime();
     let (closure, stats) = match plan {
-        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
+        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none(*options)),
         Materialization::Rdf
         | Materialization::Rdfs
         | Materialization::OwlRl
-        | Materialization::D => engine::close(ds, regime, stop)?,
+        | Materialization::D => engine::close(ds, regime, options, stop)?,
         // The two query-directed lanes are DELEGATED, not restated: each already assembles
-        // its own report, so returning here is what keeps one implementation per lane.
+        // its own report, so returning here is what keeps one implementation per lane. The
+        // report names the calculus under `options` like every other lane's does.
         Materialization::OwlDirect(query_bgp) => {
-            return materialize_dl_reported_until(ds, query_bgp, stop);
+            return materialize_dl_reported_until(ds, query_bgp, stop)
+                .map(|(closure, report)| (closure, report.under(options)));
         }
-        Materialization::Rif(rules) => return materialize_rif_until(ds, rules, stop),
+        Materialization::Rif(rules) => {
+            return materialize_rif_until(ds, rules, stop)
+                .map(|(closure, report)| (closure, report.under(options)));
+        }
     };
     Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
 }
@@ -2257,24 +2304,31 @@ mod tests {
         );
     }
 
-    /// A ceiling is a REFUSAL, and it reaches the caller as one.
+    /// A limit is a REFUSAL, and it reaches the caller as one.
     ///
-    /// `materialize` evaluates the declared program through `purrdf-datalog`, and that
-    /// evaluator holds three fixed ceilings. There is no partial answer behind one: a
-    /// truncated closure returned as a complete one is precisely the failure a
-    /// [`ReasoningReport`] exists to prevent, so an exhausted budget is
-    /// [`EntailError::Evaluate`] and the closure is not produced at all.
+    /// `materialize` evaluates the declared program through `purrdf-datalog` under the
+    /// caller's evaluation limits. There is no partial answer behind one: a truncated
+    /// closure returned as a complete one is precisely the failure a [`ReasoningReport`]
+    /// exists to prevent, so an exhausted limit is [`EntailError::Chase`] (or
+    /// [`EntailError::Evaluate`]) and the closure is not produced at all.
     ///
-    /// The input is the smallest cross product that passes a ceiling: `p` carries 360
-    /// `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must conclude
-    /// 136 800 typings — more than [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS)
-    /// admits. The report is asserted to carry the OBSERVATION that proved the ceiling was
-    /// passed rather than the ceiling itself, because a figure rounded down to the limit
-    /// would tell a caller nothing about how far over they are.
+    /// The input is a cross product past the `wasm32` default stored-fact limit: `p`
+    /// carries 360 `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must
+    /// conclude 136 800 typings — more than the 131,072 facts
+    /// [`WASM_DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS)
+    /// admits, and well inside the native default. Under the `wasm32` limit, stated, the
+    /// run is refused naming the knob, and the report carries the OBSERVATION that proved
+    /// the limit was passed rather than the limit itself, because a figure rounded down to
+    /// the limit would tell a caller nothing about how far over they are. Under the native
+    /// stored-fact default the run passes the default join-step limit instead, naming that
+    /// knob, and completes when it is raised too; its report names the calculus under the
+    /// limits in force.
     #[test]
     fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
         use purrdf_datalog::chase::ChaseError;
-        use purrdf_datalog::seminaive::{BudgetResource, MAX_STORED_FACTS};
+        use purrdf_datalog::seminaive::{
+            BudgetResource, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS,
+        };
 
         /// `rdfs:domain` declarations on `p`.
         const CLASSES: usize = 360;
@@ -2296,19 +2350,66 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         // The `RDFS` lane runs through the restricted chase (it states four existential
-        // rules), so its ceiling refusal is the chase's — the SAME three fixed constants,
-        // charged the same way, refused by name rather than truncated.
-        let Err(EntailError::Chase(ChaseError::BudgetExhausted { resource, report })) =
-            materialize(&ds, Materialization::Rdfs)
-        else {
-            panic!("a cross product past a fixed ceiling must be refused, not truncated");
+        // rules), so its limit refusal is the chase's — the SAME limits, charged the same
+        // way, refused by name rather than truncated.
+        let wasm = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let refused = materialize_with(&ds, Materialization::Rdfs, &wasm, None)
+            .expect_err("a cross product past the limit must be refused, not truncated");
+        let EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) = &refused else {
+            panic!("expected the chase's limit refusal, got {refused:?}");
         };
-        assert_eq!(resource, BudgetResource::StoredFacts);
+        assert_eq!(*resource, BudgetResource::StoredFacts);
         assert!(
-            report.stored_facts() > MAX_STORED_FACTS,
-            "the report must carry the observation that passed the ceiling, not the \
-             ceiling: {} vs {MAX_STORED_FACTS}",
+            report.stored_facts() as u64 > WASM_DEFAULT_MAX_STORED_FACTS,
+            "the report must carry the observation that passed the limit, not the limit: \
+             {} vs {WASM_DEFAULT_MAX_STORED_FACTS}",
             report.stored_facts()
+        );
+        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains("131072 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: the native stored-fact default holds every typing. The chase
+        // enumerates more candidates than the default join-step limit admits, so that is
+        // refused naming its own knob, and a raised join-step limit admits the run.
+        let native_facts =
+            EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let steps = materialize_with(&ds, Materialization::Rdfs, &native_facts, None)
+            .expect_err("the default join-step limit is passed")
+            .to_string();
+        assert!(
+            steps.ends_with("raise it with EvalOptions::with_max_join_steps"),
+            "{steps}"
+        );
+        let native = native_facts.with_max_join_steps(1 << 24);
+        let (closed, report) = materialize_with(&ds, Materialization::Rdfs, &native, None)
+            .expect("raised limits admit the cross product");
+        let typed = closed
+            .quad_refs()
+            .filter(|q| matches!(q.p, TermRef::Iri(p) if p == RDF_TYPE))
+            .filter(|q| matches!(q.o, TermRef::Iri(o) if o.starts_with("http://example.org/C")))
+            .count();
+        assert_eq!(
+            typed,
+            CLASSES * TRIPLES,
+            "rdfs2 types every subject by every class"
+        );
+        assert_eq!(
+            report.budget().stored_fact_limit(),
+            NATIVE_DEFAULT_MAX_STORED_FACTS
+        );
+        assert_eq!(
+            report.contract_hash(),
+            purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &native)
+        );
+        assert_ne!(
+            report.contract_hash(),
+            purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &wasm),
+            "a run under other limits names a different calculus"
         );
         // The refusal is the EVALUATOR's, not the façade's: the same input copies fine.
         let (copied, simple) = materialize(&ds, Materialization::Simple).expect("simple");

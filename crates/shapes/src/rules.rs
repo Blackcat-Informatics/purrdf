@@ -272,7 +272,11 @@ pub struct RuleOptions {
     max_term_generating_rounds: Option<u64>,
     /// The caller's generated-term budget ([`Self::with_max_generated_terms`]).
     max_generated_terms: Option<u64>,
-    /// How the host names the two limits' knobs, for a refusal to name them.
+    /// The caller's stored-fact limit ([`Self::with_max_stored_facts`]).
+    max_stored_facts: Option<u64>,
+    /// The caller's join-step limit ([`Self::with_max_join_steps`]).
+    max_join_steps: Option<u64>,
+    /// How the host names the limits' knobs, for a refusal to name them.
     knobs: LimitKnobs,
 }
 
@@ -339,7 +343,40 @@ impl RuleOptions {
         self
     }
 
-    /// Name the two limits' knobs as the host exposes them, so a refusal tells its caller
+    /// Permit an evaluation store of exactly `facts` facts — the base graph's triples, the
+    /// rule set's data, and every triple inferred — and refuse one more with a
+    /// [`RuleLimitExceeded`] naming the limit.
+    ///
+    /// The DEFAULT is sized for the target
+    /// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS)):
+    /// 4,194,304 facts natively, and 131,072 on `wasm32`, where the store lives in one
+    /// linear memory. A rule set whose inferences are large but finite states what it
+    /// needs here; the limit can only refuse, so a run it admits infers exactly what it
+    /// would under any larger limit.
+    #[must_use]
+    pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
+        self.max_stored_facts = Some(facts);
+        self
+    }
+
+    /// Permit exactly `steps` JOIN STEPS — candidate solutions the rule bodies enumerate —
+    /// and refuse one more with a [`RuleLimitExceeded`] naming the limit.
+    ///
+    /// The DEFAULT is sized for the target
+    /// ([`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)):
+    /// 1,048,576 on every target — it is what refuses a rule that keeps minting new terms
+    /// promptly; see [`NATIVE_DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS).
+    /// A rule set that needs more work, such as the non-linear transitive closure of a
+    /// thousand-node chain, states it here. It also bounds a rule body that
+    /// enumerates far more candidates than it infers triples — an accidental cross
+    /// product — which the stored-fact limit alone would not see.
+    #[must_use]
+    pub fn with_max_join_steps(mut self, steps: u64) -> Self {
+        self.max_join_steps = Some(steps);
+        self
+    }
+
+    /// Name the limits' knobs as the host exposes them, so a refusal tells its caller
     /// what to change in the caller's own terms. The default names this type's methods.
     #[must_use]
     pub fn with_limit_knobs(mut self, knobs: LimitKnobs) -> Self {
@@ -357,10 +394,16 @@ impl RuleOptions {
         if let Some(terms) = self.max_generated_terms {
             options = options.with_max_generated_terms(terms);
         }
+        if let Some(facts) = self.max_stored_facts {
+            options = options.with_max_stored_facts(facts);
+        }
+        if let Some(steps) = self.max_join_steps {
+            options = options.with_max_join_steps(steps);
+        }
         options
     }
 
-    /// How the host names the two limits' knobs.
+    /// How the host names the limits' knobs.
     #[must_use]
     pub fn limit_knobs(&self) -> &LimitKnobs {
         &self.knobs
@@ -388,7 +431,7 @@ impl RuleOptions {
     }
 }
 
-/// How a host names the knobs of the two rule-evaluation limits, so a
+/// How a host names the knobs of the four rule-evaluation limits, so a
 /// [`RuleLimitExceeded`] tells its caller what to change in the caller's own terms: a
 /// command-line flag, a keyword argument, an option, a parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,16 +440,39 @@ pub struct LimitKnobs {
     rounds: String,
     /// The generated-term budget's knob.
     generated_terms: String,
+    /// The stored-fact limit's knob.
+    stored_facts: String,
+    /// The join-step limit's knob.
+    join_steps: String,
 }
 
 impl LimitKnobs {
-    /// Knobs named `rounds` and `generated_terms`.
+    /// Knobs named `rounds`, `generated_terms`, `stored_facts` and `join_steps`.
     #[must_use]
-    pub fn new(rounds: impl Into<String>, generated_terms: impl Into<String>) -> Self {
+    pub fn new(
+        rounds: impl Into<String>,
+        generated_terms: impl Into<String>,
+        stored_facts: impl Into<String>,
+        join_steps: impl Into<String>,
+    ) -> Self {
         Self {
             rounds: rounds.into(),
             generated_terms: generated_terms.into(),
+            stored_facts: stored_facts.into(),
+            join_steps: join_steps.into(),
         }
+    }
+
+    /// The stored-fact limit's knob.
+    #[must_use]
+    pub fn stored_facts(&self) -> &str {
+        &self.stored_facts
+    }
+
+    /// The join-step limit's knob.
+    #[must_use]
+    pub fn join_steps(&self) -> &str {
+        &self.join_steps
     }
 
     /// The term-generating round limit's knob.
@@ -423,12 +489,15 @@ impl LimitKnobs {
 }
 
 impl Default for LimitKnobs {
-    /// The Rust API's knobs: [`RuleOptions::with_max_term_generating_rounds`] and
-    /// [`RuleOptions::with_max_generated_terms`].
+    /// The Rust API's knobs: [`RuleOptions::with_max_term_generating_rounds`],
+    /// [`RuleOptions::with_max_generated_terms`], [`RuleOptions::with_max_stored_facts`] and
+    /// [`RuleOptions::with_max_join_steps`].
     fn default() -> Self {
         Self::new(
             "RuleOptions::with_max_term_generating_rounds",
             "RuleOptions::with_max_generated_terms",
+            "RuleOptions::with_max_stored_facts",
+            "RuleOptions::with_max_join_steps",
         )
     }
 }
@@ -440,14 +509,18 @@ pub enum RuleLimit {
     TermGeneratingRounds,
     /// The generated-term budget ([`RuleOptions::with_max_generated_terms`]).
     GeneratedTerms,
+    /// The stored-fact limit ([`RuleOptions::with_max_stored_facts`]).
+    StoredFacts,
+    /// The join-step limit ([`RuleOptions::with_max_join_steps`]).
+    JoinSteps,
 }
 
 /// A rule set refused for passing a rule-evaluation limit ([`RuleOptions`]).
 ///
-/// It states the limit, how far past it the run went and the rules that inferred a new
-/// term in the last iteration. It is never a verdict that the rule set diverges: whether
-/// it would have terminated is undecidable, and a rule set that needs more states it with
-/// the knob this names.
+/// It states the limit, how far past it the run went, the knob that raises it and — for
+/// the two term limits — the rules that inferred a new term in the last iteration. It is
+/// never a verdict that the rule set diverges: whether it would have terminated is
+/// undecidable, and a rule set that needs more states it with the knob this names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleLimitExceeded {
     limit: RuleLimit,
@@ -479,7 +552,8 @@ impl RuleLimitExceeded {
         self.limit
     }
 
-    /// What the run reached: term-generating rounds, or generated terms.
+    /// What the run reached: term-generating rounds, generated terms, stored facts or join
+    /// steps.
     #[must_use]
     pub fn observed(&self) -> u64 {
         self.observed
@@ -504,7 +578,8 @@ impl RuleLimitExceeded {
     }
 
     /// The rules that inferred a new term in the last iteration, as the rule set names
-    /// them, in rule order.
+    /// them, in rule order. Empty for the stored-fact and join-step limits, which no one
+    /// rule passes.
     #[must_use]
     pub fn rules(&self) -> &[String] {
         &self.rules
@@ -563,7 +638,34 @@ impl std::fmt::Display for RuleLimitExceeded {
                 },
                 self.knob,
             ),
+            RuleLimit::StoredFacts => write!(
+                f,
+                "the rules exceeded the stored-fact limit: {} facts observed, {} permitted \
+                 ({}); raise it with {}",
+                self.observed,
+                self.permitted,
+                capacity_origin(self.stated),
+                self.knob,
+            ),
+            RuleLimit::JoinSteps => write!(
+                f,
+                "the rules exceeded the join-step limit: {} join steps observed, {} permitted \
+                 ({}); raise it with {}",
+                self.observed,
+                self.permitted,
+                capacity_origin(self.stated),
+                self.knob,
+            ),
         }
+    }
+}
+
+/// Where a stored-fact or join-step limit came from, for a diagnostic.
+const fn capacity_origin(stated: bool) -> &'static str {
+    if stated {
+        "the caller's limit"
+    } else {
+        "the default for this target"
     }
 }
 
@@ -600,6 +702,18 @@ impl RulesError {
                 report.generated_term_budget(),
                 report.generated_term_budget_stated(),
                 knobs.generated_terms(),
+            ),
+            RuleLimit::StoredFacts => (
+                u64::try_from(report.stored_facts()).unwrap_or(u64::MAX),
+                report.stored_fact_limit(),
+                report.stored_fact_limit_stated(),
+                knobs.stored_facts(),
+            ),
+            RuleLimit::JoinSteps => (
+                report.join_steps(),
+                report.join_step_limit(),
+                report.join_step_limit_stated(),
+                knobs.join_steps(),
             ),
         };
         Self::LimitExceeded(RuleLimitExceeded {
@@ -663,8 +777,9 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 /// A failure the specification makes one: a `sh:ruleProcessor` value the host has not
 /// registered, on a rule or on any rule set; a requested rule set the shapes graph does
 /// not declare; a rule or expression that fails during execution; a rule set that keeps
-/// inferring new terms past a rule-evaluation limit ([`RuleLimitExceeded`]); and a rule set
-/// that passes one of the engine's fixed ceilings.
+/// inferring new terms past a rule-evaluation limit, or that holds or enumerates more than
+/// the stored-fact or join-step limit permits ([`RuleLimitExceeded`]); and a rule set that
+/// passes the engine's fixed term-arena ceiling.
 pub fn infer(
     data: &ShaclData,
     shapes: &Shapes,

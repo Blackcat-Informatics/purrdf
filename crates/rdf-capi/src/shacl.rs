@@ -504,6 +504,13 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// naming the limit, the numbers, the rules that inferred a new term last, and the
 /// parameter that raises it.
 ///
+/// `max_stored_facts` bounds the facts the evaluation store may hold — the data graph, a
+/// rule set's data and every inferred triple — and `max_join_steps` the candidate
+/// solutions the rule bodies may enumerate. Each may be NULL for the target's default —
+/// 4194304 facts and 1048576 join steps natively — or point at an exact limit. A run
+/// past either fails the call naming the limit, the numbers and the parameter that raises
+/// it.
+///
 /// `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
 /// proof of every inferred triple (`derived S P O .`, then `  rule R` and one
 /// `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
@@ -519,7 +526,9 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// # Safety
 /// `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
 /// `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
-/// `max_term_generating_rounds` and `max_generated_terms` must each be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+/// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+/// `max_join_steps` must each be null or readable; when `import_count` is non-zero,
+/// `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings; `out_inferred`
 /// must be writable; `out_proof` and `out_error` must each be null or writable.
 #[unsafe(no_mangle)]
@@ -531,6 +540,8 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     srl_base_iri: *const c_char,
     max_term_generating_rounds: *const u64,
     max_generated_terms: *const u64,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
@@ -564,6 +575,10 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
                 // SAFETY: the caller's contract — null or readable.
                 max_generated_terms: max_generated_terms.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_stored_facts: max_stored_facts.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_join_steps: max_join_steps.as_ref().copied(),
                 host: purrdf_validate::RulesHost::CAbi,
             };
             let outcome = apply_rules_outcome(&request).map_err(PurrdfError::shapes)?;
@@ -2157,6 +2172,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     0,
                     &raw mut inferred,
                     if explain {
@@ -2233,6 +2250,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     &raw const budget,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
@@ -2255,6 +2274,79 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             "{refused}"
         );
         assert_eq!(run(6).expect("six terms suffice"), tools_inference());
+    }
+
+    /// The stored-fact and join-step limits cross the C boundary as their own nullable
+    /// parameters: a refusal names this ABI's parameter and the numbers, a limit of exactly
+    /// the store the run needs admits it with the default inference graph, and one fewer
+    /// refuses it.
+    #[test]
+    fn capi_apply_rules_takes_the_capacity_limits() {
+        use std::ffi::CString;
+
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
+        let run = |facts: Option<u64>, steps: Option<u64>| -> Result<String, String> {
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let facts_ptr = facts.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            // SAFETY: every pointer is a live CString, NULL, a readable local, or a
+            // writable local.
+            unsafe {
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    facts_ptr,
+                    steps_ptr,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut inferred,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    return Err(take_error(error));
+                }
+                Ok(take_text(inferred))
+            }
+        };
+        let mut limit = 1_u64;
+        let admitted = loop {
+            match run(Some(limit), None) {
+                Ok(graph) => break graph,
+                Err(refused) => {
+                    assert!(
+                        refused.contains(&format!("{limit} permitted (the caller's limit)"))
+                            && refused.ends_with(
+                                "raise it with purrdf_shacl_apply_rules's max_stored_facts"
+                            ),
+                        "{refused}"
+                    );
+                    let observed: u64 = refused
+                        .split("the rules exceeded the stored-fact limit: ")
+                        .nth(1)
+                        .and_then(|tail| tail.split(' ').next())
+                        .and_then(|count| count.parse().ok())
+                        .expect("an observed count");
+                    assert!(observed > limit, "{refused}");
+                    limit = observed;
+                }
+            }
+        };
+        assert_eq!(admitted, tools_inference());
+        assert!(run(Some(limit - 1), None).is_err(), "one fact short");
+        let steps = run(None, Some(1)).expect_err("one join step");
+        assert!(
+            steps.ends_with("raise it with purrdf_shacl_apply_rules's max_join_steps"),
+            "{steps}"
+        );
     }
 
     /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table across the C
@@ -2292,6 +2384,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     srl.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
@@ -2782,6 +2876,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
                     shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),

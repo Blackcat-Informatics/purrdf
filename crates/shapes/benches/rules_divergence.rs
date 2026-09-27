@@ -22,6 +22,11 @@
 //! * `complete/depth/<n>` — a SHACL SPARQL rule counting depth along an `n`-edge chain:
 //!   a counter bounded by its data.
 //! * `complete/countdown/<n>` — a SHACL SPARQL rule counting down from `n` to 0.
+//! * `complete/copy/<n>` — a non-recursive `sh:TripleRule` copying `n` triples: 70,000
+//!   holds 140,000 facts, past the `wasm32` default stored-fact limit and inside the
+//!   native one.
+//! * `complete/closure/<n>` — the transitive closure of an `n`-edge chain as two global
+//!   `sh:SPARQLRule`s, one of them linear-recursive: 1,000 edges infer 500,500 triples.
 //!
 //! Report-only, `cargo bench -p purrdf-shapes --bench rules_divergence` (the `make
 //! bench` lane) — excluded from `make check`. No timing is asserted.
@@ -182,5 +187,85 @@ fn bench_countdown(c: &mut Criterion) {
     countdown.finish();
 }
 
-criterion_group!(benches, bench_refuse, bench_complete, bench_countdown);
+/// Copy workload sizes: the second passes the `wasm32` default stored-fact limit.
+const COPIES: &[usize] = &[10_000, 70_000];
+
+/// Chain lengths for the transitive closure.
+const CLOSURE_CHAINS: &[usize] = &[150, 1_000];
+
+const COPY_RULE: &str = "ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:q ;
+            sh:object [ sh:path ex:p ] ] .
+";
+
+const CLOSURE_RULES: &str = r#"ex:base a sh:SPARQLRule ; sh:construct
+  "CONSTRUCT { ?x ex:connected ?y } WHERE { ?x ex:link ?y }" .
+ex:step a sh:SPARQLRule ; sh:construct
+  "CONSTRUCT { ?x ex:connected ?z } WHERE { ?x ex:connected ?y . ?y ex:link ?z }" .
+"#;
+
+/// Completion of the copy workloads the native default limits admit.
+fn bench_copy(c: &mut Criterion) {
+    let copies: Vec<(usize, (Shapes, ShaclData))> = COPIES
+        .iter()
+        .map(|&count| {
+            let mut ttl = format!("{PREFIXES}{COPY_RULE}");
+            for index in 0..count {
+                writeln!(ttl, "ex:s{index} ex:p ex:o{index} .").expect("write to String");
+            }
+            (count, load(&ttl))
+        })
+        .collect();
+    let mut copy = c.benchmark_group("rules_divergence/complete/copy");
+    copy.sample_size(10);
+    for (count, (shapes, data)) in &copies {
+        let count = *count;
+        copy.bench_with_input(BenchmarkId::from_parameter(count), data, |b, data| {
+            b.iter(|| {
+                let inference = infer(black_box(data), shapes, &RuleOptions::default())
+                    .expect("a copy completes under the default limits");
+                assert_eq!(inference.inferred().len(), count);
+                inference
+            });
+        });
+    }
+    copy.finish();
+}
+
+/// Completion of the transitive closure the native default limits admit.
+fn bench_closure(c: &mut Criterion) {
+    let closures: Vec<(usize, (Shapes, ShaclData))> = CLOSURE_CHAINS
+        .iter()
+        .map(|&length| {
+            let mut ttl = format!("{PREFIXES}{CLOSURE_RULES}");
+            for index in 0..length {
+                writeln!(ttl, "ex:n{index} ex:link ex:n{} .", index + 1).expect("write to String");
+            }
+            (length, load(&ttl))
+        })
+        .collect();
+    let mut closure = c.benchmark_group("rules_divergence/complete/closure");
+    closure.sample_size(10);
+    for (length, (shapes, data)) in &closures {
+        let length = *length;
+        closure.bench_with_input(BenchmarkId::from_parameter(length), data, |b, data| {
+            b.iter(|| {
+                let inference = infer(black_box(data), shapes, &RuleOptions::default())
+                    .expect("a closure completes under the default limits");
+                assert_eq!(inference.inferred().len(), length * (length + 1) / 2);
+                inference
+            });
+        });
+    }
+    closure.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_refuse,
+    bench_complete,
+    bench_countdown,
+    bench_copy,
+    bench_closure
+);
 criterion_main!(benches);

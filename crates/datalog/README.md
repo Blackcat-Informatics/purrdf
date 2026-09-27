@@ -61,15 +61,25 @@ and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
 * **Deterministic by construction.** Per-key rows keep insertion order, the
   arrangement is sorted, and no map iteration order reaches an output path.
   Identical input yields byte-identical output, on every target.
-* **Budgets are constants, not knobs.** Step, fact and arena ceilings are fixed
-  workspace constants and their consumption is *reported*, never configured —
-  two callers with the same input always get the same answer. Nothing numeric is
-  caller-settable here: a settable ceiling drags a charge schedule behind it, and
-  a reasoner's step count is an artifact of the plan, so pinning one would pin the
-  planner and make a caller's *model* move when the join order does. The two
-  exceptions are the limits on term generation by a guarded program: whether
-  such a program terminates is undecidable, so any fixed limit refuses some
-  program that terminates, and the limits are the caller's (`EvalOptions`). The
+* **Limits refuse; they never truncate.** The STORED-FACT and JOIN-STEP limits
+  are the caller's (`EvalOptions::with_max_stored_facts`,
+  `EvalOptions::with_max_join_steps`), with a default sized for the target:
+  131,072 facts and 1,048,576 join steps on `wasm32`, where the store lives in
+  one linear memory, and 4,194,304 facts and 1,048,576 join steps everywhere
+  else (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`, chosen at compile
+  time from the target architecture). The term-arena ceiling
+  (`MAX_TERM_ARENA_BYTES`) stays a constant. A limit can only refuse: a run
+  inside its limits returns the least model, the same under every limit that
+  admits it, and a run past one returns `EvalError::BudgetExhausted` naming the
+  limit, the numbers and the knob that raises it — never a truncated model.
+  Every caller passing the same options gets the same answer or the same
+  refusal, and the effective limits are folded into every program's contract
+  hash, so a result computed under one set of limits never claims another's
+  identity. A join-step count is also a property of the plan, so a limit sized
+  tightly against one release can refuse under the next; headroom cannot change
+  a completed answer. The limits on term generation by a guarded program are the
+  caller's too: whether such a program terminates is undecidable, so any fixed
+  limit refuses some program that terminates (`EvalOptions`). The
   TERM-GENERATING ROUND limit defaults to `DEFAULT_MAX_TERM_GENERATING_ROUNDS`
   (16,384). The GENERATED-TERM budget, the terms added beyond the seeded store's
   `N`, defaults to `max(65,536, 4 × N)`. A run past either is refused as

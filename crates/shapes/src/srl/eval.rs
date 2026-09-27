@@ -186,7 +186,8 @@ impl Inference {
 /// # Errors
 ///
 /// An ill-formed element rule, a rule set that is not stratifiable, a guard or producer
-/// that fails, or a fixed ceiling passed — each named by the rule it concerns.
+/// that fails, a rule-evaluation limit passed (naming the host's knob that raises it), or
+/// the fixed term-arena ceiling passed — each named by the rule it concerns.
 pub fn evaluate(
     set: &RuleSet<'_>,
     data: &ShaclData,
@@ -470,10 +471,23 @@ fn register_constants(codec: &Codec, rule: &super::ir::ElementRule) {
     elements(codec, &rule.body);
 }
 
-/// An evaluation refusal: a passed rule-evaluation limit naming its rules and the host's
-/// knob, or the described error.
+/// An evaluation refusal: a passed rule-evaluation limit naming its rules (for a term
+/// limit) and the host's knob, or the described error.
 fn refusal(error: &EvalError, set: &RuleSet<'_>, knobs: &rules::LimitKnobs) -> rules::RulesError {
     match error {
+        EvalError::BudgetExhausted {
+            resource: resource @ (BudgetResource::StoredFacts | BudgetResource::JoinSteps),
+            report,
+        } => rules::RulesError::limit_exceeded(
+            if *resource == BudgetResource::StoredFacts {
+                rules::RuleLimit::StoredFacts
+            } else {
+                rules::RuleLimit::JoinSteps
+            },
+            Vec::new(),
+            *report,
+            knobs,
+        ),
         EvalError::TermLimitExceeded {
             resource,
             rules: indices,

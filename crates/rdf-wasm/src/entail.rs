@@ -39,14 +39,14 @@
 //! unchanged.
 
 use purrdf_validate::regime::{
-    ReasonerSession, ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
-    certain_answers_to_string, check_absent_proof_is_not_verifiable, check_dl_proof,
-    check_dl_proof_golden_vectors, check_inconsistent_refusal, check_regime_golden_vectors,
-    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
-    extension_rules_string, extract_module_to_string, graph_entails_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    profile_to_string, prove_to_string, realize_to_string, rules_string,
-    verify_entailment_to_string,
+    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer,
+    RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
+    check_absent_proof_is_not_verifiable, check_dl_proof, check_dl_proof_golden_vectors,
+    check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
+    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
+    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
+    instances_to_string, justify_to_string, materialize_to_nquads_string_with, profile_to_string,
+    prove_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
 
@@ -100,12 +100,25 @@ pub(crate) fn materialize_impl(
     document: &str,
     regime: &str,
     program: &str,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<RegimeClosure, String> {
-    materialize_to_nquads_string(regime, document, program).map(RegimeClosure::from)
+    materialize_to_nquads_string_with(
+        regime,
+        document,
+        program,
+        &MaterializeLimits {
+            max_stored_facts,
+            max_join_steps,
+            host: RegimeHost::Wasm,
+        },
+    )
+    .map(RegimeClosure::from)
 }
 
-/// `entailMaterialize(document, regime, program)` → a `RegimeClosure` carrying the
-/// canonical N-Quads closure and the rendered reasoning report.
+/// `entailMaterialize(document, regime, program, maxStoredFacts?, maxJoinSteps?)` → a
+/// `RegimeClosure` carrying the canonical N-Quads closure and the rendered reasoning
+/// report.
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged, so a document that names a graph keeps naming it. `regime` is one
@@ -118,15 +131,28 @@ pub(crate) fn materialize_impl(
 /// other regime's rule table is the specification's, so its `program` is `""`, and a
 /// non-empty one throws rather than being silently discarded.
 ///
+/// `maxStoredFacts` (a `bigint`) bounds the facts each evaluation store may hold and
+/// `maxJoinSteps` (a `bigint`) the candidate solutions the rules may enumerate, for the
+/// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted, each is this target's default:
+/// 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory — a
+/// native build's defaults are 4194304 and 1048576. A run past either throws naming
+/// the limit, the numbers and the argument that raises it; a run inside them returns
+/// exactly the closure larger limits would, and the report's `contract-hash` names the
+/// calculus under the limits in force.
+///
 /// Throws if `document` fails to parse, if `regime` is not one of those spellings
-/// (the message names the accepted set), or if `program` is wrong for the regime.
+/// (the message names the accepted set), if `program` is wrong for the regime, or if
+/// the run passes an evaluation limit.
 #[wasm_bindgen(js_name = entailMaterialize)]
 pub fn entail_materialize(
     document: &str,
     regime: &str,
     program: &str,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<RegimeClosure, JsError> {
-    materialize_impl(document, regime, program).map_err(|e| JsError::new(&e))
+    materialize_impl(document, regime, program, max_stored_facts, max_join_steps)
+        .map_err(|e| JsError::new(&e))
 }
 
 /// The rule table `regime` is *defined by*. See [`entail_rules`].
@@ -1446,7 +1472,7 @@ mod tests {
 
     #[test]
     fn materialize_infers_and_reports() {
-        let closed = materialize_impl(SCHEMA, "rdfs", "").expect("rdfs closure");
+        let closed = materialize_impl(SCHEMA, "rdfs", "", None, None).expect("rdfs closure");
         assert!(closed.nquads().contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -1472,7 +1498,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_impl(SCHEMA, "RDFS", "").expect_err("case-sensitive"),
+            materialize_impl(SCHEMA, "RDFS", "", None, None).expect_err("case-sensitive"),
             rules_impl("rdfs-plus").expect_err("unknown"),
             implemented_rules_impl("rdfs-plus").expect_err("unknown"),
         ] {
@@ -1495,7 +1521,7 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let closed = materialize_impl(SCHEMA, regime, program)
+            let closed = materialize_impl(SCHEMA, regime, program, None, None)
                 .unwrap_or_else(|error| panic!("{regime}: {error}"));
             assert!(
                 closed.report().contains(&format!("\nregime {regime}\n")),
@@ -1505,14 +1531,45 @@ mod tests {
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM)
+        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, None, None)
             .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
 
+    /// A passed evaluation limit names this host's own arguments, and the neighbour
+    /// holding exactly the store the run needs returns the default closure.
+    #[test]
+    fn the_evaluation_limits_name_this_hosts_arguments() {
+        let closed = materialize_impl(SCHEMA, "rdfs", "", None, None).expect("rdfs");
+        let stored: u64 = closed
+            .report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget stored-facts "))
+            .expect("a stored-facts line")
+            .parse()
+            .expect("a count");
+        let Err(refused) = materialize_impl(SCHEMA, "rdfs", "", Some(stored - 1), None) else {
+            panic!("one fact short must be refused");
+        };
+        assert!(
+            refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
+                && refused.ends_with("raise it with entailMaterialize's maxStoredFacts"),
+            "{refused}"
+        );
+        let exact = materialize_impl(SCHEMA, "rdfs", "", Some(stored), None).expect("exact");
+        assert_eq!(exact.nquads, closed.nquads);
+        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", None, Some(1)) else {
+            panic!("one join step must be refused");
+        };
+        assert!(
+            steps.ends_with("raise it with entailMaterialize's maxJoinSteps"),
+            "{steps}"
+        );
+    }
+
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_impl("this is not n-quads\n", "rdfs", "").is_err());
+        assert!(materialize_impl("this is not n-quads\n", "rdfs", "", None, None).is_err());
     }
 
     #[test]
@@ -1647,7 +1704,7 @@ mod tests {
                 .starts_with("purrdf-dl-certificate 1\n")
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
-        let chase = materialize_impl(TAXONOMY, "owl-rl", "").expect("owl-rl");
+        let chase = materialize_impl(TAXONOMY, "owl-rl", "", None, None).expect("owl-rl");
         assert!(chase.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(!chase.report().contains("completeness decided"));
     }

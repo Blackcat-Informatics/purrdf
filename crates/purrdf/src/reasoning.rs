@@ -663,16 +663,15 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// carrying certified partial answers, and it arrives on
 /// [`GovernedEntailment::Answered`] beside the closure's [`ReasoningReport`].
 ///
-/// **Phase one — materializing the closure — honours the STOP SIGNAL and nothing else.**
-/// That is not an omission and it is not a smaller version of the ceilings; it is the only
-/// thing that can be honoured there without changing what a closure IS. A numeric ceiling on
-/// a reasoning run is a *charge schedule* — some tally of rounds, facts or steps, priced per
-/// lane — and a caller-settable one would mean two callers materializing the same regime
-/// over the same data get different closures, which is the semantic optionality
-/// `purrdf-datalog` states its [fixed
-/// budgets](purrdf_datalog#budgets-are-constants-not-knobs) to prevent. A stop signal has no
-/// such property: it either lets the closure finish, in which case it is bit-for-bit the
-/// closure [`query_with_entailment`] would have computed, or it ends the run with
+/// **Phase one — materializing the closure — honours the STOP SIGNAL, under the target's
+/// default evaluation limits.** The SPARQL governors price query evaluation, not a
+/// reasoning run, so none of them is translated into a limit on the closure: the closure is
+/// computed under `purrdf-datalog`'s default stored-fact and join-step limits
+/// ([limits refuse; they never truncate](purrdf_datalog#limits-refuse-they-never-truncate)),
+/// exactly as [`query_with_entailment`] computes it. A caller that needs other limits
+/// materializes with [`purrdf_entail::materialize_with`] and queries the closure. The stop
+/// signal either lets the closure finish, in which case it is bit-for-bit the closure
+/// [`query_with_entailment`] would have computed, or it ends the run with
 /// [`GovernedEntailment::ClosureStopped`] and nothing at all. See
 /// [`purrdf_entail::materialize_until`] for the boundaries each lane polls it at.
 ///

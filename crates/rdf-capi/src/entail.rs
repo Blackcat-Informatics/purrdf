@@ -56,12 +56,12 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::regime::{
-    ReasonerSession, ReasoningAnswer, certain_answers_to_string, check_dl_proof,
-    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
-    extension_rules_string, extract_module_to_string, graph_entails_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    profile_to_string, prove_to_string, realize_to_string, rules_string,
-    verify_entailment_to_string,
+    MaterializeLimits, ReasonerSession, ReasoningAnswer, RegimeHost, certain_answers_to_string,
+    check_dl_proof, classify_to_string, consistency_to_string, entails_to_string,
+    explain_conclusion_to_string, extension_rules_string, extract_module_to_string,
+    graph_entails_to_string, implemented_rules_string, instances_to_string, justify_to_string,
+    materialize_to_nquads_string_with, profile_to_string, prove_to_string, realize_to_string,
+    rules_string, verify_entailment_to_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -74,13 +74,21 @@ use crate::status::PurrdfStatus;
 /// report as two byte vectors. Native-testable, pointer-free core.
 ///
 /// The parse → close → canonicalize → render sequence lives in
-/// [`materialize_to_nquads_string`]; this only adds the C-ABI byte framing.
+/// [`materialize_to_nquads_string_with`]; this only adds the C-ABI byte framing.
 fn materialize_to_nquads_bytes(
     document: &str,
     regime: &str,
     program: &str,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let (nquads, report) = materialize_to_nquads_string(regime, document, program)?.into_parts();
+    let limits = MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::CAbi,
+    };
+    let (nquads, report) =
+        materialize_to_nquads_string_with(regime, document, program, &limits)?.into_parts();
     Ok((nquads.into_bytes(), report.into_bytes()))
 }
 
@@ -111,17 +119,27 @@ fn materialize_to_nquads_bytes(
 /// would be making exactly the overclaim the report exists to prevent — a
 /// complete rule table is not a complete closure.
 ///
+/// `max_stored_facts` bounds the facts each evaluation store may hold and
+/// `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
+/// `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
+/// 1048576 join steps natively — or point at an exact limit. A run past either fails
+/// the call naming the limit, the numbers and the parameter that raises it; a run inside
+/// them returns exactly the closure larger limits would, and the report's
+/// `contract-hash` names the calculus under the limits in force.
+///
 /// On any error neither out-param is written, so there is nothing to free.
 ///
 /// # Safety
 /// `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
-/// `out_nquads` and `out_report` must be writable pointers; `out_error` must be
-/// null or writable.
+/// `max_stored_facts` and `max_join_steps` must each be null or readable; `out_nquads` and
+/// `out_report` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     document: *const c_char,
     regime: *const c_char,
     program: *const c_char,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     out_nquads: *mut *mut PurrdfBuffer,
     out_report: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -147,8 +165,16 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
             let document = cstr_to_str(document)?;
             let regime = cstr_to_str(regime)?;
             let program = cstr_to_str(program)?;
-            let (nquads, report) = materialize_to_nquads_bytes(document, regime, program)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let (nquads, report) = materialize_to_nquads_bytes(
+                document,
+                regime,
+                program,
+                // SAFETY: the caller's contract — null or readable.
+                max_stored_facts.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_join_steps.as_ref().copied(),
+            )
+            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_nquads = PurrdfBuffer::into_raw(nquads);
             *out_report = PurrdfBuffer::into_raw(report);
             Ok(PurrdfStatus::Ok)
@@ -1879,7 +1905,7 @@ mod tests {
     #[test]
     fn materialize_emits_closure_and_report() {
         let (nquads, report) =
-            materialize_to_nquads_bytes(SCHEMA, "rdfs", "").expect("rdfs closure");
+            materialize_to_nquads_bytes(SCHEMA, "rdfs", "", None, None).expect("rdfs closure");
         let nquads = String::from_utf8(nquads).expect("utf8");
         let report = String::from_utf8(report).expect("utf8");
         assert!(nquads.contains(
@@ -1901,7 +1927,8 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_to_nquads_bytes(SCHEMA, "RDFS", "").expect_err("case-sensitive"),
+            materialize_to_nquads_bytes(SCHEMA, "RDFS", "", None, None)
+                .expect_err("case-sensitive"),
             rules_bytes("rdfs-plus").expect_err("unknown"),
             implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
         ] {
@@ -1924,21 +1951,23 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let (_, report) = materialize_to_nquads_bytes(SCHEMA, regime, program)
+            let (_, report) = materialize_to_nquads_bytes(SCHEMA, regime, program, None, None)
                 .unwrap_or_else(|error| panic!("{regime}: {error}"));
             let report = String::from_utf8(report).expect("utf8");
             assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM)
+        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM, None, None)
             .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
 
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "").is_err());
+        assert!(
+            materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "", None, None).is_err()
+        );
     }
 
     #[test]
@@ -2000,6 +2029,8 @@ mod tests {
                     document.as_ptr(),
                     regime.as_ptr(),
                     program.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2013,6 +2044,70 @@ mod tests {
             ));
             assert!(take(report).starts_with("purrdf-reasoning-report 4\n"));
         }
+    }
+
+    /// The evaluation limits cross the C boundary as nullable parameters: a refusal names
+    /// this ABI's parameter and the numbers, and a limit of exactly the store the run
+    /// needs returns the default closure.
+    #[test]
+    fn the_pointer_surface_takes_the_evaluation_limits() {
+        let document = CString::new(SCHEMA).expect("no interior NUL");
+        let program = CString::new("").expect("no interior NUL");
+        let run = |regime: &str,
+                   facts: Option<u64>,
+                   steps: Option<u64>|
+         -> Result<(String, String), String> {
+            let regime = CString::new(regime).expect("no interior NUL");
+            let facts_ptr = facts.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let mut nquads: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every C string is live for the call, each limit pointer is NULL or a
+            // readable local, and the out-pointers address live, writable locals.
+            unsafe {
+                let status = purrdf_entail_materialize_to_nquads(
+                    document.as_ptr(),
+                    regime.as_ptr(),
+                    program.as_ptr(),
+                    facts_ptr,
+                    steps_ptr,
+                    &raw mut nquads,
+                    &raw mut report,
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    let text = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                        .to_string_lossy()
+                        .into_owned();
+                    crate::error::purrdf_error_free(error);
+                    return Err(text);
+                }
+                Ok((take(nquads), take(report)))
+            }
+        };
+        let (closure, report) = run("rdfs", None, None).expect("the default");
+        let stored: u64 = report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget stored-facts "))
+            .expect("a stored-facts line")
+            .parse()
+            .expect("a count");
+        let refused = run("rdfs", Some(stored - 1), None).expect_err("one fact short");
+        assert!(
+            refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
+                && refused.ends_with(
+                    "raise it with purrdf_entail_materialize_to_nquads's max_stored_facts"
+                ),
+            "{refused}"
+        );
+        let (exact, _) = run("rdfs", Some(stored), None).expect("exactly the store");
+        assert_eq!(exact, closure);
+        let steps = run("owl-rl", None, Some(1)).expect_err("one join step");
+        assert!(
+            steps.ends_with("raise it with purrdf_entail_materialize_to_nquads's max_join_steps"),
+            "{steps}"
+        );
     }
 
     #[test]
@@ -2061,6 +2156,8 @@ mod tests {
                     document.as_ptr(),
                     regime.as_ptr(),
                     program.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2086,6 +2183,8 @@ mod tests {
         unsafe {
             assert_eq!(
                 purrdf_entail_materialize_to_nquads(
+                    std::ptr::null(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),

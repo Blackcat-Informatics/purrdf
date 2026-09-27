@@ -193,6 +193,11 @@ out["inferred"], out["proof"]
 # that needs more states it; a run past either raises ValueError naming the limit.
 shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=50_000)
 
+# Two more bound what a run holds and enumerates: 4194304 stored facts (the data
+# graph, a rule set's data and every inferred triple) and 1048576 join steps. A
+# run past either raises ValueError naming the limit and the keyword argument.
+shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
+
 # Evaluate one node expression of a shapes graph against a focus node. The
 # expression is an IRI or "_:label"; the scope binds shnex:var names.
 shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
@@ -268,8 +273,8 @@ ontology's own named terms).
 **The report is the second return value and is never optional.** It is a
 byte-stable rendering naming which rules fired and how often, which specification
 rules did *not* fire, which constructs the run left at a boundary, what it
-consumed of the evaluator's fixed ceilings, and the contract hash of the calculus
-that ran — so a cached closure minted under a different rule set can be refused
+consumed against the evaluation limits it ran under, and the contract hash of the
+calculus that ran under those limits — so a cached closure minted under a different rule set can be refused
 rather than trusted.
 
 The rule tables are readable directly, so coverage is something you measure
@@ -317,9 +322,17 @@ other suite are in
 `ValueError` is raised for an unknown regime spelling (the message names the
 accepted set), for a `program` that is wrong for the regime — a non-empty one for
 any regime but `"rif"`, or one `"rif"` cannot parse as a normative RIF-in-XML
-document — and for an exhausted evaluation ceiling. An exhausted ceiling is a
-refusal, never a truncated closure handed back as a complete one. Being
-`"owl-direct"` or `"rif"` is not itself a refusal: both materialize.
+document — and for a passed evaluation limit. A passed limit is a refusal, never a
+truncated closure handed back as a complete one. Being `"owl-direct"` or `"rif"` is
+not itself a refusal: both materialize.
+
+`materialize` and `materialize_nt` take two keyword-only evaluation limits for the
+`"rdf"`, `"rdfs"`, `"owl-rl"` and `"d"` regimes: `max_stored_facts` (the facts each
+graph's store may hold, default 4194304) and `max_join_steps` (the candidate
+solutions the rules may enumerate, default 1048576). A run past either raises
+`ValueError` naming the limit, the numbers and the keyword argument; a run inside them
+returns the closure any larger limits would, and the report's `contract-hash` names the
+calculus under the limits in force.
 
 ## Description-Logic reasoning services
 

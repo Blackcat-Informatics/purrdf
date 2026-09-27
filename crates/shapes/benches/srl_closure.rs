@@ -13,6 +13,11 @@
 //! * `infer/<n>` — `srl::infer` over a chain of `n` `:link` edges, whose closure holds
 //!   `n (n + 1) / 2` `:connected` triples; the per-rule semi-naive delta is what keeps a
 //!   round from rejoining the whole closure.
+//! * `infer_linear/<n>` — the LINEAR closure (`?x :connected ?y . ?y :link ?z`), which
+//!   takes one round per edge. Its `:link` atom gains no row after the first round, so a
+//!   round skips the decomposition anchored at it rather than enumerating the whole
+//!   closure first; 1,000 edges (500,500 triples) is past the `wasm32` default
+//!   stored-fact limit and inside the native one.
 //!
 //! Report-only, `cargo bench -p purrdf-shapes --bench srl_closure` (the `make bench`
 //! lane) — excluded from `make check`. No timing is asserted.
@@ -63,5 +68,32 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench);
+const LINEAR_RULES: &str = "PREFIX : <https://example.org/srl-bench/>
+RULE { ?x :connected ?y } WHERE { ?x :link ?y }
+RULE { ?x :connected ?z } WHERE { ?x :connected ?y . ?y :link ?z }
+";
+
+/// Chain lengths for the linear closure.
+const LINEAR_CHAINS: &[usize] = &[128, 1_000];
+
+fn bench_linear(c: &mut Criterion) {
+    let document = srl::parse_and_check(LINEAR_RULES, None).expect("checks");
+    let mut group = c.benchmark_group("srl_closure/infer_linear");
+    group.sample_size(10);
+    for &len in LINEAR_CHAINS {
+        let data = chain(len);
+        group.throughput(Throughput::Elements((len * (len + 1) / 2) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(len), &data, |b, data| {
+            b.iter(|| {
+                let inference = srl::infer(&document, black_box(data), &InferOptions::default())
+                    .expect("evaluates under the default limits");
+                assert_eq!(inference.inferred().len(), len * (len + 1) / 2);
+                inference
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_linear);
 criterion_main!(benches);

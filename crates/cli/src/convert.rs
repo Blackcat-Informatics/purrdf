@@ -117,6 +117,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) entailment: Option<CliRegime>,
     /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
     pub(crate) rules: Option<&'a std::path::Path>,
+    /// `--max-stored-facts` and `--max-join-steps`: the limits `--entailment` runs under.
+    pub(crate) limits: purrdf_validate::regime::MaterializeLimits,
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -369,6 +371,7 @@ fn run_with_transforms(
                         options.base,
                         options.transport,
                         plan.materialization(),
+                        &options.limits,
                         report_target,
                     )?
                 }
@@ -378,7 +381,12 @@ fn run_with_transforms(
                     // then reason over the merged dataset.
                     let (merged, ledger) = ingest::ingest(sources, formats)?;
                     read_ledger = ledger;
-                    report::materialize_reported(&*merged, plan.materialization(), report_target)?
+                    report::materialize_reported(
+                        &*merged,
+                        plan.materialization(),
+                        &options.limits,
+                        report_target,
+                    )?
                 }
             }
         }

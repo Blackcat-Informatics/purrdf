@@ -109,6 +109,9 @@ Transcode a source into a target syntax or the pack container.
   serializing (see [`reason`](#reason) for the seven regimes and their inputs).
 - `--rules <FILE>` — the RIF-in-XML rule document `--entailment rif` runs;
   required by that regime and a usage error for any other.
+- `--max-stored-facts <N>` / `--max-join-steps <N>` — the evaluation limits
+  `--entailment` runs under, exactly as on [`reason`](#reason); each requires
+  `--entailment`.
 - `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
@@ -317,7 +320,8 @@ purrdf query --data people.ttl --entailment rdfs \
 ## `reason`
 
 ```text
-purrdf reason --regime <R> [--rules <FILE>] [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+purrdf reason --regime <R> [--rules <FILE>] [--max-stored-facts <N>] [--max-join-steps <N>]
+              [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
 Materialize an entailment regime's closure over the source graph and write it out.
@@ -325,6 +329,12 @@ Materialize an entailment regime's closure over the source graph and write it ou
 - `--regime <R>` — the entailment regime to close under.
 - `--rules <FILE>` — the RIF-in-XML rule document `--regime rif` runs; required by
   that regime and a usage error for any other (see below).
+- `--max-stored-facts <N>` / `--max-join-steps <N>` — the evaluation limits of the
+  `rdf`, `rdfs`, `owl-rl` and `d` regimes: the facts each graph's store may hold
+  (default 4194304) and the candidate solutions the rules may enumerate (default
+  1048576). A run past either fails (exit 1) naming the limit, the numbers and
+  the flag, and writes no closure; a run inside them writes the closure larger limits
+  would. `convert --entailment` takes the same two flags.
 - `--from <F>` / `--to <F>` — input/output format overrides; inferred from the
   `IN`/`OUT` extension when omitted. `IN`/`OUT` default to `-` (stdin/stdout); a
   path of `-` has no extension, so it **requires** the matching explicit
@@ -716,6 +726,7 @@ purrdf rules (--shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
               | --srl <FILE> [--srl-base <IRI>])
              [--import <IRI>=<FILE>]... [--explain[=<PATH>]]
              [--max-term-generating-rounds <N>] [--max-generated-terms <N>]
+             [--max-stored-facts <N>] [--max-join-steps <N>]
              [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
@@ -761,10 +772,20 @@ Omitted, the budget is `max(65536, 4 × N)` for `N` distinct terms in the data
 graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set whose new terms
 double every iteration reaches it within a few iterations.
 
-A run past either limit fails, and no graph is written. The error names the
-limit, the numbers, the rules that inferred a new term in the last iteration,
-and the flag that raises the limit. PurRDF cannot prove that a rule set
-diverges, so the error only says which limit it passed.
+**`--max-stored-facts <N>`** bounds the facts the evaluation store holds: the
+data graph, a rule set's data and every inferred triple. Omitted, the limit is
+4194304 facts, so a rule copying a predicate over 70,000 triples, or the
+transitive closure of a thousand-node chain, completes.
+
+**`--max-join-steps <N>`** bounds the candidate solutions the rule bodies
+enumerate. Omitted, the limit is 1048576. It bounds a rule body that
+enumerates far more candidates than it infers triples.
+
+A run past any limit fails, and no graph is written. The error names the limit,
+the numbers, the flag that raises it and, for the two term limits, the rules
+that inferred a new term in the last iteration. PurRDF cannot prove that a rule
+set diverges, so the error only says which limit it passed. A limit can only
+refuse: a run it admits writes the inference graph any larger limit would.
 
 **`--import <IRI>=<FILE>`** resolves the rule source's imports to local
 documents: an `owl:imports` of the shapes graph (exactly as `validate --import`
@@ -1192,7 +1213,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | Code | Meaning |
 |---|---|
 | `0` | success — including every **decided negative verdict** (see below) |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds` or `--max-generated-terms`, or a [`shapes lint`](#shapes-lint) report with a finding |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds`, `--max-generated-terms`, `--max-stored-facts` or `--max-join-steps`, a `reason` or `convert --entailment` run that passes `--max-stored-facts` or `--max-join-steps`, or a [`shapes lint`](#shapes-lint) report with a finding |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, a malformed `--import` pair, two documents reading stdin, or a flag that names something the selected mode does not produce |
 | `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, an `update` or a [`validate`](#validate); or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `update` and `validate`, nothing was produced (a mutation is atomic and a truncated SHACL run cannot license a verdict) and the receipt is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 

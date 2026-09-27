@@ -854,3 +854,133 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:n ; sh:minCo
     let validated = run(&["validate", "--shapes", &shapes, &data]);
     assert_eq!(code(&validated), 0, "{}", stderr(&validated));
 }
+
+/// The stored-fact number a `--max-stored-facts` refusal observed.
+fn observed_facts(refusal: &str) -> u64 {
+    let (_, tail) = refusal
+        .split_once("the rules exceeded the stored-fact limit: ")
+        .unwrap_or_else(|| panic!("not a stored-fact refusal: {refusal}"));
+    tail.split(' ')
+        .next()
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("no observed count: {refusal}"))
+}
+
+/// `rules --max-stored-facts` and `--max-join-steps` refuse naming the numbers and this
+/// command's own flag, and write no graph; a limit of exactly the store the run needs
+/// completes with the same inference graph as the default, and one fact fewer refuses.
+#[test]
+fn cli_rules_capacity_limits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = shapes_file(dir.path(), TOOLS);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let with = |flag: &str, value: &str| {
+        run(&[
+            "rules", "--shapes", &shapes, flag, value, "--to", "ntriples", &data,
+        ])
+    };
+
+    // Find the store the run needs by raising the limit to each refusal's observation.
+    let mut limit = 1_u64;
+    let admitted = loop {
+        let out = with("--max-stored-facts", &limit.to_string());
+        if code(&out) == 0 {
+            break out;
+        }
+        assert_eq!(code(&out), 1, "{}", stderr(&out));
+        let refusal = stderr(&out);
+        assert!(
+            refusal.contains(&format!("{limit} permitted (the caller's limit)"))
+                && refusal
+                    .trim_end()
+                    .ends_with("raise it with --max-stored-facts"),
+            "the refusal names the numbers and this command's flag: {refusal}"
+        );
+        assert!(stdout(&out).is_empty(), "a refused run writes no graph");
+        let observed = observed_facts(&refusal);
+        assert!(observed > limit, "{refusal}");
+        limit = observed;
+    };
+    assert_eq!(stdout(&admitted), expected_inference());
+    let short = with("--max-stored-facts", &(limit - 1).to_string());
+    assert_eq!(code(&short), 1, "{}", stderr(&short));
+    assert!(
+        stderr(&short).contains(&format!("{limit} facts observed, {} permitted", limit - 1)),
+        "{}",
+        stderr(&short)
+    );
+
+    let steps = with("--max-join-steps", "1");
+    assert_eq!(code(&steps), 1, "{}", stderr(&steps));
+    assert!(
+        stderr(&steps).contains("the rules exceeded the join-step limit: ")
+            && stderr(&steps)
+                .trim_end()
+                .ends_with("raise it with --max-join-steps"),
+        "{}",
+        stderr(&steps)
+    );
+    let roomy = with("--max-join-steps", "1000000");
+    assert_eq!(code(&roomy), 0, "{}", stderr(&roomy));
+    assert_eq!(stdout(&roomy), expected_inference());
+}
+
+/// The NON-linear transitive closure of a 1,000-edge chain enumerates more candidates
+/// than the default join-step limit admits: `rules` refuses it naming `--max-join-steps`
+/// and writes no graph, and completes with every one of its 500,500 triples when the
+/// limit is raised. The linear closure of the same chain fits the default.
+#[test]
+fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
+    use std::fmt::Write as _;
+    const EDGES: usize = 1_000;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
+    for index in 0..EDGES {
+        writeln!(chain, "ex:n{index} ex:link ex:n{} .", index + 1).expect("write to String");
+    }
+    let data = write_file(dir.path(), "chain.ttl", &chain);
+    let rules = |recursive_atom: &str| {
+        format!(
+            "PREFIX ex: <http://example.org/ns#>\n\
+             RULE {{ ?x ex:connected ?y }} WHERE {{ ?x ex:link ?y }}\n\
+             RULE {{ ?x ex:connected ?z }} WHERE {{ ?x ex:connected ?y . ?y {recursive_atom} ?z }}\n"
+        )
+    };
+    let nonlinear = write_file(dir.path(), "nonlinear.srl", &rules("ex:connected"));
+    let linear = write_file(dir.path(), "linear.srl", &rules("ex:link"));
+    let closure = EDGES * (EDGES + 1) / 2;
+
+    let refused = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("the rules exceeded the join-step limit: ")
+            && stderr(&refused).contains("1048576 permitted (the default for this target)")
+            && stderr(&refused)
+                .trim_end()
+                .ends_with("raise it with --max-join-steps"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
+
+    let raised = run(&[
+        "rules",
+        "--srl",
+        &nonlinear,
+        "--max-join-steps",
+        "268435456",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&raised), 0, "{}", stderr(&raised));
+    assert_eq!(stdout(&raised).lines().count(), closure);
+
+    let linear_run = run(&["rules", "--srl", &linear, "--to", "ntriples", &data]);
+    assert_eq!(code(&linear_run), 0, "{}", stderr(&linear_run));
+    assert_eq!(
+        stdout(&linear_run),
+        stdout(&raised),
+        "the same closure either way"
+    );
+}

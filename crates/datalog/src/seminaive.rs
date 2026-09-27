@@ -60,14 +60,15 @@
 //! strictly in program order; `par_sort`/`par_bridge` are never used, because they are not
 //! order-stable.
 //!
-//! # Budgets are constants
+//! # Limits are parameters; the arena ceiling is a constant
 //!
-//! [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and [`MAX_TERM_ARENA_BYTES`] are fixed
-//! `const`s. Exceeding one returns [`EvalError::BudgetExhausted`] carrying an accurate
-//! [`BudgetReport`] — never a panic, never a truncated answer presented as complete. See
-//! the crate docs for why a caller-supplied budget is not offered for them, and
-//! [`EvalOptions`] for the two limits that ARE the caller's: term-generating rounds and
-//! generated terms.
+//! The stored-fact limit and the join-step limit are the caller's, on [`EvalOptions`]
+//! ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]), with a
+//! default sized for the target ([`DEFAULT_MAX_STORED_FACTS`], [`DEFAULT_MAX_JOIN_STEPS`]).
+//! [`MAX_TERM_ARENA_BYTES`] stays a fixed `const`. Exceeding any of them returns
+//! [`EvalError::BudgetExhausted`] carrying an accurate [`BudgetReport`] — never a panic,
+//! never a truncated answer presented as complete. [`EvalOptions`] also carries the two
+//! limits on term generation: term-generating rounds and generated terms.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -91,36 +92,101 @@ use crate::store::{Bound, Fact, PartitionRef, RelationStore};
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
 
-/// The maximum number of candidate solutions one evaluation may enumerate.
-///
-/// A "join step" is one partial or complete solution appended by a body-atom extension —
-/// the unit that actually grows without bound when a rule set is accidentally Cartesian.
-/// It is deliberately NOT "one committed derivation": committed derivations are already
-/// bounded by [`MAX_STORED_FACTS`], so counting them would make this ceiling redundant,
-/// while a blow-up that enumerates millions of candidates and commits three facts would
-/// slip past unseen.
-///
-/// This is a `const`, not a parameter: a caller-supplied budget would mean two callers
-/// running the same program over the same input get different answers — the same semantic
-/// optionality the project's no-Cargo-features rule exists to prevent, merely arriving
-/// through an argument. Consumption is *reported* in [`BudgetReport`] instead.
-pub const MAX_JOIN_STEPS: u64 = 1 << 20;
-
-/// The maximum number of facts (seeded plus derived) one evaluation's store may hold.
+/// The stored-fact limit's default on `wasm32` targets ([`DEFAULT_MAX_STORED_FACTS`]).
 ///
 /// Sized so a saturated store stays comfortably inside a `wasm32` linear memory: at this
 /// count the arrangement's columns, the row-id space and the term dictionary together are
-/// a few tens of megabytes, well under the ceiling a browser imposes.
-pub const MAX_STORED_FACTS: usize = 1 << 17;
+/// a few tens of megabytes, well under the ceiling a browser imposes on one module's
+/// memory.
+pub const WASM_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 17;
+
+/// The join-step limit's default on `wasm32` targets ([`DEFAULT_MAX_JOIN_STEPS`]).
+///
+/// A browser runs the evaluation on the thread that paints its page, so the default keeps
+/// the work an accidentally Cartesian body can enumerate there small; it is the value every
+/// target used before the limit became a parameter.
+pub const WASM_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
+
+/// The stored-fact limit's default on every target but `wasm32`
+/// ([`DEFAULT_MAX_STORED_FACTS`]).
+///
+/// A native process addresses the host's memory rather than one linear memory, so the
+/// default admits ordinary terminating workloads — a non-recursive rule copying one
+/// predicate over tens of thousands of triples, the transitive closure of a thousand-node
+/// chain (half a million facts) — and still refuses a least model of more than four
+/// million facts before the arrangement, the provenance and the term dictionary grow
+/// without bound.
+pub const NATIVE_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 22;
+
+/// The join-step limit's default on every target but `wasm32`
+/// ([`DEFAULT_MAX_JOIN_STEPS`]): the same value as [`WASM_DEFAULT_MAX_JOIN_STEPS`].
+///
+/// Unlike the stored-fact limit, the join-step limit does not grow with the target's
+/// memory, for two measured reasons.
+///
+/// * It is the limit that refuses a divergent rule PROMPTLY when the rule adds one new
+///   term per round but re-derives every earlier one: a SHACL SPARQL rule minting a
+///   strictly longer IRI for every focus node, each round. The term limits admit such a
+///   rule for thousands of rounds, because a counter stepping to 10,000 must complete, and
+///   every round costs more than the last. It is refused in about nine seconds at
+///   1,048,576 join steps and was still running after 590 seconds at 268,435,456.
+/// * A body's candidate solutions for one round are materialised before the limit is
+///   checked, so a Cartesian body under a limit of hundreds of millions would allocate
+///   tens of gigabytes before it could be refused.
+///
+/// A larger default would trade that refusal time and that memory for reach. Reach is the
+/// caller's to buy: a program that genuinely needs more work — the NON-linear transitive
+/// closure of a thousand-node chain, `connected(x, z) :- connected(x, y), connected(y,
+/// z)`, which enumerates more than 67 million candidates — completes when the caller raises
+/// the limit ([`EvalOptions::with_max_join_steps`]). The LINEAR closure of the same chain
+/// fits the default.
+pub const NATIVE_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
+
+/// The stored-fact limit in force when the caller states none
+/// ([`EvalOptions::with_max_stored_facts`]): [`WASM_DEFAULT_MAX_STORED_FACTS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_STORED_FACTS`] everywhere else.
+///
+/// The default differs by target because the memory the store lives in does; it is chosen
+/// at compile time from the target architecture, never by a Cargo feature. A caller who
+/// needs one answer on every target states the limit, and every caller passing the same
+/// limit gets the same answer or the same refusal.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_STORED_FACTS: u64 = WASM_DEFAULT_MAX_STORED_FACTS;
+
+/// The stored-fact limit in force when the caller states none
+/// ([`EvalOptions::with_max_stored_facts`]): [`WASM_DEFAULT_MAX_STORED_FACTS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_STORED_FACTS`] everywhere else.
+///
+/// The default differs by target because the memory the store lives in does; it is chosen
+/// at compile time from the target architecture, never by a Cargo feature. A caller who
+/// needs one answer on every target states the limit, and every caller passing the same
+/// limit gets the same answer or the same refusal.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_MAX_STORED_FACTS: u64 = NATIVE_DEFAULT_MAX_STORED_FACTS;
+
+/// The join-step limit in force when the caller states none
+/// ([`EvalOptions::with_max_join_steps`]): [`WASM_DEFAULT_MAX_JOIN_STEPS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] everywhere else — today the same value, for the
+/// reasons [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] gives.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_JOIN_STEPS: u64 = WASM_DEFAULT_MAX_JOIN_STEPS;
+
+/// The join-step limit in force when the caller states none
+/// ([`EvalOptions::with_max_join_steps`]): [`WASM_DEFAULT_MAX_JOIN_STEPS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] everywhere else — today the same value, for the
+/// reasons [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] gives.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_MAX_JOIN_STEPS: u64 = NATIVE_DEFAULT_MAX_JOIN_STEPS;
 
 /// The maximum bytes of interned term surfaces one evaluation's store may hold
 /// ([`RelationStore::term_bytes`]).
 ///
-/// Facts are counted by [`MAX_STORED_FACTS`], but a fact set of a legal size can still be
+/// Facts are counted by the stored-fact limit, but a fact set of a legal size can still be
 /// arbitrarily large if its terms are: one relation of a thousand megabyte-long IRIs is a
 /// hundred-fold smaller in facts and a thousand-fold larger in bytes. This ceiling closes
 /// that gap. It is checked on the seeded store and again after every round, so no future
-/// term-minting extension can grow past it unobserved.
+/// term-minting extension can grow past it unobserved. Unlike the stored-fact and
+/// join-step limits it is not a parameter: it is the same on every target.
 pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
 
 /// The default limit on TERM-GENERATING rounds ([`EvalOptions`]).
@@ -140,18 +206,50 @@ pub const GENERATED_TERM_BUDGET_FLOOR: u64 = 65_536;
 /// ([`EvalOptions`]).
 pub const GENERATED_TERMS_PER_INPUT_TERM: u64 = 4;
 
-/// The caller's evaluation governors: the limit on term-generating ROUNDS and the budget
-/// of GENERATED TERMS.
+/// The caller's evaluation governors: the STORED-FACT and JOIN-STEP limits, the limit on
+/// term-generating ROUNDS and the budget of GENERATED TERMS.
 ///
-/// # What the two limits count, and why only these are the caller's
+/// # The stored-fact and join-step limits
 ///
-/// The three fixed ceilings bound what a run HOLDS; none bounds how long a run that
-/// holds little can keep going. A guard-free program cannot run away: every term it can
-/// commit is a body binding or one of its own finitely many constants, so its round
-/// count is bounded by its fact count. A guard can compute a NEW term each round —
-/// `?n + 1`, `CONCAT(?s, "x")`, a triple term nesting its own match, a fresh blank node —
-/// and a rule that feeds such a term back into its own body derives more facts every
-/// round, forever. Two shapes of that run away, and each has its limit:
+/// The stored-fact limit bounds the facts (seeded plus derived) one evaluation's store may
+/// hold; the join-step limit bounds the candidate solutions it may enumerate. A "join
+/// step" is one partial or complete solution appended by a body-atom extension — the unit
+/// that actually grows without bound when a rule set is accidentally Cartesian. It is
+/// deliberately NOT "one committed derivation": committed derivations are already bounded
+/// by the stored-fact limit, so counting them would make this limit redundant, while a
+/// blow-up that enumerates millions of candidates and commits three facts would slip past
+/// unseen.
+///
+/// Both are parameters ([`Self::with_max_stored_facts`], [`Self::with_max_join_steps`])
+/// with a default sized for the target: [`DEFAULT_MAX_STORED_FACTS`] and
+/// [`DEFAULT_MAX_JOIN_STEPS`], which are the `wasm32` values
+/// ([`WASM_DEFAULT_MAX_STORED_FACTS`], [`WASM_DEFAULT_MAX_JOIN_STEPS`]) on `wasm32` and the
+/// native values ([`NATIVE_DEFAULT_MAX_STORED_FACTS`], [`NATIVE_DEFAULT_MAX_JOIN_STEPS`])
+/// everywhere else. A fixed ceiling sized for a browser refused ordinary terminating rule
+/// sets on a server — a single non-recursive rule copying a predicate over 70,000 triples
+/// — and a fixed ceiling sized for a server would let a browser evaluation exhaust its
+/// linear memory, so neither value can serve every target.
+///
+/// What keeps a parameter from making the answer the caller's choice is that it can only
+/// REFUSE. A run inside both limits returns the program's least model — the same model
+/// under every limit that admits it, on every target — and a run past one returns no model
+/// at all ([`EvalError::BudgetExhausted`]), never a truncated one. Every caller passing
+/// the same options gets the same answer or the same refusal. The join-step count is a
+/// property of the evaluator's plan as well as of the program, so a limit sized tightly
+/// against one release's count can refuse under another's; a limit with headroom cannot
+/// change a completed answer under either. The limits in force are part of the result's
+/// identity: [`contract_hash_with`](crate::cache::contract_hash_with) folds their
+/// effective values into every program's contract hash.
+///
+/// # The term limits
+///
+/// The stored-fact, join-step and arena limits bound what a run HOLDS and ENUMERATES;
+/// none bounds how long a run that holds little can keep going. A guard-free program
+/// cannot run away: every term it can commit is a body binding or one of its own finitely
+/// many constants, so its round count is bounded by its fact count. A guard can compute a
+/// NEW term each round — `?n + 1`, `CONCAT(?s, "x")`, a triple term nesting its own match,
+/// a fresh blank node — and a rule that feeds such a term back into its own body derives
+/// more facts every round, forever. Two shapes of that run away, and each has its limit:
 ///
 /// * A **round** is term-generating when it commits a term a guard computed and the store
 ///   had never interned. A program that keeps generating a few terms per round — a
@@ -168,31 +266,75 @@ pub const GENERATED_TERMS_PER_INPUT_TERM: u64 = 4;
 ///
 /// A round that commits only terms already interned is never counted, and adds no term:
 /// a value-preserving recursion (a transitive closure, a label propagated down a chain)
-/// is bounded by [`MAX_STORED_FACTS`] and runs as many rounds as it needs.
+/// is bounded by the stored-fact limit and runs as many rounds as it needs.
 ///
 /// Whether a guarded program terminates is undecidable, so no limit PROVES divergence,
 /// and a refusal says only which limit a run passed and by how much — a counter stepping
 /// `?n + 1` up to `FILTER (?n < N)` terminates after `N` term-generating rounds for every
 /// `N`, and a caller who knows a larger bound states it. The limits can only REFUSE,
-/// never truncate — a refused run returns no model, exactly as every other ceiling does —
+/// never truncate — a refused run returns no model, exactly as every other limit does —
 /// and they are part of the result's identity:
 /// [`contract_hash_with`](crate::cache::contract_hash_with) folds both into a guarded
 /// program's contract hash, so two runs under different limits never claim the same
 /// calculus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EvalOptions {
+    /// The caller's stored-fact limit, or `None` for the target's default.
+    stored_facts: Option<u64>,
+    /// The caller's join-step limit, or `None` for the target's default.
+    join_steps: Option<u64>,
     /// The caller's term-generating round limit, or `None` for the default.
-    max_term_generating_rounds: Option<u64>,
+    term_generating_rounds: Option<u64>,
     /// The caller's generated-term budget, or `None` for the input-derived default.
-    max_generated_terms: Option<u64>,
+    generated_terms: Option<u64>,
 }
 
 impl EvalOptions {
+    /// Permit a store of exactly `facts` facts, seeded plus derived; one more is refused
+    /// with [`EvalError::BudgetExhausted`] naming [`BudgetResource::StoredFacts`].
+    #[must_use]
+    pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
+        self.stored_facts = Some(facts);
+        self
+    }
+
+    /// Permit exactly `steps` enumerated candidate solutions; one more is refused with
+    /// [`EvalError::BudgetExhausted`] naming [`BudgetResource::JoinSteps`].
+    #[must_use]
+    pub fn with_max_join_steps(mut self, steps: u64) -> Self {
+        self.join_steps = Some(steps);
+        self
+    }
+
+    /// The stored-fact limit in force: the caller's, or [`DEFAULT_MAX_STORED_FACTS`].
+    #[must_use]
+    pub fn max_stored_facts(&self) -> u64 {
+        self.stored_facts.unwrap_or(DEFAULT_MAX_STORED_FACTS)
+    }
+
+    /// The caller's stored-fact limit, or `None` for the target's default.
+    #[must_use]
+    pub fn stated_max_stored_facts(&self) -> Option<u64> {
+        self.stored_facts
+    }
+
+    /// The join-step limit in force: the caller's, or [`DEFAULT_MAX_JOIN_STEPS`].
+    #[must_use]
+    pub fn max_join_steps(&self) -> u64 {
+        self.join_steps.unwrap_or(DEFAULT_MAX_JOIN_STEPS)
+    }
+
+    /// The caller's join-step limit, or `None` for the target's default.
+    #[must_use]
+    pub fn stated_max_join_steps(&self) -> Option<u64> {
+        self.join_steps
+    }
+
     /// Permit exactly `rounds` term-generating rounds; one more is refused with
     /// [`EvalError::TermLimitExceeded`] naming [`BudgetResource::TermGeneratingRounds`].
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.max_term_generating_rounds = Some(rounds);
+        self.term_generating_rounds = Some(rounds);
         self
     }
 
@@ -200,28 +342,28 @@ impl EvalOptions {
     /// [`EvalError::TermLimitExceeded`] naming [`BudgetResource::GeneratedTerms`].
     #[must_use]
     pub fn with_max_generated_terms(mut self, terms: u64) -> Self {
-        self.max_generated_terms = Some(terms);
+        self.generated_terms = Some(terms);
         self
     }
 
     /// The term-generating round limit in force.
     #[must_use]
     pub fn max_term_generating_rounds(&self) -> u64 {
-        self.max_term_generating_rounds
+        self.term_generating_rounds
             .unwrap_or(DEFAULT_MAX_TERM_GENERATING_ROUNDS)
     }
 
     /// The caller's term-generating round limit, or `None` for the default.
     #[must_use]
     pub fn stated_max_term_generating_rounds(&self) -> Option<u64> {
-        self.max_term_generating_rounds
+        self.term_generating_rounds
     }
 
     /// The generated-term budget in force over a seeded store of `input_terms` distinct
     /// terms.
     #[must_use]
     pub fn generated_term_budget(&self, input_terms: usize) -> u64 {
-        self.max_generated_terms.unwrap_or_else(|| {
+        self.generated_terms.unwrap_or_else(|| {
             GENERATED_TERM_BUDGET_FLOOR.max(
                 GENERATED_TERMS_PER_INPUT_TERM
                     .saturating_mul(u64::try_from(input_terms).unwrap_or(u64::MAX)),
@@ -232,46 +374,94 @@ impl EvalOptions {
     /// The caller's generated-term budget, or `None` for the input-derived default.
     #[must_use]
     pub fn stated_max_generated_terms(&self) -> Option<u64> {
-        self.max_generated_terms
+        self.generated_terms
     }
 }
 
-/// What an evaluation actually consumed of the three fixed ceilings.
+/// The four limits one evaluation runs under, and which of them the caller stated.
+///
+/// The stated flags are one bit set rather than four `bool`s, which keeps a
+/// [`BudgetReport`] — carried by value in every [`EvalError`] — small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    /// The join-step limit.
+    join_steps: u64,
+    /// The stored-fact limit.
+    stored_facts: u64,
+    /// The term-generating round limit.
+    term_generating_rounds: u64,
+    /// The generated-term budget.
+    generated_terms: u64,
+    /// Which limits the caller stated: the `STATED_*` bits.
+    stated: u8,
+}
+
+/// [`Limits::stated`]: the join-step limit is the caller's.
+const STATED_JOIN_STEPS: u8 = 1;
+/// [`Limits::stated`]: the stored-fact limit is the caller's.
+const STATED_STORED_FACTS: u8 = 1 << 1;
+/// [`Limits::stated`]: the term-generating round limit is the caller's.
+const STATED_TERM_GENERATING_ROUNDS: u8 = 1 << 2;
+/// [`Limits::stated`]: the generated-term budget is the caller's.
+const STATED_GENERATED_TERMS: u8 = 1 << 3;
+
+impl Limits {
+    /// The limits `options` states, over a seeded store of `input_terms` distinct terms.
+    fn of(options: &EvalOptions, input_terms: usize) -> Self {
+        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
+        Self {
+            join_steps: options.max_join_steps(),
+            stored_facts: options.max_stored_facts(),
+            term_generating_rounds: options.max_term_generating_rounds(),
+            generated_terms: options.generated_term_budget(input_terms),
+            stated: bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
+                | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
+                | bit(
+                    options.stated_max_term_generating_rounds(),
+                    STATED_TERM_GENERATING_ROUNDS,
+                )
+                | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS),
+        }
+    }
+
+    /// Whether the caller stated the limit `flag` names.
+    const fn is_stated(self, flag: u8) -> bool {
+        self.stated & flag != 0
+    }
+}
+
+/// What an evaluation actually consumed, against the limits it ran under.
 ///
 /// Returned on success ([`Evaluation::budget`]) and on failure
 /// ([`EvalError::BudgetExhausted`]) alike; on failure the field naming the exhausted
-/// resource holds the observation that proved the ceiling was passed, so the report is
+/// resource holds the observation that proved the limit was passed, so the report is
 /// never rounded down to the limit it exceeded.
 ///
-/// Every field is a deterministic function of the input: the same program over the same
-/// facts reports the same numbers on every target.
+/// Every measurement is a deterministic function of the input: the same program over the
+/// same facts reports the same numbers on every target. The limits it carries are the ones
+/// in force ([`EvalOptions`]), so a default limit reads differently on `wasm32` than
+/// elsewhere ([`DEFAULT_MAX_STORED_FACTS`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BudgetReport {
-    /// Candidate solutions enumerated, against [`MAX_JOIN_STEPS`].
+    /// Candidate solutions enumerated, against [`Self::join_step_limit`].
     join_steps: u64,
-    /// Facts held by the store, against [`MAX_STORED_FACTS`].
+    /// Facts held by the store, against [`Self::stored_fact_limit`].
     stored_facts: usize,
     /// Interned term surface bytes, against [`MAX_TERM_ARENA_BYTES`].
     term_arena_bytes: usize,
     /// Term-generating rounds run, against [`Self::term_generating_round_limit`].
     term_generating_rounds: u64,
-    /// The term-generating round limit the run was governed by ([`EvalOptions`]).
-    term_generating_round_limit: u64,
-    /// Whether that limit is the caller's rather than the default.
-    term_generating_round_limit_stated: bool,
     /// Terms added to the store beyond the seeded ones, against
     /// [`Self::generated_term_budget`].
     generated_terms: u64,
-    /// The generated-term budget the run was governed by ([`EvalOptions`]).
-    generated_term_budget: u64,
-    /// Whether that budget is the caller's rather than the input-derived default.
-    generated_term_budget_stated: bool,
     /// The distinct terms of the seeded store.
     input_terms: usize,
+    /// The limits the run was governed by ([`EvalOptions`]).
+    limits: Limits,
 }
 
 impl Default for BudgetReport {
-    /// The zero measurement, governed by the default term-generating round limit.
+    /// The zero measurement, governed by the default limits.
     fn default() -> Self {
         Self::new(0, 0, 0)
     }
@@ -284,9 +474,9 @@ impl BudgetReport {
     /// that one type can say "what did this evaluation consume" for a run this crate did
     /// not perform — `purrdf-entail`'s `Simple` lane, which copies a dataset and evaluates
     /// no program at all, reports the zero measurement through here rather than growing a
-    /// second budget type for the case. It takes MEASUREMENTS, never limits: the three
-    /// ceilings stay `const` and stay this crate's, so nothing here re-opens the
-    /// caller-supplied-budget door the crate docs close.
+    /// second budget type for the case. It takes MEASUREMENTS, never limits: the report it
+    /// builds carries the default limits ([`EvalOptions::default`]), and
+    /// [`Self::governed_by`] restates them for a run that was governed by others.
     ///
     /// The coordinates mean exactly what they mean for [`evaluate`]: candidate solutions
     /// enumerated, facts held when evaluation stopped, and interned term surface bytes. An
@@ -298,18 +488,54 @@ impl BudgetReport {
             stored_facts,
             term_arena_bytes,
             term_generating_rounds: 0,
-            term_generating_round_limit: DEFAULT_MAX_TERM_GENERATING_ROUNDS,
-            term_generating_round_limit_stated: false,
             generated_terms: 0,
-            generated_term_budget: GENERATED_TERM_BUDGET_FLOOR,
-            generated_term_budget_stated: false,
             input_terms: 0,
+            limits: Limits::of(&EvalOptions::default(), 0),
+        }
+    }
+
+    /// This report, stating the stored-fact and join-step limits of `options` as the ones
+    /// the run was governed by. The measurements are unchanged.
+    #[must_use]
+    pub fn governed_by(self, options: &EvalOptions) -> Self {
+        let capacity = Limits::of(options, 0);
+        let kept = self.limits.stated & !(STATED_JOIN_STEPS | STATED_STORED_FACTS);
+        Self {
+            limits: Limits {
+                join_steps: capacity.join_steps,
+                stored_facts: capacity.stored_facts,
+                stated: kept | (capacity.stated & (STATED_JOIN_STEPS | STATED_STORED_FACTS)),
+                ..self.limits
+            },
+            ..self
         }
     }
 
     /// Candidate solutions enumerated across every round of every stratum.
     pub fn join_steps(self) -> u64 {
         self.join_steps
+    }
+
+    /// The join-step limit the run was governed by ([`EvalOptions::max_join_steps`]).
+    pub fn join_step_limit(self) -> u64 {
+        self.limits.join_steps
+    }
+
+    /// Whether the join-step limit was the caller's rather than
+    /// [`DEFAULT_MAX_JOIN_STEPS`].
+    pub fn join_step_limit_stated(self) -> bool {
+        self.limits.is_stated(STATED_JOIN_STEPS)
+    }
+
+    /// The stored-fact limit the run was governed by ([`EvalOptions::max_stored_facts`]).
+    pub fn stored_fact_limit(self) -> u64 {
+        self.limits.stored_facts
+    }
+
+    /// Whether the stored-fact limit was the caller's rather than
+    /// [`DEFAULT_MAX_STORED_FACTS`].
+    pub fn stored_fact_limit_stated(self) -> bool {
+        self.limits.is_stated(STATED_STORED_FACTS)
     }
 
     /// Facts held by the store when evaluation stopped (seeded plus derived).
@@ -330,13 +556,13 @@ impl BudgetReport {
 
     /// The term-generating round limit the run was governed by ([`EvalOptions`]).
     pub fn term_generating_round_limit(self) -> u64 {
-        self.term_generating_round_limit
+        self.limits.term_generating_rounds
     }
 
     /// Whether the term-generating round limit was the caller's rather than
     /// [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`].
     pub fn term_generating_round_limit_stated(self) -> bool {
-        self.term_generating_round_limit_stated
+        self.limits.is_stated(STATED_TERM_GENERATING_ROUNDS)
     }
 
     /// Terms the evaluation added to the store beyond the seeded ones ([`EvalOptions`]).
@@ -346,13 +572,13 @@ impl BudgetReport {
 
     /// The generated-term budget the run was governed by ([`EvalOptions`]).
     pub fn generated_term_budget(self) -> u64 {
-        self.generated_term_budget
+        self.limits.generated_terms
     }
 
     /// Whether the generated-term budget was the caller's rather than the input-derived
     /// default.
     pub fn generated_term_budget_stated(self) -> bool {
-        self.generated_term_budget_stated
+        self.limits.is_stated(STATED_GENERATED_TERMS)
     }
 
     /// The distinct terms of the seeded store.
@@ -361,13 +587,15 @@ impl BudgetReport {
     }
 }
 
-/// Which fixed ceiling an exhausted evaluation passed.
+/// Which limit an exhausted evaluation passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum BudgetResource {
-    /// [`MAX_JOIN_STEPS`] — too many candidate solutions enumerated.
+    /// The join-step limit ([`EvalOptions::with_max_join_steps`]) — too many candidate
+    /// solutions enumerated.
     JoinSteps,
-    /// [`MAX_STORED_FACTS`] — too many facts seeded or derived.
+    /// The stored-fact limit ([`EvalOptions::with_max_stored_facts`]) — too many facts
+    /// seeded or derived.
     StoredFacts,
     /// [`MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
     TermArenaBytes,
@@ -379,19 +607,21 @@ pub enum BudgetResource {
 }
 
 impl BudgetResource {
-    /// The ceiling this resource is measured against, rendered for a diagnostic.
-    fn limit(self, report: BudgetReport) -> u64 {
+    /// The limit this resource is measured against in `report`.
+    #[must_use]
+    pub fn limit(self, report: BudgetReport) -> u64 {
         match self {
-            Self::JoinSteps => MAX_JOIN_STEPS,
-            Self::StoredFacts => MAX_STORED_FACTS as u64,
+            Self::JoinSteps => report.limits.join_steps,
+            Self::StoredFacts => report.limits.stored_facts,
             Self::TermArenaBytes => MAX_TERM_ARENA_BYTES as u64,
-            Self::TermGeneratingRounds => report.term_generating_round_limit,
-            Self::GeneratedTerms => report.generated_term_budget,
+            Self::TermGeneratingRounds => report.limits.term_generating_rounds,
+            Self::GeneratedTerms => report.limits.generated_terms,
         }
     }
 
     /// The observation that tripped this resource, taken from `report`.
-    fn observed(self, report: BudgetReport) -> u64 {
+    #[must_use]
+    pub fn observed(self, report: BudgetReport) -> u64 {
         match self {
             Self::JoinSteps => report.join_steps,
             Self::StoredFacts => report.stored_facts as u64,
@@ -415,8 +645,8 @@ impl BudgetResource {
 
 /// A per-rule allowance for one round's candidate enumeration.
 ///
-/// The governor is the ported step budget, with the ceiling moved from a caller parameter
-/// to [`MAX_JOIN_STEPS`]. Each rule task in a round is handed the SAME allowance — the
+/// The governor charges the join-step limit in force ([`EvalOptions::max_join_steps`]).
+/// Each rule task in a round is handed the SAME allowance — the
 /// evaluation's remaining budget plus one — so a task that reaches it has proved the
 /// ceiling is passed while bounding one round's work to `rules × allowance`. Whether the
 /// round actually exceeded the ceiling is decided once, after the tasks are merged in
@@ -513,11 +743,13 @@ pub enum EvalError {
         /// The unbindable variable, as authored.
         variable: String,
     },
-    /// A fixed ceiling was passed. The report is accurate at the point evaluation stopped.
+    /// The stored-fact or join-step limit in force ([`EvalOptions`]), or the fixed
+    /// term-arena ceiling, was passed. The report is accurate at the point evaluation
+    /// stopped, and carries the limit that was passed.
     BudgetExhausted {
         /// Which ceiling.
         resource: BudgetResource,
-        /// Consumption of all three ceilings when evaluation stopped.
+        /// Consumption, and the limits in force, when evaluation stopped.
         report: BudgetReport,
     },
     /// The run passed a term limit ([`EvalOptions`]): the term-generating round limit
@@ -538,14 +770,15 @@ pub enum EvalError {
     ///
     /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
     /// model here either, and the rounds already committed are not an answer to anything.
-    /// It is a DISTINCT variant because the two say different things to a caller — a fixed
-    /// ceiling was passed by the program and the data, whereas this run was stopped by the
-    /// host that asked for it — and only one of them is a reason to change the input.
+    /// It is a DISTINCT variant because the two say different things to a caller — a limit
+    /// was passed by the program and the data, whereas this run was stopped by the host
+    /// that asked for it — and only one of them is a reason to change the input or the
+    /// limit.
     ///
     /// The report is accurate at the point evaluation stopped, so a host can say what the
     /// stopped run had already consumed rather than only that it was stopped.
     Stopped {
-        /// Consumption of all three ceilings when the signal was observed.
+        /// Consumption, and the limits in force, when the signal was observed.
         report: BudgetReport,
     },
     /// A guard ([`crate::guard`]) could not be evaluated: the caller's
@@ -602,10 +835,59 @@ pub enum EvalError {
     },
 }
 
+/// Where a report's stored-fact limit came from, for a diagnostic.
+#[must_use]
+pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
+    if report.limits.is_stated(STATED_STORED_FACTS) {
+        "the caller's limit"
+    } else {
+        "the default for this target"
+    }
+}
+
+/// Where a report's join-step limit came from, for a diagnostic.
+#[must_use]
+pub fn join_step_limit_origin(report: BudgetReport) -> &'static str {
+    if report.limits.is_stated(STATED_JOIN_STEPS) {
+        "the caller's limit"
+    } else {
+        "the default for this target"
+    }
+}
+
+/// Render a passed stored-fact or join-step limit, naming `knob` as what raises it — the
+/// one wording every host gives the refusal, each with its own spelling of the knob.
+///
+/// `None` for any other resource.
+#[must_use]
+pub fn render_capacity_refusal(
+    resource: BudgetResource,
+    report: BudgetReport,
+    knob: &str,
+) -> Option<String> {
+    match resource {
+        BudgetResource::StoredFacts => Some(format!(
+            "evaluation exceeded the stored-fact limit: {} facts observed, {} permitted ({}); \
+             raise it with {knob}",
+            report.stored_facts,
+            report.limits.stored_facts,
+            stored_fact_limit_origin(report),
+        )),
+        BudgetResource::JoinSteps => Some(format!(
+            "evaluation exceeded the join-step limit: {} join steps observed, {} permitted \
+             ({}); raise it with {knob}",
+            report.join_steps,
+            report.limits.join_steps,
+            join_step_limit_origin(report),
+        )),
+        _ => None,
+    }
+}
+
 /// Where a report's term-generating round limit came from, for a diagnostic.
 #[must_use]
 pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
-    if report.term_generating_round_limit_stated {
+    if report.limits.is_stated(STATED_TERM_GENERATING_ROUNDS) {
         "the caller's limit".to_owned()
     } else {
         "the default".to_owned()
@@ -615,7 +897,7 @@ pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
 /// Where a report's generated-term budget came from, for a diagnostic.
 #[must_use]
 pub fn generated_term_budget_origin(report: BudgetReport) -> String {
-    if report.generated_term_budget_stated {
+    if report.limits.is_stated(STATED_GENERATED_TERMS) {
         "the caller's budget".to_owned()
     } else {
         format!(
@@ -672,7 +954,7 @@ impl fmt::Display for EvalError {
                          EvalOptions::with_max_generated_terms",
                         report.generated_terms,
                         report.input_terms,
-                        report.generated_term_budget,
+                        report.limits.generated_terms,
                         generated_term_budget_origin(*report),
                     ),
                     _ => write!(
@@ -682,18 +964,27 @@ impl fmt::Display for EvalError {
                          if the rule set terminates, raise it with \
                          EvalOptions::with_max_term_generating_rounds",
                         report.term_generating_rounds,
-                        report.term_generating_round_limit,
+                        report.limits.term_generating_rounds,
                         term_generating_round_limit_origin(*report),
                     ),
                 }
             }
-            Self::BudgetExhausted { resource, report } => write!(
-                f,
-                "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
-                resource.name(),
-                resource.observed(*report),
-                resource.limit(*report)
-            ),
+            Self::BudgetExhausted { resource, report } => {
+                let knob = match resource {
+                    BudgetResource::StoredFacts => "EvalOptions::with_max_stored_facts",
+                    _ => "EvalOptions::with_max_join_steps",
+                };
+                match render_capacity_refusal(*resource, *report, knob) {
+                    Some(rendered) => f.write_str(&rendered),
+                    None => write!(
+                        f,
+                        "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
+                        resource.name(),
+                        resource.observed(*report),
+                        resource.limit(*report)
+                    ),
+                }
+            }
             Self::Stopped { report } => write!(
                 f,
                 "evaluation was stopped by the caller's stop signal after {} join steps, \
@@ -791,7 +1082,7 @@ pub struct Evaluation {
     facts: RelationStore,
     /// Every derivation, in lexical `(fact, rule, sources)` order.
     derivations: Vec<Derivation>,
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
 }
 
@@ -811,7 +1102,7 @@ impl Evaluation {
         &self.derivations
     }
 
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     pub fn budget(&self) -> BudgetReport {
         self.budget
     }
@@ -1848,8 +2139,38 @@ struct JoinSnapshot<'a> {
     delta: Delta,
 }
 
+/// Whether the atom `operator` can match a row of `snapshot`'s delta: some partition its
+/// constant predicate and graph positions admit holds a row minted at or after the
+/// delta's first row.
+///
+/// A semi-naive decomposition whose delta atom cannot match is skipped. It would otherwise
+/// enumerate every atom before the delta position in full — a whole relation, for a rule
+/// whose recursive atom is planned first — and then match nothing, so a linear recursion
+/// such as `connected(x, z) :- connected(x, y), link(y, z)` would spend a scan of the
+/// whole closure per round on the decomposition anchored at `link`, which gains no row
+/// after the first round. Skipping it changes no solution: the delta scan admits only
+/// rows at or after the delta's first row, and there are none to admit. It changes only
+/// the candidates enumerated, which is the join-step count.
+fn delta_can_match(operator: &AtomOperator, snapshot: JoinSnapshot<'_>) -> bool {
+    let shape = operator.shape();
+    let [_, predicate, _, graph] = constant_positions(shape, snapshot.rel);
+    let known = |value: Option<PositionValue>| match value {
+        Some(PositionValue::Known(id)) => Ok(Some(id)),
+        Some(PositionValue::Missing) => Err(()),
+        Some(PositionValue::Free) | None => Ok(None),
+    };
+    let (Ok(predicate), Ok(graph)) = (known(predicate), known(graph)) else {
+        // A constant the store never interned matches nothing, delta or not.
+        return false;
+    };
+    snapshot
+        .rel
+        .partitions(predicate, graph)
+        .any(|partition| partition.has_row_from(snapshot.delta.lo))
+}
+
 /// The indexed binary positive join: every planned operator in execution order, for every
-/// semi-naive delta position.
+/// semi-naive delta position whose delta atom can match ([`delta_can_match`]).
 fn join_positive_binary(
     plan: &RulePlan,
     snapshot: JoinSnapshot<'_>,
@@ -1858,6 +2179,9 @@ fn join_positive_binary(
     let operators = plan.operators();
     let mut all: Vec<SlotSolution> = Vec::new();
     for delta_position in 0..operators.len() {
+        if !delta_can_match(&operators[delta_position], snapshot) {
+            continue;
+        }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         for (position, operator) in operators.iter().enumerate() {
             partial = extend_slot_solutions(
@@ -1886,7 +2210,8 @@ fn join_positive_binary(
 }
 
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, for every semi-naive delta position.
+/// physical group in execution order, for every semi-naive delta position whose delta atom
+/// can match ([`delta_can_match`]).
 fn join_positive_leapfrog(
     plan: &RulePlan,
     snapshot: JoinSnapshot<'_>,
@@ -1894,6 +2219,9 @@ fn join_positive_leapfrog(
 ) -> Vec<SlotSolution> {
     let mut all: Vec<SlotSolution> = Vec::new();
     for delta_position in 0..plan.positive().len() {
+        if !delta_can_match(plan.operator_at(delta_position), snapshot) {
+            continue;
+        }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         for group in plan.join_groups() {
             partial = match group {
@@ -2964,14 +3292,8 @@ pub(crate) struct FixpointState {
     pub(crate) join_steps: u64,
     /// Term-generating rounds committed so far.
     pub(crate) term_generating_rounds: u64,
-    /// The term-generating round limit in force.
-    pub(crate) term_generating_round_limit: u64,
-    /// Whether that limit is the caller's.
-    term_generating_round_limit_stated: bool,
-    /// The generated-term budget in force.
-    generated_term_budget: u64,
-    /// Whether that budget is the caller's.
-    generated_term_budget_stated: bool,
+    /// The limits in force.
+    limits: Limits,
     /// The distinct terms of the seeded store.
     input_terms: usize,
     /// The rules that generated a term in the latest term-generating round.
@@ -2989,12 +3311,7 @@ impl FixpointState {
             derivations: Vec::new(),
             join_steps: 0,
             term_generating_rounds: 0,
-            term_generating_round_limit: options.max_term_generating_rounds(),
-            term_generating_round_limit_stated: options
-                .stated_max_term_generating_rounds()
-                .is_some(),
-            generated_term_budget: options.generated_term_budget(input_terms),
-            generated_term_budget_stated: options.stated_max_generated_terms().is_some(),
+            limits: Limits::of(&options, input_terms),
             input_terms,
             generating_rules: BTreeSet::new(),
         }
@@ -3007,15 +3324,12 @@ impl FixpointState {
             stored_facts: self.rel.row_count(),
             term_arena_bytes: self.rel.term_bytes(),
             term_generating_rounds: self.term_generating_rounds,
-            term_generating_round_limit: self.term_generating_round_limit,
-            term_generating_round_limit_stated: self.term_generating_round_limit_stated,
             generated_terms: u64::try_from(
                 self.rel.interner().len().saturating_sub(self.input_terms),
             )
             .unwrap_or(u64::MAX),
-            generated_term_budget: self.generated_term_budget,
-            generated_term_budget_stated: self.generated_term_budget_stated,
             input_terms: self.input_terms,
+            limits: self.limits,
         }
     }
 
@@ -3029,7 +3343,8 @@ impl FixpointState {
 
     /// The join-step allowance one round's rule tasks each receive.
     pub(crate) fn allowance(&self) -> u64 {
-        MAX_JOIN_STEPS
+        self.limits
+            .join_steps
             .saturating_sub(self.join_steps)
             .saturating_add(1)
     }
@@ -3048,8 +3363,9 @@ impl FixpointState {
         }
         // Every entry was gated on absence from the store when it was created, and the
         // entries are unique by head fact, so this projection is exact rather than an
-        // over-estimate: the ceiling is decided before a single surface is materialised.
-        if self.rel.row_count() + round.entries.len() > MAX_STORED_FACTS {
+        // over-estimate: the limit is decided before a single surface is materialised.
+        let projected = self.rel.row_count().saturating_add(round.entries.len());
+        if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
             return Err(EvalError::BudgetExhausted {
                 resource: BudgetResource::StoredFacts,
                 report: self.projected_report(round.entries.len()),
@@ -3071,8 +3387,8 @@ impl FixpointState {
 ///
 /// # Errors
 ///
-/// [`EvalError::BudgetExhausted`] if the run passes any of the fixed ceilings. There
-/// is no partial answer: a budget refusal is total. [`EvalError::Guard`] if the program
+/// [`EvalError::BudgetExhausted`] if the run passes the default stored-fact or join-step
+/// limit ([`EvalOptions::default`]) or the term-arena ceiling. There is no partial answer: a budget refusal is total. [`EvalError::Guard`] if the program
 /// carries a guard, which this entry point has no evaluator for — see
 /// [`evaluate_guarded`].
 pub fn evaluate(exe: &Executable, edb: RelationStore) -> Result<Evaluation, EvalError> {
@@ -3217,13 +3533,13 @@ impl FixpointState {
 /// Whether any ceiling is already passed.
 pub(crate) fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
     let report = state.report();
-    if report.join_steps > MAX_JOIN_STEPS {
+    if report.join_steps > report.limits.join_steps {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::JoinSteps,
             report,
         });
     }
-    if report.stored_facts > MAX_STORED_FACTS {
+    if u64::try_from(report.stored_facts).unwrap_or(u64::MAX) > report.limits.stored_facts {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::StoredFacts,
             report,
@@ -4001,7 +4317,7 @@ mod tests {
     /// A SIGNAL THAT FIRES PRODUCES NO ANSWER AT ALL — never a truncated one.
     ///
     /// The refusal is its own variant rather than a budget's, because "the host stopped this
-    /// run" and "the program passed a fixed ceiling" are different facts and only one of them
+    /// run" and "the program passed a limit" are different facts and only one of them
     /// is a reason to change the input. The report is the consumption measured at the point
     /// the signal was observed, so a stopped run can still say what it had spent.
     #[test]
@@ -4527,11 +4843,14 @@ mod tests {
 
     // ── Budgets ────────────────────────────────────────────────────────────────
 
-    /// The join-step ceiling stops a Cartesian blow-up that commits almost nothing, and
+    /// The join-step limit stops a Cartesian blow-up that commits almost nothing, and
     /// the returned report is the exact observation that tripped it — not a truncated
-    /// answer, not a panic.
+    /// answer, not a panic. A limit of exactly the candidates the run enumerates admits
+    /// it, and one fewer refuses it.
     #[test]
     fn the_join_step_ceiling_is_a_distinguishable_error() {
+        // The candidates the run enumerates: the n² pair joins and the atom scans around them.
+        const JOIN_STEPS_OBSERVED: u64 = 1_212_200;
         // sink(?c, ?c) :- src(?x, ?c), src(?y, ?c). One head fact, n^2 candidates.
         let src = "https://example.org/src";
         let sink = "https://example.org/sink";
@@ -4539,7 +4858,7 @@ mod tests {
             ClauseAtom::positive(v("?c"), sink, v("?c")),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
-        let n = 1100usize; // 1_210_000 candidate solutions > MAX_JOIN_STEPS
+        let n = 1100usize; // over a million candidate solutions > the wasm32 default
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
@@ -4550,17 +4869,44 @@ mod tests {
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the join-step ceiling must be passed");
-        let EvalError::BudgetExhausted { resource, report } = error else {
+        let limited = EvalOptions::default().with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
+            .expect_err("the join-step limit must be passed");
+        let EvalError::BudgetExhausted { resource, report } = error.clone() else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::JoinSteps);
         assert_eq!(
             report.join_steps(),
-            MAX_JOIN_STEPS + 1,
-            "one task, so the report is exactly the observation that passed the ceiling"
+            WASM_DEFAULT_MAX_JOIN_STEPS + 1,
+            "one task, so the report is exactly the observation that passed the limit"
         );
+        assert_eq!(report.join_step_limit(), WASM_DEFAULT_MAX_JOIN_STEPS);
+        assert!(report.join_step_limit_stated());
         assert!(report.stored_facts() <= n + 1);
+        let rendered = error.to_string();
+        assert!(
+            rendered
+                .contains("1048577 join steps observed, 1048576 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_join_steps"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: the same program over the same store under a limit of
+        // exactly the candidates it enumerates completes, with its one head fact.
+        let admitted = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED);
+        let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &admitted, None)
+            .expect("a limit the run fits under admits it");
+        assert_eq!(model.facts().row_count(), n + 1);
+        assert_eq!(model.budget().join_steps(), JOIN_STEPS_OBSERVED);
+        let short = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
+        assert!(matches!(
+            evaluate_guarded(&exe, edb, &NoGuards, &short, None),
+            Err(EvalError::BudgetExhausted {
+                resource: BudgetResource::JoinSteps,
+                ..
+            })
+        ));
     }
 
     /// The stored-fact ceiling stops a program whose least model is simply too large, and
@@ -4574,7 +4920,7 @@ mod tests {
             atom("?x", pair, "?y"),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
-        let n = 400usize; // 160_000 derived facts > MAX_STORED_FACTS
+        let n = 400usize; // 160_000 derived facts > the wasm32 default
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
@@ -4585,8 +4931,10 @@ mod tests {
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the stored-fact ceiling must be passed");
-        let EvalError::BudgetExhausted { resource, report } = error else {
+        let limited = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
+            .expect_err("the stored-fact limit must be passed");
+        let EvalError::BudgetExhausted { resource, report } = error.clone() else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::StoredFacts);
@@ -4595,7 +4943,150 @@ mod tests {
             n + n * n,
             "the report is the count the round would have produced"
         );
-        assert!(report.join_steps() <= MAX_JOIN_STEPS);
+        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        assert!(report.join_steps() <= report.join_step_limit());
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("160400 facts observed, 131072 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: a limit of exactly the least model's size admits it, and
+        // one fact fewer does not.
+        let exact = EvalOptions::default().with_max_stored_facts((n + n * n) as u64);
+        let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &exact, None)
+            .expect("a limit of exactly the model's size admits it");
+        assert_eq!(model.facts().row_count(), n + n * n);
+        let short = EvalOptions::default().with_max_stored_facts((n + n * n - 1) as u64);
+        assert!(matches!(
+            evaluate_guarded(&exe, edb, &NoGuards, &short, None),
+            Err(EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                ..
+            })
+        ));
+    }
+
+    /// A store past the NATIVE default is refused under the default, naming the limit, the
+    /// numbers and the knob, and the same store completes when the limit is raised to
+    /// exactly what the run holds. The grid is 2,049 × 2,048 rows over one partition, so
+    /// the interner stays small while the row count passes 4,194,304.
+    #[test]
+    fn a_store_past_the_native_default_is_refused_and_completes_when_raised() {
+        const SIDE: usize = 2_048;
+        let grid = "https://example.org/grid";
+        let small = "https://example.org/small";
+        let copy = "https://example.org/copy";
+        let rules = vec![DlClause::datalog(
+            atom("?x", copy, "?y"),
+            vec![atom("?x", small, "?y")],
+        )];
+        let mut edb = RelationStore::new();
+        let objects: Vec<String> = (0..SIDE)
+            .map(|j| surface(&format!("https://example.org/o{j}")))
+            .collect();
+        let (grid, small) = (surface(grid), surface(small));
+        for i in 0..=SIDE {
+            let subject = surface(&format!("https://example.org/s{i}"));
+            for object in &objects {
+                edb.insert(&subject, &grid, object, RelationStore::DEFAULT_GRAPH);
+            }
+        }
+        edb.insert(
+            &objects[0],
+            &small,
+            &objects[1],
+            RelationStore::DEFAULT_GRAPH,
+        );
+        let seeded = (SIDE + 1) * SIDE + 1;
+        assert!(seeded as u64 > NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let exe = compile(rules).expect("the fixture compiles");
+        let native = EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &native, None)
+            .expect_err("the native default is passed by the seeded store");
+        assert_eq!(
+            error.to_string(),
+            "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
+             permitted (the caller's limit); raise it with EvalOptions::with_max_stored_facts"
+        );
+        if !cfg!(target_arch = "wasm32") {
+            assert_eq!(
+                evaluate(&exe, edb.clone())
+                    .expect_err("the native default refuses it unstated too")
+                    .to_string(),
+                "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
+                 permitted (the default for this target); raise it with \
+                 EvalOptions::with_max_stored_facts"
+            );
+        }
+        let raised = EvalOptions::default().with_max_stored_facts(seeded as u64 + 1);
+        let model = evaluate_guarded(&exe, edb, &NoGuards, &raised, None)
+            .expect("raised to exactly the model's size");
+        assert_eq!(model.facts().row_count(), seeded + 1);
+    }
+
+    /// Each target's defaults are the values its documentation states: the `wasm32`
+    /// values are the ceilings every target had before the limits became parameters, the
+    /// native stored-fact limit admits a least model thirty-two times larger, and the
+    /// join-step limit is the same everywhere. A native build runs the native defaults.
+    #[test]
+    fn the_default_limits_are_sized_per_target() {
+        assert_eq!(WASM_DEFAULT_MAX_STORED_FACTS, 131_072);
+        assert_eq!(WASM_DEFAULT_MAX_JOIN_STEPS, 1_048_576);
+        assert_eq!(NATIVE_DEFAULT_MAX_STORED_FACTS, 4_194_304);
+        assert_eq!(NATIVE_DEFAULT_MAX_JOIN_STEPS, 1_048_576);
+        if cfg!(target_arch = "wasm32") {
+            assert_eq!(DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS);
+            assert_eq!(DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_JOIN_STEPS);
+        } else {
+            assert_eq!(DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_STORED_FACTS);
+            assert_eq!(DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_JOIN_STEPS);
+        }
+        let options = EvalOptions::default();
+        assert_eq!(options.max_stored_facts(), DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(options.max_join_steps(), DEFAULT_MAX_JOIN_STEPS);
+        assert_eq!(options.stated_max_stored_facts(), None);
+        assert_eq!(options.stated_max_join_steps(), None);
+    }
+
+    /// Under the default limits the store past the `wasm32` default completes natively —
+    /// 160,400 facts — and its report says which limits governed it.
+    #[test]
+    fn a_default_native_run_admits_a_model_past_the_wasm32_default() {
+        let src = "https://example.org/src";
+        let pair = "https://example.org/pair";
+        let rules = vec![DlClause::datalog(
+            atom("?x", pair, "?y"),
+            vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
+        )];
+        let n = 400usize;
+        let mut edb = RelationStore::new();
+        for i in 0..n {
+            edb.insert(
+                &surface(&format!("https://example.org/n{i}")),
+                &surface(src),
+                &surface("https://example.org/hub"),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+        let exe = compile(rules).expect("the fixture compiles");
+        let outcome = evaluate(&exe, edb);
+        if cfg!(target_arch = "wasm32") {
+            assert!(outcome.is_err(), "the wasm32 default refuses 160,400 facts");
+        } else {
+            let model = outcome.expect("the native default admits 160,400 facts");
+            assert_eq!(model.facts().row_count(), n + n * n);
+            assert_eq!(
+                model.budget().stored_fact_limit(),
+                NATIVE_DEFAULT_MAX_STORED_FACTS
+            );
+            assert!(!model.budget().stored_fact_limit_stated());
+            assert_eq!(
+                model.budget().join_step_limit(),
+                NATIVE_DEFAULT_MAX_JOIN_STEPS
+            );
+        }
     }
 
     /// The term-arena ceiling stops a legal-sized fact set whose TERMS are enormous, and
@@ -4617,7 +5108,7 @@ mod tests {
                 RelationStore::DEFAULT_GRAPH,
             );
         }
-        assert!(edb.row_count() < MAX_STORED_FACTS);
+        assert!((edb.row_count() as u64) < DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
         let error = evaluate(&exe, edb).expect_err("the term-arena ceiling must be passed");
         let EvalError::BudgetExhausted { resource, report } = error else {
@@ -4646,7 +5137,7 @@ mod tests {
             first.facts().term_bytes()
         );
         assert!(first.budget().join_steps() > 0);
-        assert!(first.budget().join_steps() <= MAX_JOIN_STEPS);
+        assert!(first.budget().join_steps() <= first.budget().join_step_limit());
     }
 
     /// The budget refusal is a `std::error::Error` with a message naming the resource and
@@ -4656,16 +5147,24 @@ mod tests {
         let error = EvalError::BudgetExhausted {
             resource: BudgetResource::JoinSteps,
             report: BudgetReport {
-                join_steps: MAX_JOIN_STEPS + 1,
+                join_steps: DEFAULT_MAX_JOIN_STEPS + 1,
                 stored_facts: 3,
                 term_arena_bytes: 4,
                 ..BudgetReport::default()
             },
         };
         let rendered = error.to_string();
-        assert!(rendered.contains("join steps"), "{rendered}");
+        assert!(rendered.contains("join-step limit"), "{rendered}");
         assert!(
-            rendered.contains(&(MAX_JOIN_STEPS + 1).to_string()),
+            rendered.contains(&format!(
+                "{} join steps observed, {DEFAULT_MAX_JOIN_STEPS} permitted (the default for \
+                 this target)",
+                DEFAULT_MAX_JOIN_STEPS + 1
+            )),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with("raise it with EvalOptions::with_max_join_steps"),
             "{rendered}"
         );
         let _: &dyn std::error::Error = &error;

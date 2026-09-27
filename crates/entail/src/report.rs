@@ -60,10 +60,10 @@ use core::fmt;
 use purrdf_core::{DatasetView, TermRef, TermValue};
 use purrdf_datalog::cache::ContractHash;
 use purrdf_datalog::chase::ChaseTermination;
-use purrdf_datalog::seminaive::BudgetReport;
+use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
 
 use crate::Regime;
-use crate::calculus::{ChaseRule, calculus_contract_hash};
+use crate::calculus::{ChaseRule, calculus_contract_hash, calculus_contract_hash_with};
 use crate::entails::EntailmentMechanism;
 use crate::rules::{RuleId, extensions, implemented, rules};
 
@@ -965,8 +965,10 @@ pub(crate) struct RunStats {
     /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
     /// [`ChaseRule::index`].
     pub(crate) fired: [u64; ChaseRule::COUNT],
-    /// What the evaluation consumed of `purrdf-datalog`'s three fixed ceilings.
+    /// What the evaluation consumed, against the limits it ran under.
     pub(crate) budget: BudgetReport,
+    /// The caller's evaluation limits the run was governed by.
+    pub(crate) options: EvalOptions,
     /// Conclusions dropped because the RDF 1.2 IR cannot hold them — a literal or triple
     /// term in subject position, or a non-IRI in predicate position. The
     /// [`Construct::GeneralizedRdf`] boundary's observation.
@@ -987,16 +989,13 @@ pub(crate) struct RunStats {
 }
 
 impl RunStats {
-    /// The measurements of a run that evaluated nothing — the `Simple` identity closure.
-    pub(crate) fn none() -> Self {
-        Self::of_budget(BudgetReport::new(0, 0, 0))
-    }
-
-    /// A fresh tally over an evaluation that consumed `budget`.
-    pub(crate) fn of_budget(budget: BudgetReport) -> Self {
+    /// The measurements of a run that has evaluated nothing yet, governed by `options` —
+    /// the `Simple` identity closure's whole tally, and the start of every other lane's.
+    pub(crate) fn none(options: EvalOptions) -> Self {
         Self {
             fired: [0; ChaseRule::COUNT],
-            budget,
+            budget: BudgetReport::new(0, 0, 0).governed_by(&options),
+            options,
             generalized_rdf_drops: 0,
             surrogate_drops: 0,
             termination: None,
@@ -1033,7 +1032,8 @@ impl RunStats {
             self.budget
                 .term_arena_bytes()
                 .max(budget.term_arena_bytes()),
-        );
+        )
+        .governed_by(&self.options);
     }
 
     /// Record `count` conclusions the RDF 1.2 IR could not hold.
@@ -1133,7 +1133,7 @@ pub struct ReasoningReport {
     rules_fired: Vec<(RuleId, u64)>,
     /// The constructs the run could not fully handle.
     boundaries: Vec<Boundary>,
-    /// What the run consumed of the three fixed evaluation ceilings.
+    /// What the run consumed, against the evaluation limits it ran under.
     budget: BudgetReport,
     /// The identity of the calculus the run used.
     contract_hash: ContractHash,
@@ -1165,10 +1165,12 @@ impl ReasoningReport {
     /// non-empty `boundaries` is not a value a caller can pass in — not from this crate,
     /// and not from a consumer assembling a report of its own.
     ///
-    /// The contract hash is not a parameter either: it is
-    /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
-    /// than the one its regime declares would be a second contradiction with no honest
-    /// reading. Neither is [`Self::mechanism`]: a materialization answers no
+    /// The contract hash is not a parameter either: it is the calculus `regime` declares,
+    /// hashed under the default evaluation limits of the current target
+    /// (`purrdf_datalog::cache::contract_hash(&calculus_program(regime))`), and a report
+    /// naming a calculus other than the one its regime declares would be a second
+    /// contradiction with no honest reading. A report [`crate::materialize_with`] builds
+    /// for a run under the caller's limits names the calculus under those limits instead. Neither is [`Self::mechanism`]: a materialization answers no
     /// conclusion-directed question, so every report built here starts with `None`, and the
     /// only thing that attaches one is the certificate that derives it from its own outcome.
     ///
@@ -1228,6 +1230,15 @@ impl ReasoningReport {
         }
     }
 
+    /// This report, naming its regime's calculus under `options`
+    /// ([`crate::materialize_with`]).
+    pub(crate) fn under(self, options: &EvalOptions) -> Self {
+        Self {
+            contract_hash: calculus_contract_hash_with(self.regime, options),
+            ..self
+        }
+    }
+
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
     pub(crate) fn of_run<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Self {
         Self::of_chase_run(ds, regime, stats, None)
@@ -1257,21 +1268,28 @@ impl ReasoningReport {
     }
 
     /// The shared body of [`Self::of_run`] and [`Self::of_inconsistent_run`].
+    ///
+    /// The contract hash is the calculus's under the limits the run was governed by
+    /// ([`RunStats::options`]), so a closure computed under raised limits names a
+    /// different calculus from one computed under the defaults.
     fn of_chase_run<D: DatasetView>(
         ds: &D,
         regime: Regime,
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
     ) -> Self {
-        Self::new(
-            regime,
-            fired_rules(regime, stats),
-            boundaries(ds, regime, stats),
-            stats.budget,
-            inconsistency,
-            stats.surrogate_drops,
-            stats.termination,
-        )
+        Self {
+            contract_hash: calculus_contract_hash_with(regime, &stats.options),
+            ..Self::new(
+                regime,
+                fired_rules(regime, stats),
+                boundaries(ds, regime, stats),
+                stats.budget,
+                inconsistency,
+                stats.surrogate_drops,
+                stats.termination,
+            )
+        }
     }
 
     /// Assemble the report for an `OWL-Direct` run that met `boundaries`.
@@ -1503,7 +1521,7 @@ impl ReasoningReport {
         extensions(self.regime)
     }
 
-    /// What the run consumed of the three fixed evaluation ceilings.
+    /// What the run consumed, against the evaluation limits it ran under.
     ///
     /// The coordinates carry `purrdf-datalog`'s meanings: candidate conclusions
     /// enumerated, facts held when the run stopped, and interned term surface bytes. A
@@ -1515,10 +1533,14 @@ impl ReasoningReport {
 
     /// The identity of the calculus this closure was minted under.
     ///
-    /// Exactly `purrdf_datalog::cache::contract_hash(&calculus_program(regime))`. A
-    /// consumer holding a cached closure compares this against the hash of the calculus it
-    /// is willing to trust and refuses the closure if they differ — the point being that
-    /// the comparison is a digest, not two prose claims about rule coverage.
+    /// Exactly `purrdf_datalog::cache::contract_hash_with(&calculus_program(regime),
+    /// options)` for the evaluation limits the run was governed by — the current target's
+    /// defaults unless the caller stated others ([`crate::materialize_with`]). A consumer
+    /// holding a cached closure compares this against the hash of the calculus it is
+    /// willing to trust and refuses the closure if they differ — the point being that the
+    /// comparison is a digest, not two prose claims about rule coverage. Because the
+    /// effective limits are hashed, a closure minted natively under the native defaults
+    /// and one minted on `wasm32` under its defaults name different calculi.
     #[must_use]
     pub const fn contract_hash(&self) -> ContractHash {
         self.contract_hash

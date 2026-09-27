@@ -120,6 +120,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
 /// `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
 ///
+/// The same unshipped bump carries the caller's evaluation limits. `purrdf_shacl_apply_rules`
+/// gained `max_stored_facts` / `max_join_steps` between `max_generated_terms` and
+/// `import_iris`, and `purrdf_entail_materialize_to_nquads` gained the same two between
+/// `program` and `out_nquads` — each a nullable `const uint64_t *`, NULL for the target's
+/// default. Both are incompatible (a `0.7.0` host passes its import table or its
+/// out-pointer into the new slots), and both ride this bump for the reason the others do.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

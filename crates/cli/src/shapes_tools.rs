@@ -64,6 +64,10 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) max_term_generating_rounds: Option<u64>,
     /// `--max-generated-terms`.
     pub(crate) max_generated_terms: Option<u64>,
+    /// `--max-stored-facts`.
+    pub(crate) max_stored_facts: Option<u64>,
+    /// `--max-join-steps`.
+    pub(crate) max_join_steps: Option<u64>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--to`: the output format override.
@@ -181,6 +185,12 @@ pub(crate) fn run_rules(
             if let Some(terms) = options.max_generated_terms {
                 rule_options = rule_options.with_max_generated_terms(terms);
             }
+            if let Some(facts) = options.max_stored_facts {
+                rule_options = rule_options.with_max_stored_facts(facts);
+            }
+            if let Some(steps) = options.max_join_steps {
+                rule_options = rule_options.with_max_join_steps(steps);
+            }
             purrdf::shapes::infer(&holder, &shapes, &rule_options)
                 .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
         }
@@ -195,6 +205,12 @@ pub(crate) fn run_rules(
             }
             if let Some(terms) = options.max_generated_terms {
                 infer_options = infer_options.with_max_generated_terms(terms);
+            }
+            if let Some(facts) = options.max_stored_facts {
+                infer_options = infer_options.with_max_stored_facts(facts);
+            }
+            if let Some(steps) = options.max_join_steps {
+                infer_options = infer_options.with_max_join_steps(steps);
             }
             srl::infer(&document, data.as_ref(), &infer_options)
                 .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?
@@ -219,7 +235,12 @@ pub(crate) fn run_rules(
 
 /// The rule-evaluation limits' knobs, as this command spells them.
 fn cli_limit_knobs() -> purrdf::shapes::LimitKnobs {
-    purrdf::shapes::LimitKnobs::new("--max-term-generating-rounds", "--max-generated-terms")
+    purrdf::shapes::LimitKnobs::new(
+        "--max-term-generating-rounds",
+        "--max-generated-terms",
+        "--max-stored-facts",
+        "--max-join-steps",
+    )
 }
 
 /// Read `path` (or stdin) as UTF-8 text.

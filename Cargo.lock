@@ -1765,6 +1765,7 @@ version = "2.0.2"
 dependencies = [
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-entail",
  "purrdf-iri",
  "purrdf-rdf",

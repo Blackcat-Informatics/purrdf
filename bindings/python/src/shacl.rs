@@ -210,7 +210,7 @@ fn messages_list<'py>(
 /// Raises `ValueError` if either graph fails to parse or if rule application
 /// fails (an illegal head term, an unresolvable `sh:condition`, an unregistered
 /// `sh:ruleProcessor`, or a rule set that passes the engine's term-generating
-/// round limit or another fixed ceiling).
+/// round limit or another evaluation limit, at its default).
 ///
 /// # One boundary, three bindings
 ///
@@ -260,6 +260,12 @@ fn entail(
 /// raises `ValueError` naming the limit, the numbers, the rules that inferred a new term
 /// last, and the keyword argument that raises it. A rule set that needs more states it.
 ///
+/// `max_stored_facts` bounds the facts the evaluation store may hold — the data graph, a
+/// rule set's data and every inferred triple (default 4194304) — and `max_join_steps` the
+/// candidate solutions the rule bodies may enumerate (default 1048576). A run past
+/// either raises `ValueError` naming the limit, the numbers and the keyword argument that
+/// raises it; a run inside them infers exactly what it would under any larger limits.
+///
 /// `imports` is the rule source's import table of `(IRI, text)` pairs: for `shapes_ttl`
 /// the shapes graph's `owl:imports` table (Turtle documents — see the
 /// [module documentation](self)), for `srl` the rule set's `IMPORTS` table (SPARQL 1.2 RL
@@ -279,6 +285,8 @@ fn entail(
     explain=false,
     max_term_generating_rounds=None,
     max_generated_terms=None,
+    max_stored_facts=None,
+    max_join_steps=None,
     imports=Vec::new(),
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -293,6 +301,8 @@ fn apply_rules(
     explain: bool,
     max_term_generating_rounds: Option<u64>,
     max_generated_terms: Option<u64>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
     imports: Vec<(String, String)>,
 ) -> PyResult<Py<PyAny>> {
     let pairs = crate::py_entail::import_list(&imports);
@@ -308,6 +318,8 @@ fn apply_rules(
                 explain,
                 max_term_generating_rounds,
                 max_generated_terms,
+                max_stored_facts,
+                max_join_steps,
                 host: purrdf_validate::RulesHost::Python,
             })
         })

@@ -1070,11 +1070,20 @@ export type EntailmentRegime =
  * `"owl-direct"` takes no program either: its extra input is a *query's* class
  * expressions, and this is a document boundary with no query, so it runs the
  * query-independent tableau augmentation.
+ *
+ * `maxStoredFacts` bounds the facts each evaluation store may hold and `maxJoinSteps` the
+ * candidate solutions the rules may enumerate, for the `"rdf"`, `"rdfs"`, `"owl-rl"` and
+ * `"d"` regimes. Omitted, each is this target's default: 131072 facts and 1048576 join
+ * steps (a native build's defaults are 4194304 and 1048576). A run past either throws
+ * naming the limit, the numbers and the argument that raises it; the report's
+ * `contract-hash` names the calculus under the limits in force.
  */
 export function entailMaterialize(
   document: string,
   regime: EntailmentRegime | string,
   program: string,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -1479,6 +1488,13 @@ export class ShaclRulesInference {
  * the limit, the numbers, the rules that inferred a new term last, and the argument that
  * raises it.
  *
+ * `maxStoredFacts` bounds the facts the evaluation store may hold — the data graph, a rule
+ * set's data and every inferred triple — and `maxJoinSteps` the candidate solutions the
+ * rule bodies may enumerate. Omitted, each is this target's default: 131072 facts and
+ * 1048576 join steps, sized for one WebAssembly linear memory (a native build's defaults
+ * are 4194304 and 1048576). A run past either throws naming the limit, the numbers and
+ * the argument that raises it.
+ *
  * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
  * `owl:imports` table (Turtle documents, see `ShaclImportError`) beside `shapesTtl`, the
  * rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
@@ -1496,6 +1512,8 @@ export function shaclApplyRules(
   importIris?: readonly string[],
   importDocuments?: readonly string[],
   maxGeneratedTerms?: bigint,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ShaclRulesInference;
 
 /**

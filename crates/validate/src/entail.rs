@@ -71,7 +71,7 @@ use crate::ShapesImportList;
 /// hand or `imports` cannot be used. Otherwise [`ShapesError::Invalid`]: either graph
 /// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
 /// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
-/// term-generating round limit or another fixed ceiling); or a diagnostic naming the
+/// term-generating round limit or another evaluation limit); or a diagnostic naming the
 /// refusal if the materialized dataset carries a reserved-vocabulary IRI or
 /// exhausts the RDFC-1.0 n-degree search budget.
 ///

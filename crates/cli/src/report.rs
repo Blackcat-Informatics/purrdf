@@ -45,9 +45,11 @@
 //! left the one operator who most needed the certificate with only an exit code.
 
 use purrdf_core::{DatasetView, RdfDataset};
-use purrdf_entail::{EntailError, Materialization, ReasoningReport, materialize};
+use purrdf_entail::{EntailError, Materialization, ReasoningReport, materialize_with};
 use purrdf_rdf::SourceFormat;
-use purrdf_validate::regime::render_reasoning_report;
+use purrdf_validate::regime::{
+    MaterializeLimits, regime_name, render_entail_error_for, render_reasoning_report,
+};
 use std::sync::Arc;
 
 use crate::cli::ReportTarget;
@@ -61,15 +63,18 @@ use crate::source::{self, TransportPolicy, ViewOp};
 /// and named a calculus, and every one of those is something the operator needs in order
 /// to act on the refusal.
 ///
-/// Every other [`EntailError`] is the absence of a run — an exhausted ceiling, a malformed
+/// Every other [`EntailError`] is the absence of a run — an exhausted limit, a malformed
 /// rule document, an unsatisfiable tableau — with no report to write, so nothing is
-/// surfaced and nothing is implied about a closure that was never assembled.
+/// surfaced and nothing is implied about a closure that was never assembled. A passed
+/// stored-fact or join-step limit names the flag that raises it.
 pub(crate) fn materialize_reported<D: DatasetView>(
     dataset: &D,
     plan: Materialization<'_>,
+    limits: &MaterializeLimits,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
-    match materialize(dataset, plan) {
+    let regime = regime_name(plan.regime());
+    match materialize_with(dataset, plan, &limits.eval_options(), None) {
         Ok((closure, report)) => {
             surface(target, &report)?;
             Ok(closure)
@@ -80,6 +85,18 @@ pub(crate) fn materialize_reported<D: DatasetView>(
                 EntailError::Inconsistent(run).to_string(),
             ))
         }
+        Err(
+            error @ (EntailError::Evaluate(
+                purrdf::datalog::seminaive::EvalError::BudgetExhausted { .. },
+            )
+            | EntailError::Chase(purrdf::datalog::chase::ChaseError::BudgetExhausted {
+                ..
+            })),
+        ) => Err(CliError::Runtime(render_entail_error_for(
+            regime,
+            &error,
+            limits.host,
+        ))),
         Err(other) => Err(other.into()),
     }
 }
@@ -95,10 +112,12 @@ pub(crate) fn materialize_reported_over_input(
     base: Option<&str>,
     policy: TransportPolicy,
     plan: Materialization<'_>,
+    limits: &MaterializeLimits,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
     struct Op<'a> {
         plan: Materialization<'a>,
+        limits: &'a MaterializeLimits,
         target: &'a ReportTarget,
     }
 
@@ -106,11 +125,21 @@ pub(crate) fn materialize_reported_over_input(
         type Output = Arc<RdfDataset>;
 
         fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-            materialize_reported(view, self.plan, self.target)
+            materialize_reported(view, self.plan, self.limits, self.target)
         }
     }
 
-    source::run_over_input_with_transport(path, format, base, policy, Op { plan, target })
+    source::run_over_input_with_transport(
+        path,
+        format,
+        base,
+        policy,
+        Op {
+            plan,
+            limits,
+            target,
+        },
+    )
 }
 
 /// Surface `report` per the decoded `--report` target.
@@ -206,7 +235,8 @@ mod tests {
     /// same bytes rather than two grammars described as the same one.
     #[test]
     fn the_rendering_is_the_shared_one_and_names_every_field() {
-        let (_, report) = materialize(&fixture(), Materialization::Rdfs).expect("rdfs");
+        let (_, report) =
+            purrdf_entail::materialize(&fixture(), Materialization::Rdfs).expect("rdfs");
         let rendered = render_reasoning_report(&report);
         assert!(
             rendered.starts_with(&format!("{REPORT_FORMAT_BANNER}\nregime rdfs\n")),
@@ -229,6 +259,7 @@ mod tests {
         let error = materialize_reported(
             &inconsistent(),
             Materialization::OwlRl,
+            &MaterializeLimits::default(),
             &ReportTarget::File(path.clone()),
         )
         .expect_err("cax-dw refuses");

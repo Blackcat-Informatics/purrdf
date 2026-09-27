@@ -188,6 +188,59 @@ def test_report_names_the_rules_that_fired() -> None:
     assert report.endswith("inconsistency none\n")
 
 
+# ── The evaluation limits ───────────────────────────────────────────────────────
+
+
+def _stored_facts(report: str) -> int:
+    for line in report.splitlines():
+        if line.startswith("budget stored-facts "):
+            return int(line.removeprefix("budget stored-facts "))
+    raise AssertionError(f"no stored-facts line:\n{report}")
+
+
+def test_the_evaluation_limits_refuse_naming_this_hosts_keyword() -> None:
+    """A passed limit names the keyword argument of the function called; the store the
+    run needs, stated exactly, admits the same closure, and one fact fewer refuses."""
+    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    needed = _stored_facts(report)
+    with pytest.raises(ValueError) as short:
+        entail.materialize(
+            _dataset(), entail.Regime.OWL_RL, "", max_stored_facts=needed - 1
+        )
+    assert f"{needed - 1} permitted (the caller's limit)" in str(short.value)
+    assert str(short.value).endswith("raise it with materialize(max_stored_facts=...)")
+    exact, _ = entail.materialize(
+        _dataset(), entail.Regime.OWL_RL, "", max_stored_facts=needed
+    )
+    assert exact.to_nquads() == closure.to_nquads()
+
+    with pytest.raises(ValueError) as steps:
+        entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", max_join_steps=1)
+    assert "evaluation exceeded the join-step limit: " in str(steps.value)
+    assert str(steps.value).endswith("raise it with materialize_nt(max_join_steps=...)")
+    with pytest.raises(ValueError) as text_facts:
+        entail.materialize_nt(SCHEMA, entail.Regime.RDFS, "", max_stored_facts=1)
+    assert str(text_facts.value).endswith(
+        "raise it with materialize_nt(max_stored_facts=...)"
+    )
+
+
+def test_the_limits_in_force_reach_the_contract_hash() -> None:
+    """Raising a limit past the default names a different calculus; the closure is the
+    same one."""
+    def hash_of(report: str) -> str:
+        return next(
+            line for line in report.splitlines() if line.startswith("contract-hash ")
+        )
+
+    closure, report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "")
+    raised, raised_report = entail.materialize_nt(
+        SCHEMA, entail.Regime.OWL_RL, "", max_stored_facts=1 << 23
+    )
+    assert raised == closure
+    assert hash_of(raised_report) != hash_of(report)
+
+
 # ── The two entry points are one path ───────────────────────────────────────────
 
 

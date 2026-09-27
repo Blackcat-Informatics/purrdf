@@ -165,6 +165,28 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
       error.message === "no rule source: name a SHACL shapes graph or a SPARQL 1.2 RL rule set",
   );
 
+  // The join-step limit names this host's own argument.
+  assert.throws(
+    () =>
+      shaclApplyRules(
+        DATA,
+        SHAPES,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        1n,
+      ),
+    (error) =>
+      error.message.includes("the rules exceeded the join-step limit: ") &&
+      error.message.endsWith("raise it with shaclApplyRules's maxJoinSteps"),
+  );
+
   // A SPARQL 1.2 RL rule set's IMPORTS resolve from the same import table.
   const importing =
     "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n" +
@@ -293,4 +315,41 @@ test("wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing 
   malformed.free();
 
   assert.throws(() => shaclLintShapes("@@@ not turtle"));
+});
+
+test("wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised", () => {
+  const COPIED = 70000;
+  let data = "";
+  for (let i = 0; i < COPIED; i += 1) {
+    data += `<http://example.org/ns#s${i}> <http://example.org/ns#p> <http://example.org/ns#o${i}> .\n`;
+  }
+  const copy = `${PREFIXES}
+ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:q ;
+            sh:object [ sh:path ex:p ] ] .
+`;
+  // 70,000 data triples and 70,000 copies: 140,000 facts, past this target's default.
+  assert.throws(
+    () => shaclApplyRules(data, copy),
+    (error) =>
+      error.message ===
+      "SHACL rules did not complete: the rules exceeded the stored-fact limit: 140000 facts " +
+        "observed, 131072 permitted (the default for this target); raise it with " +
+        "shaclApplyRules's maxStoredFacts",
+  );
+  const raised = shaclApplyRules(
+    data,
+    copy,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    140000n,
+  );
+  assert.equal(raised.inferred.split("\n").length - 1, COPIED);
+  raised.free();
 });

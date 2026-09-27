@@ -325,6 +325,18 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
+        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// a run it admits writes exactly the closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+        max_join_steps: Option<u64>,
         /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
         /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
         /// ignored) when named beside `--canonical`, since it would otherwise be
@@ -556,6 +568,18 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
+        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// a run it admits writes exactly the closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
         /// Input format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1176,7 +1200,8 @@ pub(crate) enum Command {
     /// Exit codes: **0** when the rule set ran to completion, whether it inferred anything
     /// or not. **1** for a malformed data graph, shapes graph or rule set; a rule set that is
     /// ill-formed or cannot be stratified; a `sh:ruleProcessor` this engine does not handle;
-    /// a rule that fails during execution; and a rule set that passes
+    /// a rule that fails during execution; a rule set that holds or enumerates more than
+    /// `--max-stored-facts` or `--max-join-steps` permits; and a rule set that passes
     /// `--max-term-generating-rounds` or `--max-generated-terms` — SHACL 1.2 Inference Rules
     /// lets an engine "report a failure after a pre-configured maximum iteration count has
     /// been exceeded", and this one does, writing no graph. **2** for a usage error.
@@ -1252,6 +1277,20 @@ pub(crate) enum Command {
         /// states it here.
         #[arg(long = "max-generated-terms", value_name = "N")]
         max_generated_terms: Option<u64>,
+        /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
+        /// data and every inferred triple; one more fails the run naming the limit and the
+        /// numbers. Omitted, the limit is 4194304 facts: a rule copying a predicate over
+        /// tens of thousands of triples, or the closure of a thousand-node chain,
+        /// completes. The limit can only refuse: a run it admits writes exactly the
+        /// inference graph a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
+        /// one more fails the run naming the limit and the numbers. Omitted, the limit is
+        /// 1048576 steps. It bounds a rule body that enumerates far more candidates than
+        /// it infers triples.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

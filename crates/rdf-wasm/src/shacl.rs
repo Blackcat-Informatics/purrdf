@@ -483,8 +483,8 @@ pub(crate) fn apply_rules_impl(
 }
 
 /// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-/// maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?)` → a
-/// `ShaclRulesInference`.
+/// maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
+/// maxStoredFacts?, maxJoinSteps?)` → a `ShaclRulesInference`.
 ///
 /// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
 /// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
@@ -497,6 +497,13 @@ pub(crate) fn apply_rules_impl(
 /// run past either throws naming the limit, the numbers, the rules that inferred a new
 /// term last, and the argument that raises it.
 ///
+/// `maxStoredFacts` (a `bigint`) bounds the facts the evaluation store may hold — the data
+/// graph, a rule set's data and every inferred triple — and `maxJoinSteps` (a `bigint`)
+/// the candidate solutions the rule bodies may enumerate. Omitted, each is this target's
+/// default: 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory
+/// (a native build's defaults are 4194304 and 1048576). A run past either throws naming
+/// the limit, the numbers and the argument that raises it.
+///
 /// `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
 /// `owl:imports` table (Turtle documents, see [`ShaclImportError`]) beside `shapesTtl`, the
 /// rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
@@ -504,7 +511,7 @@ pub(crate) fn apply_rules_impl(
 /// closure never names, throw.
 ///
 /// Throws on a document that does not parse, an ill-formed or unstratifiable rule set, a
-/// rule failing during execution, and a passed round limit; rejects with a
+/// rule failing during execution, and a passed evaluation limit; rejects with a
 /// [`ShaclImportError`] when the shapes graph's `owl:imports` closure is not in hand. Call
 /// `.free()` on the result.
 #[wasm_bindgen(js_name = shaclApplyRules)]
@@ -524,6 +531,8 @@ pub fn shacl_apply_rules(
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
     max_generated_terms: Option<u64>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<ShaclRulesInference, JsValue> {
     let imports = shapes_import_pairs(
         import_iris.as_deref().unwrap_or_default(),
@@ -540,6 +549,8 @@ pub fn shacl_apply_rules(
         explain: explain.unwrap_or(false),
         max_term_generating_rounds,
         max_generated_terms,
+        max_stored_facts,
+        max_join_steps,
         host: purrdf_validate::RulesHost::Wasm,
     })
     .map_err(shapes_rejection)?;
@@ -1574,6 +1585,59 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
              <http://example.org/ns#yes> .\n",
         );
         out
+    }
+
+    /// The stored-fact and join-step limits name this host's own arguments, and the
+    /// `wasm32` default refuses a 70,000-triple copy (140,000 facts) that a larger stated
+    /// limit admits. The default is STATED here, because this native test binary runs the
+    /// native default; `the_default_limits_are_sized_per_target` in `purrdf-datalog` pins
+    /// that a `wasm32` build's default is exactly this value.
+    #[test]
+    fn wasm_apply_rules_capacity_limits() {
+        use std::fmt::Write as _;
+        let mut data = String::new();
+        for i in 0..70_000 {
+            writeln!(
+                data,
+                "<http://example.org/ns#s{i}> <http://example.org/ns#p> \
+                 <http://example.org/ns#o{i}> ."
+            )
+            .expect("write to String");
+        }
+        let copy =
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?s ex:q ?o } WHERE { ?s ex:p ?o }\n";
+        let request = purrdf_validate::RulesRequest {
+            data_nt: &data,
+            srl: Some(copy),
+            max_stored_facts: Some(purrdf::datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS),
+            host: purrdf_validate::RulesHost::Wasm,
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let refused = apply_rules_impl(&request)
+            .expect_err("140,000 facts pass the wasm32 default")
+            .to_string();
+        assert!(
+            refused.contains("140000 facts observed, 131072 permitted (the caller's limit)")
+                && refused.ends_with("raise it with shaclApplyRules's maxStoredFacts"),
+            "{refused}"
+        );
+        let raised = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_stored_facts: Some(140_000),
+            ..request
+        })
+        .expect("a limit of exactly the store admits it");
+        assert_eq!(raised.inferred_ntriples.lines().count(), 70_000);
+        let steps = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_stored_facts: None,
+            max_join_steps: Some(1),
+            ..request
+        })
+        .expect_err("one join step")
+        .to_string();
+        assert!(
+            steps.ends_with("raise it with shaclApplyRules's maxJoinSteps"),
+            "{steps}"
+        );
     }
 
     /// The rules entry point: the inference graph alone, the proof on request, the

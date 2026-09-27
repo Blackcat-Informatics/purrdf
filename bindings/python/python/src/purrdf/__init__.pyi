@@ -1817,6 +1817,12 @@ class shapes:
     # raises ValueError naming the limit, the numbers, the rules that inferred a new
     # term last, and the keyword argument that raises it.
     #
+    # `max_stored_facts` bounds the facts the evaluation store may hold (the data
+    # graph, a rule set's data and every inferred triple; default 4194304), and
+    # `max_join_steps` the candidate solutions the rule bodies may enumerate (default
+    # 1048576). A run past either raises ValueError naming the limit, the numbers
+    # and the keyword argument that raises it.
+    #
     # `imports` is the rule source's import table of (IRI, text) pairs: the shapes
     # graph's owl:imports table (Turtle) for `shapes_ttl`, the rule set's IMPORTS table
     # (SPARQL 1.2 RL texts) for `srl`, followed transitively. An import no entry
@@ -1832,6 +1838,8 @@ class shapes:
         explain: bool = False,
         max_term_generating_rounds: int | None = None,
         max_generated_terms: int | None = None,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, str | None]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
@@ -1922,15 +1930,33 @@ class entail:
     # materializes, including `owl-direct` and `rif`; `program` is the rule
     # document `rif` entails under and must be `""` for every other regime,
     # because a caller who passed rules to `rdfs` believes they ran.
+    #
+    # `max_stored_facts` bounds the facts each evaluation store may hold (default
+    # 4194304) and `max_join_steps` the candidate solutions the rules may enumerate
+    # (default 1048576), for the RDF, RDFS, OWL_RL and D regimes. A run past
+    # either raises ValueError naming the limit, the numbers and the keyword
+    # argument that raises it; the report's contract-hash names the calculus under
+    # the limits in force.
     @staticmethod
     def materialize(
-        dataset: RdfDataset, regime: RegimeLike, program: str
+        dataset: RdfDataset,
+        regime: RegimeLike,
+        program: str,
+        *,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
-    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out.
+    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out,
+    # under the same two evaluation limits.
     @staticmethod
     def materialize_nt(
-        data: str, regime: RegimeLike, program: str
+        data: str,
+        regime: RegimeLike,
+        program: str,
+        *,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> tuple[str, str]: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`

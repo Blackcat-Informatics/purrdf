@@ -29,6 +29,7 @@ use std::path::Path;
 use purrdf::QueryEntailment;
 use purrdf_entail::{Materialization, Regime, RuleSet, parse_rif_xml};
 use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_validate::regime::MaterializeLimits;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
@@ -163,6 +164,7 @@ fn read_rule_set(path: &Path) -> Result<RuleSet, CliError> {
 pub(crate) fn run(
     regime: CliRegime,
     rules: Option<&Path>,
+    limits: &MaterializeLimits,
     from: Option<CliRdfFormat>,
     to: Option<CliRdfFormat>,
     base: Option<&str>,
@@ -201,6 +203,7 @@ pub(crate) fn run(
         base,
         crate::source::TransportPolicy::Detect,
         plan.materialization(),
+        limits,
         report_target,
     )?;
 

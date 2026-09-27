@@ -690,6 +690,9 @@ pub(crate) struct Relation {
     tail: Tail,
     /// The number of rows across batches + tail (the dense per-relation row count).
     len: usize,
+    /// The store-global id of the newest row, or `None` for an empty relation. Row ids are
+    /// minted in ascending order, so this is the largest id the relation holds.
+    newest_row: Option<RowId>,
 }
 
 impl Relation {
@@ -715,6 +718,7 @@ impl Relation {
         }
         self.tail.push(s_id, o_id, row_id);
         self.len += 1;
+        self.newest_row = Some(self.newest_row.map_or(row_id, |newest| newest.max(row_id)));
         if self.tail.len() >= TAIL_SEAL_THRESHOLD {
             self.seal();
         }
@@ -862,6 +866,15 @@ impl<'a> PartitionRef<'a> {
     /// The number of distinct `(subject, object)` rows in this partition.
     pub fn row_count(self) -> usize {
         self.relation.row_count()
+    }
+
+    /// Whether this partition holds a row whose store-global id is at least `index` —
+    /// one O(1) comparison against the newest row id, so a semi-naive round can tell that
+    /// a partition gained nothing since row `index` without scanning it.
+    pub fn has_row_from(self, index: usize) -> bool {
+        self.relation
+            .newest_row
+            .is_some_and(|newest| newest.index() >= index)
     }
 
     /// A galloping lending [`RowCursor`] over the id rows selected by `bound`.

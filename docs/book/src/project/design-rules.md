@@ -63,8 +63,8 @@ the *same engine* rather than a port.
 
 Across the toolkit, out-of-scope input is a **typed error**, never a partial
 answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin is
-`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, an exhausted
-evaluation ceiling is `EntailError::Evaluate` rather than a truncated closure, and
+`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, a passed
+evaluation limit is `EntailError::Evaluate` rather than a truncated closure, and
 an unsupported results projection is a typed format error. Lossy-by-design
 projections are permitted but *loud*, via the
 [loss ledger](../slices.md#the-loss-ledger).

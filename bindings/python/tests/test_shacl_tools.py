@@ -118,6 +118,31 @@ def test_py_apply_rules() -> None:
     )
     assert purrdf.shapes.apply_rules(_DATA, _SHAPES, max_generated_terms=6)["inferred"] == _INFERRED
 
+    # The stored-fact and join-step limits name this host's own keyword arguments, and
+    # the neighbour holding exactly the store the run needs completes.
+    with pytest.raises(ValueError) as facts:
+        purrdf.shapes.apply_rules(_DATA, _SHAPES, max_stored_facts=1)
+    assert "the rules exceeded the stored-fact limit: " in str(facts.value)
+    assert "1 permitted (the caller's limit)" in str(facts.value)
+    assert str(facts.value).endswith("raise it with apply_rules(max_stored_facts=...)")
+    limit = 1
+    while True:
+        try:
+            ran_within = purrdf.shapes.apply_rules(_DATA, _SHAPES, max_stored_facts=limit)
+        except ValueError as refused:
+            observed = str(refused).split("the rules exceeded the stored-fact limit: ")[1]
+            limit = int(observed.split(" ")[0])
+            continue
+        break
+    assert ran_within["inferred"] == _INFERRED
+    with pytest.raises(ValueError):
+        purrdf.shapes.apply_rules(_DATA, _SHAPES, max_stored_facts=limit - 1)
+    with pytest.raises(ValueError) as steps:
+        purrdf.shapes.apply_rules(_DATA, _SHAPES, max_join_steps=1)
+    assert "the rules exceeded the join-step limit: " in str(steps.value)
+    assert str(steps.value).endswith("raise it with apply_rules(max_join_steps=...)")
+    assert purrdf.shapes.apply_rules(_DATA, _SHAPES, max_join_steps=1_000_000)["inferred"] == _INFERRED
+
     # SPARQL 1.2 RL text through the same function.
     srl = (
         "PREFIX ex: <http://example.org/ns#>\n"

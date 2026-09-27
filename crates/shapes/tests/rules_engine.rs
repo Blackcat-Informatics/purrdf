@@ -627,7 +627,9 @@ fn the_term_generating_round_limit_is_the_callers() {
     );
     let short = run(data_ttl, &counter(400), &limited).expect("within the limit");
     assert_eq!(short.len(), 400, "ex:n 1 through 400");
-    let named = limited.with_limit_knobs(purrdf_shapes::LimitKnobs::new("--rounds", "--terms"));
+    let named = limited.with_limit_knobs(purrdf_shapes::LimitKnobs::new(
+        "--rounds", "--terms", "--facts", "--steps",
+    ));
     let err = run(data_ttl, &counter(1000), &named).expect_err("past the limit");
     assert!(err.ends_with("raise the limit with --rounds"), "{err}");
 }

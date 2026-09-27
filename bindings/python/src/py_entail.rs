@@ -63,16 +63,17 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, certain_answers_to_string, check_dl_proof,
-    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
-    extension_rules_string, extract_module_to_string, graph_entails_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    parse_regime, profile_to_string, prove_to_string, realize_to_string, regime_name, regime_plan,
-    regime_rule_set, render_entail_error, render_reasoning_report, rules_string,
+    MaterializeLimits, PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, RegimeHost,
+    certain_answers_to_string, check_dl_proof, classify_to_string, consistency_to_string,
+    entails_to_string, explain_conclusion_to_string, extension_rules_string,
+    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
+    instances_to_string, justify_to_string, materialize_to_nquads_string_with, parse_regime,
+    profile_to_string, prove_to_string, realize_to_string, regime_name, regime_plan,
+    regime_rule_set, render_entail_error_for, render_reasoning_report, rules_string,
     verify_entailment_to_string,
 };
 
-use crate::entail::{Regime, materialize as materialize_closure};
+use crate::entail::{Regime, materialize_with as materialize_closure_with};
 use crate::py_gts_dataset::PyRdfDataset;
 
 // ── The regime enum ─────────────────────────────────────────────────────────────
@@ -195,17 +196,35 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// the premise COUNT, so the caller whose data was bad was the only caller who got no
 /// report at all.
 ///
+/// # The evaluation limits
+///
+/// `max_stored_facts` bounds the facts each evaluation store may hold — one store per
+/// graph of the dataset, holding its triples, the regime's axioms and every conclusion —
+/// and `max_join_steps` the candidate solutions the rules may enumerate, for the `RDF`,
+/// `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default: 4194304 facts and
+/// 1048576 join steps. A run past either raises `ValueError` naming the limit, the
+/// numbers and the keyword argument that raises it; a run inside them returns exactly the
+/// closure larger limits would, and the report's `contract-hash` names the calculus under
+/// the limits in force.
+///
 /// Raises `ValueError` for an unknown regime spelling (naming the accepted set), for a
-/// `program` that is wrong for the regime, for an inconsistent knowledge base, and for an
-/// exhausted evaluation ceiling.
+/// `program` that is wrong for the regime, for an inconsistent knowledge base, and for a
+/// passed evaluation limit.
 #[pyfunction]
-#[pyo3(signature = (dataset, regime, program))]
+#[pyo3(signature = (dataset, regime, program, *, max_stored_facts=None, max_join_steps=None))]
 fn materialize(
     py: Python<'_>,
     dataset: &PyRdfDataset,
     regime: &Bound<'_, PyAny>,
     program: &str,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(PyRdfDataset, String)> {
+    let limits = MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::Python,
+    };
     // Arguments become plain Rust data (a native regime, an owned `Arc` handle)
     // BEFORE the GIL is released.
     let native = native_regime(regime)?;
@@ -219,8 +238,13 @@ fn materialize(
             // so the dataset path and the text path cannot come to mean different things
             // by the same regime spelling.
             let rules = regime_rule_set(native, name, program)?;
-            let (closure, report) = materialize_closure(data.as_ref(), regime_plan(native, &rules))
-                .map_err(|error| render_entail_error(name, &error))?;
+            let (closure, report) = materialize_closure_with(
+                data.as_ref(),
+                regime_plan(native, &rules),
+                &limits.eval_options(),
+                None,
+            )
+            .map_err(|error| render_entail_error_for(name, &error, limits.host))?;
             Ok::<_, String>((closure, render_reasoning_report(&report)))
         })
         .map_err(PyValueError::new_err)?;
@@ -242,23 +266,33 @@ fn materialize(
 ///
 /// `program` is the regime's own rule document, exactly as on [`materialize`].
 ///
+/// `max_stored_facts` and `max_join_steps` are [`materialize`]'s evaluation limits.
+///
 /// Raises `ValueError` on a malformed document, an unknown regime spelling
 /// (naming the accepted set), or a `program` that is wrong for the regime — and on an
 /// INCONSISTENT knowledge base, whose raise carries the run's full rendered report,
-/// witness triples included, exactly as [`materialize`] documents.
+/// witness triples included, exactly as [`materialize`] documents — and on a passed
+/// evaluation limit, naming the keyword argument that raises it.
 #[pyfunction]
-#[pyo3(signature = (data, regime, program))]
+#[pyo3(signature = (data, regime, program, *, max_stored_facts=None, max_join_steps=None))]
 fn materialize_nt(
     py: Python<'_>,
     data: &str,
     regime: &Bound<'_, PyAny>,
     program: &str,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
+    let limits = MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::PythonText,
+    };
     // Parse + chase + canonical serialization + report rendering run detached
     // (GIL released).
     let closure = py
-        .detach(|| materialize_to_nquads_string(name, data, program))
+        .detach(|| materialize_to_nquads_string_with(name, data, program, &limits))
         .map_err(PyValueError::new_err)?;
     Ok(closure.into_parts())
 }

@@ -83,13 +83,15 @@ use core::fmt;
 use core::fmt::Write as _;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
+use purrdf_datalog::chase::ChaseError;
+use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
 use purrdf_entail::{
     ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
     Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Question,
     Reasoner, ReasoningReport, Regime, RuleSet, Service, ServiceProof, VarKey, Verdict,
     explain_conclusion, extensions, extract_module, extract_module_with_proofs, implemented,
-    justify, materialize, parse_rif_xml, profile, rules,
+    justify, materialize_with, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -332,14 +334,117 @@ pub fn materialize_to_nquads_string(
     document: &str,
     program: &str,
 ) -> Result<RegimeClosure, String> {
+    materialize_to_nquads_string_with(regime, document, program, &MaterializeLimits::default())
+}
+
+/// The host a materialization comes from: it decides how a refusal for a passed
+/// evaluation limit names the knob that raises it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RegimeHost {
+    /// A Rust caller of this boundary: [`MaterializeLimits`]' fields.
+    #[default]
+    Rust,
+    /// The Python `purrdf.entail.materialize` keyword arguments.
+    Python,
+    /// The Python `purrdf.entail.materialize_nt` keyword arguments.
+    PythonText,
+    /// The WebAssembly `entailMaterialize` arguments.
+    Wasm,
+    /// The C ABI `purrdf_entail_materialize_to_nquads` parameters.
+    CAbi,
+    /// The command line's flags.
+    Cli,
+}
+
+impl RegimeHost {
+    /// The host's names for the stored-fact limit and the join-step limit, in that order.
+    #[must_use]
+    pub const fn limit_knobs(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Rust => (
+                "MaterializeLimits::max_stored_facts",
+                "MaterializeLimits::max_join_steps",
+            ),
+            Self::Python => (
+                "materialize(max_stored_facts=...)",
+                "materialize(max_join_steps=...)",
+            ),
+            Self::PythonText => (
+                "materialize_nt(max_stored_facts=...)",
+                "materialize_nt(max_join_steps=...)",
+            ),
+            Self::Wasm => (
+                "entailMaterialize's maxStoredFacts",
+                "entailMaterialize's maxJoinSteps",
+            ),
+            Self::CAbi => (
+                "purrdf_entail_materialize_to_nquads's max_stored_facts",
+                "purrdf_entail_materialize_to_nquads's max_join_steps",
+            ),
+            Self::Cli => ("--max-stored-facts", "--max-join-steps"),
+        }
+    }
+}
+
+/// The evaluation limits one materialization runs under, and the host asking.
+///
+/// `None` keeps the target's default: 4,194,304 stored facts and 1,048,576 join steps
+/// natively, 131,072 and 1,048,576 on `wasm32`
+/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
+/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). They
+/// govern the four rule-table regimes (`rdf`, `rdfs`, `owl-rl`, `d`); see
+/// [`purrdf_entail::materialize_with`]. A run past one fails naming the limit, the numbers
+/// and the knob that raises it in the calling host's own terms ([`Self::host`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MaterializeLimits {
+    /// The stored-fact limit, or `None` for the target's default.
+    pub max_stored_facts: Option<u64>,
+    /// The join-step limit, or `None` for the target's default.
+    pub max_join_steps: Option<u64>,
+    /// The host calling, whose names for the two limits' knobs a refusal gives.
+    pub host: RegimeHost,
+}
+
+impl MaterializeLimits {
+    /// The evaluation options these limits state.
+    #[must_use]
+    pub fn eval_options(&self) -> EvalOptions {
+        let mut options = EvalOptions::default();
+        if let Some(facts) = self.max_stored_facts {
+            options = options.with_max_stored_facts(facts);
+        }
+        if let Some(steps) = self.max_join_steps {
+            options = options.with_max_join_steps(steps);
+        }
+        options
+    }
+}
+
+/// [`materialize_to_nquads_string`] under the caller's evaluation limits.
+///
+/// # Errors
+///
+/// Every error [`materialize_to_nquads_string`] returns; a passed limit names the knob
+/// [`MaterializeLimits::host`] spells.
+pub fn materialize_to_nquads_string_with(
+    regime: &str,
+    document: &str,
+    program: &str,
+    limits: &MaterializeLimits,
+) -> Result<RegimeClosure, String> {
     let parsed = parse_regime(regime)?;
     let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| diagnostic.to_string())?;
     // Bound here, outside the call below, because the plan BORROWS it: a rule set
     // built inline would not outlive the value that names it.
     let rules = regime_rule_set(parsed, regime, program)?;
-    let (closure, report) = materialize(&dataset, regime_plan(parsed, &rules))
-        .map_err(|error| render_entail_error(regime, &error))?;
+    let (closure, report) = materialize_with(
+        &dataset,
+        regime_plan(parsed, &rules),
+        &limits.eval_options(),
+        None,
+    )
+    .map_err(|error| render_entail_error_for(regime, &error, limits.host))?;
     // The materialized closure is wholly caller-supplied (the document parsed above),
     // so it goes through the typed, non-panicking canonicalization entry point rather
     // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
@@ -669,7 +774,32 @@ pub fn render_reasoning_report(report: &ReasoningReport) -> String {
 /// was never assembled.
 #[must_use]
 pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
-    let head = format!("entailment regime \"{regime}\": {error}");
+    render_entail_error_for(regime, error, RegimeHost::Rust)
+}
+
+/// [`render_entail_error`], naming the knob that raises a passed stored-fact or join-step
+/// limit in `host`'s own terms ([`RegimeHost::limit_knobs`]): the refusal reads
+/// `evaluation exceeded the stored-fact limit: N facts observed, M permitted (…); raise it
+/// with <knob>`.
+#[must_use]
+pub fn render_entail_error_for(regime: &str, error: &EntailError, host: RegimeHost) -> String {
+    let capacity = match error {
+        EntailError::Evaluate(EvalError::BudgetExhausted { resource, report })
+        | EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) => {
+            let (stored_facts, join_steps) = host.limit_knobs();
+            let knob = if *resource == BudgetResource::StoredFacts {
+                stored_facts
+            } else {
+                join_steps
+            };
+            render_capacity_refusal(*resource, *report, knob)
+        }
+        _ => None,
+    };
+    let head = capacity.map_or_else(
+        || format!("entailment regime \"{regime}\": {error}"),
+        |refusal| format!("entailment regime \"{regime}\": {refusal}"),
+    );
     match error {
         EntailError::Inconsistent(run) => {
             format!("{head}\n{}", render_reasoning_report(run.report()))
@@ -874,8 +1004,22 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
     parse_regime_vectors(REGIME_GOLDEN_VECTORS)
 }
 
+/// The evaluation limits every case of [`REGIME_GOLDEN_VECTORS`] is written and checked
+/// under: the NATIVE defaults, stated.
+///
+/// A report's `contract-hash` line folds the effective limits, and the defaults differ by
+/// target, so an artifact shared by every host has to name one set. A native host calling
+/// with no limits runs exactly these; a `wasm32` host states them, and its report is then
+/// byte-identical to the native one — which is the claim the artifact makes.
+pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
+    max_stored_facts: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_STORED_FACTS),
+    max_join_steps: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS),
+    host: RegimeHost::Rust,
+};
+
 /// Run every case of [`REGIME_GOLDEN_VECTORS`] through
-/// [`materialize_to_nquads_string`] and compare both outputs byte for byte.
+/// [`materialize_to_nquads_string_with`] under [`REGIME_GOLDEN_VECTOR_LIMITS`] and compare
+/// both outputs byte for byte.
 ///
 /// This is the *one* assertion each host makes: the Rust test here, the C-ABI
 /// crate's test, and the WASM crate's test all call this, so a divergence between
@@ -896,8 +1040,13 @@ pub fn check_regime_golden_vectors() -> Result<(), String> {
         return Err("the regime golden vector artifact holds no cases".to_owned());
     }
     for case in &cases {
-        let produced = materialize_to_nquads_string(case.regime(), case.input(), case.program())
-            .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
+        let produced = materialize_to_nquads_string_with(
+            case.regime(),
+            case.input(),
+            case.program(),
+            &REGIME_GOLDEN_VECTOR_LIMITS,
+        )
+        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
         if produced.nquads() != case.closure() {
             return Err(format!(
                 "case \"{}\": closure mismatch\n--- expected ---\n{}--- produced ---\n{}",
@@ -5187,8 +5336,13 @@ mod tests {
             }
             if line == "@end" {
                 let regime = case_regime.expect("a case names its regime");
-                let closed = materialize_to_nquads_string(regime, &input, &program)
-                    .expect("a golden case runs");
+                let closed = materialize_to_nquads_string_with(
+                    regime,
+                    &input,
+                    &program,
+                    &REGIME_GOLDEN_VECTOR_LIMITS,
+                )
+                .expect("a golden case runs");
                 rendered.push_str("@closure\n");
                 rendered.push_str(closed.nquads());
                 rendered.push_str("@report\n");

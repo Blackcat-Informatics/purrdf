@@ -146,8 +146,10 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
         report_s == NULL) {
         goto done;
     }
-    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, &nquads,
-                                            &rendered,
+    /* NULL limits: this native library's defaults, which are the limits the
+     * artifact is written under. */
+    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
+                                            &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
                 error == NULL ? "(no error)" : purrdf_error_message(error));

@@ -135,6 +135,13 @@
  * expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
  * `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
  *
+ * The same unshipped bump carries the caller's evaluation limits. `purrdf_shacl_apply_rules`
+ * gained `max_stored_facts` / `max_join_steps` between `max_generated_terms` and
+ * `import_iris`, and `purrdf_entail_materialize_to_nquads` gained the same two between
+ * `program` and `out_nquads` — each a nullable `const uint64_t *`, NULL for the target's
+ * default. Both are incompatible (a `0.7.0` host passes its import table or its
+ * out-pointer into the new slots), and both ride this bump for the reason the others do.
+ *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
  * and never sees an enumerator's value move. The discriminants are therefore pinned
@@ -1176,16 +1183,26 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * would be making exactly the overclaim the report exists to prevent — a
  * complete rule table is not a complete closure.
  *
+ * `max_stored_facts` bounds the facts each evaluation store may hold and
+ * `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
+ * `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
+ * 1048576 join steps natively — or point at an exact limit. A run past either fails
+ * the call naming the limit, the numbers and the parameter that raises it; a run inside
+ * them returns exactly the closure larger limits would, and the report's
+ * `contract-hash` names the calculus under the limits in force.
+ *
  * On any error neither out-param is written, so there is nothing to free.
  *
  * # Safety
  * `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
- * `out_nquads` and `out_report` must be writable pointers; `out_error` must be
- * null or writable.
+ * `max_stored_facts` and `max_join_steps` must each be null or readable; `out_nquads` and
+ * `out_report` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             const char *regime,
                                             const char *program,
+                                            const uint64_t *max_stored_facts,
+                                            const uint64_t *max_join_steps,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
                                             PurrdfError **out_error);
@@ -2790,6 +2807,13 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * naming the limit, the numbers, the rules that inferred a new term last, and the
  * parameter that raises it.
  *
+ * `max_stored_facts` bounds the facts the evaluation store may hold — the data graph, a
+ * rule set's data and every inferred triple — and `max_join_steps` the candidate
+ * solutions the rule bodies may enumerate. Each may be NULL for the target's default —
+ * 4194304 facts and 1048576 join steps natively — or point at an exact limit. A run
+ * past either fails the call naming the limit, the numbers and the parameter that raises
+ * it.
+ *
  * `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
  * proof of every inferred triple (`derived S P O .`, then `  rule R` and one
  * `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
@@ -2805,7 +2829,9 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * # Safety
  * `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
  * `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
- * `max_term_generating_rounds` and `max_generated_terms` must each be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+ * `max_join_steps` must each be null or readable; when `import_count` is non-zero,
+ * `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_inferred`
  * must be writable; `out_proof` and `out_error` must each be null or writable.
  */
@@ -2816,6 +2842,8 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *srl_base_iri,
                                  const uint64_t *max_term_generating_rounds,
                                  const uint64_t *max_generated_terms,
+                                 const uint64_t *max_stored_facts,
+                                 const uint64_t *max_join_steps,
                                  const char *const *import_iris,
                                  const char *const *import_documents,
                                  size_t import_count,
