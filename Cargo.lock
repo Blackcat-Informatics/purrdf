@@ -925,7 +925,6 @@ dependencies = [
  "regex",
  "regex-syntax",
  "sha2",
- "smallvec",
 ]
 
 [[package]]
@@ -940,7 +939,6 @@ dependencies = [
  "purrdf-hash",
  "purrdf-testkit",
  "rayon",
- "smallvec",
 ]
 
 [[package]]
@@ -988,7 +986,6 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-testkit",
  "purrdf-xsd",
- "smallvec",
 ]
 
 [[package]]
@@ -1166,7 +1163,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "smallvec",
  "syn",
 ]
 
@@ -1253,7 +1249,6 @@ dependencies = [
  "rayon",
  "regex",
  "sha2",
- "smallvec",
 ]
 
 [[package]]
@@ -1604,12 +1599,6 @@ name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
-
-[[package]]
-name = "smallvec"
-version = "1.15.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spki"

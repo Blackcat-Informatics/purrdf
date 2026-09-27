@@ -33,7 +33,7 @@ use std::cmp::Ordering;
 use ::purrdf::blank_label::ESCAPE_MARKER;
 use ::purrdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";

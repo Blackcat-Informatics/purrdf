@@ -49,7 +49,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -384,6 +384,19 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	python3 scripts/check-python-binding-tests.py
 	cd bindings/python && uv run maturin develop && uv run pytest tests
+
+miri: ## Run the SmallVec unsafe-storage tests under Miri: Stacked and Tree Borrows, strict provenance, and 32-bit i686 (own lane, NOT part of `check`).
+	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
+	@# storage and moves them with raw pointer copies; its tests pin ownership
+	@# (no double drop, no leak, no uninitialised read) but only an interpreter
+	@# can see an aliasing violation or an out-of-bounds offset that happens to
+	@# work natively. Each run is a distinct model: the default Stacked Borrows,
+	@# Tree Borrows, strict provenance (no integer-to-pointer casts), and a
+	@# 32-bit target, where `usize` arithmetic and layout differ.
+	cargo miri test -p purrdf-core small
+	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core small
+	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
 
 conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
 	python3 scripts/conformance-matrix.py

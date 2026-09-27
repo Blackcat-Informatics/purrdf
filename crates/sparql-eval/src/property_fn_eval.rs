@@ -519,7 +519,7 @@ fn eval_call_over<D: DatasetView + Sync>(
         // own usual width (inline capacity 4, matching `crate::solution::Solution`) —
         // so the common case pays no heap allocation at all, and only an arity wider
         // than that spills, exactly as the plain `Vec` it replaces always did.
-        let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+        let refs: purrdf_core::SmallVec<[Option<&TermValue>; 4]> =
             args.iter().map(Option::as_ref).collect();
         let (subject, object) = refs.split_at(plan.subject_len);
         let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
@@ -643,7 +643,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 }
                 RowAdmission::Admitted => {}
             }
-            let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
+            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..left_len].copy_from_slice(mu);
             for &(slot, column) in &plan.bound_cols {
                 let value = values[slot]
@@ -2547,7 +2547,7 @@ pub(crate) fn open_call_cursor(
     // with nothing before it in its group.
     let free: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
     let args: Vec<Option<TermValue>> = plan.args.iter().map(|arg| arg_value(arg, &free)).collect();
-    let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+    let refs: purrdf_core::SmallVec<[Option<&TermValue>; 4]> =
         args.iter().map(Option::as_ref).collect();
     let (subject, object) = refs.split_at(plan.subject_len);
     let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);

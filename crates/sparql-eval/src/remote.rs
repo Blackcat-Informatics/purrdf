@@ -953,7 +953,7 @@ fn silent_or_err<I: ViewTermId>(
 fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
     SolutionSeq {
         schema: VarSchema::empty_shared(),
-        rows: vec![smallvec::smallvec![]],
+        rows: vec![purrdf_core::smallvec![]],
     }
 }
 

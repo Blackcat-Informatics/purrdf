@@ -151,7 +151,7 @@ impl GovernedRowIngest {
         ctx: &mut EvalCtx<'_, D>,
         cells: impl IntoIterator<Item = Option<TermValue>>,
     ) -> Solution<D::Id> {
-        let mut row: Solution<D::Id> = smallvec::smallvec![None; self.width];
+        let mut row: Solution<D::Id> = purrdf_core::smallvec![None; self.width];
         for (i, cell) in cells.into_iter().enumerate().take(self.width) {
             if let Some(value) = cell {
                 // THE producer seam — a third-party `ServiceResolver`'s rows

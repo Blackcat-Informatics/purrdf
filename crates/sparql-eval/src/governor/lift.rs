@@ -634,7 +634,7 @@ mod tests {
     fn one_row() -> SolutionSeq<TermId> {
         SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("s")])),
-            rows: vec![smallvec::smallvec![Some(
+            rows: vec![purrdf_core::smallvec![Some(
                 crate::scratch::SolutionTerm::Existing(TermId::from_index(0))
             )]],
         }

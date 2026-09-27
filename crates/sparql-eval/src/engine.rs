@@ -3117,7 +3117,7 @@ impl Default for QueryOptions<'_> {
 /// request and a SHACL validation sends one request per focus node.
 struct RequestParameters<'a> {
     /// The pre-bound variable names, sorted and without repeats.
-    names: smallvec::SmallVec<[&'a str; 8]>,
+    names: purrdf_core::SmallVec<[&'a str; 8]>,
     /// The rewrite the names are admitted under; [`ShaclPrebinding::None`] when there
     /// are none, so a request without substitutions shares the plain plan.
     reach: ShaclPrebinding,
@@ -3127,7 +3127,7 @@ impl<'a> RequestParameters<'a> {
     /// The parameters of a request whose substitutions are `substitutions`, rewritten
     /// under `lane`.
     fn of(substitutions: Prebindings<'a>, lane: ShaclPrebinding) -> Self {
-        let mut names: smallvec::SmallVec<[&'a str; 8]> = (0..substitutions.len())
+        let mut names: purrdf_core::SmallVec<[&'a str; 8]> = (0..substitutions.len())
             .map(|index| substitutions.name(index))
             .collect();
         names.sort_unstable();
@@ -3144,7 +3144,7 @@ impl<'a> RequestParameters<'a> {
     /// [`NativeSparqlEngine::prepare_query_with_options`] was admitted with.
     fn none() -> Self {
         Self {
-            names: smallvec::SmallVec::new(),
+            names: purrdf_core::SmallVec::new(),
             reach: ShaclPrebinding::None,
         }
     }

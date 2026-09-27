@@ -199,7 +199,7 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         let _ = ctx.observe_cells(1, working.len());
         return Ok(empty_over_real_vars(&working));
     }
-    let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
+    let mut rows: Vec<Solution<D::Id>> = vec![purrdf_core::smallvec![None; working.len()]];
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is

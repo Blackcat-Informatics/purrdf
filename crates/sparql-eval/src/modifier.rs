@@ -157,7 +157,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
             break;
         }
-        let mut row = smallvec::smallvec![None; width];
+        let mut row = purrdf_core::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
                 // The PLAIN door, deliberately: an unbound cell here is not the
@@ -1242,7 +1242,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             &groups,
             || ctx.fork_for_worker(),
             |child, acc, (_, key, idxs)| {
-                let mut row = smallvec::smallvec![None; out_width];
+                let mut row = purrdf_core::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
                 row[..var_count].copy_from_slice(key);
@@ -1262,7 +1262,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     } else {
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
-            let mut row = smallvec::smallvec![None; out_width];
+            let mut row = purrdf_core::smallvec![None; out_width];
             // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
             row[..var_count].copy_from_slice(key);
             for (j, (_, agg)) in aggregates.iter().enumerate() {

@@ -78,10 +78,6 @@ purrdf-iri = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-rdf's chunk-parallel text parse).
 rayon = { workspace = true }
-# Inline small-vector primitive for hot, short-lived id rows / solution columns
-# (default features only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version
-# is pinned once in the root `[workspace.dependencies]`.
-smallvec = { workspace = true }
 # Store-once computed-term interning: the value vector owns each term exactly once
 # and the raw table stores only dense ScratchIds.
 hashbrown = { workspace = true }

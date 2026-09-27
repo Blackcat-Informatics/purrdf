@@ -75,3 +75,15 @@ sha3 = [
     'var\("sha3"\)',
     'BIND\(sha3-512\(',
 ]
+smallvec = [
+    # `purrdf_core::smallvec!`, the in-house small-vector constructor macro:
+    # its definition, its documentation, and every call site (qualified or
+    # imported) in the crates that build `SmallVec` rows.
+    'macro_rules! smallvec \{',
+    '`smallvec!\[',
+    '\bsmallvec!\[',
+    # Imports and re-exports of that macro alongside other purrdf_core items.
+    '^use purrdf_core::\{SmallVec, smallvec\};$',
+    '^use ::purrdf::\{[^}]*\bsmallvec\};$',
+    '^\s+research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec, try_canonicalize,$',
+]

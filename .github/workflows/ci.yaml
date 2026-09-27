@@ -754,6 +754,27 @@ jobs:
       - name: LinkML emitter schema oracle
         run: make linkml-oracle
 
+  # The small vector's inline storage is uninitialised memory moved with raw
+  # pointer copies, so its tests run under Miri on every push: Stacked and Tree
+  # Borrows, strict provenance, and a 32-bit target (`make miri`).
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          components: miri, rust-src
+
+      - name: Miri (SmallVec unsafe storage)
+        run: make miri
+
   # The single conformance matrix: runs the native Rust W3C
   # harnesses (RDFC-1.0, IRI, syntax codecs, SPARQL-eval subset, SHACL, shexTest)
   # AND the Python rdflib drop-in gate together, printing ONE scoreboard with

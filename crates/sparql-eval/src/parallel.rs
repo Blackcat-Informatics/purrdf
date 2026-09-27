@@ -1069,7 +1069,7 @@ where
 /// ONE implementation of the chunking, the per-chunk `init`, the short-circuit and the
 /// chunk-index-ordered reduce.
 ///
-/// The harvests come back in a [`smallvec::SmallVec`] holding one inline, not a `Vec`, and that
+/// The harvests come back in a [`purrdf_core::SmallVec`] holding one inline, not a `Vec`, and that
 /// is a measured choice rather than a stylistic one. Below the parallel threshold
 /// there is exactly one chunk and therefore exactly one harvest, and that is the
 /// common case: a per-focus-node SHACL query evaluates its `FILTER`s over a handful of
@@ -1082,7 +1082,7 @@ pub(crate) fn par_chunk_try_map_init<T, S, R, H>(
     init: impl Fn() -> S + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
     harvest: impl Fn(&mut S) -> H + Sync,
-) -> Result<(Vec<R>, smallvec::SmallVec<[H; 1]>), EvalError>
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
 where
     T: Sync,
     R: Send,
@@ -1095,7 +1095,7 @@ where
             push(&mut state, &mut out, item)?;
         }
         let harvested = harvest(&mut state);
-        return Ok((out, smallvec::smallvec![harvested]));
+        return Ok((out, purrdf_core::smallvec![harvested]));
     }
 
     use rayon::prelude::*;
@@ -1120,7 +1120,7 @@ where
             .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
             .sum(),
     );
-    let mut harvests = smallvec::SmallVec::with_capacity(per_chunk.len());
+    let mut harvests = purrdf_core::SmallVec::with_capacity(per_chunk.len());
     for chunk_result in per_chunk {
         let (rows, harvested) = chunk_result?;
         out.extend(rows);
@@ -2183,7 +2183,7 @@ mod tests {
         let _parallel_guard = force_parallel_for_test(true);
         let _chunk_guard = force_chunk_size_for_test(5);
         let items: Vec<usize> = (0..40).collect();
-        let result: Result<(Vec<Solution>, smallvec::SmallVec<[(); 1]>), EvalError> =
+        let result: Result<(Vec<Solution>, purrdf_core::SmallVec<[(); 1]>), EvalError> =
             par_chunk_try_map_init(
                 &items,
                 || (),
@@ -2260,7 +2260,7 @@ mod tests {
         // `portable_row` must classify this as `Fresh` (sid >= base).
         let fresh_value = lit("hello parallel");
         let fresh_term = child.scratch.intern(&ds, fresh_value.clone());
-        let row: Solution = smallvec::smallvec![None, Some(pre_fork_term), Some(fresh_term)];
+        let row: Solution = purrdf_core::smallvec![None, Some(pre_fork_term), Some(fresh_term)];
 
         let prow = portable_row(&child.scratch, base, &row);
         assert_eq!(prow[0], None);
@@ -2296,8 +2296,8 @@ mod tests {
         let term_a = child_a.scratch.intern(&ds, shared_value.clone());
         let term_b = child_b.scratch.intern(&ds, shared_value);
 
-        let row_a: Solution = smallvec::smallvec![Some(term_a)];
-        let row_b: Solution = smallvec::smallvec![Some(term_b)];
+        let row_a: Solution = purrdf_core::smallvec![Some(term_a)];
+        let row_b: Solution = purrdf_core::smallvec![Some(term_b)];
         let prow_a = portable_row(&child_a.scratch, base, &row_a);
         let prow_b = portable_row(&child_b.scratch, base, &row_b);
 

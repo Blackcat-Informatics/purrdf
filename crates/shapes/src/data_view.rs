@@ -13,7 +13,7 @@ use ::purrdf::{
     BlankScope, DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset,
     RdfDatasetBuilder, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 /// Native term lookup used by SHACL traversal, without an owned RDF row boundary.
 /// Implementations preserve one validation-local `TermId` namespace.

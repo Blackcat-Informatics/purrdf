@@ -498,12 +498,14 @@ fn map_clone_1to1(
             counts_rows: true,
         },
     );
-    let mut original_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
+    let mut original_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+        purrdf_core::SmallVec::new();
     soundness::visit_classified_children(original, &mut |child, _edge| {
         original_children.push(child);
         false
     });
-    let mut normalized_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
+    let mut normalized_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+        purrdf_core::SmallVec::new();
     soundness::visit_classified_children(normalized, &mut |child, _edge| {
         normalized_children.push(child);
         false

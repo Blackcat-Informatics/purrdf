@@ -249,7 +249,7 @@ pub use purrdf_iri::terminals;
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
 pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
-pub use small::{IdVec, SmallVec, smallvec};
+pub use small::{IdVec, SmallVec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
     SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet,

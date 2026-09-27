@@ -747,7 +747,7 @@ where
 /// variant two edits of which only one gets found — the exact failure this module exists
 /// to prevent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ChildEdges(smallvec::SmallVec<[ChildEdge; 4]>);
+pub(crate) struct ChildEdges(purrdf_core::SmallVec<[ChildEdge; 4]>);
 
 impl ChildEdges {
     /// The edge to the child at `ordinal`.
@@ -763,7 +763,7 @@ impl ChildEdges {
 
 /// The classified edges of `pattern`'s children, in [`visit_classified_children`] order.
 pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
-    let mut edges = smallvec::SmallVec::new();
+    let mut edges = purrdf_core::SmallVec::new();
     visit_classified_children(pattern, &mut |_child, edge| {
         edges.push(edge);
         false
@@ -793,7 +793,7 @@ where
     let mut stack = vec![(root, SpineContext::ROOT, 0_usize)];
     while let Some((node, context, depth)) = stack.pop() {
         visit(node, context, depth);
-        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
+        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
             children.push((child, edge));
             false
@@ -1107,7 +1107,7 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
         if let Some(ceiling) = ceiling.filter(|ceiling| *ceiling != u64::MAX) {
             out.insert(std::ptr::from_ref(node) as usize, ceiling);
         }
-        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
+        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
             let ordinal = children.len();
             children.push((child, edge, ordinal));

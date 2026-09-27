@@ -75,7 +75,7 @@ use rayon::prelude::*;
 use crate::clause::{ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::id::{RowId, TermId};
-use smallvec::{SmallVec, smallvec};
+use purrdf_core::{SmallVec, smallvec};
 
 use crate::plan::{
     ATOM_ARITY, AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup,

@@ -67,10 +67,6 @@ csv = { workspace = true }
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
-# Inline small-vector primitive shared workspace-wide (`crate::small`): the
-# generic `IdVec` and re-exported `SmallVec`/`smallvec!`. Default features only
-# (no `union`/`serde`) — wasm-clean, `unsafe`-free.
-smallvec = { workspace = true }
 # The execution engine `xsd_regex::compile` translates XSD/XPath regex source
 # into: a DFA-based, backtracking-free, pure-Rust, wasm32-clean engine already
 # proven elsewhere in this workspace (`purrdf-rdf`, `purrdf-shapes`,
@@ -217,4 +213,12 @@ harness = false
 # and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
 # are reported side by side. `make bench` lane only -- excluded from `make check`.
 name = "distance"
+harness = false
+
+[[bench]]
+# `purrdf_core::SmallVec` on the workspace's row shapes: `IdVec` push /
+# from_slice / collect / clone / into_iter inline and spilled, and dense
+# `Option<TermId>` rows built by `smallvec![None; w]`. Report-only -- no
+# timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "small"
 harness = false

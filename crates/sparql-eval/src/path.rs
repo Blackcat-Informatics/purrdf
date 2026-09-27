@@ -291,7 +291,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
             return false;
         }
-        let mut row = smallvec::smallvec![None; width];
+        let mut row = purrdf_core::smallvec![None; width];
         if let (Some(c), Some(id)) = (s_col, s_id) {
             row[c] = Some(id);
         }

@@ -41,11 +41,6 @@ purrdf-iri = { workspace = true }
 # functions return, and `XSD_NS`/`XsdDatatype` for the datatype IRIs they carry.
 # Zero-dependency leaf, so this edge adds nothing to the wasm surface.
 purrdf-xsd = { workspace = true }
-# Inline coordinate and limb storage. DEFAULT FEATURES ONLY (`union` and
-# `serde` stay off): a `Coord` is four exact rationals and a ring is a
-# variable-length vector of them, so the inline capacity is what keeps a small
-# geometry off the allocator on the per-row predicate path.
-smallvec = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
