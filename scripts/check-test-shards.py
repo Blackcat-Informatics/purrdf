@@ -47,20 +47,36 @@ _spec.loader.exec_module(test_shards)
 # What the `test` job and its planning job must contain, each with the reason a
 # job without it would stop running the whole workspace.
 TEST_JOB_WIRING = (
-    ("needs: test-plan", "the matrix must come from the planning job, not a hand-copied list"),
-    ("fromJSON(needs.test-plan.outputs.shards)", "the matrix must be the list the shard gate proved"),
+    (
+        "needs: test-plan",
+        "the matrix must come from the planning job, not a hand-copied list",
+    ),
+    (
+        "fromJSON(needs.test-plan.outputs.shards)",
+        "the matrix must be the list the shard gate proved",
+    ),
     ("fail-fast: false", "one red leg must not cancel the others before they report"),
-    ("scripts/test-shards.py --packages", "each leg must test exactly its shard's packages"),
+    (
+        "scripts/test-shards.py --packages",
+        "each leg must test exactly its shard's packages",
+    ),
     ("cargo test --locked", "each leg must run the ordinary locked `cargo test`"),
 )
 PLAN_JOB_WIRING = (
-    ("scripts/test-shards.py --matrix", "the planning job must emit the checked shard list"),
+    (
+        "scripts/test-shards.py --matrix",
+        "the planning job must emit the checked shard list",
+    ),
 )
 
 
 def job_block(workflow: str, job: str) -> str | None:
     """The text of one top-level job in a workflow, or None if it is absent."""
-    match = re.search(rf"^  {re.escape(job)}:\s*$(.*?)(?=^  \S|\Z)", workflow, re.MULTILINE | re.DOTALL)
+    match = re.search(
+        rf"^  {re.escape(job)}:\s*$(.*?)(?=^  \S|\Z)",
+        workflow,
+        re.MULTILINE | re.DOTALL,
+    )
     return match.group(1) if match else None
 
 
@@ -72,7 +88,9 @@ def wiring_problems(workflow: str) -> list[str]:
             problems.append(f"ci.yaml has no `{job}:` job")
             continue
         # Comments do not run: a commented-out step must not satisfy the wiring.
-        live = "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
+        live = "\n".join(
+            line for line in block.splitlines() if not line.lstrip().startswith("#")
+        )
         for needle, reason in required:
             if needle not in live:
                 problems.append(f"ci.yaml `{job}` job lacks `{needle}`: {reason}")
@@ -109,7 +127,9 @@ def check() -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     count = sum(len(packages) for packages in test_shards.SHARDS.values())
-    print(f"OK: {len(test_shards.SHARDS)} test shards partition all {count} workspace members")
+    print(
+        f"OK: {len(test_shards.SHARDS)} test shards partition all {count} workspace members"
+    )
     return 0
 
 
@@ -126,7 +146,9 @@ def self_test() -> int:
         if not test_shards.coverage_problems(members, shards):
             failures.append(f"accepted {case}")
     # The valid neighbour: an exact partition, with a singleton shard like `capi`.
-    if problems := test_shards.coverage_problems(members, {"one": ("a", "b"), "two": ("c",)}):
+    if problems := test_shards.coverage_problems(
+        members, {"one": ("a", "b"), "two": ("c",)}
+    ):
         failures.append(f"refused an exact partition: {problems}")
 
     wired = (
@@ -170,7 +192,9 @@ def self_test() -> int:
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
-    print(f"OK: check-test-shards refuses {len(refused) + len(unwired)} broken splits and accepts two valid ones")
+    print(
+        f"OK: check-test-shards refuses {len(refused) + len(unwired)} broken splits and accepts two valid ones"
+    )
     return 0
 
 
@@ -178,7 +202,9 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Refuse a CI test split that lets any workspace crate escape testing."
     )
-    parser.add_argument("--self-test", action="store_true", help="prove every refusal fires")
+    parser.add_argument(
+        "--self-test", action="store_true", help="prove every refusal fires"
+    )
     args = parser.parse_args(argv)
     return self_test() if args.self_test else check()
 

@@ -46,8 +46,9 @@ import argparse
 import glob
 import json
 import sys
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -105,22 +106,30 @@ def manifest_members(root: Path = REPO_ROOT) -> set[str]:
     This is what the CI planning step can afford (no Rust toolchain installed);
     `check-test-shards.py` proves it agrees with `cargo metadata`.
     """
-    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]
+    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))[
+        "workspace"
+    ]
     excluded = {(root / path).resolve() for path in workspace.get("exclude", [])}
     names = set()
     for pattern in workspace["members"]:
         matches = sorted(glob.glob(str(root / pattern)))
         if not matches:
-            raise SystemExit(f"FAIL: workspace member pattern `{pattern}` matches nothing")
+            raise SystemExit(
+                f"FAIL: workspace member pattern `{pattern}` matches nothing"
+            )
         for directory in matches:
             if Path(directory).resolve() in excluded:
                 continue
-            manifest = tomllib.loads((Path(directory) / "Cargo.toml").read_text(encoding="utf-8"))
+            manifest = tomllib.loads(
+                (Path(directory) / "Cargo.toml").read_text(encoding="utf-8")
+            )
             names.add(manifest["package"]["name"])
     return names
 
 
-def coverage_problems(members: set[str], shards: dict[str, tuple[str, ...]]) -> list[str]:
+def coverage_problems(
+    members: set[str], shards: dict[str, tuple[str, ...]]
+) -> list[str]:
     """Every way `shards` fails to be an exact partition of `members`."""
     problems = []
     owner: dict[str, str] = {}
@@ -135,7 +144,9 @@ def coverage_problems(members: set[str], shards: dict[str, tuple[str, ...]]) -> 
                 )
             owner.setdefault(package, shard)
             if package not in members:
-                problems.append(f"shard `{shard}` names `{package}`, which is not a workspace member")
+                problems.append(
+                    f"shard `{shard}` names `{package}`, which is not a workspace member"
+                )
     for package in sorted(members - owner.keys()):
         problems.append(
             f"workspace member `{package}` is in no shard, so CI would never run its tests; "
@@ -153,13 +164,18 @@ def main(argv: list[str]) -> int:
         "--matrix", action="store_true", help="print the shard names as a JSON list"
     )
     action.add_argument(
-        "--packages", metavar="SHARD", help="print `-p <package>` arguments for one shard"
+        "--packages",
+        metavar="SHARD",
+        help="print `-p <package>` arguments for one shard",
     )
     args = parser.parse_args(argv)
 
     problems = coverage_problems(manifest_members(), SHARDS)
     if problems:
-        print("FAIL: the test shards are not a partition of the workspace:", file=sys.stderr)
+        print(
+            "FAIL: the test shards are not a partition of the workspace:",
+            file=sys.stderr,
+        )
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
@@ -168,7 +184,10 @@ def main(argv: list[str]) -> int:
         print(json.dumps(list(SHARDS)))
         return 0
     if args.packages not in SHARDS:
-        print(f"FAIL: no shard named `{args.packages}` (have: {', '.join(SHARDS)})", file=sys.stderr)
+        print(
+            f"FAIL: no shard named `{args.packages}` (have: {', '.join(SHARDS)})",
+            file=sys.stderr,
+        )
         return 1
     print(" ".join(f"-p {package}" for package in SHARDS[args.packages]))
     return 0
