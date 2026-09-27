@@ -13,9 +13,9 @@
 //! field then `/`, followed by the first error if any: `E:utf8:<record>:<field>:
 //! <valid bytes>` or `E:len:<record>:<expected>:<found>` (`<record>` counts
 //! from 0, a header row included). A writer answer is the bytes of one written
-//! record. The eleven `digest` records hash the answers over 200,000 further
-//! generated inputs per dialect; the generator is not in the file, so those
-//! are covered only by the file's body hash and are not replayed.
+//! record. The eleven historical `digest` records hash answers over 200,000
+//! further generated inputs per dialect. Their generator was not preserved;
+//! these rows are provenance only and are not counted as replayed evidence.
 //!
 //! # PROVENANCE-csv: disagreement classes
 //!
@@ -70,7 +70,7 @@ use std::collections::BTreeMap;
 use purrdf_core::csv::{
     CsvError, CsvErrorKind, Dialect, LineTerminators, QuoteStyle, Reader, StringRecord, Writer,
 };
-use purrdf_testkit::vectors::{VectorFile, decode_bytes, encode_bytes};
+use purrdf_testkit::vectors::{VectorFile, decode_bytes, encode_bytes, sha256_hex};
 
 const VECTORS: &str = include_str!("csv_differential_vectors.txt");
 
@@ -79,6 +79,56 @@ const VECTORS: &str = include_str!("csv_differential_vectors.txt");
 const NO_TERMINATORS: &[&str] = &[];
 /// The recorded non-CSVW readers' terminators: CR as well as CRLF and LF.
 const WITH_LONE_CR: &[&str] = &["\r\n", "\n", "\r"];
+
+/// Every contributing input is present in the tracked vector file. This
+/// catches an unrelated answer change even when a disagreement class remains
+/// present and its count is unchanged.
+const REPLAYED_ANSWER_DIGESTS: &[(&str, &str)] = &[
+    (
+        "read-csvw-comma",
+        "0b99ca72b4e8625f81f295ac68cf1fa1f0022cdd13eb9fdd372b85eedeebcf1f",
+    ),
+    (
+        "read-csvw-escape",
+        "718ecbf82d2f726eeceb8b7a0a1a7c63f61cb905fec263a6a053241e436ff06c",
+    ),
+    (
+        "read-csvw-semicolon",
+        "9f1d336c920432a22c3d14fd31b41f28ef109ee460069e26b189e44f9b75f873",
+    ),
+    (
+        "read-csvw-tab",
+        "0032e81929fdd82398b2c41b7f1048429db333692bb84be3dbb3ce71763c2659",
+    ),
+    (
+        "read-csvw-unquoted",
+        "cefe326480fe045e65db167417c7ab33867553ac975a9090674149f792957bbe",
+    ),
+    (
+        "read-lpg-csv",
+        "2aacc6d9dfb258610e15a0361eec62d167fdef5094d457670fff8c37ab253723",
+    ),
+    (
+        "read-rfc4180",
+        "1baab4c5853c210bfc62806beba7de52eb58fcb5d004ee39319fc3fedde0fb7e",
+    ),
+    (
+        "read-sssom-tsv",
+        "bf5f716d5ea51a79379d224b01fb605ded8c1ede93214e1009d6073273508649",
+    ),
+    (
+        "write-always-lf",
+        "ddd1cb22c681765d3068084a212923971a9dfef17c87cb2b9e138ffc4b029b4e",
+    ),
+    (
+        "write-necessary-crlf",
+        "4d899528fb2f13e976a88c8df17ba97326d46484bc34ff0735a722ccfc9e976d",
+    ),
+    (
+        "write-necessary-lf",
+        "469cc9aa594ae08546c1007743568fe1a4bae207b5006ae75b3e75267aa4857b",
+    ),
+];
 
 /// One reader answer, in the file's encoding.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -576,9 +626,12 @@ fn every_frozen_vector_agrees_or_falls_in_a_documented_class() {
     let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut agreed = 0_usize;
     let mut unexplained = Vec::new();
+    let mut replayed_answers: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut historical_digests = 0;
     for record in file.records() {
         let Some((case, index)) = record.fields[0].split_once('@') else {
             assert_eq!(record.fields[0], "digest");
+            historical_digests += 1;
             continue;
         };
         let index: usize = index.parse().expect("input index");
@@ -587,11 +640,13 @@ fn every_frozen_vector_agrees_or_falls_in_a_documented_class() {
         if case.starts_with("write-") {
             let replayed = replay_writer(case, index, &input, frozen);
             assert_eq!(replayed, frozen, "{case}@{index}: the writer disagrees");
+            append_replayed_answer(&mut replayed_answers, case, &replayed);
             agreed += 1;
             continue;
         }
         let dialect = reader_dialect(case).expect("a known reader case");
         let new = read(dialect, &input);
+        append_replayed_answer(&mut replayed_answers, case, &new.encode());
         if new.encode() == frozen {
             agreed += 1;
             continue;
@@ -634,6 +689,19 @@ fn every_frozen_vector_agrees_or_falls_in_a_documented_class() {
         unexplained.len(),
         unexplained.join("\n")
     );
+    assert_eq!(
+        historical_digests, 11,
+        "historical digests are provenance only"
+    );
+    let answer_digests: Vec<_> = replayed_answers
+        .iter()
+        .map(|(case, answers)| (case.as_str(), sha256_hex(answers)))
+        .collect();
+    let frozen_answer_digests: Vec<_> = REPLAYED_ANSWER_DIGESTS
+        .iter()
+        .map(|&(case, digest)| (case, digest.to_owned()))
+        .collect();
+    assert_eq!(answer_digests, frozen_answer_digests);
     let frozen: BTreeMap<(String, String), usize> = FROZEN_CLASS_COUNTS
         .iter()
         .map(|&(case, classes, count)| ((case.to_owned(), classes.to_owned()), count))
@@ -649,4 +717,93 @@ fn every_frozen_vector_agrees_or_falls_in_a_documented_class() {
         );
     }
     assert_eq!(agreed + counts.values().sum::<usize>(), 5_500);
+}
+
+fn append_replayed_answer(answers: &mut BTreeMap<String, Vec<u8>>, case: &str, encoded: &str) {
+    let stream = answers.entry(case.to_owned()).or_default();
+    stream.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
+    stream.extend_from_slice(encoded.as_bytes());
+}
+
+/// Generate valid records from fields, then spell their expected answer from
+/// the RFC 4180 / CSVW length-prefixed answer format rather than using the
+/// reader or a read/write round trip as the oracle.
+#[test]
+fn deterministic_spec_records_have_independent_expected_fields() {
+    const CASES: &[&str] = &[
+        "read-sssom-tsv",
+        "read-lpg-csv",
+        "read-rfc4180",
+        "read-csvw-comma",
+        "read-csvw-escape",
+        "read-csvw-unquoted",
+        "read-csvw-semicolon",
+        "read-csvw-tab",
+    ];
+    for &case in CASES {
+        let dialect = reader_dialect(case).expect("declared case");
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for index in 0..512 {
+            // Fixed LCG with all inputs derived here: unlike the 200,000
+            // historical digest inputs, these cases can be replayed.
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let first = format!("a{:x}", state & 0xffff);
+            let second = if index % 3 == 0 { "é" } else { "plain" };
+            let third = if index % 5 == 0 && dialect.quote_char.is_some() {
+                format!("x{}y", char::from(dialect.delimiter))
+            } else {
+                format!("z{}", (state >> 16) & 0xff)
+            };
+            let fields = [first.as_str(), second, third.as_str()];
+            let mut wire = Vec::new();
+            let mut expected = Vec::from(b"R".as_slice());
+            for (field_index, field) in fields.iter().enumerate() {
+                if field_index > 0 {
+                    wire.push(dialect.delimiter);
+                }
+                let needs_quote = field.as_bytes().contains(&dialect.delimiter);
+                if needs_quote {
+                    wire.push(
+                        dialect
+                            .quote_char
+                            .expect("quoted field has a quote character"),
+                    );
+                }
+                wire.extend_from_slice(field.as_bytes());
+                if needs_quote {
+                    wire.push(
+                        dialect
+                            .quote_char
+                            .expect("quoted field has a quote character"),
+                    );
+                }
+                expected.extend_from_slice(field.len().to_string().as_bytes());
+                expected.push(b':');
+                expected.extend_from_slice(field.as_bytes());
+            }
+            expected.push(b'/');
+            if !case.starts_with("read-csvw") {
+                wire.extend_from_slice(if index % 2 == 0 { b"\r\n" } else { b"\n" });
+            }
+            let actual = read(dialect, &wire);
+            assert_eq!(
+                actual.encode(),
+                encode_bytes(&expected),
+                "{case} generated case {index}, wire {}",
+                encode_bytes(&wire)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_classified_lone_cr_does_not_excuse_corruption_in_another_field() {
+    // The recorded csv engine splits at lone CR. RFC 4180 does not, so the
+    // first cell must contain it verbatim, while the second cell must still
+    // be exactly `safe`. A classifier-only check would also accept `evil`.
+    let actual = read(Dialect::RFC4180, b"a\rb,safe\r\n");
+    assert_eq!(actual.encode(), encode_bytes(b"R3:a\rb4:safe/"));
+    assert_ne!(actual.encode(), encode_bytes(b"R3:a\rb4:evil/"));
 }
