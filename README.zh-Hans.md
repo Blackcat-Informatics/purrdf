@@ -319,8 +319,8 @@ ORDER BY ?rank
     数成正比。
   - **路径见证**——一个绑定遍历*推导过程*而不只是其端点的属性函数：
     `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，每跳一行，每条被遍历的
-    陈述都是一个可直接连接回数据集的 RDF 1.2 三元组项；每条简单前缀游走或每对端点
-    一条最短见证，一个由内容派生的路径标识符，以及调用方必须声明的跳数上限。可从 CLI
+    陈述都是一个可直接连接回数据集的 RDF 1.2 三元组项；可返回每一条简单前缀游走，
+    或每对端点只返回一条最短见证，一个由内容派生的路径标识符，以及调用方必须声明的跳数上限。可从 CLI
     （`--path-relation`）与 Python（`path_relations`）访问；参考向量是在一个真实的
     Virtuoso `OPTION(TRANSITIVE …)` 实例上重新执行得到的，而不是从其手册抄录的。
 - **受调控的执行**——每个查询/更新入口点都有一个对应的受调控版本，在调用方设定的
@@ -344,7 +344,8 @@ ORDER BY ?rank
   扩展、按每种表达式所规定的顺序与重数求值的节点表达式、推理规则，以及 SPARQL 1.2 RL
   规则语言；SHACL 规则与 SPARQL 1.2 RL 都运行在 `purrdf-datalog` 上。SHACL-AF 1.0 的
   拼写解析为同一种表示；合并了 W3C SHACL 1.2 词汇表的形状图可以加载，其中每个内置项都
-  绑定到原生实现。在随库固化的 W3C SHACL 1.2 测试套件上 **547/547 通过**，在随库固化的
+  绑定到原生实现。在随库固化的 W3C SHACL 1.2 测试套件上 **538/544 通过**（其余 6 个经批准
+  的结果以非规范形式拼写计算所得的小数，按 XSD 1.1 规范拼写评分，单独计数），在随库固化的
   W3C SHACL 1.0 测试套件上 **129/129 通过**，两者台账均为空。答案是作为冻结 RDF 数据集
   的 W3C 验证报告（`ValidationReport::to_dataset()`），因此任何语法——以及 CLI 的
   `validate --format`——都是该数据集的一次序列化而非文本往返，报告所生成的空节点与
@@ -356,12 +357,17 @@ ORDER BY ?rank
   赋予它们含义。
   形状图的 `owl:imports` 从不被
   获取——由调用方提供 `--import IRI=FILE`，与 `entails` 和 `shex` 接受的形式相同，并从
-  该表出发传递地跟随导入闭包。只有位于形状文档自身 IRI 上、`owl:Ontology` 头上，或以
-  二者之一作为其 `owl:versionIRI` 的节点上的 `owl:imports` 才是导入；在其他任何节点上
-  ——SHACL 的 `sh:prefixes/owl:imports*/sh:declare` 前缀边也在其中——它都是数据。
-  对形状文档自身 IRI 的导入，或对形状图中已有本体
-  （`<X> a owl:Ontology`，或某个 `owl:versionIRI` 指名它）的导入，无需配对；其他任何
-  未解析的导入都会被点名拒绝，而不是针对一个更小的形状图进行验证。
+  该表出发传递地跟随导入闭包。只有位于形状文档自身 IRI 上、`owl:Ontology` 头上、
+  `sh:ShapesGraph`（包括 `sh:RulesGraph` 及其子类）上，或以其中之一作为其
+  `owl:versionIRI` 的节点上的 `owl:imports` 才是导入；在其他任何节点上——仅为
+  `sh:DataGraph` 的节点，以及 SHACL 的 `sh:prefixes/owl:imports*/sh:declare` 前缀边，
+  都在其中——它都是数据，`shapes lint` 会把它列在 `unanchored-imports` 下。蕴涵遵循
+  同一规则。对形状文档自身 IRI 的导入，或对形状图中已有的图
+  （`<X> a owl:Ontology`、`<X> a sh:ShapesGraph`，或某个 `owl:versionIRI` 指名它）的
+  导入，无需配对；其他任何未解析的导入都会被点名拒绝，而不是针对一个更小的形状图进行
+  验证。数据图的 `sh:shapesGraph` 链接（SHACL 1.2 Core §6.4，位于其 `sh:DataGraph`
+  节点或其自身 IRI 上）经由同一张表解析并并入形状图，否则被点名拒绝；预备好的产物会拒绝
+  它未持有的链接。
 - **模式通道：SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML / TypeScript / GraphQL**
   （`purrdf-shapes`，**仅限 Rust**）——`compile_schema` 把一个形状图（可按需感知本体，
   并附覆盖率报告）降为一份 JSON Schema draft 2020-12 文档和一份共享其 `$defs` 的
@@ -414,14 +420,15 @@ ORDER BY ?rank
   `queryEntailmentGoverned`、C `purrdf_query_entailment_governed`）解析查询、在七种
   蕴涵机制之一下求闭包、在闭包上求值，并把答案连同推理报告一起交回；路径关系
   （`--path-relation`）从闭包重新派生，因此游走能看到推导出的边，而 OWL-Direct 通道在
-  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：与
-  生成见证的 chase 并置的重建器会按名称被拒绝（`reasoning-closure-relation-witness`）；
+  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：若
+  chase 生成了存在性见证，同时又提供了从闭包重新派生关系的重建器（rebuilder），这一
+  组合会按名称被拒绝（`reasoning-closure-relation-witness`）；
   闭包阶段只遵守停止信号（取消或墙钟截止时间），而数值上限只作用于查询阶段；
   `ClosureStopped` 结果不携带任何行，也不携带报告。
 - **GTS 图传输**——面向 RDF 1.2 图及其引用的二进制对象的单文件、内容寻址、仅追加
   的容器：BLAKE3 链接的 CBOR 段、确定性的折叠、COSE 签名/加密、纯 Rust 密码学
   （对 wasm 友好）。可从 Rust、CLI（`--from gts`，只读）、Python 与 C 访问；wasm/JavaScript
-  包并不暴露它。仅限 Rust 库的附加功能——可流式的压缩证书、MMR 包含证明、内容链与
+  包并不暴露它。仅限 Rust 库的附加功能——可流式压缩（compaction）的证书、MMR 包含证明、内容链与
   OpenPGP 密钥环验证——在 [本书的 GTS 一章](./docs/book/src/gts.md) 中描述而不在此处：
   Rust 之外没有任何接口能触及它们，且该栈的一部分在本仓库中没有直接测试。规范见
   [`docs/GTS-SPEC.md`](./docs/GTS-SPEC.md)，冻结的跨语言一致性向量见
@@ -629,10 +636,10 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | --- | --- | --- |
 | ShEx 2.1 验证 | shexTest v2.1.0（`vectors/shexTest/`） | **1,105 / 1,105** 尝试，0 xfail |
 | ShEx 模式 / 负例语法 / 结构 | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
-| SHACL | W3C data-shapes（`vectors/shacl/`） | **129 / 129**，0 例入账 |
-| SHACL 1.2 | W3C shacl12-test-suite（`vectors/shacl12/`） | **547 / 547**，0 例入账 |
+| SHACL | W3C data-shapes（`vectors/shacl/`） | **129 / 129** 通过 · 0 例入账 |
+| SHACL 1.2 | W3C shacl12-test-suite（`vectors/shacl12/`） | **538 / 544** 通过 · 6 个非规范形式的预期小数 · 0 例入账；3 个未列入清单的随库固化文件单独评分 |
 | SHACL（第一方冻结语料） | `crates/shapes/corpus/` | **73 / 73** |
-| SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **19 / 19** |
+| SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **20 / 20** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |
 | SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **862** 通过 · 5 例入台账（上游勘误） |
