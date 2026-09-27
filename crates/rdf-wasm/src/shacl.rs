@@ -2451,7 +2451,10 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         .expect("N-Quads is UTF-8");
         let results = |sarif: &str| -> usize {
             let log: serde_json::Value = serde_json::from_str(sarif).expect("json");
-            log["runs"][0]["results"].as_array().map_or(0, Vec::len)
+            log["runs"][0]["results"]
+                .as_array()
+                .expect("a completed run always carries results")
+                .len()
         };
         for (graph, expected) in [(Some(base.as_str()), 1usize), (None, 0)] {
             let sarif = validate_to_sarif_impl(&shapes, Some(&base), &data, None, &[], &[], graph)

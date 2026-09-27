@@ -42,10 +42,14 @@ parsed.free();
 const FOCUS =
   "http://datashapes.org/sh/tests/sparql/pre-binding/shapesGraph-001.test#InvalidResource";
 
-/** `[conforms, results]` of a SARIF log; an empty `results` array is omitted. */
+/**
+ * `[conforms, results]` of a SARIF log. A completed run always carries `results` — an
+ * empty array when nothing was found (SARIF 2.1.0 section 3.14.23).
+ */
 function verdict(sarif) {
   const run = JSON.parse(sarif).runs[0];
-  return [run.properties.shaclConforms, run.results ?? []];
+  assert.ok(Array.isArray(run.results), "a completed SARIF run always carries results");
+  return [run.properties.shaclConforms, run.results];
 }
 
 test("wasm_shacl_shapes_graph: shapesGraph-001 through shaclValidateToSarif", () => {

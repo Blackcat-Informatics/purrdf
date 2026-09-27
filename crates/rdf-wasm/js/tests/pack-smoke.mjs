@@ -131,7 +131,10 @@ const data = [
 ].join("\n");
 const sarif = JSON.parse(shaclValidateToSarif(shapes, data));
 assert.equal(sarif.version, "2.1.0");
-assert.ok(sarif.runs.flatMap((run) => run.results ?? []).length >= 1);
+assert.ok(sarif.runs.flatMap((run) => {
+  assert.ok(Array.isArray(run.results), "a completed SARIF run always carries results");
+  return run.results;
+}).length >= 1);
 `;
 
 const root = await mkdtemp(join(tmpdir(), "purrdf-pack-smoke-"));

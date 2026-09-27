@@ -105,8 +105,16 @@ impl SarifLog {
 pub struct Run {
     /// The analysis tool that produced this run.
     pub tool: Tool,
-    /// The results (violations/warnings/notes) for this run.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The results (violations/warnings/notes) for this run — ALWAYS serialized, an
+    /// empty array included.
+    ///
+    /// SARIF 2.1.0 §3.14.23: "In all other circumstances, results SHALL be present and
+    /// SHALL contain all results detected by the tool. If the tool did not detect any
+    /// results, results SHALL be an empty array. If results is absent, it SHALL default
+    /// to null." Only a tool that failed to start, or started but failed to begin its
+    /// analysis, may leave it absent or `null`; every run this model is built for
+    /// completed, so a run that found nothing says so with `[]` rather than claiming, by
+    /// omission, that it could not compute results.
     pub results: Vec<SarifResult>,
     /// Optional invocation records (only when the caller supplied timing).
     #[serde(skip_serializing_if = "Vec::is_empty")]

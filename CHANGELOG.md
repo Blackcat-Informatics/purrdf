@@ -1121,6 +1121,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **validate, cli, python, wasm, capi:** a SARIF log whose run found nothing now carries
+  `"results": []`; it used to omit `results`. SARIF 2.1.0 §3.14.23: "In all other
+  circumstances, results SHALL be present and SHALL contain all results detected by the
+  tool. If the tool did not detect any results, results SHALL be an empty array. If
+  results is absent, it SHALL default to null" — and `null` is reserved for a tool that
+  failed to start or to begin its analysis. A conforming validation and a clean parse
+  therefore serialize one more member, on every host.
+
 - **core, shapes, entail:** `<G> a sh:ShapesGraph ; owl:imports <lib>` was silently not
   an import: validation ran without `<lib>`'s shapes, and entailment without its axioms,
   with no refusal. It is now an import on every host (see Changed). The implicit

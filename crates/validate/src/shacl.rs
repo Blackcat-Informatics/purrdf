@@ -456,14 +456,7 @@ mod tests {
                         )
                     })
                     .collect();
-                assert_eq!(
-                    document["runs"][0]["results"],
-                    if expected.is_empty() {
-                        Value::Null
-                    } else {
-                        json!(expected)
-                    },
-                );
+                assert_eq!(document["runs"][0]["results"], json!(expected),);
 
                 if let Some(predicate) = ["first", "second"].get(present) {
                     writeln!(
@@ -526,14 +519,7 @@ mod tests {
                 "importing the vocabulary preserves the exact report",
             );
             let document: Value = serde_json::from_str(&sarif).expect("SARIF JSON");
-            assert_eq!(
-                document["runs"][0]["results"],
-                if results.is_empty() {
-                    Value::Null
-                } else {
-                    json!(results)
-                },
-            );
+            assert_eq!(document["runs"][0]["results"], json!(results),);
         }
     }
 

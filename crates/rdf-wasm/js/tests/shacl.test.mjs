@@ -36,7 +36,10 @@ const DATA = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-synta
 test("shaclValidateToSarif emits SARIF 2.1.0 with a violation", () => {
   const sarif = JSON.parse(shaclValidateToSarif(SHAPES, DATA));
   assert.equal(sarif.version, "2.1.0");
-  const results = sarif.runs.flatMap((r) => r.results ?? []);
+  const results = sarif.runs.flatMap((r) => {
+    assert.ok(Array.isArray(r.results), "a completed SARIF run always carries results");
+    return r.results;
+  });
   assert.ok(results.length >= 1, "the ill-typed age must produce at least one result");
   assert.ok(
     results.some((r) => r.level === "error"),
@@ -259,7 +262,10 @@ test("shaclValidateChangesToSarif honours the retract half", () => {
   try {
     assert.equal(outcome.bounded, true);
     const sarif = JSON.parse(outcome.sarif);
-    const results = sarif.runs.flatMap((r) => r.results ?? []);
+    const results = sarif.runs.flatMap((r) => {
+    assert.ok(Array.isArray(r.results), "a completed SARIF run always carries results");
+    return r.results;
+  });
     assert.equal(results.length, 0, "removing the ill-typed row restores conformance");
   } finally {
     outcome.free();

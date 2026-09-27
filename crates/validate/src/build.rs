@@ -1461,6 +1461,60 @@ mod tests {
         );
     }
 
+    /// SARIF 2.1.0 §3.14.23: a run that completed and detected nothing carries
+    /// `"results": []` — an absent `results` defaults to `null`, which the specification
+    /// reserves for a tool that failed to start or to begin its analysis. The neighbour
+    /// (one result) proves the array is the report's results, not a constant.
+    #[test]
+    fn a_completed_run_that_found_nothing_serializes_an_empty_results_array() {
+        let conforming = ValidationReport {
+            conforms: true,
+            results: vec![],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: Some(true),
+        };
+        let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
+            &conforming,
+            &SarifOptions::default(),
+        ))
+        .expect("SARIF JSON");
+        assert_eq!(
+            json["runs"][0]["results"],
+            serde_json::json!([]),
+            "{json:#}"
+        );
+
+        let clean_parse: serde_json::Value =
+            serde_json::from_str(&diagnostics_to_sarif_string(&[], &SarifOptions::default()))
+                .expect("SARIF JSON");
+        assert_eq!(
+            clean_parse["runs"][0]["results"],
+            serde_json::json!([]),
+            "{clean_parse:#}"
+        );
+
+        let violating = ValidationReport {
+            conforms: false,
+            results: vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Violation,
+                None,
+            )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: Some(true),
+        };
+        let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
+            &violating,
+            &SarifOptions::default(),
+        ))
+        .expect("SARIF JSON");
+        assert_eq!(
+            json["runs"][0]["results"].as_array().map(Vec::len),
+            Some(1),
+            "{json:#}"
+        );
+    }
+
     #[test]
     fn caller_times_emit_an_invocation_and_default_omits_it() {
         let report = ValidationReport {

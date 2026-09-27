@@ -258,7 +258,7 @@ fn sarif_detail_related_locations() {
     assert!(
         conforming["runs"][0]["results"]
             .as_array()
-            .is_none_or(Vec::is_empty),
+            .is_some_and(Vec::is_empty),
         "{conforming:#}"
     );
     let plain = sarif(
