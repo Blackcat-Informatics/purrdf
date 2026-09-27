@@ -234,8 +234,11 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
         target: ${{ fromJSON(needs.bench-compare-plan.outputs.targets) }}
     env:
-      # One target directory for both trees: criterion keeps its baselines under the
-      # target directory, so the head run finds exactly what the base run saved.
+      # Each tree builds into its own target directory: the two trees contain path
+      # crates with the same name and version, and a shared directory lets the head
+      # build link against units compiled from the base's sources. Only criterion's
+      # baselines are shared, through CRITERION_HOME, so the head run finds exactly
+      # what the base run saved.
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       CRITERION_HOME: ${{ github.workspace }}/target/criterion
       BASE_SHA: ${{ needs.bench-compare-plan.outputs.base }}
@@ -260,6 +263,8 @@ jobs:
 
       - name: Record the base commit's baseline
         if: matrix.target.in_base
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/../base-target
         run: |
           set -euo pipefail
           cd ../base
