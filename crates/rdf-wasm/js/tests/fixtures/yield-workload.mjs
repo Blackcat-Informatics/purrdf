@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// The event-loop yielding workload, shared by the in-process test and the child that
-// runs it with only `MessageChannel` to yield through, so both assert the same thing.
+// The event-loop yielding workload the asynchronous tests share: a quadratic self-join
+// whose every candidate pair is a governor poll, so a job over it polls — and, at a small
+// `yieldEveryPolls`, yields — many times.
 
 import { Dataset } from "../../index.mjs";
 
@@ -18,50 +19,12 @@ export function crossDataset(size) {
 }
 
 /**
- * A cross product folded to one row: about a million candidate pairs at 1 000 nodes,
- * which runs for hundreds of milliseconds synchronously, so an event loop that is never
- * turned while it runs is plain to see.
+ * A cross product folded to one row: size·(size−1)/2 pairs pass the filter, and every
+ * candidate pair is a poll.
  */
 export const CROSS_COUNT = `SELECT (COUNT(*) AS ?c) WHERE { ?a <${EX}v> ?x . ?b <${EX}v> ?y . FILTER(?x < ?y) }`;
 
 /** The answer `CROSS_COUNT` must give over `crossDataset(size)`. */
 export function expectedCrossCount(size) {
   return String((size * (size - 1)) / 2);
-}
-
-/**
- * Run `CROSS_COUNT` once synchronously and once through `queryGovernedAsync` with
- * `yieldEveryPolls: 64`, counting the ticks of a 5 ms interval during each. Node delivers
- * up to a thousand queued `MessagePort` messages in one event-loop turn, so at 1 024 the
- * `MessageChannel` fallback came round to the timer phase only once in the whole run;
- * at 64 it comes round often enough that a tick count of zero means starvation. A
- * primitive that turns the timer phase at every yield needs no such density, and a
- * caller may pass a larger `yieldEveryPolls`.
- */
-export async function measureYielding(engine, size, yieldEveryPolls = 64) {
-  const dataset = crossDataset(size);
-  let ticks = 0;
-  const interval = setInterval(() => {
-    ticks += 1;
-  }, 5);
-  try {
-    const sync = engine.select(dataset, CROSS_COUNT);
-    const syncCount = sync.rows.take(0).c.value;
-    const syncTicks = ticks;
-    ticks = 0;
-    const outcome = await engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls });
-    const asyncTicks = ticks;
-    return {
-      syncCount,
-      syncTicks,
-      asyncComplete: outcome.isComplete,
-      asyncCount: outcome.isComplete ? outcome.result.rows.take(0).c.value : undefined,
-      asyncTicks,
-      yields: outcome.evidence.async.yields,
-      polls: outcome.evidence.async.polls,
-    };
-  } finally {
-    clearInterval(interval);
-    dataset.free();
-  }
 }

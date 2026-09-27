@@ -1060,8 +1060,10 @@ export class QueryEngine {
   // budget kept under the JavaScript engine's call stack, which V8 sizes the same for a
   // job as for the synchronous lane) is the synchronous twin's refusal unchanged, since
   // no region raises it; a cancellation through `signal` rejects with
-  // `signal.reason` (an `AbortError` without one); a fault — a handler that threw,
-  // rejected or answered something unrecognizable, or work no stack check guards
+  // `signal.reason` (an `AbortError` without one); a handler that threw, rejected or
+  // answered something unrecognizable fails its own invocation (`native-sparql-host-fault`
+  // or `native-sparql-load-fault` without `SILENT`); a fault — a broken delivery protocol,
+  // or work no stack check guards
   // reaching its region's guard band — is an `Error` with the fault's text. Errors built by the twin carry
   // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
   // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
@@ -1468,14 +1470,21 @@ export interface LoadRedirect {
  * with nothing loaded, recorded on the evidence's `silenced`.
  */
 export interface ServiceFailure {
-  readonly kind: "transport" | "denied";
+  /**
+   * `"transport"`: the endpoint or source could not be reached or read. `"denied"`: the
+   * host's own policy refused the request. `"fault"`: the handler could not answer it
+   * (the failure a throw, a rejection or an unrecognized answer is delivered as).
+   */
+  readonly kind: "transport" | "denied" | "fault";
   readonly message: string;
 }
 
 /**
  * `resolveService`'s answer: SPARQL Results JSON (bytes or text), a `Response` (a non-ok
  * status is a transport failure), or a typed failure. A throw, a rejection or any other
- * value is a fault that fails the job, even under `SERVICE SILENT`.
+ * value is the handler's fault: that invocation fails with kind `"fault"`, which
+ * `SERVICE SILENT` answers with the join identity and records on the evidence's
+ * `silenced`, and which without `SILENT` fails the query with `native-sparql-host-fault`.
  */
 export type AsyncServiceAnswer = Uint8Array | ArrayBuffer | string | Response | ServiceFailure;
 
@@ -1487,7 +1496,9 @@ export type AsyncLoadDocument =
 /**
  * `resolveLoad`'s answer: a document (its `base` defaults to the IRI), a `Response` (its
  * `Content-Type` names the media type), a `Dataset`, a redirect, or a typed failure. A
- * bare string or bytes carry no media type and are a fault. A document that does not
+ * bare string or bytes carry no media type and are the handler's fault, as a throw or a
+ * rejection is: the `LOAD` fails with `native-sparql-load-fault`, and `LOAD SILENT`
+ * loads nothing and records the invocation with kind `"fault"`. A document that does not
  * parse is the `LOAD`'s decode failure (`native-sparql-load-decode`).
  */
 export type AsyncLoadAnswer = AsyncLoadDocument | Response | Dataset | LoadRedirect | ServiceFailure;
@@ -1641,17 +1652,11 @@ export interface AsyncJobError extends PurrdfError {
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
- * (`WebAssembly.Suspending` and `WebAssembly.promising`) and a macrotask primitive to yield
- * through. Where it is `false`, every asynchronous twin rejects with the reason before
- * touching wasm; the synchronous API is unaffected.
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`, which every job
+ * yields to the event loop through. Where it is `false`, every asynchronous twin rejects
+ * with the reason before touching wasm; the synchronous API is unaffected.
  */
 export function hasAsyncQueries(): boolean;
-
-/**
- * The macrotask primitive asynchronous jobs yield through — `"setTimeout"` in a Cloudflare
- * Worker, else `"setImmediate"` or `"MessageChannel"` — or `undefined` when none exists.
- */
-export function asyncYieldPrimitive(): "setTimeout" | "setImmediate" | "MessageChannel" | undefined;
 
 /**
  * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)

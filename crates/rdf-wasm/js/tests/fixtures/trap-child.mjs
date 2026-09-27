@@ -45,13 +45,16 @@ const report = {};
 
 // Before the trap: an ordinary asynchronous query answers on the small secondary stack.
 report.asyncBefore = await settle(() => engine.queryAsync(data, SHALLOW));
-// A job that faults (its host rejects) and one whose host reports a typed transport
-// failure: both are errors of their own job, never a poisoning.
-report.faulted = await settle(() =>
-  engine.queryAsync(data, SERVICE_QUERY, {
-    resolveService: () => Promise.reject(new Error("the example.org endpoint refused")),
-  }),
-);
+// A job whose host rejects (its SERVICE invocation fails as the host's fault, reported
+// under the host-fault code without the handler's words) and one whose host reports a
+// typed transport failure: both are errors of their own job, never a poisoning.
+const faultedRun = engine.queryAsync(data, SERVICE_QUERY, {
+  resolveService: () => Promise.reject(new Error("the example.org endpoint refused")),
+});
+faultedRun.catch((error) => {
+  report.faultedCode = error.code;
+});
+report.faulted = await settle(() => faultedRun);
 report.typedFailure = await settle(() =>
   engine.queryAsync(data, SERVICE_QUERY, {
     resolveService: () => ({ kind: "transport", message: "the example.org endpoint is unreachable" }),

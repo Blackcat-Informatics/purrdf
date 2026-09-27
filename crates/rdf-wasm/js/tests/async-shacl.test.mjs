@@ -524,7 +524,7 @@ test("concurrent SHACL validations suspended at every poll, interleaved with syn
     );
     assert.equal(stackPointer(), IDLE);
     turns += 1;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
   const jobs = { sparql: track(shaclValidateToSarifAsync(SPARQL_SHAPES, sparqlData, null, yieldEvery)) };

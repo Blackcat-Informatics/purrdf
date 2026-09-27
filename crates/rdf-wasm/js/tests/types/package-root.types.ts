@@ -3,7 +3,6 @@
 
 import {
   ready,
-  asyncYieldPrimitive,
   configureAsync,
   hasAsyncQueries,
   ServiceCatalog,
@@ -246,7 +245,6 @@ const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o 
 
 // The asynchronous twins.
 const asyncAvailable: boolean = hasAsyncQueries();
-const yieldPrimitive: "setTimeout" | "setImmediate" | "MessageChannel" | undefined = asyncYieldPrimitive();
 configureAsync({ maxConcurrentJobs: 8 });
 const profile: ServiceProfileJson = {
   capabilities: ["query", "network"],
@@ -451,7 +449,6 @@ void ledger;
 void rebuiltFromNull;
 void fromFactoryNull;
 void asyncAvailable;
-void yieldPrimitive;
 void asyncSelect;
 void asyncAsk;
 void asyncConstruct;

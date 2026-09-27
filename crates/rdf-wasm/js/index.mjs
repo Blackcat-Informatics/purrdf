@@ -122,7 +122,6 @@ import init, {
 import {
   assertAsyncQueries,
   assertNotPoisoned,
-  asyncYieldPrimitive as jspiAsyncYieldPrimitive,
   configureAsync as jspiConfigureAsync,
   hasAsyncQueries as jspiHasAsyncQueries,
   installAsync,
@@ -1033,23 +1032,13 @@ export async function shaclProductValidateToSarifRebuildExpectingAsync(
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
- * (`WebAssembly.Suspending` and `WebAssembly.promising`) and a macrotask primitive to
- * yield through. Where it is `false`, every asynchronous twin rejects with the reason
- * before touching wasm, and the synchronous API is unaffected.
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`, which every
+ * job yields to the event loop through. Where it is `false`, every asynchronous twin
+ * rejects with the reason before touching wasm, and the synchronous API is unaffected.
  */
 export function hasAsyncQueries() {
   assertNotPoisoned();
   return jspiHasAsyncQueries();
-}
-
-/**
- * The macrotask primitive asynchronous jobs yield to the event loop through —
- * `"setTimeout"` in a Cloudflare Worker, else `"setImmediate"` or `"MessageChannel"` — or
- * `undefined` when the environment has none.
- */
-export function asyncYieldPrimitive() {
-  assertNotPoisoned();
-  return jspiAsyncYieldPrimitive();
 }
 
 /**

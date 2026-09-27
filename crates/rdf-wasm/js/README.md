@@ -225,7 +225,7 @@ ownership, and all limits. Complete examples are in
 - `QueryEngine.queryAsync` … `updateGovernedAsync`, `Dataset.queryAsync` — the
   Promise-returning twins, which take `resolveService` / `resolveLoad` handlers, a
   `ServiceCatalog`, `localServices`, an `AbortSignal` and the yielding and stack options;
-  `hasAsyncQueries()`, `asyncYieldPrimitive()` and `configureAsync(...)` describe and
+  `hasAsyncQueries()` and `configureAsync(...)` describe and
   configure the scheduler, and `SparqlProtocolRequest` reads a SPARQL 1.1 Protocol
   request. See
   [Asynchronous queries, federation and the Cloudflare adapter](#asynchronous-queries-federation-and-the-cloudflare-adapter).
@@ -388,16 +388,20 @@ The answer is one of:
 - a `Response`, whose 2xx body is read as SPARQL Results JSON. Any other status is a
   transport failure;
 - `{ kind: "transport", message }` when the endpoint could not be reached or read;
-- `{ kind: "denied", message }` when the host's policy refuses the request.
+- `{ kind: "denied", message }` when the host's policy refuses the request;
+- `{ kind: "fault", message }` when the handler itself could not answer.
 
-Either failure fails the query. Under `SERVICE SILENT` it contributes the join identity
-instead, so the surrounding pattern's own solutions come back unextended, and the job's
-`evidence.async.silenced` records the endpoint and the failure's `kind`.
+Each failure fails the query: `native-sparql-service-failed`,
+`native-sparql-service-host-denied` and `native-sparql-host-fault`. Under
+`SERVICE SILENT` each contributes the join identity instead, so the surrounding
+pattern's own solutions come back unextended, and the job's `evidence.async.silenced`
+records the endpoint and the failure's `kind`.
 
-A handler that throws, rejects, or returns anything else has *faulted*. A fault fails
-the job even under `SERVICE SILENT`, because a fault is not an answer. `ctx.silent` is
-for information only: an empty answer is not the handler's to invent, and the failure
-it reports decides what `SILENT` does with it.
+A handler that throws, rejects, or returns anything else has failed the invocation it
+was answering, and is delivered exactly as `{ kind: "fault" }`: the invocation's own
+failure, never the job's. The handler's words stay out of the error a query fails
+with. `ctx.silent` is for information only: an empty answer is not the handler's to
+invent, and the failure it reports decides what `SILENT` does with it.
 
 This handler sends each request with `fetch`:
 
@@ -423,7 +427,8 @@ async function resolveService(request, { signal }) {
       signal,
     });
   } catch (error) {
-    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    // A network error is the endpoint's failure; a throw would be reported as this
+    // handler's own fault instead.
     return { kind: "transport", message: String(error) };
   }
 }
@@ -530,29 +535,29 @@ deadline. The answer is any of:
   `LOAD` as a transport failure;
 - `{ kind: "transport" }` when the document could not be fetched or read;
 - `{ kind: "denied" }` when the host's policy refuses the request
-  (`native-sparql-load-host-denied`, apart from the catalog's own denial).
+  (`native-sparql-load-host-denied`, apart from the catalog's own denial);
+- `{ kind: "fault" }` when the handler itself could not answer
+  (`native-sparql-load-fault`).
 
 Each failure fails the request. `LOAD SILENT` succeeds over any of them — and over a
 missing `resolveLoad` — with nothing loaded (SPARQL 1.1 Update §3.1.4), and the job's
 `evidence.async.silenced` records the source's `iri` and the failure's `kind`.
 
-A bare string or bytes carry no media type and are a fault. A document that does not
-parse — or names a media type no parser reads — is the `LOAD`'s decode failure
+A handler that throws or rejects, and a bare string or bytes (which carry no media
+type), are the handler's fault, delivered as `{ kind: "fault" }`. A document that does
+not parse — or names a media type no parser reads — is the `LOAD`'s decode failure
 (`native-sparql-load-decode`).
 
 ### Yielding, cancellation and deadlines
 
 A job counts the evaluator's governor polls and gives the event loop one turn every
 `yieldEveryPolls` polls: 65 536 by default, and `0` yields at every poll. The count, not
-the clock, decides when to yield. It yields through one macrotask primitive, chosen when
-the module loads and reported by `asyncYieldPrimitive()`: `setTimeout(…, 0)` in a
-Cloudflare Worker (recognized by its `navigator.userAgent`, `Cloudflare-Workers`, because
-workerd delivers a `MessageChannel` message without letting another request in),
-else `setImmediate`, or a `MessageChannel` round trip where there is none (a browser,
-for one). It never uses
-`scheduler.yield`: that resumes as a prioritized continuation ahead of ordinary tasks, so
-a job yielding through it would starve timers, messages and the fetch responses other
-jobs await. Only evaluation yields (an entailment closure included). Freezing the dataset before the job and serializing
+the clock, decides when to yield. Every yield is one `setTimeout(…, 0)` task, on every
+host — Node, a browser, a Cloudflare Worker alike. A timer task queues behind the tasks
+already waiting, so other requests, timers and the fetch responses other jobs await all
+run between a job's turns. `globalThis.setTimeout` is bound once, when the module loads;
+a host without it has no asynchronous lane, and `hasAsyncQueries()` says so. Only
+evaluation yields (an entailment closure included). Freezing the dataset before the job and serializing
 the result after are linear passes that run to completion. `evidence.async` reports
 what each phase cost (`freezeMs`, `evaluateMs`, `serializeMs`).
 
@@ -714,7 +719,11 @@ pieces:
   fixed `detail` and a fresh `correlationId`, while the real error goes to exactly one
   place, `onInternalError(error, { correlationId, request })` (one
   `console.error(error, correlationId)` line by default), so an operator can always join
-  what the client saw to what actually broke.
+  what the client saw to what actually broke. A `resolveService`/`resolveLoad` that
+  throws under `SERVICE SILENT` or `LOAD SILENT` is reported there too, under its
+  correlation id, while the response is the clause's own answer — the join identity, or
+  nothing loaded — with the invocation recorded on the job's evidence as a silenced
+  `"fault"`.
 
 | Status | `code` | When |
 |---|---|---|

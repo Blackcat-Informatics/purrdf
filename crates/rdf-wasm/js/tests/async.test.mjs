@@ -27,13 +27,12 @@ import {
   Dataset,
   QueryEngine,
   ServiceCatalog,
-  asyncYieldPrimitive,
   hasAsyncQueries,
   ready,
 } from "../index.mjs";
 import { AsyncJobOptions, AsyncOperationKind, DeliveryStatus, RunStatus } from "../pkg/purrdf_wasm.js";
 import { NO_JSPI_MESSAGE, runJob } from "../pkg/purrdf_jspi.mjs";
-import { expectedCrossCount, measureYielding } from "./fixtures/yield-workload.mjs";
+import { CROSS_COUNT, crossDataset, expectedCrossCount } from "./fixtures/yield-workload.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -117,7 +116,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function turnUntil(predicate, label) {
   for (let turns = 0; turns < 10_000; turns += 1) {
     if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.fail(`the event loop turned 10 000 times without ${label}`);
 }
@@ -211,34 +210,62 @@ test("a transport failure is the join identity under SILENT", async () => {
   assert.equal(mock.calls[0].ctx.silent, true, "the host is told the clause is SILENT");
 });
 
-test("a resolver that throws is a job fault even under SILENT", async () => {
+// SPARQL 1.1 Federated Query §3.2: a handler that throws or rejects has failed the
+// invocation it was answering. That failure is the invocation's, never the job's: SILENT
+// answers it with the join identity and records it as a silenced `fault`; without SILENT
+// the query fails with the host-fault code, and the handler's own words never reach the
+// error a client is shown.
+test("a resolver that throws fails its invocation: the join identity under SILENT, recorded as a fault; native-sparql-host-fault without", async () => {
   const engine = new QueryEngine();
-  const thrown = await rejection(
-    engine.queryAsync(local(), joinQuery(true), {
-      resolveService: () => {
-        throw new Error("host bug");
-      },
-    }),
-  );
-  assert.ok(thrown instanceof Error);
-  assert.match(thrown.message, /resolveService threw: Error: host bug/);
-  assert.equal(typeof thrown.evidence.async.stackHighWaterBytes, "number");
+  const throwing = {
+    resolveService: () => {
+      throw new Error("host bug");
+    },
+  };
+  const rejecting = {
+    resolveService: async () => {
+      throw new Error("async host bug");
+    },
+  };
+  for (const [host, words] of [
+    [throwing, "host bug"],
+    [rejecting, "async host bug"],
+  ]) {
+    // Under SILENT: the local rows survive unextended, and the governed evidence records
+    // the invocation as a fault of the host.
+    assert.deepEqual(rowsOf(await engine.queryAsync(local(), joinQuery(true), host)), IDENTITY, words);
+    const silenced = await engine.queryGovernedAsync(local(), joinQuery(true), host);
+    assert.equal(silenced.isComplete, true);
+    assert.deepEqual(rowsOf(silenced.result), IDENTITY, words);
+    assert.deepEqual(
+      silenced.evidence.silenced.map(({ target, endpoint, kind }) => ({ target, endpoint, kind })),
+      [{ target: "service", endpoint: `${EX}sparql`, kind: "fault" }],
+      words,
+    );
+    assert.deepEqual(silenced.evidence.async.silenced, silenced.evidence.silenced);
 
-  const rejected = await rejection(
-    engine.queryAsync(local(), joinQuery(true), {
-      resolveService: async () => {
-        throw new Error("async host bug");
-      },
-    }),
-  );
-  assert.match(rejected.message, /resolveService rejected: Error: async host bug/);
+    // Without SILENT: the request fails under the host-fault code, carrying the job's
+    // evidence and the handler's own words — the caller is the host that wrote the
+    // handler. (The SPARQL endpoint adapter answers its clients without those words.)
+    const loud = await rejection(engine.queryAsync(local(), joinQuery(false), host));
+    assert.ok(loud instanceof Error);
+    assert.equal(loud.name, "Error");
+    assert.equal(loud.code, "native-sparql-host-fault", words);
+    assert.match(loud.message, new RegExp(words), "the handler's own words reach the host that wrote it");
+    assert.equal(typeof loud.evidence.async.stackHighWaterBytes, "number");
+  }
 
   // The valid neighbour: the same SILENT clause, the resolver reporting its failure as a
-  // typed transport failure, is the join identity.
-  const neighbour = await engine.queryAsync(local(), joinQuery(true), {
+  // typed transport failure, is the join identity too — recorded as a transport failure,
+  // not a fault.
+  const neighbour = await engine.queryGovernedAsync(local(), joinQuery(true), {
     resolveService: async () => ({ kind: "transport", message: "caught its own network error" }),
   });
-  assert.deepEqual(rowsOf(neighbour), IDENTITY);
+  assert.deepEqual(rowsOf(neighbour.result), IDENTITY);
+  assert.deepEqual(
+    neighbour.evidence.silenced.map(({ kind }) => kind),
+    ["transport"],
+  );
 });
 
 test("a host denial with no catalog installed fails the query, is the identity under SILENT, and never invents a catalog cause", async () => {
@@ -408,10 +435,13 @@ test("an endpoint variable nothing binds is refused, under SILENT too", async ()
 // identity on both lanes, with nobody asked.
 test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is the join identity on both lanes", async () => {
   const engine = new QueryEngine();
-  // No source: the job has no resolveService, the synchronous lane never has one.
+  // No source: the job has no resolveService, the synchronous lane never has one. Each
+  // lane's result is materialised once, into its own array, and compared from there.
   const noSource = joinQuery(true);
-  assert.deepEqual(rowsOf(await engine.queryAsync(local(), noSource)), IDENTITY);
-  assert.deepEqual(rowsOf(engine.select(local(), noSource)), IDENTITY);
+  const asyncIdentity = rowsOf(await engine.queryAsync(local(), noSource));
+  const syncIdentity = rowsOf(engine.select(local(), noSource));
+  assert.deepEqual(asyncIdentity, IDENTITY);
+  assert.deepEqual(syncIdentity, IDENTITY);
   // Without SILENT: the same error on both lanes.
   const asyncError = await rejection(engine.queryAsync(local(), joinQuery(false)));
   assert.equal(
@@ -432,9 +462,10 @@ test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is 
     `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . VALUES ?e { "x" } OPTIONAL { SERVICE SILENT ?e { ?a ?b ?x } } }`,
   ]) {
     const mock = recordingResolver(answerWithEndpointName);
-    const result = rowsOf(await engine.queryAsync(local(), shape, { resolveService: mock.resolveService }));
-    assert.deepEqual(result, [`e=x&s=${EX}a`, `e=x&s=${EX}b`], shape);
-    assert.deepEqual(rowsOf(engine.select(local(), shape)), result, shape);
+    const asyncRows = rowsOf(await engine.queryAsync(local(), shape, { resolveService: mock.resolveService }));
+    const syncRows = rowsOf(engine.select(local(), shape));
+    assert.deepEqual(asyncRows, [`e=x&s=${EX}a`, `e=x&s=${EX}b`], shape);
+    assert.deepEqual(syncRows, asyncRows, shape);
     assert.equal(mock.calls.length, 0, `${shape}: nobody is asked`);
     const loud = shape.replace("SILENT ", "");
     const error = await rejection(engine.queryAsync(local(), loud, { resolveService: mock.resolveService }));
@@ -833,15 +864,51 @@ test("every async twin evaluates", async () => {
 // U2: yielding and cancellation
 // ---------------------------------------------------------------------------
 
-test("a long query yields to the event loop", async () => {
-  const measured = await measureYielding(new QueryEngine(), 1000);
-  assert.equal(measured.syncCount, expectedCrossCount(1000));
-  assert.equal(measured.syncTicks, 0, "the synchronous control never turns the event loop");
-  assert.equal(measured.asyncComplete, true);
-  assert.equal(measured.asyncCount, measured.syncCount);
-  assert.ok(measured.asyncTicks > 0, `the interval ticked ${measured.asyncTicks} times during the async run`);
-  assert.ok(measured.yields > 0, `evidence.async.yields = ${measured.yields}`);
-  assert.equal(asyncYieldPrimitive(), "setImmediate", "Node's preferred macrotask primitive is chosen");
+// The oracle is another party's `setTimeout(…, 0)` timer, scheduled before the job
+// begins, which records whether the job was still running when it fired. Every yield is
+// itself a `setTimeout(…, 0)` task queued after that timer, so the first yield lets it
+// fire while the job runs; a job that never yields runs to completion inside the turn
+// that began it, and the timer fires only afterwards. Both are event-loop orderings,
+// not durations: no clock is read and nothing is calibrated.
+test("a yielding job lets a setTimeout(…, 0) timer another party scheduled fire between its turns; a job that never yields does not", async () => {
+  const engine = new QueryEngine();
+  const size = 100;
+  const dataset = crossDataset(size);
+  const expected = expectedCrossCount(size);
+  // Arm a timer and run `job()`; resolves to what the timer saw when it fired.
+  const raceTimer = async (job) => {
+    let done = false;
+    const seen = new Promise((resolve) => {
+      setTimeout(() => resolve({ jobDoneWhenTimerFired: done }), 0);
+    });
+    const outcome = await job();
+    done = true;
+    return { ...(await seen), outcome };
+  };
+  try {
+    // Every 64th poll is a yield: thousands of candidate pairs make many turns.
+    const yielding = await raceTimer(() => engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 64 }));
+    assert.equal(yielding.outcome.isComplete, true);
+    assert.equal(yielding.outcome.result.rows.take(0).c.value, expected);
+    assert.ok(yielding.outcome.evidence.async.yields > 0, `evidence.async.yields = ${yielding.outcome.evidence.async.yields}`);
+    assert.equal(yielding.jobDoneWhenTimerFired, false, "the timer fired between the job's turns, while it was still running");
+
+    // The neighbour: a yield quantum the job's poll count never reaches, so it never
+    // yields, finishes in the turn that began it, and the timer fires only after it.
+    const quantum = 2 ** 31 - 1;
+    const unyielding = await raceTimer(() => engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls: quantum }));
+    assert.equal(unyielding.outcome.isComplete, true);
+    assert.equal(unyielding.outcome.result.rows.take(0).c.value, expected);
+    assert.equal(unyielding.outcome.evidence.async.yields, 0, "a quantum past the poll count yields nowhere");
+    assert.ok(unyielding.outcome.evidence.async.polls < quantum);
+    assert.equal(unyielding.jobDoneWhenTimerFired, true, "the timer fired only once the job had finished");
+
+    // The synchronous lane gives the same count, so the async lane's answers are the
+    // query's, not an artifact of yielding.
+    assert.equal(engine.select(dataset, CROSS_COUNT).rows.take(0).c.value, expected);
+  } finally {
+    dataset.free();
+  }
 });
 
 // A dataset whose three-way self cross product cannot finish in any time a test would
@@ -1448,7 +1515,7 @@ test("refusal pair: an update begun while another update of the dataset is in fl
 });
 
 // ---------------------------------------------------------------------------
-// Hosts without JSPI or without a preferred yield primitive (child processes)
+// Hosts without JSPI (child processes)
 // ---------------------------------------------------------------------------
 
 /** Run a fixture script in a child `node` with `--import <preload>`; its one JSON line. */
@@ -1483,86 +1550,6 @@ test("async methods hard-fail without JSPI", async () => {
   // reaches wasm and is refused for what it is.
   const reached = await rejection(new QueryEngine().queryAsync({ notADataset: true }, "SELECT * WHERE { ?s ?p ?o }"));
   assert.notEqual(reached.message, NO_JSPI_MESSAGE);
-});
-
-test("the yield primitive falls back to MessageChannel", () => {
-  const report = runChild("no-macrotask-preload.mjs", "message-channel-child.mjs");
-  assert.equal(report.setImmediate, "undefined");
-  assert.equal(report.hasAsyncQueries, true);
-  assert.equal(report.primitive, "MessageChannel");
-  // The long-query yielding assertions, unchanged, over the fallback primitive.
-  assert.equal(report.syncCount, expectedCrossCount(1000));
-  assert.equal(report.syncTicks, 0);
-  assert.equal(report.asyncComplete, true);
-  assert.equal(report.asyncCount, report.syncCount);
-  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times`);
-  assert.ok(report.yields > 0);
-});
-
-// A browser's `scheduler.yield()` resumes as a prioritized continuation, ahead of every
-// ordinary task, so a job that kept yielding through it would never let a timer, a
-// message or a fetch response run. The preload models that priority at its limit and
-// removes `setImmediate`, as a browser page has it.
-test("a scheduler.yield with continuation priority is never the yield primitive", () => {
-  const report = runChild("continuation-scheduler-preload.mjs", "continuation-scheduler-child.mjs");
-  assert.equal(report.setImmediate, "undefined");
-  assert.equal(report.scheduler, "function", "the continuation-priority scheduler.yield is installed");
-  // The oracle can see starvation: yielding through the installed primitive turns no timer.
-  assert.ok(report.schedulerYieldTurns > 0);
-  assert.equal(report.schedulerYieldTicks, 0, "yielding through scheduler.yield starves the timer");
-  assert.equal(report.hasAsyncQueries, true);
-  assert.equal(report.primitive, "MessageChannel");
-  assert.equal(report.syncCount, expectedCrossCount(1000));
-  assert.equal(report.syncTicks, 0, "the synchronous control never turns the event loop");
-  assert.equal(report.asyncCount, report.syncCount);
-  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
-});
-
-test("setImmediate is preferred where it exists, beside a scheduler.yield", () => {
-  const report = runChild("continuation-scheduler-preload.mjs", "continuation-scheduler-child.mjs", {
-    PURRDF_TEST_KEEP_SET_IMMEDIATE: "1",
-  });
-  assert.equal(report.setImmediate, "function");
-  assert.equal(report.scheduler, "function");
-  assert.equal(report.primitive, "setImmediate");
-  assert.equal(report.syncTicks, 0);
-  assert.equal(report.asyncCount, expectedCrossCount(1000));
-  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
-});
-
-// A Cloudflare Worker has no `setImmediate` and a `MessageChannel` whose delivery never
-// returns to workerd's event loop, so a job yielding through it lets no other request
-// in. The preload gives the process that shape (the delivery modelled as a microtask,
-// so no timer runs either) and the Workers user agent.
-test("a Cloudflare Worker yields through setTimeout, which lets a timer run during queryAsync", () => {
-  const report = runChild("workerd-preload.mjs", "workerd-child.mjs");
-  assert.equal(report.setImmediate, "undefined");
-  assert.equal(report.userAgent, "Cloudflare-Workers");
-  // The oracle can see starvation: turns through the installed MessageChannel run no timer.
-  assert.ok(report.starvedTurns > 0);
-  assert.equal(report.starvedTicks, 0, "yielding through the Worker-shaped MessageChannel starves the timer");
-  assert.equal(report.hasAsyncQueries, true);
-  assert.equal(report.primitive, "setTimeout");
-  assert.equal(report.syncCount, expectedCrossCount(1000));
-  assert.equal(report.syncTicks, 0, "the synchronous control never turns the event loop");
-  assert.equal(report.asyncComplete, true);
-  assert.equal(report.asyncCount, report.syncCount);
-  assert.ok(report.yields > 0);
-  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
-});
-
-// The control: the same Worker-shaped globals without the Workers user agent (a browser
-// page's shape) keep the MessageChannel, and through this starving one the timer never
-// runs — so the tick count above is the primitive's doing, not the workload's.
-test("without the Workers user agent the Worker-shaped MessageChannel is kept, and starves the timer", () => {
-  const report = runChild("workerd-preload.mjs", "workerd-child.mjs", { PURRDF_TEST_WORKERS_USER_AGENT: "0" });
-  assert.equal(report.setImmediate, "undefined");
-  assert.notEqual(report.userAgent, "Cloudflare-Workers");
-  assert.equal(report.primitive, "MessageChannel");
-  assert.equal(report.asyncComplete, true);
-  assert.equal(report.asyncCount, expectedCrossCount(1000));
-  assert.ok(report.yields > 0, "the job yielded through the MessageChannel");
-  assert.equal(report.asyncTicks, 0, "no timer ran while the job yielded through it");
 });
 
 // ---------------------------------------------------------------------------
@@ -1745,14 +1732,24 @@ test("refusal pair: stackBytes 4096 is refused, 524288 answers", async () => {
   assert.ok(answered.evidence.async.stackHighWaterBytes < 524288);
 });
 
-test("refusal pair: a failure kind \"nope\" is a fault, \"denied\" is a denial", async () => {
+test("refusal pair: a failure kind \"nope\" is a host fault the request reports, \"denied\" is a denial; SILENT answers both with the join identity", async () => {
   const engine = new QueryEngine();
-  const nope = await rejection(
-    engine.queryAsync(local(), joinQuery(true), { resolveService: async () => ({ kind: "nope", message: "?" }) }),
+  // A failure kind the protocol does not define is the handler's fault: the invocation
+  // failed, and SILENT answers it with the join identity, recorded as a fault.
+  const noping = { resolveService: async () => ({ kind: "nope", message: "?" }) };
+  assert.deepEqual(rowsOf(await engine.queryAsync(local(), joinQuery(true), noping)), IDENTITY);
+  const silenced = await engine.queryGovernedAsync(local(), joinQuery(true), noping);
+  assert.deepEqual(rowsOf(silenced.result), IDENTITY);
+  assert.deepEqual(
+    silenced.evidence.silenced.map(({ target, endpoint, kind }) => ({ target, endpoint, kind })),
+    [{ target: "service", endpoint: `${EX}sparql`, kind: "fault" }],
   );
-  // A fault is not an answer: SILENT does not absorb it.
-  assert.match(nope.message, /^unknown failure kind "nope" for effect 1 \(expected "transport" or "denied"\)$/);
+  // Without SILENT the request fails under the host-fault code, and the handler's own
+  // words never reach the error.
+  const nope = await rejection(engine.queryAsync(local(), joinQuery(false), noping));
   assert.equal(nope.code, "native-sparql-host-fault");
+  assert.match(nope.message, /unknown failure kind "nope"/, "the fault names the kind the host invented");
+
   const denying = { resolveService: async () => ({ kind: "denied", message: "policy" }) };
   const denied = await rejection(engine.queryAsync(local(), joinQuery(false), denying));
   assert.match(denied.message, /SERVICE <.*>: the host denied the request: policy/);

@@ -61,7 +61,7 @@ function rowsOf(select) {
 async function turnUntil(predicate, label) {
   for (let turns = 0; turns < 10_000; turns += 1) {
     if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.fail(`the event loop turned 10 000 times without ${label}`);
 }
@@ -111,7 +111,7 @@ test("three interleaved async queries resume out of order and all answer correct
     // A synchronous query between resumptions runs on the main stack, beside the
     // suspended jobs' regions.
     assert.equal(engine.select(data, syncControl).rowCount, 2);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   for (const [tag, run] of Object.entries(runs)) {
     assert.deepEqual(rowsOf(await run), joined(tag), `job ${tag} joined its own answer`);
@@ -185,7 +185,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
     assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
     assert.equal(stackPointer(), IDLE);
     turns += 1;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   };
   // The short job opens its scope first and closes it while the two started after it
   // still have theirs open: the reverse of the order a single stack would close them in.
@@ -580,15 +580,15 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   const THREW = { settled: "threw", name: "Error", message: POISON };
 
   // The valid neighbours, on the very objects the trap later poisons: a job that
-  // finishes, one that faults and one whose host reports a typed failure each settle as
-  // their own job's answer or error, and afterwards every lane answers exactly — the
-  // committed update included — on those objects and on new ones.
+  // finishes, one whose host rejects (its invocation fails as the host's fault) and one
+  // whose host reports a typed failure each settle as their own job's answer or error,
+  // and afterwards every lane answers exactly — the committed update included — on those
+  // objects and on new ones.
   assert.deepEqual(report.asyncBefore, { settled: "resolved", subjects: [`${EX}a`] });
-  assert.deepEqual(report.faulted, {
-    settled: "rejected",
-    name: "Error",
-    message: "resolveService rejected: Error: the example.org endpoint refused",
-  });
+  assert.equal(report.faulted.settled, "rejected");
+  assert.equal(report.faulted.name, "Error");
+  assert.equal(report.faultedCode, "native-sparql-host-fault");
+  assert.match(report.faulted.message, /the example\.org endpoint refused/, "the handler's own words reach the host that wrote it");
   assert.deepEqual(report.typedFailure, {
     settled: "rejected",
     name: "Error",

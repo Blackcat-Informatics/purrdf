@@ -256,10 +256,11 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 ### Yielding, cancellation and concurrency
 
 - A job gives the event loop one turn every `yieldEveryPolls` governor polls
-  (65 536 by default; `0` yields at every poll), through the macrotask primitive
-  `asyncYieldPrimitive()` reports. Only evaluation yields: freezing the dataset
-  and serializing the result run to completion, and `evidence.async` reports
-  what each phase cost.
+  (65 536 by default; `0` yields at every poll). Every turn is one
+  `setTimeout(…, 0)` task, on every host, so the requests, timers and fetch
+  responses already waiting run between a job's turns. Only evaluation yields:
+  freezing the dataset and serializing the result run to completion, and
+  `evidence.async` reports what each phase cost.
 - `signal: AbortSignal` cancels a job at its next yield or host effect. On the
   governed twins, `deadlineMs` includes the time spent waiting for the handlers,
   and a trip — a deadline or a cancellation included — is an outcome, not a

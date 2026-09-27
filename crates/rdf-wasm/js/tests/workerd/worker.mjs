@@ -6,27 +6,39 @@
 // `js worker-recipe` fence with its package specifiers pointed at the package files, and
 // `./index.mjs` is the package root that recipe imports, so both share one instance.
 //
-// Every request goes to the recipe untouched except these harness routes:
-//   * `/__probe` reports what the runtime gave the package: `hasAsyncQueries()`,
-//     `asyncYieldPrimitive()`, and the globals the primitive is chosen from;
-//   * `/__async?size=N` runs the pair count on the ASYNCHRONOUS lane over N nodes and
-//     reports its job evidence (polls, yields), so the log shows how many turns it took;
-//   * `/__sync?size=N` runs the POSTed query on the SYNCHRONOUS lane over N nodes shaped
-//     as the harness loads them into the recipe's dataset. It is the control for the
-//     concurrency check: it never turns the event loop, so a request sent while it runs
-//     is served only after it.
+// Every request goes to the recipe untouched except these harness routes, which the
+// yielding proof is built from. An experiment is one lane's pair of requests, the
+// observer and the long job, and its state is `{ begun, longDone }`:
+//   * `/__probe` reports what the runtime gave the package: `hasAsyncQueries()`;
+//   * `/__observe?lane=L` is the short request of lane L's experiment. It tells the
+//     harness it is parked (one round trip through the `MARK` service binding, so the
+//     harness sends the long request only once this one is waiting), waits until lane
+//     L's long job has begun, then answers from one `setTimeout(…, 0)` task — an ordinary
+//     event-loop task, which can run while the long job is in progress only if that job
+//     gives the event loop a turn — recording whether the long job was done when it
+//     answered;
+//   * `/__long?lane=async&size=N` runs the pair count over N nodes on the ASYNCHRONOUS
+//     lane with `yieldEveryPolls: 0`, every governor poll a yield, and reports its job
+//     evidence (polls, yields);
+//   * `/__long?lane=sync&size=N` runs the same count on the SYNCHRONOUS lane: the
+//     control. It never turns the event loop, so the observer's task runs only after it.
 
 import recipe from "./workerd-recipe.mjs";
-import { Dataset, QueryEngine, asyncYieldPrimitive, hasAsyncQueries } from "./index.mjs";
+import { Dataset, QueryEngine, hasAsyncQueries } from "./index.mjs";
 
 const engine = new QueryEngine();
-const controls = new Map(); // size -> Dataset
+const datasets = new Map(); // size -> Dataset
 
+/**
+ * A quadratic self-join folded to one row, size·(size−1)/2. Every candidate pair is
+ * governor work, so the job polls many times while it runs.
+ */
 const PAIR_COUNT =
   "SELECT (COUNT(*) AS ?n) WHERE { ?a <https://example.org/v> ?x . ?b <https://example.org/v> ?y . FILTER(?x < ?y) }";
 
-function controlDataset(size) {
-  let dataset = controls.get(size);
+/** A dataset of `size` integer-valued nodes: the operand of `PAIR_COUNT`. */
+function pairDataset(size) {
+  let dataset = datasets.get(size);
   if (dataset === undefined) {
     const lines = Array.from(
       { length: size },
@@ -34,40 +46,62 @@ function controlDataset(size) {
         `<https://example.org/n${index}> <https://example.org/v> "${index}"^^<http://www.w3.org/2001/XMLSchema#integer> .`,
     );
     dataset = Dataset.parse(`${lines.join("\n")}\n`, "nquads");
-    controls.set(size, dataset);
+    datasets.set(size, dataset);
   }
   return dataset;
 }
 
+// lane -> { begun, begin, longDone }: `begun` resolves when the lane's long job begins;
+// `longDone` is `null` before it, `false` while it runs, `true` once it has finished.
+const experiments = new Map();
+
+function experiment(lane) {
+  let state = experiments.get(lane);
+  if (state === undefined) {
+    let begin;
+    const begun = new Promise((resolve) => {
+      begin = resolve;
+    });
+    state = { begun, begin, longDone: null };
+    experiments.set(lane, state);
+  }
+  return state;
+}
+
 export default {
   async fetch(request, env, ctx) {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
     if (pathname === "/__probe") {
-      return Response.json({
-        hasAsyncQueries: hasAsyncQueries(),
-        primitive: asyncYieldPrimitive() ?? null,
-        typeofSetImmediate: typeof globalThis.setImmediate,
-        typeofMessageChannel: typeof globalThis.MessageChannel,
-        typeofSchedulerWait: typeof globalThis.scheduler?.wait,
-        typeofSchedulerYield: typeof globalThis.scheduler?.yield,
-        userAgent: globalThis.navigator?.userAgent ?? null,
-      });
+      return Response.json({ hasAsyncQueries: hasAsyncQueries() });
     }
-    if (pathname === "/__async") {
-      const size = Number(new URL(request.url).searchParams.get("size"));
-      const started = performance.now();
-      try {
-        const outcome = await engine.queryGovernedAsync(controlDataset(size), PAIR_COUNT);
-        return Response.json({ inWorkerMs: performance.now() - started, async: outcome.evidence.async });
-      } catch (error) {
-        return Response.json({ error: String(error) }, { status: 500 });
+    if (pathname === "/__observe") {
+      const lane = url.searchParams.get("lane");
+      const state = experiment(lane);
+      await env.MARK.fetch(`https://mark.example.org/observer-waiting?lane=${lane}`);
+      await state.begun;
+      // The answer is produced by an ordinary task queued once the long job has begun.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return Response.json({ lane, longDone: state.longDone });
+    }
+    if (pathname === "/__long") {
+      const lane = url.searchParams.get("lane");
+      const size = Number(url.searchParams.get("size"));
+      const state = experiment(lane);
+      const dataset = pairDataset(size);
+      state.longDone = false;
+      state.begin();
+      if (lane === "sync") {
+        const n = engine.select(dataset, PAIR_COUNT).rows.take(0).n.value;
+        state.longDone = true;
+        return Response.json({ lane, n });
       }
-    }
-    if (pathname === "/__sync") {
-      const size = Number(new URL(request.url).searchParams.get("size"));
-      const text = await request.text();
-      const result = engine.select(controlDataset(size), text);
-      return Response.json({ n: result.rows.take(0).n.value });
+      const outcome = await engine.queryGovernedAsync(dataset, PAIR_COUNT, { yieldEveryPolls: 0 });
+      state.longDone = true;
+      if (!outcome.isComplete) {
+        return Response.json({ lane, tripped: outcome.tripped }, { status: 500 });
+      }
+      return Response.json({ lane, n: outcome.result.rows.take(0).n.value, async: outcome.evidence.async });
     }
     return recipe.fetch(request, env, ctx);
   },

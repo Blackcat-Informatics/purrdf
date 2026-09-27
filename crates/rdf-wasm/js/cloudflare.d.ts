@@ -136,7 +136,9 @@ export interface SparqlEndpointOptions {
    * `resolveLoad` answer that is not one, a rejection no engine code classifies, or any
    * other exception this adapter did not otherwise classify. Defaults to one
    * `console.error(error, correlationId)` line; the response still gets a `500` with a
-   * fixed `detail` and the same `correlationId`.
+   * fixed `detail` and the same `correlationId`. A `resolveService`/`resolveLoad` bug
+   * under `SERVICE SILENT` or `LOAD SILENT` is reported here too, while the response is
+   * the clause's own answer and the job's evidence records the silenced `"fault"`.
    */
   readonly onInternalError?: InternalErrorReporter | null;
 }

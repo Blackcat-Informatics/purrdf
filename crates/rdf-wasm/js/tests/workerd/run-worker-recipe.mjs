@@ -17,18 +17,24 @@
 // directory in PURRDF_MINIFLARE_DIR; without it this exits non-zero rather than
 // skipping, so the CI step cannot pass without having run.
 //
-// Asserted:
-//   * the runtime gives the package JSPI and the yield primitive a Worker needs,
-//     `setTimeout` (recorded in the log and the job summary, beside a table of which
-//     candidate primitives let a concurrent request in between turns);
+// Every ordering asserted here is caused, never timed: no clock is read, nothing is
+// calibrated, and no sleep stands in for a synchronisation. Asserted:
+//   * the runtime gives the package JSPI and `setTimeout`, so `hasAsyncQueries()`;
 //   * a SERVICE the catalog admits is joined: 200 and SPARQL Results JSON;
 //   * SERVICE SILENT over an endpoint that answered 500 is the join identity, and the
 //     endpoint was really asked;
 //   * a SERVICE the catalog does not admit is 403 `native-sparql-service-denied`, and
 //     nothing was sent;
 //   * an endpoint that answers 500 is 502 `native-sparql-service-failed`;
-//   * while a long query runs, a second request is served before it finishes — and, as
-//     the control, not while the same query runs on the synchronous lane.
+//   * suspension: a SERVICE whose upstream answer this harness holds open leaves its job
+//     suspended, and a second request is answered — completely — while it is held; the
+//     upstream is released only afterwards, and the held request then completes joined;
+//   * yielding: a job run with `yieldEveryPolls: 0` gives the event loop a turn at every
+//     poll, so a request parked in the Worker before the job began, whose answer comes
+//     from an ordinary `setTimeout(…, 0)` task, is answered while the job runs and
+//     records `longDone === false`; the control runs the same count on the synchronous
+//     lane, which never turns the event loop, and the same parked request records
+//     `longDone === true`.
 
 import assert from "node:assert/strict";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -47,13 +53,30 @@ const QUERY = `SELECT ?s ?x WHERE { ?s <https://example.org/p> ?o SERVICE <${REM
 const FAILING = QUERY.replace("<https://example.org/q>", "<https://example.org/fail>");
 const SILENT_FAILING = FAILING.replace("SERVICE <", "SERVICE SILENT <");
 const DENIED_QUERY = QUERY.replace(REMOTE, DENIED);
+// The upstream holds its answer to any query naming this predicate until the harness
+// releases it.
+const GATED = QUERY.replace("<https://example.org/q>", "<https://example.org/gated>");
 const SHORT = "SELECT ?s WHERE { ?s <https://example.org/p> ?o }";
+
+// The yielding experiment's operand: size·(size−1)/2 pairs, each a governor poll, so a
+// job at `yieldEveryPolls: 0` yields thousands of times — far more than the one turn the
+// observer's task needs to be reached.
+const LONG_SIZE = 100;
 
 const watchdog = setTimeout(() => {
   console.error(`the workerd Worker-recipe run did not finish within ${RUN_TIMEOUT_MS} ms`);
   process.exit(1);
 }, RUN_TIMEOUT_MS);
 watchdog.unref();
+
+/** A promise settled by hand, from anywhere. */
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 /** Miniflare, resolved from the scratch directory CI installed it into. */
 async function loadMiniflare() {
@@ -108,28 +131,6 @@ function remoteAnswer() {
   });
 }
 
-/**
- * The update that makes the recipe's dataset hold `size` integer-valued nodes (and
- * nothing else under `<https://example.org/v>`): the operand of `PAIR_COUNT`.
- */
-function pairData(size) {
-  const lines = Array.from(
-    { length: size },
-    (_, index) => `<https://example.org/n${index}> <https://example.org/v> ${index} .`,
-  );
-  return `DELETE WHERE { ?s <https://example.org/v> ?o } ; INSERT DATA { ${lines.join("\n")} }`;
-}
-
-/**
- * A quadratic self-join folded to one row, size·(size−1)/2. Every candidate pair is a
- * governor poll, so the job yields many times while it runs; a `VALUES` cross product
- * of the same size polls a few hundred times in all and would not yield once.
- */
-const PAIR_COUNT =
-  "SELECT (COUNT(*) AS ?n) WHERE { ?a <https://example.org/v> ?x . ?b <https://example.org/v> ?y . FILTER(?x < ?y) }";
-
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-
 /** Diagnostics, printed before the assertions they explain. */
 function diagnostics(lines) {
   for (const line of lines) console.log(`[workerd diagnostics] ${line}`);
@@ -149,6 +150,21 @@ async function main() {
   const { Miniflare, Response } = await loadMiniflare();
   const upstream = [];
   const stray = [];
+  // The gate the upstream holds a GATED answer behind: `asked` settles when the request
+  // reaches the upstream, `release` lets the answer go.
+  const asked = deferred();
+  const release = deferred();
+  let released = false;
+  // lane -> settled when that lane's observer is parked in the Worker.
+  const observers = new Map();
+  const observerWaiting = (lane) => {
+    let entry = observers.get(lane);
+    if (entry === undefined) {
+      entry = deferred();
+      observers.set(lane, entry);
+    }
+    return entry;
+  };
   const mf = new Miniflare({
     modulesRoot: JS_ROOT,
     modules: [
@@ -177,9 +193,18 @@ async function main() {
         if (body.includes("<https://example.org/fail>")) {
           return new Response("the example.org upstream is failing", { status: 500 });
         }
+        if (body.includes("<https://example.org/gated>")) {
+          asked.resolve();
+          await release.promise;
+        }
         return new Response(remoteAnswer(), {
           headers: { "Content-Type": "application/sparql-results+json" },
         });
+      },
+      async MARK(request) {
+        const lane = new URL(request.url).searchParams.get("lane");
+        observerWaiting(lane).resolve();
+        return new Response(null, { status: 204 });
       },
     },
     outboundService(request) {
@@ -204,17 +229,8 @@ async function main() {
   try {
     // The runtime gives the package what the asynchronous lane needs.
     const probe = await (await mf.dispatchFetch(`${WORKER}/__probe`)).json();
-    diagnostics([
-      `probe: hasAsyncQueries() = ${probe.hasAsyncQueries}, asyncYieldPrimitive() = ${probe.primitive}`,
-      `probe: typeof setImmediate = ${probe.typeofSetImmediate}, typeof MessageChannel = ${probe.typeofMessageChannel}, ` +
-        `typeof scheduler.wait = ${probe.typeofSchedulerWait}, typeof scheduler.yield = ${probe.typeofSchedulerYield}`,
-      `probe: navigator.userAgent = ${JSON.stringify(probe.userAgent)}`,
-    ]);
-    assert.equal(probe.hasAsyncQueries, true, "workerd provides JSPI and a yield primitive");
-    // workerd delivers a MessageChannel message without letting another request in, so
-    // a Worker must yield through the timer (the experiment above shows both).
-    assert.equal(probe.userAgent, "Cloudflare-Workers", "workerd reports the documented Workers user agent");
-    assert.equal(probe.primitive, "setTimeout", "a Worker yields through setTimeout");
+    diagnostics([`probe: hasAsyncQueries() = ${probe.hasAsyncQueries}`]);
+    assert.equal(probe.hasAsyncQueries, true, "workerd provides JSPI and setTimeout");
 
     // A SERVICE the catalog admits is joined.
     const joined = await post(QUERY);
@@ -229,11 +245,11 @@ async function main() {
 
     // SERVICE SILENT over an endpoint that failed: the local row, unextended — which
     // differs from the joined row above — and the endpoint was really asked.
-    const asked = upstream.length;
+    const askedBefore = upstream.length;
     const silent = await post(SILENT_FAILING);
     assert.equal(silent.status, 200);
     assert.deepEqual(await rowsOf(silent), [["https://example.org/a", undefined]]);
-    assert.equal(upstream.length, asked + 1, "the failing endpoint was contacted");
+    assert.equal(upstream.length, askedBefore + 1, "the failing endpoint was contacted");
     assert.match(upstream.at(-1).body, /<https:\/\/example\.org\/fail>/);
 
     // The same failure without SILENT: 502, the endpoint's failure.
@@ -249,82 +265,85 @@ async function main() {
     assert.equal(upstream.length, beforeDenied, "the denied endpoint was never asked");
     assert.deepEqual(stray, [], "no request left through the outbound fetch");
 
-    // Calibrate a query long enough that a request sent while it runs is clearly inside
-    // it. The recipe's dataset is grown through the recipe's own update route.
-    let size = 1000;
-    const long = PAIR_COUNT;
-    let longAloneMs;
-    for (;;) {
-      const loaded = await post(pairData(size), "/sparql", "application/sparql-update");
-      assert.equal(loaded.status, 204, `the ${size}-node update applies`);
-      const started = performance.now();
-      const alone = await post(long);
-      longAloneMs = performance.now() - started;
-      assert.equal(alone.status, 200, `the ${size}-value pair count answers`);
-      const n = JSON.parse(await alone.text()).results.bindings[0].n.value;
-      assert.equal(n, String((size * (size - 1)) / 2));
-      if (longAloneMs >= 400 || size >= 4000) break;
-      size *= 2;
-    }
-    const lane = await (await mf.dispatchFetch(`${WORKER}/__async?size=${size}`)).json();
-    diagnostics([
-      `long query: ${size} nodes, ${Math.round(longAloneMs)} ms alone through the recipe`,
-      `long query on the async lane in the Worker: ${JSON.stringify(lane)}`,
-    ]);
-    assert.ok(longAloneMs >= 400, `the long query runs long enough to overlap (${longAloneMs} ms)`);
-    const head = Math.min(100, longAloneMs / 4);
-
-    // The asynchronous lane: the short request is served while the long one runs.
+    // Suspension. The GATED query's job reaches its SERVICE and suspends while the
+    // upstream holds the answer. Once the request has reached the upstream, a SHORT
+    // request is sent and answered — to the last byte — while the gate is still shut;
+    // only then is the gate opened, and the held request completes joined. Nothing here
+    // depends on how long anything took: the gate is closed until the short answer is in
+    // hand, so "short before gated" is the only order the run can produce.
     const finished = [];
-    const timeline = {};
-    const longStarted = performance.now();
-    const at = () => Math.round(performance.now() - longStarted);
-    const longRun = post(long).then(async (response) => {
-      timeline.longStatus = response.status;
-      await response.text();
-      timeline.longFinished = at();
-      finished.push("long");
+    const gatedRun = post(GATED).then(async (response) => {
+      const rows = await rowsOf(response);
+      finished.push("gated");
+      return { status: response.status, rows };
     });
-    await sleep(head);
-    const shortStarted = performance.now();
-    timeline.shortSent = at();
-    const shortRun = post(SHORT).then(async (response) => {
-      timeline.shortStatus = response.status;
-      await response.text();
-      timeline.shortFinished = at();
-      finished.push("short");
-    });
-    await Promise.all([shortRun, longRun]);
-    const shortMs = performance.now() - shortStarted;
+    await asked.promise;
+    assert.equal(released, false);
+    const short = await post(SHORT);
+    const shortRows = await rowsOf(short);
+    finished.push("short");
+    const shortAnsweredWhileHeld = !released;
+    released = true;
+    release.resolve();
+    const gated = await gatedRun;
     diagnostics([
-      `async lane timeline (ms from the long request): ${JSON.stringify(timeline)}; order ${JSON.stringify(finished)}`,
+      `suspension: the short request answered ${short.status} with ${JSON.stringify(shortRows)} while the SERVICE answer was held; ` +
+        `the held request then answered ${gated.status}; order ${JSON.stringify(finished)}`,
     ]);
-    assert.equal(timeline.longStatus, 200);
-    assert.equal(timeline.shortStatus, 200);
-    assert.deepEqual(finished, ["short", "long"], "the short request was served during the long query");
+    assert.equal(short.status, 200);
+    assert.deepEqual(shortRows, [["https://example.org/a", undefined]]);
+    assert.equal(shortAnsweredWhileHeld, true, "the short request was answered while the SERVICE answer was held");
+    assert.equal(gated.status, 200);
+    assert.deepEqual(gated.rows, [["https://example.org/a", "joined"]], "the held request completed joined once released");
+    assert.deepEqual(finished, ["short", "gated"]);
+    assert.match(upstream.at(-1).body, /<https:\/\/example\.org\/gated>/);
 
-    // The control: the same query on the synchronous lane never turns the event loop, so
-    // the short request waits for it. Without this, an order the check above cannot fail
-    // would pass as evidence.
-    const controlFinished = [];
-    const syncRun = post(long, `/__sync?size=${size}`).then(async (response) => {
-      assert.equal(response.status, 200);
-      assert.equal((await response.json()).n, String((size * (size - 1)) / 2));
-      controlFinished.push("sync");
-    });
-    await sleep(head);
-    const controlShort = post(SHORT).then(async (response) => {
-      assert.equal(response.status, 200);
-      await response.text();
-      controlFinished.push("short");
-    });
-    await Promise.all([syncRun, controlShort]);
-    assert.deepEqual(controlFinished, ["sync", "short"], "the synchronous control blocks the short request");
+    // Yielding, on the asynchronous lane and then its synchronous control. Each lane's
+    // observer is parked in the Worker (it reports that through MARK, awaited here) before
+    // the lane's long request is sent, so the observer is waiting when the job begins; it
+    // answers from a `setTimeout(…, 0)` task queued once the job has begun, and records
+    // whether the job was done by then. A job yielding at every poll runs thousands of
+    // turns after that task is queued, so the task runs — and the observer answers — while
+    // the job is still in progress; a synchronous run holds the isolate until it returns,
+    // so the task runs only afterwards.
+    const expectedCount = String((LONG_SIZE * (LONG_SIZE - 1)) / 2);
+    const experiment = async (lane) => {
+      const observing = mf.dispatchFetch(`${WORKER}/__observe?lane=${lane}`).then((response) => response.json());
+      await observerWaiting(lane).promise;
+      const long = await (await mf.dispatchFetch(`${WORKER}/__long?lane=${lane}&size=${LONG_SIZE}`)).json();
+      const observed = await observing;
+      return { long, observed };
+    };
+
+    const asyncLane = await experiment("async");
+    diagnostics([
+      `yielding (async lane): the long job reported ${JSON.stringify(asyncLane.long)}`,
+      `yielding (async lane): the observer recorded ${JSON.stringify(asyncLane.observed)}`,
+    ]);
+    assert.equal(asyncLane.long.lane, "async");
+    assert.equal(asyncLane.long.n, expectedCount, "the asynchronous lane counted every pair");
+    assert.ok(
+      asyncLane.long.async.yields >= 2,
+      `the job yielded ${asyncLane.long.async.yields} times; the observer's task is queued before every yield but the first`,
+    );
+    assert.deepEqual(asyncLane.observed, { lane: "async", longDone: false }, "the observer answered while the yielding job ran");
+
+    const syncLane = await experiment("sync");
+    diagnostics([
+      `yielding (sync control): the long job reported ${JSON.stringify(syncLane.long)}`,
+      `yielding (sync control): the observer recorded ${JSON.stringify(syncLane.observed)}`,
+    ]);
+    assert.equal(syncLane.long.lane, "sync");
+    assert.equal(syncLane.long.n, expectedCount, "the synchronous lane counted every pair");
+    assert.deepEqual(syncLane.observed, { lane: "sync", longDone: true }, "the observer answered only after the synchronous run");
+
+    assert.deepEqual(stray, [], "no request left through the outbound fetch");
 
     summary([
-      `workerd Worker recipe: asyncYieldPrimitive() = ${probe.primitive}`,
-      `long query: a ${size}-node self-join, ${Math.round(longAloneMs)} ms alone`,
-      `a request sent ${Math.round(head)} ms into it answered in ${Math.round(shortMs)} ms, before it finished`,
+      "workerd Worker recipe: JSPI and setTimeout present; joined, SILENT, 502 and 403 answered as the recipe promises",
+      "suspension: a request was answered while a SERVICE answer was held open",
+      `yielding: a ${LONG_SIZE}-node self-join at yieldEveryPolls 0 yielded ${asyncLane.long.async.yields} times and the observer answered mid-job; ` +
+        "the synchronous control answered it only afterwards",
     ]);
   } finally {
     await mf.dispose();

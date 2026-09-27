@@ -327,8 +327,8 @@ async function cacheKey(request) {
  * (a repeated name is kept, never merged). The request is abandoned when the query
  * abandons it (`ctx.signal`): at its catalog profile's timeout, or the query's deadline,
  * whichever comes first. Everything that stops a 2xx answer arriving is a
- * `{ kind: "transport" }` failure — never a throw, which would be a fault that fails even
- * a `SERVICE SILENT`.
+ * `{ kind: "transport" }` failure — never a throw, which would report the endpoint's
+ * failure as this handler's own fault.
  *
  * The fetch is always sent with `redirect: "manual"` and never follows one: a 3xx (or a
  * browser's opaque-redirect response to a cross-origin `redirect: "manual"` fetch) is
@@ -683,14 +683,16 @@ function reportInternalError(error, onInternalError, request) {
 /**
  * Wrap a host-supplied `resolveService`/`resolveLoad` so that a bug in *it* — a throw, a
  * rejection — never reaches the client as its own words, while still reaching the engine
- * as exactly the fault it always was. The package root treats a throwing or rejecting
- * resolver as a fault, latched on the job: a fault is about this endpoint's own
- * correctness, never the remote's, so `SERVICE SILENT`/`LOAD SILENT` does not swallow it.
- * That invariant survives this wrapper, which never answers the effect with a value.
- * Instead the real error goes to `onInternalError` with a fresh correlation id, and a
- * sanitized `Error` carrying only that id is re-thrown — the same fault, with the host's
- * words replaced before they reach Rust. `sawFault` reports whether this fired, and with
- * which id, so the failure response carries that same id.
+ * as exactly what it is: the handler's fault, the failure of the one invocation it was
+ * answering. The real error goes to `onInternalError` with a fresh correlation id, and
+ * the effect is answered with `{ kind: "fault" }` carrying only that id — the host's
+ * words replaced before they reach Rust. The clause that issued the effect decides what
+ * the fault means: without `SILENT` the request fails with `native-sparql-host-fault` or
+ * `native-sparql-load-fault`, a `500` whose `correlationId` is this one (`sawFault`
+ * reports whether the wrapper fired, and with which id); under `SERVICE SILENT` or
+ * `LOAD SILENT` the clause answers with the join identity, or loads nothing, and the
+ * response is that answer, the invocation recorded on the evidence as a silenced
+ * `"fault"` and the bug already reported under its id.
  *
  * A `handler` that is not a function (the option was never given) passes through
  * unchanged: `undefined` must stay `undefined`, or the engine would believe a handler was
@@ -705,7 +707,7 @@ function wrapHostHandler(handler, onInternalError, request) {
     } catch (error) {
       const correlationId = reportInternalError(error, onInternalError, request);
       fault = { correlationId };
-      throw new Error(`internal error; see the Worker log for correlation id ${correlationId}`);
+      return { kind: "fault", message: `internal error; see the Worker log for correlation id ${correlationId}` };
     }
   };
   return { handler: wrapped, sawFault: () => fault };
@@ -875,10 +877,10 @@ export async function handleSparqlRequest(request, options) {
       }
       // `resolveService`/`resolveLoad` are host code, not this engine's: a bug in either
       // is wrapped so its own words never reach the client, while it still reaches the
-      // engine as the same non-silenceable fault an unwrapped throw always was — `SILENT`
-      // swallows a remote's failure, never a host bug (see `wrapHostHandler`). So a fault
-      // always rejects the twin call below, `SILENT` or not, and `hostFault()` reports its
-      // correlation id for as long as this request runs, for the catch to answer with.
+      // engine as the handler's fault — the failure of that one invocation (see
+      // `wrapHostHandler`). Without `SILENT` the twin call below rejects with it, and
+      // `hostFault()` reports its correlation id for the catch to answer with; under
+      // `SILENT` the clause absorbs it and the outcome below is the answer.
       const resolveService = wrapHostHandler(o.host.resolveService, o.onInternalError, request);
       const resolveLoad = wrapHostHandler(o.host.resolveLoad, o.onInternalError, request);
       const hostFault = () => resolveService.sawFault() ?? resolveLoad.sawFault();
@@ -896,13 +898,6 @@ export async function handleSparqlRequest(request, options) {
           outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
         } catch (error) {
           return failureResponse(error, request.signal, headers, internal, hostFault()?.correlationId);
-        }
-        // Defensive: a fault always rejects (see `wrapHostHandler`), so `outcome` here
-        // should never coexist with a recorded fault — but a `200`-adjacent response is
-        // exactly the outcome a fault must never produce, so this is checked anyway.
-        {
-          const fault = hostFault();
-          if (fault !== undefined) return internalFailure(undefined, headers, internal, fault.correlationId);
         }
         const timing = serverTiming(outcome.evidence.async);
         if (!outcome.isApplied) return tripResponse(outcome.tripped, [...timing, ...headers]);
@@ -935,14 +930,6 @@ export async function handleSparqlRequest(request, options) {
           internal,
           hostFault()?.correlationId,
         );
-      }
-      // Defensive: see the update branch above — `outcome` here should never coexist
-      // with a recorded fault, since a fault always rejects.
-      {
-        const fault = hostFault();
-        if (fault !== undefined) {
-          return internalFailure(undefined, [["Vary", "Accept"], ...headers], internal, fault.correlationId);
-        }
       }
       const timing = serverTiming(outcome.evidence.async);
       if (!outcome.isComplete) {

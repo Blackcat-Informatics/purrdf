@@ -474,14 +474,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   - `signal`, an `AbortSignal` observed at every yield and every effect. It is the
     only way to cancel a twin: passing `cancel` is a `TypeError`;
   - `yieldEveryPolls` (default 65 536; `0` yields at every poll). A job gives the
-    event loop one turn per that many governor polls, counted rather than timed,
-    through the macrotask primitive `asyncYieldPrimitive()` reports: `setTimeout(…, 0)`
-    in a Cloudflare Worker (recognized by its `Cloudflare-Workers` user agent, since
-    workerd delivers a `MessageChannel` message without letting another request into
-    the isolate), else `setImmediate`, else a `MessageChannel` round trip.
-    `scheduler.yield` is never used, because its
-    prioritized continuation runs ahead of ordinary tasks and a job yielding through
-    it would starve timers, messages and network responses;
+    event loop one turn per that many governor polls, counted rather than timed.
+    Every turn is one `setTimeout(…, 0)` task, on every host: a timer task queues
+    behind the requests, timers and network responses already waiting, so each of
+    them runs between a job's turns;
   - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region. It
     sizes the shadow stack only: V8 gives a job's suspendable call stack the same
     size as the synchronous lane's, so the host-stack budget (see Fixed) binds at
@@ -2407,6 +2403,27 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   built by this one and must be re-planned.
 
 ### Changed
+
+- **BREAKING** **wasm:** `asyncYieldPrimitive()` is removed from the package root.
+  Asynchronous jobs yield to the event loop through `setTimeout(…, 0)` on every host;
+  nothing is chosen per host, sniffed from `navigator.userAgent`, or overridable.
+  `globalThis.setTimeout` is bound once when the runtime module loads; a host without
+  it has no asynchronous lane (`hasAsyncQueries()` is `false`, and every asynchronous
+  twin rejects naming `setTimeout`), the synchronous API unaffected.
+
+- **BREAKING** **wasm, cloudflare:** a `resolveService` or `resolveLoad` that throws,
+  rejects, answers with a value the protocol does not define, or names a failure kind
+  it does not define fails the one invocation it was answering, delivered as the typed
+  failure `{ kind: "fault", message }` beside `"transport"` and `"denied"`. The clause
+  decides what that means: `SERVICE SILENT` is the join identity and `LOAD SILENT`
+  loads nothing, each recorded on `evidence.silenced` with kind `"fault"`; without
+  `SILENT` the request fails with `native-sparql-host-fault` or
+  `native-sparql-load-fault`, its message never echoing the handler's words. Such a
+  failure was a fault latched on the whole job, which no `SILENT` absorbed; a job's
+  fault is now only a broken delivery protocol. `handleSparqlRequest` answers a
+  `SILENT` clause over a throwing handler with the clause's own answer (`200`, or
+  `204` for an update) while still reporting the bug through `onInternalError` under a
+  correlation id; without `SILENT` it stays the `500` carrying that id.
 
 - **BREAKING** **sparql-eval, wasm:** a `LOAD` the host's own policy refused
   (`LoadError::HostDenied`) is `native-sparql-load-host-denied`, apart from the

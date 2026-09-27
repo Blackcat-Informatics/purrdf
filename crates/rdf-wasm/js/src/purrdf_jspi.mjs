@@ -31,11 +31,21 @@
 // # Nothing crosses a suspended frame
 //
 // A JavaScript exception thrown into a suspended wasm frame bricks the instance, so
-// `suspendImpl` never throws and never rejects. Every condition becomes a status: a host
-// that throws, rejects or returns something unrecognizable is a *fault*, latched on the
-// job with `job.fault(...)` — never a transport failure that `SERVICE SILENT` could
-// swallow. A resolver catches its own network errors and reports them as
-// `{ kind: "transport", message }`.
+// `suspendImpl` never throws and never rejects. Every condition becomes a status, under
+// one rule: a handler's failure is that effect's failure, and a broken delivery protocol
+// is the job's fault.
+//
+// A handler that throws, rejects, returns a value the protocol does not define, or names
+// a failure kind it does not define has failed the invocation it was answering. That
+// failure is delivered to the effect with kind `"fault"`, beside `"transport"` (the
+// endpoint could not be reached or read) and `"denied"` (the host's policy refused it),
+// and the clause that issued the effect decides what it means: a `SERVICE SILENT` or
+// `LOAD SILENT` answers it with the join identity, or loads nothing, and records a
+// silenced invocation of kind `"fault"`; without `SILENT` the request fails with
+// `native-sparql-host-fault` (`SERVICE`) or `native-sparql-load-fault` (`LOAD`). Only a
+// protocol violation — a status wasm cannot have sent, an effect suspended on without a
+// ticket, an exchange no call is answering, a delivery the job refuses — is latched on the
+// job with `job.fault(...)`, which no clause can absorb.
 //
 // # Stack regions
 //
@@ -71,9 +81,8 @@ export const NO_JSPI_MESSAGE =
   "does not provide; the synchronous API is unaffected";
 
 const NO_YIELD_MESSAGE =
-  "asynchronous queries need a macrotask primitive to yield to the event loop " +
-  "(setImmediate or MessageChannel), and this JavaScript environment " +
-  "provides none; the synchronous API is unaffected";
+  "asynchronous queries yield to the event loop through setTimeout, and this JavaScript " +
+  "environment provides no globalThis.setTimeout; the synchronous API is unaffected";
 
 const NOT_INSTALLED_MESSAGE =
   "the asynchronous runtime is not installed; await ready() before any asynchronous call";
@@ -117,66 +126,19 @@ const exchanges = new Map();
 const encoder = new TextEncoder();
 
 // ---------------------------------------------------------------------------
-// The yield primitive, chosen once
+// The yield primitive
 // ---------------------------------------------------------------------------
 
-const yielder = chooseYield();
+// Every yield is one `setTimeout(…, 0)` task, on every host. A timer task queues behind
+// the tasks already waiting — other requests, timers, network responses — so a job that
+// keeps yielding lets each of them run between its turns. The global is bound once, when
+// this module loads; a host without one has no asynchronous lane (`hasAsyncQueries()` is
+// `false`, and every asynchronous call refuses with `NO_YIELD_MESSAGE`).
+const setTimeoutImpl = typeof globalThis.setTimeout === "function" ? globalThis.setTimeout : null;
 
-// `scheduler.yield()` is deliberately not a candidate. It resumes as a prioritized
-// continuation that runs ahead of ordinary tasks of the same priority, so a job that
-// keeps yielding through it never lets a timer, a message or a network task run — in a
-// browser that starves the very fetch responses a concurrent job awaits. Every primitive
-// below queues an ordinary task behind the ones already waiting.
-//
-// A Cloudflare Worker (workerd) is recognized by its documented `navigator.userAgent`,
-// "Cloudflare-Workers", and yields through `setTimeout(…, 0)`, ahead of every other
-// check. Feature detection cannot tell it from a browser: it has `MessageChannel` and no
-// `setImmediate`, just as a page does. But workerd delivers a `MessageChannel` message
-// without returning to its event loop, so a job yielding through it lets no other request
-// into the isolate until it finishes: measured under workerd, a request sent while a
-// spinner yielded through a `MessageChannel` round trip was answered only after it, and
-// one sent while it yielded through `setTimeout(…, 0)` was answered between its turns.
-// The check comes before `setImmediate` so a Worker built with Node.js compatibility,
-// which adds one, still yields through the timer.
-function chooseYield() {
-  if (globalThis.navigator?.userAgent === "Cloudflare-Workers" && typeof globalThis.setTimeout === "function") {
-    const setTimeout = globalThis.setTimeout;
-    return {
-      name: "setTimeout",
-      once: () => new Promise((resolve) => setTimeout(resolve, 0)),
-    };
-  }
-  if (typeof globalThis.setImmediate === "function") {
-    const setImmediate = globalThis.setImmediate;
-    return {
-      name: "setImmediate",
-      once: () => new Promise((resolve) => setImmediate(resolve)),
-    };
-  }
-  if (typeof globalThis.MessageChannel === "function") {
-    const channel = new globalThis.MessageChannel();
-    const waiting = [];
-    // Node keeps the process alive while a port with a listener is referenced; hold the
-    // reference only while a turn is pending.
-    const ref = () => channel.port1.ref?.();
-    const unref = () => channel.port1.unref?.();
-    channel.port1.onmessage = () => {
-      const resolve = waiting.shift();
-      if (waiting.length === 0) unref();
-      resolve?.();
-    };
-    unref();
-    return {
-      name: "MessageChannel",
-      once: () =>
-        new Promise((resolve) => {
-          waiting.push(resolve);
-          if (waiting.length === 1) ref();
-          channel.port2.postMessage(0);
-        }),
-    };
-  }
-  return null;
+/** One turn of the event loop: resolves from a `setTimeout(…, 0)` task. */
+function yieldOnce() {
+  return new Promise((resolve) => setTimeoutImpl(resolve, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -294,19 +256,18 @@ export function installAsync(exports, protocol) {
   idleTop = sp();
 }
 
-/** Whether this engine can run asynchronous jobs: JSPI and a yield primitive exist. */
+/** Whether this engine can run asynchronous jobs: JSPI and `setTimeout` exist. */
 export function hasAsyncQueries() {
-  return HAS_JSPI && yielder !== null;
+  return HAS_JSPI && setTimeoutImpl !== null;
 }
 
 /**
  * Throw the one clear error that explains why an asynchronous call cannot run here, or
- * return when it can: no JSPI, no yield primitive, not installed, or a poisoned
- * instance.
+ * return when it can: no JSPI, no `setTimeout`, not installed, or a poisoned instance.
  */
 export function assertAsyncQueries() {
   if (!HAS_JSPI) throw new Error(NO_JSPI_MESSAGE);
-  if (yielder === null) throw new Error(NO_YIELD_MESSAGE);
+  if (setTimeoutImpl === null) throw new Error(NO_YIELD_MESSAGE);
   if (installed === null) throw new Error(NOT_INSTALLED_MESSAGE);
   if (poisonReason !== null) throw poisonError();
 }
@@ -318,15 +279,6 @@ export function assertAsyncQueries() {
  */
 export function assertNotPoisoned() {
   if (poisonReason !== null) throw poisonError();
-}
-
-/**
- * The macrotask primitive jobs yield through — `"setTimeout"` in a Cloudflare Worker,
- * else `"setImmediate"` or `"MessageChannel"`, chosen once when this module loads — or
- * `undefined` when none exists.
- */
-export function asyncYieldPrimitive() {
-  return yielder?.name;
 }
 
 /**
@@ -362,10 +314,12 @@ export function configureAsync(options) {
  *   remainingDeadlineMs, silent, maxIntermediateCells }`. It returns (or resolves to)
  *   SPARQL Results JSON as a `Uint8Array`, `ArrayBuffer` or `string`; a `Response` (a
  *   non-ok status is a transport failure and its body is cancelled); or
- *   `{ kind: "transport" | "denied", message }`. A throw, a rejection or any other value
- *   is a fault that fails the job. The job answers a request it repeats from its own
- *   memo, and concurrent jobs share one call when Rust says they may; `ctx.signal` is the
- *   shared call's, which aborts once no job waits on it.
+ *   `{ kind: "transport" | "denied" | "fault", message }`. A throw, a rejection or any
+ *   other value is the handler's fault, delivered to the effect as a `"fault"` failure:
+ *   the invocation failed, and the clause that issued it decides whether `SILENT`
+ *   absorbs it. The job answers a request it repeats from its own memo, and concurrent
+ *   jobs share one call when Rust says they may; `ctx.signal` is the shared call's, which
+ *   aborts once no job waits on it.
  * - `resolveLoad(request, ctx)` — answers one hop of a `LOAD`. `request` is
  *   `{ kind: "load", iri, accept, userAgent, headers, timeoutMs }`, `ctx` is
  *   `{ signal }`. It returns `{ bytes | text, mediaType, base? }` (`base` defaults to the
@@ -491,7 +445,7 @@ async function answer(record, seq) {
     }
     switch (effect.kind) {
       case EffectKind.Yield:
-        await yielder.once();
+        await yieldOnce();
         return SuspendStatus.Answered;
       case EffectKind.Service:
         return await answerService(record, effect);
@@ -690,7 +644,13 @@ async function answerLoad(record, effect) {
       try {
         status = job.deliverGraphDataset(seq, settled.dataset);
       } catch {
-        return latchFault(record, `resolveLoad returned an unrecognized value (${kindOf(settled.dataset)}) for ${iri}`);
+        // Not a `Dataset` of this package: the handler's answer is not one the protocol
+        // defines, which is the invocation's fault.
+        status = job.deliverFailure(
+          seq,
+          "fault",
+          `resolveLoad returned an unrecognized value (${kindOf(settled.dataset)}) for ${iri}`,
+        );
       }
       return delivered(record, seq, status);
     }
@@ -699,7 +659,7 @@ async function answerLoad(record, effect) {
     case "failure":
       return delivered(record, seq, job.deliverFailure(seq, settled.kind, settled.message));
     default:
-      return latchFault(record, settled.message);
+      return delivered(record, seq, job.deliverFailure(seq, "fault", settled.message));
   }
 }
 
@@ -795,8 +755,9 @@ const STOPPED = Symbol("stopped");
 
 /**
  * Call a host handler and normalize its answer. The returned promise never rejects: a
- * throw, a rejection, or a failure while normalizing is a fault. The host's own promise
- * is always given a rejection handler, so abandoning it never surfaces as unhandled.
+ * throw, a rejection, or a failure while normalizing is the handler's fault, which the
+ * caller delivers to the effect as a `"fault"` failure. The host's own promise is always
+ * given a rejection handler, so abandoning it never surfaces as unhandled.
  */
 function invokeHost(name, call, normalize) {
   let raw;
@@ -824,7 +785,7 @@ function typedFailure(value, name) {
   if (typeof value.message !== "string") {
     return fault(`${name} returned a ${JSON.stringify(value.kind)} failure without a string message`);
   }
-  // An unknown kind is delivered as is: the job latches the fault naming it.
+  // An unknown kind is delivered as is: Rust fails the effect with a fault naming it.
   return { type: "failure", kind: value.kind, message: value.message };
 }
 
@@ -860,6 +821,11 @@ async function cancelBody(response) {
   }
 }
 
+/**
+ * The handler's own fault — it threw, rejected or answered with something the protocol
+ * does not define — as a normalized answer. Delivered to the effect it was answering as
+ * a `"fault"` failure (`deliverFailure`, or `faultExchange` for a shared call).
+ */
 function fault(message) {
   return { type: "fault", message };
 }
@@ -868,6 +834,10 @@ function fault(message) {
 // Delivery helpers (all return a status for wasm)
 // ---------------------------------------------------------------------------
 
+/**
+ * Latch a protocol violation as the job's fault: a delivery the job cannot make sense of,
+ * never a handler's answer. Nothing a clause writes absorbs it.
+ */
 function latchFault(record, message) {
   record.job.fault(message);
   return installed.SuspendStatus.Fault;

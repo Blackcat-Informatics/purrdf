@@ -872,7 +872,7 @@ async function withConsoleRecorded(fn) {
   try {
     const result = await fn();
     // A rejecting reporter is observed on a later microtask; let every one settle.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return { result, errorCalls, warnCalls, unhandled };
   } finally {
     console.error = originalError;
@@ -1732,14 +1732,16 @@ test("refusal pair: a resolveService that throws is a 500 with a correlation id,
   assert.equal(errors.length, 1, "the healthy neighbour never touches onInternalError");
 });
 
-test("SERVICE SILENT does not hide a resolveService bug: still a 500 with a correlation id, never a quietly incomplete 200; the valid neighbour is a genuine typed transport failure, which SILENT still swallows to the join identity", async () => {
+test("SERVICE SILENT over a resolveService bug is the join identity, a 200 whose body never carries the bug's words, and the bug still reaches onInternalError under a correlation id; the neighbour is a genuine typed transport failure, which never touches the hook", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const { errors, onInternalError } = recordingInternalErrors();
   const silentQuery = q(FEDERATED().replace("SERVICE <", "SERVICE SILENT <"));
 
-  // A host bug is about this endpoint's own correctness, never the remote's, so SILENT —
-  // a promise about the remote, "it may be unreachable" — must not swallow it: the query
-  // still rejects, exactly as it would without SILENT, just with the secret replaced.
+  // A host bug fails the invocation it was answering (SPARQL 1.1 Federated Query §3.2:
+  // an invocation that does not succeed is Ω0 under SILENT), so the response is the
+  // clause's answer — the local rows, unextended. The bug itself is this endpoint's to
+  // know about: it goes to onInternalError, once, under a fresh correlation id, and its
+  // words never reach the client.
   const buggy = await handleSparqlRequest(httpRequest({ query: silentQuery }), {
     engine: new QueryEngine(),
     dataset: dataset(),
@@ -1750,17 +1752,18 @@ test("SERVICE SILENT does not hide a resolveService bug: still a 500 with a corr
     catalog,
     onInternalError,
   });
-  assert.equal(buggy.status, 500);
-  assert.doesNotMatch(await buggy.clone().text(), /secret-token-abc/);
-  const body = await problemOf(buggy);
-  assert.equal(body.code, "InternalError");
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].error.message, "secret-token-abc at /internal/path");
-  assert.equal(errors[0].correlationId, body.correlationId);
+  assert.equal(buggy.status, 200);
+  const buggyBody = await buggy.text();
+  assert.doesNotMatch(buggyBody, /secret-token-abc/);
+  assert.doesNotMatch(buggyBody, /internal\/path/);
+  assert.deepEqual(rowsOf(buggyBody), [`s=${EX}a`, `s=${EX}b`]);
+  assert.equal(errors.length, 1, "the hook observed the bug exactly once");
+  assert.equal(errors[0].error.message, "secret-token-abc at /internal/path", "the hook got the real error");
+  assert.equal(typeof errors[0].correlationId, "string");
 
   // The valid neighbour: a genuine, deliberately typed transport failure under the same
-  // SILENT clause is exactly what SILENT promises — the join identity, a plain 200 — and
-  // never touches onInternalError, which is for host bugs, not remote ones.
+  // SILENT clause is the same join identity, a plain 200 — and never touches
+  // onInternalError, which is for host bugs, not remote ones.
   const genuine = await handleSparqlRequest(httpRequest({ query: silentQuery }), {
     engine: new QueryEngine(),
     dataset: dataset(),
