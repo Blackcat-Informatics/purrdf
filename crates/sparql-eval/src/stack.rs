@@ -35,8 +35,8 @@
 //!   and copy, an in-process
 //!   `SERVICE`'s blank-node rewrite, a function body's copy and pre-binding rewrite, and
 //!   template instantiation (`CONSTRUCT`, and an update's `DELETE`/`INSERT` and `DATA`
-//!   templates). Their copies of algebra trees go through the `clone` submodule, whose
-//!   levels ask too.
+//!   templates). Their copies of algebra trees are the algebra's own `Clone`, which walks
+//!   a work list and needs no stack per level.
 //! * **Walks whose answer has a safe side** answer it when the stack is low, with no
 //!   scope: the parallel-safety classification answers "unsafe" (the loop runs
 //!   sequentially), `EXISTS` probe admissibility answers "not admissible" (the per-row
@@ -89,7 +89,6 @@
 
 use crate::error::EvalError;
 
-pub(crate) mod clone;
 pub(crate) mod height;
 
 /// How many triple-term levels [`purrdf_stack::MARGIN_BYTES`] holds walks over, with no

@@ -5,7 +5,7 @@
 //! through [`NativeSparqlEngine`]: nested brackets, built-in calls, unary minus, groups
 //! and property-path groups answer — with the value the nesting computes, not merely
 //! without an error — as deep as the thread's stack holds their evaluation, and the
-//! first level past that is the evaluator's typed stack refusal returned as a
+//! only answer past that is the evaluator's typed stack refusal returned as a
 //! diagnostic, never a stack overflow that takes the host down. The parser admits every
 //! depth; brackets, a group around a single element and a bracketed path build no node
 //! of their own, so those shapes answer at any depth.
@@ -268,19 +268,20 @@ fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
 }
 
 /// Ten thousand nested parentheses build no node, and answer on a test thread; ten
-/// thousand nested negations do build one each, and are the evaluator's typed stack
-/// refusal returned as a diagnostic — never a crash — after which the engine answers
-/// the next request.
+/// thousand nested negations do build one each, and answer what they compute or are the
+/// evaluator's typed stack refusal returned as a diagnostic — never a crash — after
+/// which the engine answers the next request.
 #[test]
-fn ten_thousand_deep_parentheses_answer_and_negations_are_the_typed_refusal() {
+fn ten_thousand_deep_parentheses_answer_and_negations_answer_or_are_the_typed_refusal() {
     let [parentheses, _, negations, ..] = shapes();
     assert_eq!(
         subjects(&(parentheses.text)(10_000)).expect("ten thousand parentheses answer"),
         ["s1"]
     );
-    let refused = subjects(&(negations.text)(10_000))
-        .expect_err("ten thousand nested negations do not fit a test thread's stack");
-    assert!(is_stack_refusal(&refused), "{refused:?}");
+    match subjects(&(negations.text)(10_000)) {
+        Ok(answered) => assert_eq!(answered, (negations.answer)(10_000)),
+        Err(refused) => assert!(is_stack_refusal(&refused), "{refused:?}"),
+    }
     assert_eq!(
         subjects(&(parentheses.text)(1)).expect("the next request answers"),
         ["s1"]

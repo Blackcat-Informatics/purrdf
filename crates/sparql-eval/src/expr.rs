@@ -2660,7 +2660,7 @@ fn substitute_pattern_impl(
             let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
-                    path: crate::stack::clone::path(path),
+                    path: path.clone(),
                     object: object.clone(),
                 },
                 pattern,

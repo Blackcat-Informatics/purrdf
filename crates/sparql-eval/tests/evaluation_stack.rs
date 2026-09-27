@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The evaluator's stack guard, end to end: a request the parser admits but the thread
-//! evaluating it has too little stack for is the typed
+//! The evaluator's stack guard, end to end: a request the parser admits, evaluated on a
+//! thread with little stack, answers with the rows its semantics give or is the typed
 //! `native-sparql-evaluation-stack-exhausted` diagnostic — never an aborted process — and
-//! the same request on a thread with room answers with the rows its semantics give.
+//! the same request on a thread with room answers with those rows.
 //!
 //! Each deep request is prepared on a roomy thread and evaluated on a small one: a
 //! prepared plan is exactly what a host that parses once and evaluates on worker threads
@@ -28,7 +28,7 @@ use purrdf_sparql_eval::{
 
 const EX: &str = "http://example.org/";
 
-/// Small enough that none of the deep requests below fits: 256 KiB left.
+/// A small stack for the deep requests below: 256 KiB left.
 const SMALL: usize = 256 * 1024;
 
 /// Large enough that every one of them does: 64 MiB left.
@@ -185,11 +185,19 @@ fn request(query: &str, bytes: usize) -> Result<Vec<String>, RdfDiagnostic> {
     })
 }
 
-/// Assert `refused` is the stack guard's diagnostic.
-fn assert_stack_refusal(refused: &Result<Vec<String>, RdfDiagnostic>, what: &str) {
-    let diagnostic = refused
-        .as_ref()
-        .expect_err(&format!("{what} does not fit the small stack"));
+/// Assert `outcome` answers exactly `expected`, or is the stack guard's diagnostic.
+fn assert_answer_or_stack_refusal(
+    outcome: &Result<Vec<String>, RdfDiagnostic>,
+    expected: &[&str],
+    what: &str,
+) {
+    let diagnostic = match outcome {
+        Ok(answered) => {
+            assert_eq!(answered, expected, "{what} answers what it computes");
+            return;
+        }
+        Err(diagnostic) => diagnostic,
+    };
     assert_eq!(
         diagnostic.code,
         EvalError::STACK_EXHAUSTED_CODE,
@@ -223,10 +231,10 @@ fn deep_forms() -> [(&'static str, String, &'static [&'static str]); 4] {
 }
 
 #[test]
-fn a_deep_request_on_a_small_stack_is_the_typed_refusal_and_answers_on_a_large_one() {
+fn a_deep_request_on_a_small_stack_answers_or_is_the_typed_refusal_and_answers_on_a_large_one() {
     for (what, query, expected) in deep_forms() {
         let prepared = prepare(&query);
-        assert_stack_refusal(&evaluate(&prepared, SMALL), what);
+        assert_answer_or_stack_refusal(&evaluate(&prepared, SMALL), expected, what);
         // The valid neighbour: the very same plan, on a thread with room for it.
         assert_eq!(
             evaluate(&prepared, LARGE).expect(what),
@@ -255,11 +263,12 @@ fn the_deep_answers_equal_their_shallow_twins() {
 }
 
 #[test]
-fn the_whole_request_path_refuses_a_flat_spine_on_a_small_stack() {
+fn the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack() {
     // The flat spine parses in a few KiB, so the small thread parses it, admits it and
-    // plans it, and only its evaluation does not fit.
-    assert_stack_refusal(
+    // plans it, and then evaluates it or refuses its evaluation, typed.
+    assert_answer_or_stack_refusal(
         &request(&optional_spine(126), SMALL),
+        &["s1", "s2", "s3", "s4"],
         "126 sibling OPTIONAL",
     );
     assert_eq!(
@@ -269,7 +278,7 @@ fn the_whole_request_path_refuses_a_flat_spine_on_a_small_stack() {
 }
 
 #[test]
-fn the_small_stack_still_answers_a_shallow_request_after_refusing_a_deep_one() {
+fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
     let prepared = prepare(&not_exists(63));
     let (refused, shallow) = on_stack(SMALL, move || {
         let engine = NativeSparqlEngine::new();
@@ -286,7 +295,7 @@ fn the_small_stack_still_answers_a_shallow_request_after_refusing_a_deep_one() {
         ));
         (refused, shallow)
     });
-    assert_stack_refusal(&refused, "63 nested FILTER NOT EXISTS");
+    assert_answer_or_stack_refusal(&refused, &["s2", "s3", "s4"], "63 nested FILTER NOT EXISTS");
     // Three negations: the same rows as one.
     assert_eq!(
         shallow.expect("a shallow request answers"),
@@ -295,7 +304,7 @@ fn the_small_stack_still_answers_a_shallow_request_after_refusing_a_deep_one() {
 }
 
 #[test]
-fn an_update_whose_where_does_not_fit_is_refused_and_applies_nothing() {
+fn an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing() {
     // DELETE every `<q>` edge, guarded by a WHERE that is a 120-deep OPTIONAL spine.
     let update = format!(
         "DELETE {{ ?s <{EX}q> ?z }} WHERE {{ ?s <{EX}p> ?o {} }}",
@@ -317,14 +326,18 @@ fn an_update_whose_where_does_not_fit_is_refused_and_applies_nothing() {
             (outcome, data.quad_count())
         })
     };
-    let (refused, untouched) = run(SMALL);
-    let diagnostic = refused.expect_err("the WHERE does not fit the small stack");
-    assert_eq!(
-        diagnostic.code,
-        EvalError::STACK_EXHAUSTED_CODE,
-        "{diagnostic:?}"
-    );
-    assert_eq!(untouched, 5, "a refused update applies nothing");
+    let (small, count) = run(SMALL);
+    match small {
+        Ok(()) => assert_eq!(count, 4, "an applied update deletes the one `<q>` edge"),
+        Err(diagnostic) => {
+            assert_eq!(
+                diagnostic.code,
+                EvalError::STACK_EXHAUSTED_CODE,
+                "{diagnostic:?}"
+            );
+            assert_eq!(count, 5, "a refused update applies nothing");
+        }
+    }
     // The valid neighbour: with room, the one `<q>` edge is deleted.
     let (applied, after) = run(LARGE);
     applied.expect("the update applies on a large stack");
@@ -332,12 +345,12 @@ fn an_update_whose_where_does_not_fit_is_refused_and_applies_nothing() {
 }
 
 #[test]
-fn a_stack_refusal_inside_an_in_process_service_is_not_silenced() {
-    // The forwarded body is itself a deep spine, evaluated by the in-process source; the
-    // outer spine before it leaves the body too little of 320 KiB of stack. `SILENT`
-    // tolerates an endpoint that cannot answer — it must not turn "this host's stack
-    // cannot evaluate the body" into the join identity, which here would answer every
-    // subject as though the service had imposed nothing.
+fn an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced() {
+    // The forwarded body is itself a deep spine, evaluated by the in-process source under
+    // an outer spine, with 320 KiB of stack. It answers `s1` alone, or its evaluation is
+    // the typed refusal. `SILENT` tolerates an endpoint that cannot answer — it must not
+    // turn "this host's stack cannot evaluate the body" into the join identity, which
+    // here would answer every subject as though the service had imposed nothing.
     let body = format!(
         "?s <{EX}p> ?o {}",
         format!("OPTIONAL {{ ?s <{EX}q> ?z }} ").repeat(90)
@@ -363,7 +376,7 @@ fn a_stack_refusal_inside_an_in_process_service_is_not_silenced() {
             ))
         })
     };
-    assert_stack_refusal(&run(320 * 1024), "a deep SERVICE SILENT body");
+    assert_answer_or_stack_refusal(&run(320 * 1024), &["s1"], "a deep SERVICE SILENT body");
     // The valid neighbour: with room, the service answers `s1` only, and the join keeps it.
     assert_eq!(run(LARGE).expect("room for it"), ["s1"]);
 }
@@ -399,21 +412,23 @@ fn evaluate_with_service(
 }
 
 #[test]
-fn a_forwarded_body_too_deep_to_evaluate_there_is_the_typed_refusal_under_silent() {
+fn a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent() {
     // The body's 120 nested calls are written again in the text the SERVICE forwards, and
     // the in-process source re-parses and evaluates that text at the depth the SERVICE is
-    // evaluated at. With 320 KiB left there, evaluating the body's expression runs out of
-    // stack: the typed refusal, naming the evaluator's construct, and not silenced —
+    // evaluated at. With 320 KiB left there, the body answers `s1` alone, or its
+    // evaluation is the typed refusal naming the evaluator's construct, and not silenced —
     // `SILENT` answering it with the join identity would pass every subject as though the
     // service had imposed nothing.
     let deep = prepare(&service_with_nested_calls(120));
-    let refused = evaluate_with_service(&deep, 320 * 1024);
-    assert_stack_refusal(&refused, "a SERVICE SILENT body 120 calls deep");
-    let message = refused.expect_err("refused").message;
-    assert!(
-        message.contains("expression"),
-        "the evaluator's construct is named: {message}"
-    );
+    let small = evaluate_with_service(&deep, 320 * 1024);
+    assert_answer_or_stack_refusal(&small, &["s1"], "a SERVICE SILENT body 120 calls deep");
+    if let Err(refused) = small {
+        assert!(
+            refused.message.contains("expression"),
+            "the evaluator's construct is named: {}",
+            refused.message
+        );
+    }
     // The valid neighbours: the same plan with room for the body answers `s1` alone,
     // and so does a shallow body on the very same small stack.
     assert_eq!(

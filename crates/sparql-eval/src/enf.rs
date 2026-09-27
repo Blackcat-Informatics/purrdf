@@ -317,7 +317,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             if left_join_erasable(right, expression.as_ref()) {
                 normalize(left)
             } else {
-                Enf::Pattern(crate::stack::clone::pattern(pattern))
+                Enf::Pattern(copied(pattern))
             }
         }
         // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
@@ -325,7 +325,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             if order_by_erasable(expression) {
                 normalize(inner)
             } else {
-                Enf::Pattern(crate::stack::clone::pattern(pattern))
+                Enf::Pattern(copied(pattern))
             }
         }
         // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
@@ -344,7 +344,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             // hard-failed or reached a federation endpoint must not be erased.
             (_, Some(0)) => {
                 if soundness::pattern_can_hard_error(inner) {
-                    Enf::Pattern(crate::stack::clone::pattern(pattern))
+                    Enf::Pattern(copied(pattern))
                 } else {
                     Enf::FoldedEmpty
                 }
@@ -354,7 +354,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             // whatever this recursion returns.
             (0, _) => normalize(inner),
             // start > 0: not a transparent wrapper; stop here, unmodified.
-            (_, _) => Enf::Pattern(crate::stack::clone::pattern(pattern)),
+            (_, _) => Enf::Pattern(copied(pattern)),
         },
         // Project is transparent to the spine, but it is also a real node in the
         // output (the `PrjMap` boundary substitution narrows against) — rebuild it
@@ -392,8 +392,16 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         // output is empty (every row whose expression denotes no composite, or an
         // empty one, contributes zero rows), so erasing it would answer `EXISTS`
         // `true` for a pattern that has no solutions.
-        other => Enf::Pattern(crate::stack::clone::pattern(other)),
+        other => Enf::Pattern(copied(other)),
     }
+}
+
+/// A copy of `pattern`, made by the algebra's `Clone`; a test build counts the pattern
+/// nodes it builds (`crate::op_count::count_copied`).
+fn copied(pattern: &GraphPattern) -> GraphPattern {
+    #[cfg(test)]
+    crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(pattern));
+    pattern.clone()
 }
 
 /// Map every node address inside `normalized` — an already-computed `Enf::Pattern` result

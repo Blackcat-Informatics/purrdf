@@ -444,6 +444,15 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             patterns: Vec::new(),
         };
     }
+    // A test build counts the pattern nodes the copies of this node's own expressions,
+    // sort keys and aggregates build. Its child patterns are rebuilt by this walk rather
+    // than copied, and are not counted.
+    #[cfg(test)]
+    purrdf_sparql_algebra::NodeRef::Pattern(pattern).for_each_child(|child| {
+        if !matches!(child, purrdf_sparql_algebra::NodeRef::Pattern(_)) {
+            crate::op_count::count_copied(child);
+        }
+    });
     match pattern {
         // Leaves with no child pattern and no `Values` cells to inspect.
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
@@ -455,7 +464,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             object,
         } => GraphPattern::Path {
             subject: subject.clone(),
-            path: crate::stack::clone::path(path),
+            path: path.clone(),
             object: object.clone(),
         },
         GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
@@ -487,14 +496,14 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::LeftJoin {
             left: Child::new(sanitize_forwarded_body(left)),
             right: Child::new(sanitize_forwarded_body(right)),
-            expression: expression.as_ref().map(crate::stack::clone::expression),
+            expression: expression.clone(),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
             left: Child::new(sanitize_forwarded_body(left)),
             right: Child::new(sanitize_forwarded_body(right)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: crate::stack::clone::expression(expr),
+            expr: expr.clone(),
             inner: Child::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
@@ -511,7 +520,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Extend {
             inner: Child::new(sanitize_forwarded_body(inner)),
             variable: variable.clone(),
-            expression: crate::stack::clone::expression(expression),
+            expression: expression.clone(),
         },
         GraphPattern::Unfold {
             inner,
@@ -520,7 +529,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             companion,
         } => GraphPattern::Unfold {
             inner: Child::new(sanitize_forwarded_body(inner)),
-            expression: crate::stack::clone::expression(expression),
+            expression: expression.clone(),
             element: element.clone(),
             companion: companion.clone(),
         },
@@ -539,7 +548,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
             inner: Child::new(sanitize_forwarded_body(inner)),
-            expression: expression.iter().map(crate::stack::clone::order).collect(),
+            expression: expression.clone(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
             inner: Child::new(sanitize_forwarded_body(inner)),
@@ -567,10 +576,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Group {
             inner: Child::new(sanitize_forwarded_body(inner)),
             variables: variables.clone(),
-            aggregates: aggregates
-                .iter()
-                .map(|(variable, call)| (variable.clone(), crate::stack::clone::aggregate(call)))
-                .collect(),
+            aggregates: aggregates.clone(),
         },
     }
 }

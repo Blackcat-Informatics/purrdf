@@ -16,13 +16,16 @@
 
 use std::cell::Cell;
 
+use purrdf_sparql_algebra::NodeRef;
+
 /// One kind of counted work.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Op {
     /// A pattern or expression node built by the correlated substitution walk
     /// (`crate::expr::substitute_pattern_impl` / `substitute_expr`).
     Substituted,
-    /// A pattern node copied by `crate::stack::clone::pattern`.
+    /// A pattern node in a subtree the evaluator copies with the algebra's `Clone`
+    /// ([`count_copied`]).
     Cloned,
     /// A pattern node visited by the structural analysis
     /// (`crate::governor::soundness::analyze_pattern`).
@@ -74,6 +77,20 @@ pub(crate) fn bump(op: Op) {
         }
         counts.set(current);
     });
+}
+
+/// Count one [`Op::Cloned`] for every pattern node in the subtree at `node`, itself
+/// included: the pattern nodes a `Clone` of that subtree builds. Pattern nodes reached
+/// through an expression (an `EXISTS` body) are counted too, because the copy builds
+/// them as well. Walks a work list, as the copy does.
+pub(crate) fn count_copied(node: NodeRef<'_>) {
+    let mut pending = vec![node];
+    while let Some(next) = pending.pop() {
+        if matches!(next, NodeRef::Pattern(_)) {
+            bump(Op::Cloned);
+        }
+        next.for_each_child(|child| pending.push(child));
+    }
 }
 
 /// Zero every counter on this thread.

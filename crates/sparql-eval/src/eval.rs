@@ -327,7 +327,11 @@ impl PreparedExists {
                 // location, and `witness_inner` is boxed BEFORE its address is taken, so
                 // both walks key every entry by the address the node actually ends up at.
                 let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
-                let witness_inner = Box::new(crate::stack::clone::pattern(&normalized));
+                #[cfg(test)]
+                crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
+                    normalized.as_ref(),
+                ));
+                let witness_inner = Box::new(GraphPattern::clone(&normalized));
                 let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
                 let root_source = ledger_source
                     .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))

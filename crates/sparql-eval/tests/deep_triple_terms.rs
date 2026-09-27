@@ -12,9 +12,9 @@
 //! * writing one into a dataset (`INSERT DATA`, an `INSERT` template, a `CONSTRUCT`
 //!   graph) is refused with the dataset's own limit, `rdf-ir-triple-nesting-limit`,
 //!   past 16 levels, and admitted at 16;
-//! * how deep they may nest is the stack of the thread answering, and past it the
-//!   answer is the typed stack refusal, never an abort — however deep the evaluation
-//!   stands when it walks the term.
+//! * however deep they nest, the answer is the value the request computes or the typed
+//!   stack refusal, never an abort — however deep the evaluation stands when it walks
+//!   the term.
 
 use purrdf_core::TermBox;
 use std::sync::Arc;
@@ -433,20 +433,42 @@ fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
 }
 
-/// A hundred thousand nested triple terms on a test thread are the typed stack refusal,
-/// in a pattern and in `VALUES` alike — never an abort — and the next request answers.
+/// A hundred thousand nested triple terms on a test thread, in a pattern and in `VALUES`,
+/// answer what they compute — the pattern, deeper than any stored term, no rows; the
+/// `VALUES` block its one row holding the whole term — or are the typed stack refusal,
+/// never an abort; and the next request answers.
 #[test]
-fn triple_terms_nested_past_the_stack_are_the_typed_refusal() {
+fn triple_terms_nested_a_hundred_thousand_deep_answer_or_are_the_typed_refusal() {
+    const LEVELS: usize = 100_000;
     let data = dataset();
-    for query in [
-        format!("SELECT * WHERE {{ ?a <{EX}q> {} }}", chain(100_000, "?o")),
-        format!(
+    match query_on(
+        &data,
+        &format!("SELECT * WHERE {{ ?a <{EX}q> {} }}", chain(LEVELS, "?o")),
+    ) {
+        Ok(result) => {
+            let (_, rows) = solutions(result);
+            assert!(rows.is_empty(), "a pattern past the stored depth: {rows:?}");
+        }
+        Err(refused) => assert!(is_stack_refusal(&refused), "{refused:?}"),
+    }
+    match query_on(
+        &data,
+        &format!(
             "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
-            chain(100_000, "1")
+            chain(LEVELS, "1")
         ),
-    ] {
-        let refused = query_on(&data, &query).expect_err("past the stack");
-        assert!(is_stack_refusal(&refused), "{refused:?}");
+    ) {
+        Ok(result) => {
+            let (_, mut rows) = solutions(result);
+            assert_eq!(rows.len(), 1, "one VALUES row");
+            let value = rows
+                .pop()
+                .and_then(|mut row| row.pop().flatten())
+                .expect("?x is bound");
+            assert_eq!(nesting(&value), LEVELS, "the whole term");
+            drop_flat(value);
+        }
+        Err(refused) => assert!(is_stack_refusal(&refused), "{refused:?}"),
     }
     let (_, rows) = solutions(
         query_on(&data, &format!("SELECT ?a WHERE {{ ?a <{EX}q> ?t }}"))
@@ -518,8 +540,13 @@ fn a_deep_term_walked_at_the_deepest_evaluation_fits_the_stack_left() {
             };
             let (mut refused, mut answered) = (purrdf_stack::MARGIN_BYTES, 64 << 20);
             assert_eq!(answer(answered).expect("answers with room"), (0, LEVELS));
-            let refusal = answer(refused).expect_err("the margin alone holds nothing");
-            assert!(is_stack_refusal(&refusal), "{refusal:?}");
+            match answer(refused) {
+                Ok(found) => {
+                    assert_eq!(found, (0, LEVELS), "the margin alone: the term is whole");
+                    return (refused, None);
+                }
+                Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
+            }
             while answered - refused > 4096 {
                 let mid = refused.midpoint(answered);
                 match answer(mid) {
@@ -533,13 +560,13 @@ fn a_deep_term_walked_at_the_deepest_evaluation_fits_the_stack_left() {
                     }
                 }
             }
-            (answered, refused)
+            (answered, Some(refused))
         })
         .expect("spawn")
         .join()
         .expect("the thread returned rather than aborting");
     eprintln!(
-        "a {LEVELS}-deep term under 200 nested EXISTS answers with {} bytes left, refused with {}",
+        "a {LEVELS}-deep term under 200 nested EXISTS answers with {} bytes left, refused with {:?}",
         answers.0, answers.1
     );
 }
@@ -664,8 +691,17 @@ fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
                 (0, LEVELS + 1),
                 "one row, the whole term"
             );
-            let refusal = answer(refused).expect_err("the margin alone holds nothing");
-            assert!(is_stack_refusal(&refusal), "{refusal:?}");
+            match answer(refused) {
+                Ok(found) => {
+                    assert_eq!(
+                        found,
+                        (0, LEVELS + 1),
+                        "the margin alone: the term is whole"
+                    );
+                    return (refused, None);
+                }
+                Err(refusal) => assert!(is_stack_refusal(&refusal), "{refusal:?}"),
+            }
             while answered - refused > 4096 {
                 let mid = refused.midpoint(answered);
                 match answer(mid) {
@@ -679,25 +715,27 @@ fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
                     }
                 }
             }
-            (answered, refused)
+            (answered, Some(refused))
         })
         .expect("spawn")
         .join()
         .expect("the thread returned");
     eprintln!(
-        "a {}-deep term built under 200 nested EXISTS answers with {} bytes left, refused with {}",
+        "a {}-deep term built under 200 nested EXISTS answers with {} bytes left, refused with {:?}",
         LEVELS + 1,
         edge.0,
         edge.1
     );
 }
 
-/// Past the stack of the thread answering, a term built at run time is the typed stack
-/// refusal naming triple terms — on a small thread a host function's 100 000-level chain
-/// is — and the valid neighbour, the same call at 100 levels, answers the whole term.
+/// On a small thread, a host function's 100 000-level chain built into a term at run time
+/// answers the whole term or is the typed stack refusal naming triple terms, never an
+/// abort; and the neighbour, the same call at 100 levels, answers the whole term.
 #[test]
-fn a_term_built_past_the_stack_is_the_typed_refusal() {
-    if !in_child_process("a_term_built_past_the_stack_is_the_typed_refusal") {
+fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() {
+    if !in_child_process(
+        "a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal",
+    ) {
         return;
     }
     std::thread::Builder::new()
@@ -719,9 +757,22 @@ fn a_term_built_past_the_stack_is_the_typed_refusal() {
                     QueryOptions::new().with_functions(&functions),
                 )
             };
-            let refused = run(100_000).expect_err("past the stack");
-            assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE, "{refused:?}");
-            assert!(refused.message.contains("triple term"), "{refused:?}");
+            match run(100_000) {
+                Ok(result) => {
+                    let (_, mut rows) = solutions(result);
+                    let value = rows
+                        .pop()
+                        .and_then(|mut row| row.pop().flatten())
+                        .expect("one row binding ?x");
+                    assert!(rows.is_empty(), "one row");
+                    assert_eq!(nesting(&value), 100_001, "the whole term");
+                    drop_flat(value);
+                }
+                Err(refused) => {
+                    assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE, "{refused:?}");
+                    assert!(refused.message.contains("triple term"), "{refused:?}");
+                }
+            }
             let (_, mut rows) = solutions(run(100).expect("the neighbour answers"));
             let value = rows
                 .pop()

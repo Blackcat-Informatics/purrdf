@@ -1228,7 +1228,11 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // Both of those were missing while this was a load-time parse: a relation call
     // was an ordinary triple pattern, and a body that needed reordering failed per
     // row rather than being ordered once.
-    let copied = crate::stack::walk(|| crate::stack::clone::query(body.query()))?;
+    #[cfg(test)]
+    crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
+        crate::eval::query_pattern(body.query()),
+    ));
+    let copied = body.query().clone();
     let substituted = crate::substitute::apply_substitutions(
         copied,
         crate::substitute::Prebindings::Owned(&substitutions),
