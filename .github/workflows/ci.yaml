@@ -7,6 +7,8 @@ on:
   push:
     branches:
       - main
+  # Any branch can be run on demand, without opening a pull request for it.
+  workflow_dispatch:
 
 permissions:
   contents: read
