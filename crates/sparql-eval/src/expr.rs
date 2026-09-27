@@ -2924,16 +2924,16 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            // Bound, but to a term that is not an IRI: it names no endpoint. Left as a
-            // variable, `SILENT` or not, so the clause surfaces the refusal an
-            // unresolvable endpoint gets in `crate::service_endpoints` — `SILENT`
-            // tolerates an endpoint that fails, not a value that names none.
             // The body is forwarded as text, so it is substituted in full: a placeholder
             // left in it would be sent to the endpoint in place of the body.
             defer.eager_depth += 1;
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             defer.eager_depth -= 1;
-            boxed_and_mapped(
+            let unresolved = match &resolved_name {
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => Some(v.clone()),
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => None,
+            };
+            let service_node = boxed_and_mapped(
                 GraphPattern::Service {
                     name: resolved_name,
                     inner: inner_sub,
@@ -2941,7 +2941,19 @@ fn substitute_pattern_impl(
                 },
                 pattern,
                 map,
-            )
+            );
+            // Bound, but to a term that is not an IRI: it names no endpoint. The clause is
+            // joined with a one-row `VALUES` of that term, which lists it as the clause's
+            // one endpoint (`crate::service_endpoints`): an invocation that fails, so Ω0
+            // with a silenced record under `SILENT` and an error otherwise.
+            match unresolved {
+                Some(v) => {
+                    let mut vars = DetHashSet::default();
+                    vars.insert(v);
+                    join_leaf_with_values(service_node, &vars, &row.term, pattern, map)
+                }
+                None => service_node,
+            }
         }
         GraphPattern::OrderBy { inner, expression } => {
             let mut free = FreeVars::default();

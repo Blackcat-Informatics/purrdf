@@ -940,7 +940,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             deferred_exists: None,
             plan_exists_sites: None,
             endpoint_frames: Vec::new(),
-            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
+            // The body's own scan is installed when it is prepared for evaluation
+            // (`prepare_query_context`); nothing of the caller's applies to it.
+            endpoint_scan: crate::service_endpoints::EndpointScan::Absent,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -1417,6 +1419,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         match self.governors.as_ref() {
             None => candidate,
             Some(state) => state.record_trip(candidate),
+        }
+    }
+
+    /// Record an invocation a `SILENT` clause absorbed, on the evidence of a governed
+    /// execution. An ungoverned execution returns a bare result with nowhere to carry the
+    /// record, so there it is not kept.
+    pub(crate) fn record_silenced(&self, invocation: purrdf_core::SilencedInvocation) {
+        if let Some(state) = self.governors.as_ref() {
+            state.record_silenced(invocation);
         }
     }
 
@@ -2106,7 +2117,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // endpoints its parent would. The terms are the parent's, and a worker's
             // scratch is a clone of the parent's, so they read back the same.
             endpoint_frames: self.endpoint_frames.clone(),
-            endpoint_scan: self.endpoint_scan,
+            endpoint_scan: self.endpoint_scan.clone(),
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -2318,7 +2329,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // A function body is its own query: no join of the caller's encloses its
             // clauses, so no endpoint list of the caller's applies to them.
             endpoint_frames: Vec::new(),
-            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
+            // The body's own scan is installed when it is prepared for evaluation
+            // (`prepare_query_context`); nothing of the caller's applies to it.
+            endpoint_scan: crate::service_endpoints::EndpointScan::Absent,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2969,7 +2982,7 @@ pub fn eval<D: DatasetView + Sync>(
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
-    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
+    ctx.endpoint_scan = crate::service_endpoints::scan(pattern)?;
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -3213,7 +3226,7 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
+    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query))?;
     install_answer_cap_pushdown(query, ctx);
     Ok(reserve)
 }

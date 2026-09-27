@@ -301,8 +301,10 @@ discarding the same underlying model.
 ## Asynchronous queries, federation and the Cloudflare adapter
 
 The synchronous methods are the offline lane: they install no `SERVICE` or `LOAD`
-source, so a `SERVICE` or `LOAD` fails by name, `SILENT` or not (`SILENT` tolerates an
-endpoint or document that fails, and none was reached). Every evaluating method
+source, so a `SERVICE` or `LOAD` fails by name. `SERVICE SILENT` is the join identity
+there, since an invocation that cannot succeed is what `SILENT` answers that way
+(SPARQL 1.1 Federated Query §3.2); a governed method's evidence lists it under
+`silenced`. Every evaluating method
 also has a Promise-returning twin that takes the host's handlers for those two
 clauses:
 
@@ -371,12 +373,12 @@ The answer is one of:
 - SPARQL Results JSON as a `Uint8Array`, an `ArrayBuffer` or a string;
 - a `Response`, whose 2xx body is read as SPARQL Results JSON. Any other status is a
   transport failure;
-- `{ kind: "transport", message }` when the endpoint could not be reached or read.
-  `SERVICE SILENT` swallows this failure and contributes the join identity, so the
-  surrounding pattern's own solutions come back unextended. Without `SILENT` the
-  query fails;
-- `{ kind: "denied", message }` when the host's policy refuses the request. This
-  failure fails the query even under `SERVICE SILENT`.
+- `{ kind: "transport", message }` when the endpoint could not be reached or read;
+- `{ kind: "denied", message }` when the host's policy refuses the request.
+
+Either failure fails the query. Under `SERVICE SILENT` it contributes the join identity
+instead, so the surrounding pattern's own solutions come back unextended, and the job's
+`evidence.async.silenced` records the endpoint and the failure's `kind`.
 
 A handler that throws, rejects, or returns anything else has *faulted*. A fault fails
 the job even under `SERVICE SILENT`, because a fault is not an answer. `ctx.silent` is
@@ -431,7 +433,8 @@ A `ServiceCatalog` passed as `catalog` authorizes every request before the handl
 called. It denies by default, holds one profile per endpoint and an optional fallback,
 and a profile grants the capabilities `query`, `network` and `credentials` and may add
 headers, a credential header, a `User-Agent` and a timeout. A denied request fails the
-query even under `SERVICE SILENT`. `localServices: { [endpoint]: dataset }` answers the
+query, and under `SERVICE SILENT` is the join identity recorded as `"denied"`.
+`localServices: { [endpoint]: dataset }` answers the
 named endpoints in process from a snapshot of a `Dataset`, without calling the handler.
 
 In a browser, the remote endpoint's CORS policy governs whether `fetch` can read its
@@ -466,15 +469,17 @@ decides how many requests the clause makes. It is bound by one of:
   { … } }`. `OPTIONAL` and `MINUS` are not: `{ SERVICE ?e { … } OPTIONAL { ?g ex:endpoint
   ?e } }` is refused, since the optional side need not bind `?e`.
 
-Under `SERVICE SILENT` an endpoint that fails contributes one row binding only `?e`, so
-its own left rows survive unextended and no other endpoint's rows change. Under `MINUS`
-that row removes its endpoint's left rows, exactly as `FILTER NOT EXISTS { SERVICE SILENT
-?e { … } }` would. An `?e` bound to a literal or a blank node names no endpoint, and is
-refused, `SILENT` or not, before any request is made.
+Under `SERVICE SILENT` an endpoint that fails is the join identity for its own left rows
+alone. Under a group join or `OPTIONAL` it contributes one row binding only `?e`, so its
+left rows survive unextended and no other endpoint's rows change. Under `MINUS` the left
+rows are subtracted one endpoint at a time, and a failing endpoint subtracts nothing from
+its own rows while the others' answers still remove theirs. An `?e` bound to a literal or
+a blank node names no endpoint: an error before any request is made, and under `SILENT`
+the join identity for that value's rows.
 
-A clause for which no solution binds `?e` is refused, `SILENT` or not: `SILENT` tolerates
-an endpoint that fails, not a query that names none, and an empty answer would look
-complete when nothing was asked. That covers an `?e` bound nowhere, bound in only some of
+A clause for which no solution binds `?e` is refused, `SILENT` or not: no invocation is
+made for `SILENT` to absorb, and an empty answer would look complete when nothing was
+asked. That covers an `?e` bound nowhere, bound in only some of
 the left side's solutions, or bound only outside a further `OPTIONAL` or `MINUS` right
 side, an `EXISTS`, a `LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-`SELECT`
 that does not project `?e` between the binding and the clause. The error names the

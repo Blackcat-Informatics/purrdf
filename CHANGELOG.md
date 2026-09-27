@@ -435,8 +435,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   twin's result shape. The options are:
   - `resolveService` and `resolveLoad`, the host's handlers. A handler answers with
     data or with a typed `{ kind: "transport" }` or `{ kind: "denied" }` failure.
-    `SILENT` swallows a transport failure and never a denial. A handler that throws
-    has faulted, and the fault fails the job even under `SILENT`;
+    Either fails the request; under `SILENT` either is the join identity, and
+    `evidence.async.silenced` records it. A handler that throws has faulted, and the
+    fault fails the job even under `SILENT`;
   - `catalog`, a `ServiceCatalog` (deny by default, one profile per endpoint, an
     optional fallback, `carriesCredential`, `authorizeLoad`) that authorizes each
     request before the handler is called, and `localServices`, endpoints answered in
@@ -505,6 +506,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     whose `code` is the engine's code, never a JavaScript error class name.
   `maxRemoteRequests` bounds the subrequests a request makes, because every
   `SERVICE` request and `LOAD` is charged before it reaches a handler.
+
+- **core, sparql-eval, wasm:** every invocation a `SILENT` clause absorbs is recorded.
+  `GovernorEvidence::silenced` lists one `SilencedInvocation` per failed invocation —
+  its `SilencedTarget` (`Service { endpoint }` or `Load { iri }`), its `SilencedKind`
+  (`transport`, `decode`, `disabled`, `unconfigured`, `denied`, `host-denied`,
+  `not-an-iri`, `fault`) and the message the error would have carried — in ascending
+  order, so the list does not depend on how the evaluation was scheduled. Every
+  governed query and update carries it, complete or not. The answer `SILENT` requires
+  is indistinguishable from an endpoint with nothing to add; this is where the
+  difference is kept. An ungoverned entry returns a bare result and keeps no record;
+  run the same request under `QueryGovernors::METERED` to read one. The wasm package's
+  `GovernorEvidence` and `AsyncEvidence` expose the records as `silenced`, each with
+  `target`, `endpoint` or `iri`, `kind` and `message`, and the JavaScript wrapper
+  carries them on `evidence.silenced` and `evidence.async.silenced`.
 
 - **sparql-eval:** `QueryOptions` gains `remote` (the `SERVICE` source) and `load`
   (the `LOAD` source, taking precedence over a resolver installed on the engine).
@@ -741,43 +756,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   endpoint variable no solution bound. The clause became the join identity: the
   query answered the left rows alone, asked no endpoint, and looked complete. That
   refusal is now an `EvalError::Unsupported` (`SERVICE ?e with no endpoint: …`)
-  under `SILENT` too, because `SILENT` tolerates an endpoint that fails, not a query
-  that names none. Its message names the shapes that evaluate and the rewrite.
-
-- **BREAKING** **sparql-eval, wasm, cli, python, capi:** `SILENT` no longer hides the
-  engine's own missing endpoint. `SERVICE SILENT <iri>` evaluated with no remote query
-  source configured, and `SERVICE SILENT ?e` with `?e` bound to a literal or a blank
-  node, answered the join identity having asked nobody; `LOAD SILENT` with no
-  `GraphResolver` succeeded having fetched nothing. Each is now the error its
-  non-`SILENT` form raises: `native-sparql-service-unconfigured` (`no remote query
-  source configured for SERVICE <…>`), `?e is bound to …, which is not an IRI`, and
-  `native-sparql-load-no-resolver`, each message ending with why `SILENT` does not
-  apply. The reason: `SILENT` tolerates a failure of an endpoint or source that was
-  actually contacted — a transport error, an HTTP error status, a redirect, an
-  undecodable body, a resolver's timeout — and here none was contacted, so the join
-  identity or a no-op `LOAD` would report an answer that looks complete and is not.
-  A host or catalog denial, an unbound `?e`, and the engine's own refusals were
-  already hard errors under `SILENT` and remain so.
-  **Every surface that installs no source breaks the same way**, where the last
-  release answered the join identity or a no-op: the wasm package's synchronous
-  methods, the `purrdf` CLI (`query`, `update`, and SHACL-SPARQL constraints under
-  `validate`), the Python binding, and the C ABI. A query that relied on
-  `SERVICE SILENT` or `LOAD SILENT` succeeding there must drop the clause, or run
-  through a surface that is given a source (a Rust `ServiceResolver` or
-  `GraphResolver`, or the wasm package's asynchronous twins with `resolveService` /
-  `resolveLoad`).
-  `RemoteError::Unconfigured` lets a source say it has nothing that reaches an
-  endpoint (the wasm package's job with local services and no `resolveService` does),
-  and is not silenceable either. With a source whose endpoint fails, `SILENT` is still
-  the join identity and a no-op `LOAD`. The conformance
-  harness now runs every case with an in-memory source that fails undeclared
-  endpoints and an offline `LOAD` resolver, standing in for the network the W3C
-  suites assume (`service7`, `load-silent`, `load-into-silent` still pass).
+  under `SILENT` too, because no invocation is made for `SILENT` to absorb. Its
+  message names the shapes that evaluate and the rewrite.
 
 - **sparql-eval:** a query refused for a variable endpoint some solution could not
   name still contacted a remote first. `?s ?p ?o OPTIONAL { ?s ex:ep ?e } SERVICE ?e
   { … }` evaluates the clause once per left solution, so when an early solution bound
-  `?e` and a later one left it unbound (or bound it to a literal), the request for the
+  `?e` and a later one left it unbound (or, without `SILENT`, bound it to a literal),
+  the request for the
   early one — with any credentials the host attaches — went out before the refusal,
   and whether it did depended on row order. Every left solution is now checked before
   the clause is evaluated for any of them, for each `SERVICE ?e` whose variable
@@ -795,7 +781,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   evaluation order. The result is exact, because a row from any other endpoint
   matches no left row. A left row whose endpoint answers nothing keeps its bindings
   under `OPTIONAL` and is not removed under `MINUS`. Under `SILENT` a failing
-  endpoint contributes one row binding only `?e`, so no other endpoint's rows change.
+  endpoint is the join identity for its own left rows alone: under a group join or
+  `OPTIONAL` it contributes one row binding only `?e`, so no other endpoint's rows
+  change; under `MINUS` the left rows are partitioned by endpoint, the right side is
+  evaluated once per endpoint with that endpoint alone listed, and each partition is
+  subtracted by its own result, so a failing endpoint removes none of its rows while
+  every answering endpoint still removes its matches. Still one request per endpoint.
   A clause is still refused where `?e` is unbound in some left solution, or where a
   further `OPTIONAL` or `MINUS` right side, an `EXISTS`, a `LIMIT`/`OFFSET`, an
   aggregate not grouped by `?e`, or a sub-`SELECT` not projecting `?e` sits between
@@ -2436,14 +2427,30 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `… (purrdf S5 scope): …`). An unclassified `EvalError::Unsupported` carries its own code at the
   engine boundary, `native-sparql-unsupported` (`EvalError::UNSUPPORTED_CODE`), where it
   used to carry `native-sparql-query-eval` or `native-sparql-update-eval` like an
-  evaluation that failed; a `SERVICE ?e` bound to a literal or a blank node is now that
-  refusal too, not a federation error. The Cloudflare adapter's `handleSparqlRequest`
+  evaluation that failed; without `SILENT`, a `SERVICE ?e` bound to a literal or a
+  blank node is now that refusal too, not a federation error. The Cloudflare adapter's `handleSparqlRequest`
   answers a request the engine refuses to evaluate as written
   (`native-sparql-unsupported`, `native-sparql-custom-function`,
   `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted`)
   with a `400` whose `code` is that diagnostic code and whose `detail` is the refusal,
   where it answered `500 Internal Server Error`; a host fault is still the sanitized
   `500`.
+
+- **BREAKING** **sparql-eval, wasm:** `SERVICE SILENT` follows SPARQL 1.1 Federated
+  Query §3.2, which answers an invocation that does not succeed with Ω0 under
+  `SILENT` and with an error without it, whatever the reason it did not succeed. A
+  catalog denial (`EvalError::ServiceDenied` in 2.0.2) and a host's refusal are now
+  the join identity under `SILENT`, like a transport failure, an undecodable
+  response, a disabled source and a source that reaches no such endpoint; each is
+  recorded on the evidence (see Added). A `LATERAL` clause and a custom scalar
+  function call inside a `SERVICE SILENT` body are forwarded as written, where 2.0.2
+  refused them: an endpoint that rejects them fails the invocation, which `SILENT`
+  answers with Ω0. A variable endpoint bound to a term that is not an IRI is such a
+  failure too. This engine's own governors — a ceiling, a cancellation, a deadline —
+  and its stack refusals are not invocation failures and still truncate or fail the
+  query whether or not `SILENT` is written; so do the refusals of a property-function
+  call or a custom aggregate inside a forwarded body. Without `SILENT` every outcome
+  is the error it was.
 
 - **BREAKING** **sparql-eval:** each `SERVICE` outcome carries its own code at the
   engine boundary, where every one used to carry `native-sparql-query-eval` or
@@ -2454,8 +2461,8 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   asked and gave no usable answer, `native-sparql-service-failed`. A `SERVICE` with
   no source that reaches its endpoint is the new `EvalError::ServiceUnconfigured`,
   where it was `EvalError::Remote`, and carries
-  `native-sparql-service-unconfigured`. Its message is unchanged, and
-  `SERVICE SILENT` still does not swallow it. A host can now tell a refusal to ask
+  `native-sparql-service-unconfigured`. Its message is unchanged, and under
+  `SERVICE SILENT` it is the join identity, as it was. A host can now tell a refusal to ask
   an endpoint from an endpoint that failed, and both from a host that had no way to
   ask, without reading message text.
 

@@ -17,13 +17,13 @@
 //! rather than silently returning an empty or partial result: a synchronous call cannot
 //! wait for the network, and a false answer is worse than an error.
 //!
-//! `SERVICE SILENT` and `LOAD SILENT` hard-fail here too. `SILENT` is the query author
-//! writing "an endpoint (or document) that fails is not an error" into the request, and
-//! SPARQL 1.1 §10 and §3.1.4 honour it for an endpoint that was asked and did not answer.
-//! On this lane none is ever asked — no source is installed — so there is no failure
-//! for `SILENT` to tolerate, and answering the join identity (or a no-op `LOAD`) would
-//! claim one had been consulted. The refusal says why `SILENT` does not apply; the
-//! asynchronous twins, given a handler, honour `SILENT` for an endpoint that fails.
+//! The one exception is the caller's own: `SERVICE SILENT` succeeds with nothing
+//! fetched. `SILENT` is the query author writing "an invocation that fails is not an
+//! error" into the request, and SPARQL 1.1 Federated Query §3.2 answers a failed
+//! invocation under it with the join identity — so the surrounding pattern's own
+//! solutions come back, unaugmented. The governed entries record each such invocation on
+//! [`GovernorEvidence::silenced`]. `LOAD SILENT` still hard-fails on this lane. Drop
+//! `SILENT` to get the hard failure.
 //!
 //! The second lane is the `async_query` module: every evaluating method here has an
 //! asynchronous twin that runs the same evaluator as a job suspending through JSPI on
@@ -815,6 +815,82 @@ impl GovernorEvidence {
     pub fn is_complete(&self) -> bool {
         self.inner.is_complete()
     }
+
+    /// Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed: the answer the
+    /// specification requires for it is indistinguishable from an endpoint with nothing
+    /// to add, and this is where the difference is kept. Empty when nothing failed.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn silenced(&self) -> Vec<SilencedInvocation> {
+        silenced_records(self.inner.silenced())
+    }
+}
+
+/// One invocation a `SILENT` clause absorbed: a `SERVICE SILENT` that answered the single
+/// empty solution, or a `LOAD SILENT` that succeeded with nothing loaded.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct SilencedInvocation {
+    /// The kernel record this object renders.
+    inner: purrdf_core::SilencedInvocation,
+}
+
+#[wasm_bindgen]
+impl SilencedInvocation {
+    /// `"service"` or `"load"`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn target(&self) -> String {
+        self.inner.target.label().to_owned()
+    }
+
+    /// The `SERVICE` endpoint, or `undefined` for a `LOAD`. A variable endpoint bound to
+    /// a term that is not an IRI reports that term in N-Triples form.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn endpoint(&self) -> Option<String> {
+        match &self.inner.target {
+            purrdf_core::SilencedTarget::Service { endpoint } => Some(endpoint.clone()),
+            _ => None,
+        }
+    }
+
+    /// The `LOAD` source IRI, or `undefined` for a `SERVICE`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn iri(&self) -> Option<String> {
+        match &self.inner.target {
+            purrdf_core::SilencedTarget::Load { iri } => Some(iri.clone()),
+            _ => None,
+        }
+    }
+
+    /// Why the invocation failed: `"transport"`, `"decode"`, `"disabled"`,
+    /// `"unconfigured"`, `"denied"`, `"host-denied"`, `"not-an-iri"` or `"fault"`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn kind(&self) -> String {
+        self.inner.kind.label().to_owned()
+    }
+
+    /// The failure's message, as the error would have read without `SILENT`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn message(&self) -> String {
+        self.inner.message.clone()
+    }
+}
+
+/// The JavaScript objects for `records`, in their order.
+pub(crate) fn silenced_records(
+    records: &[purrdf_core::SilencedInvocation],
+) -> Vec<SilencedInvocation> {
+    records
+        .iter()
+        .map(|record| SilencedInvocation {
+            inner: record.clone(),
+        })
+        .collect()
 }
 
 /// What the rows a truncated execution reached bound, relative to the query's true answer.
@@ -1698,9 +1774,10 @@ impl Dataset {
     /// document. TriG is Turtle's dataset superset, so a default-graph-only result is
     /// byte-identical Turtle exactly as before; see `default_graph_format`.
     ///
-    /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause
-    /// (unresolvable on this lane, `SILENT` or not) throws a JsError — never a silent
-    /// empty result; see this module's federation note.
+    /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause (unresolvable
+    /// on this lane) throws a JsError — never a silent empty result. `SERVICE SILENT` is
+    /// the caller's own opt-out and succeeds with nothing fetched, as SPARQL 1.1 requires;
+    /// see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {

@@ -47,9 +47,7 @@
 //! The body is normalized ([`crate::enf`]) before substitution rather than after. The
 //! normal form only erases spine wrappers that cannot change whether the body is empty
 //! and cannot fail; substitution never makes a subtree able to fail, so every erasure the
-//! written body admits, the substituted one admits too, and the few it adds (a
-//! `SERVICE SILENT` whose endpoint is bound to a non-IRI becomes the empty pattern) erase
-//! nothing that could have answered differently.
+//! written body admits, the substituted one admits too.
 //!
 //! # Where a placeholder is visible
 //!
@@ -161,19 +159,18 @@ impl SubstitutionEnv {
         out
     }
 
-    /// Whether substituting this environment turns a `SERVICE ?variable` into something
-    /// that is no longer a variable endpoint: an IRI binding resolves it. A binding to
-    /// any other term leaves it a variable endpoint, `SILENT` or not, which the endpoint
-    /// analysis then refuses: such a value names no endpoint. Layer by layer, the first
-    /// layer that resolves it decides, so "any layer" is the answer.
+    /// Whether substituting this environment turns a `SERVICE ?variable` into a clause
+    /// that no longer needs an enclosing operator's endpoint list: any binding does. An
+    /// IRI binding becomes the clause's endpoint; any other term is joined beside the
+    /// clause as a one-row `VALUES`, which lists it as the clause's only endpoint (see
+    /// `crate::expr::substitute_pattern`). Layer by layer, the first layer that binds it
+    /// decides, so "any layer" is the answer.
     pub(crate) fn resolves_endpoint(&self, variable: &Variable) -> bool {
         let mut next = self.layers.as_deref();
         while let Some(layer) = next {
             let row = &layer.row;
-            if row
-                .expr
-                .iter()
-                .any(|(v, e)| v == variable && matches!(e, Expression::NamedNode(_)))
+            if row.expr.iter().any(|(v, _)| v == variable)
+                || row.term.iter().any(|(v, _)| v == variable)
             {
                 return true;
             }
@@ -457,10 +454,12 @@ fn build_site<D: DatasetView + Sync>(
         vars
     })?;
     let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern(body, ctx.safety_registries());
-    let service_uses = if ctx.endpoint_scan == crate::service_endpoints::EndpointScan::Absent {
-        Vec::new()
-    } else {
-        crate::stack::walk(|| endpoint_uses(body))?
+    let service_uses = match &ctx.endpoint_scan {
+        crate::service_endpoints::EndpointScan::Absent => Vec::new(),
+        crate::service_endpoints::EndpointScan::Present(index) => match index.exists_uses(body) {
+            Some(uses) => uses.to_vec(),
+            None => crate::stack::walk(|| endpoint_uses(body))?,
+        },
     };
     let plan_map = match (&ctx.ledger, prepared.as_ref()) {
         (Some(_), PreparedExists::Pattern { ledger_source, .. }) => {

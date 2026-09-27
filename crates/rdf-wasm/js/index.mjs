@@ -408,10 +408,33 @@ function governorEvidenceToObject(raw) {
       consumedBy[labels[index]] = consumed[index];
       limitsBy[labels[index]] = limits[index];
     }
-    return { isComplete: raw.isComplete, consumed: consumedBy, limits: limitsBy };
+    return {
+      isComplete: raw.isComplete,
+      consumed: consumedBy,
+      limits: limitsBy,
+      silenced: silencedToObjects(raw.silenced),
+    };
   } finally {
     raw.free?.();
   }
+}
+
+/** Plain objects for the wasm `SilencedInvocation` records, each freed once read. */
+function silencedToObjects(records) {
+  return records.map((record) => {
+    try {
+      const object = {
+        target: record.target,
+        kind: record.kind,
+        message: record.message,
+      };
+      if (object.target === "load") object.iri = record.iri;
+      else object.endpoint = record.endpoint;
+      return object;
+    } finally {
+      record.free?.();
+    }
+  });
 }
 
 function trippedGovernorToObject(raw) {
@@ -883,6 +906,7 @@ function asyncEvidenceToObject(raw) {
       freezeMs: raw.freezeMs,
       evaluateMs: raw.evaluateMs,
       serializeMs: raw.serializeMs,
+      silenced: silencedToObjects(raw.silenced),
     };
   } finally {
     raw.free?.();

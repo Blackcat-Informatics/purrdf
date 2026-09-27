@@ -21,10 +21,8 @@ use crate::manifest::SparqlTestCase;
 /// suite assumes. An endpoint the manifest declares no data for is one the test
 /// expects not to answer — `service7` sends `SERVICE SILENT` to
 /// `<http://invalid.endpoint.org/sparql>` and expects the join identity — so the source
-/// fails it at the transport layer ([`purrdf_sparql_eval::RemoteError::Transport`]),
-/// the endpoint failure `SILENT` tolerates. Running a case with no source at all would
-/// be a different claim: that the engine was given nowhere to send the request, which
-/// is a configuration fault `SILENT` does not swallow.
+/// fails it at the transport layer ([`purrdf_sparql_eval::RemoteError::Transport`]), as
+/// the network would.
 ///
 /// Endpoint data is parsed against the case's OWN sentinel base
 /// ([`SparqlTestCase::base`]) — the same one the default-graph data and the query

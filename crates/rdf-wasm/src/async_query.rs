@@ -139,11 +139,12 @@
 //! | denied | `RemoteError::HostDenied` (the host's own policy, no catalog capability named) — a catalog capability denial never reaches this delivery: it is decided natively before the host is ever asked, and surfaces as `RemoteError::Denied` instead |
 //! | nothing delivered | a latched fault ("resolver returned without a delivery") |
 //!
-//! From there the evaluator's own contract decides, unchanged (see
-//! `purrdf_sparql_eval::service`): `SERVICE SILENT` swallows a transport or decode
-//! failure to the join identity and nothing else — a denial and a governor trip are never
-//! silenced, and neither is a fault, because a fault is not an answer at all. `silent` is
-//! handed to the host for information only; an empty answer is not the host's to invent.
+//! From there the evaluator's own contract decides (see `purrdf_sparql_eval::service`):
+//! `SERVICE SILENT` answers every failed invocation — a transport or decode failure, a
+//! denial, an endpoint no handler reaches — with the join identity, and records it on
+//! [`AsyncEvidence::silenced`]; a governor trip is never silenced, and neither is a fault,
+//! because a fault is not an answer at all. `silent` is handed to the host for
+//! information only; an empty answer is not the host's to invent.
 //!
 //! A `LOAD` effect answered with a transport failure becomes the evaluator's
 //! `native-sparql-load-failed`, which `LOAD SILENT` swallows exactly as it swallows an
@@ -730,6 +731,8 @@ struct AsyncCounters {
     freeze_ms: AtomicU64,
     evaluate_ms: AtomicU64,
     serialize_ms: AtomicU64,
+    /// Every invocation a `SILENT` clause absorbed, across the job's evaluations.
+    silenced: Mutex<Vec<purrdf_core::SilencedInvocation>>,
 }
 
 impl Default for AsyncCounters {
@@ -746,6 +749,7 @@ impl Default for AsyncCounters {
             freeze_ms: AtomicU64::new(0),
             evaluate_ms: AtomicU64::new(0),
             serialize_ms: AtomicU64::new(0),
+            silenced: Mutex::new(Vec::new()),
         }
     }
 }
@@ -781,7 +785,21 @@ impl AsyncCounters {
             freeze_ms: read_ms(&self.freeze_ms),
             evaluate_ms: read_ms(&self.evaluate_ms),
             serialize_ms: read_ms(&self.serialize_ms),
+            silenced: crate::query::silenced_records(
+                &self.silenced.lock().unwrap_or_else(PoisonError::into_inner),
+            ),
         }
+    }
+
+    /// Keep the silenced invocations one evaluation's `evidence` recorded.
+    fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+        if evidence.silenced().is_empty() {
+            return;
+        }
+        self.silenced
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(evidence.silenced());
     }
 }
 
@@ -791,7 +809,7 @@ impl AsyncCounters {
 /// three `…WaitMs` fields report separately; `freezeMs` and `serializeMs` are the phases
 /// that run to completion without yielding.
 #[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AsyncEvidence {
     polls: f64,
     yields: f64,
@@ -804,6 +822,7 @@ pub struct AsyncEvidence {
     freeze_ms: f64,
     evaluate_ms: f64,
     serialize_ms: f64,
+    silenced: Vec<crate::query::SilencedInvocation>,
 }
 
 #[wasm_bindgen]
@@ -873,6 +892,13 @@ impl AsyncEvidence {
     #[wasm_bindgen(getter, js_name = serializeMs)]
     pub fn serialize_ms(&self) -> f64 {
         self.serialize_ms
+    }
+
+    /// Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed during the job, in
+    /// the order its evaluations recorded them. Empty when nothing failed.
+    #[wasm_bindgen(getter)]
+    pub fn silenced(&self) -> Vec<crate::query::SilencedInvocation> {
+        self.silenced.clone()
     }
 }
 
@@ -1485,9 +1511,9 @@ impl ServiceResolver for HostServiceSource {
 }
 
 /// The fallback for a job with local services but no host `SERVICE` handler: an endpoint
-/// that is not local fails exactly as the offline lane's missing source does — a hard
-/// error, under `SILENT` too ([`RemoteError::Unconfigured`]): the job was given nowhere
-/// to send the request, which is not an endpoint that failed.
+/// that is not local fails exactly as the offline lane's missing source does
+/// ([`RemoteError::Unconfigured`]) — an error, and under `SILENT` the join identity with a
+/// silenced record.
 #[derive(Debug)]
 struct UnhandledServiceSource;
 
@@ -1812,6 +1838,12 @@ impl JobRun<'_> {
         self.timed(&self.counters.evaluate_ms, work)
     }
 
+    /// Keep the silenced invocations an evaluation's `evidence` recorded, for
+    /// [`AsyncEvidence::silenced`].
+    fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+        self.counters.record_silenced(evidence);
+    }
+
     fn serialize<T>(&self, work: impl FnOnce() -> T) -> T {
         self.timed(&self.counters.serialize_ms, work)
     }
@@ -1872,6 +1904,9 @@ fn ungoverned_query(
     let outcome = run.evaluate(|| {
         engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
     });
+    if let Ok(outcome) = &outcome {
+        run.record_silenced(outcome.evidence());
+    }
     match outcome {
         Err(diagnostic) => Err(JobError::error(diagnostic.to_string())),
         Ok(GovernedOutcome::Complete { result, .. }) => Ok(result),
@@ -1941,6 +1976,7 @@ impl OperationInput {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                run.record_silenced(outcome.evidence());
                 Ok(JobOutcome::Governed(Box::new(outcome)))
             }
             AsyncOperationKind::Negotiated => {
@@ -1951,6 +1987,7 @@ impl OperationInput {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                run.record_silenced(outcome.evidence());
                 let value = match outcome {
                     GovernedOutcome::Complete {
                         result, evidence, ..
@@ -2000,6 +2037,9 @@ impl OperationInput {
                         )
                     })
                     .map_err(|error| JobError::error(error.to_string()))?;
+                if let Some(answered) = outcome.outcome() {
+                    run.record_silenced(answered.evidence());
+                }
                 Ok(JobOutcome::Entailment(Box::new(outcome)))
             }
             AsyncOperationKind::Explain => {
@@ -2016,6 +2056,7 @@ impl OperationInput {
                         )
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                run.record_silenced(explanation.evidence());
                 // A stop cut the measuring run short, so its ledger describes a truncated
                 // run rather than the query: the stop is the job's error, as it is for
                 // every ungoverned operation. Any other trip is part of the explanation,
@@ -2040,6 +2081,7 @@ impl OperationInput {
                         )
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                run.record_silenced(outcome.evidence());
                 match outcome.tripped() {
                     None => Ok(JobOutcome::Updated(target)),
                     Some(tripped) => Err(JobError::stopped(tripped)),
@@ -2057,6 +2099,7 @@ impl OperationInput {
                         engine.update_governed(&mut target, request, run.options(&env), &governors)
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                run.record_silenced(outcome.evidence());
                 // The engine publishes into `target` only on the applied path, so a
                 // tripped request offers nothing to commit.
                 let frozen = outcome.is_applied().then_some(target);
@@ -2322,6 +2365,7 @@ fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
             purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
         run.evaluate(|| request.run())
     };
+    run.record_silenced(&state.evidence());
     match state.tripped() {
         Some(tripped @ TrippedGovernor::Stopped { .. }) => {
             JobOutcome::Failed(JobError::stopped(tripped))
@@ -5140,7 +5184,7 @@ mod tests {
     }
 
     #[test]
-    fn service_without_a_handler_fails_like_the_offline_lane_silent_or_not() {
+    fn service_without_a_handler_fails_like_the_offline_lane_unless_silent() {
         let engine = QueryEngine::new();
         let dataset = seed();
         let query = format!("SELECT * WHERE {{ ?s ?p ?o SERVICE <{ENDPOINT}> {{ ?o ?q ?x }} }}");
@@ -5159,11 +5203,11 @@ mod tests {
             )),
             "{error}"
         );
+        assert!(job.take_evidence().silenced().is_empty());
         job.finish();
 
-        // SILENT tolerates an endpoint that fails; a job with nowhere to send the request
-        // reached none, so it is the same refusal, saying why SILENT does not apply (the
-        // synchronous twin's, which `async.test.mjs` compares on the shipped artifact).
+        // With nowhere to send the request the invocation fails, so SILENT is the join
+        // identity on both lanes, and the job's evidence records the endpoint.
         let silent = query.replace("SERVICE <", "SERVICE SILENT <");
         let job = begin(
             &engine,
@@ -5172,15 +5216,19 @@ mod tests {
             &silent,
             &options(),
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
-        let error = job.take_error().expect("an error");
-        assert!(
-            error.contains(&format!(
-                "no remote query source configured for SERVICE <{ENDPOINT}>; SILENT does not \
-                 apply: it tolerates an endpoint that fails, and no endpoint was reached"
-            )),
-            "{error}"
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let expected = engine
+            .query_raw(&dataset, &silent, None, None, None, None)
+            .expect("sync twin");
+        assert_eq!(
+            raw_text(&job),
+            expected,
+            "SILENT is the join identity on both lanes"
         );
+        let silenced = job.take_evidence().silenced();
+        assert_eq!(silenced.len(), 1);
+        assert_eq!(silenced[0].endpoint().as_deref(), Some(ENDPOINT));
+        assert_eq!(silenced[0].kind(), "unconfigured");
         job.finish();
     }
 
@@ -5222,17 +5270,20 @@ mod tests {
                 .contains("no remote query source configured")
         );
         job.finish();
-        // Under SILENT the unlisted endpoint is still refused, as offline: no handler
-        // reaches it, so no endpoint failed.
+        // Under SILENT the unlisted endpoint is the join identity, as offline, recorded
+        // as an endpoint no handler reaches.
         let silent = unlisted.replace("SERVICE <", "SERVICE SILENT <");
         let job = begin(&engine, &dataset, AsyncOperationKind::Raw, &silent, &local);
-        assert_eq!(run_job(job.id()), RUN_ERROR);
-        let error = job.take_error().expect("an error");
-        assert!(
-            error.contains("no remote query source configured: the endpoint is not a local")
-                && error.contains("SILENT does not apply"),
-            "{error}"
+        assert_eq!(run_job(job.id()), RUN_OUTCOME, "silenced, as offline");
+        let text = raw_text(&job);
+        assert!(!text.contains("http://example.org/x"), "{text}");
+        let silenced = job.take_evidence().silenced();
+        assert_eq!(silenced.len(), 1);
+        assert_eq!(
+            silenced[0].endpoint().as_deref(),
+            Some("http://example.org/elsewhere")
         );
+        assert_eq!(silenced[0].kind(), "unconfigured");
         job.finish();
         // The valid neighbour: SILENT naming the listed endpoint answers with its row.
         let silent_listed = query.replace("SERVICE <", "SERVICE SILENT <");

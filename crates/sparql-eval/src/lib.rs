@@ -210,7 +210,10 @@ pub use modifier::{ValueAggregate, compare_values, fold_values, order_values};
 // governor stopped the execution — without also depending on `purrdf-core` directly. A
 // governed surface whose outcome types are unnameable from the crate that produces them
 // is one no consumer can match on.
-pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGovernor};
+pub use purrdf_core::{
+    GovernorEvidence, ResourceDimension, SilencedInvocation, SilencedKind, SilencedTarget,
+    StopCause, TrippedGovernor,
+};
 // The adornment lattice, re-exported for the same reason: it appears in
 // [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
 // host implementing the trait cannot write the impl without naming it.

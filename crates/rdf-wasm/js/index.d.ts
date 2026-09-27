@@ -201,7 +201,44 @@ export interface GovernorEvidence {
   readonly isComplete: boolean;
   readonly consumed: Readonly<Record<string, bigint>>;
   readonly limits: Readonly<Record<string, bigint>>;
+  /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed; empty when none failed. */
+  readonly silenced: readonly SilencedInvocation[];
 }
+
+/** Why a silenced invocation failed. */
+export type SilencedKind =
+  | "transport"
+  | "decode"
+  | "disabled"
+  | "unconfigured"
+  | "denied"
+  | "host-denied"
+  | "not-an-iri"
+  | "fault";
+
+/**
+ * One invocation a `SILENT` clause absorbed: a `SERVICE SILENT` that answered the single
+ * empty solution (SPARQL 1.1 Federated Query §3.2), or a `LOAD SILENT` that succeeded
+ * with nothing loaded (SPARQL 1.1 Update §3.1.4). The answer is the one the
+ * specification requires; this record is how a host tells it from an endpoint that
+ * answered with nothing to add.
+ */
+export type SilencedInvocation =
+  | {
+      readonly target: "service";
+      /** The endpoint IRI, or a non-IRI endpoint value in N-Triples form. */
+      readonly endpoint: string;
+      readonly kind: SilencedKind;
+      /** The error the invocation would have raised without `SILENT`. */
+      readonly message: string;
+    }
+  | {
+      readonly target: "load";
+      /** The `LOAD` source IRI. */
+      readonly iri: string;
+      readonly kind: SilencedKind;
+      readonly message: string;
+    };
 
 /**
  * What a truncated execution's rows bound relative to the query's true answer: a
@@ -1168,7 +1205,8 @@ export interface ServiceProfileJson {
 /**
  * The per-service policy host-resolved `SERVICE` requests are authorized against, before
  * the host is ever called: deny by default, one profile per endpoint, an optional
- * fallback. A denial fails the query even under `SERVICE SILENT`. Pass it to an
+ * fallback. A denial fails the query; under `SERVICE SILENT` it is the join identity,
+ * recorded on the evidence's `silenced`. Pass it to an
  * asynchronous twin as `catalog` (it is copied; the catalog stays usable); it needs a
  * `resolveService` handler to govern.
  */
@@ -1362,8 +1400,9 @@ export interface AsyncLoadContext {
 
 /**
  * A typed failure a handler returns (never throws): `"transport"` — unreachable or
- * unreadable, which `SERVICE SILENT`/`LOAD SILENT` swallow — or `"denied"` — the host's
- * policy refused it, which fails the request even under `SILENT`.
+ * unreadable — or `"denied"` — the host's policy refused it. Either fails the request;
+ * under `SERVICE SILENT` either is the join identity, recorded on the evidence's
+ * `silenced`.
  */
 export interface ServiceFailure {
   readonly kind: "transport" | "denied";
@@ -1402,7 +1441,7 @@ export type AsyncLoadResolver = (
 
 /** The options every asynchronous twin accepts beside its operation's own. */
 export interface AsyncHostOptions {
-  /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously, `SILENT` or not. */
+  /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously: an error, and under `SILENT` the join identity. */
   readonly resolveService?: AsyncServiceResolver | null;
   /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously, `SILENT` or not. */
   readonly resolveLoad?: AsyncLoadResolver | null;
@@ -1474,6 +1513,8 @@ export interface AsyncEvidence {
   readonly freezeMs: number;
   readonly evaluateMs: number;
   readonly serializeMs: number;
+  /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed during the job. */
+  readonly silenced: readonly SilencedInvocation[];
 }
 
 export interface AsyncGovernorEvidence extends GovernorEvidence {

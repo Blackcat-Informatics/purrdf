@@ -166,7 +166,8 @@ pub use fno::{
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
-    GovernorEvidence, ResourceDimension, ResourceVector, StopCause, TrippedGovernor,
+    GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, SilencedKind,
+    SilencedTarget, StopCause, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 /// Deterministic embedding companions bound to exact PurRDF packs.

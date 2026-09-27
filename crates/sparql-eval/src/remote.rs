@@ -28,11 +28,17 @@
 //!
 //! # Hard-fail vs SILENT
 //!
-//! With a transport error or an undecodable response: a **non-silent** `SERVICE`
-//! raises [`EvalError::Remote`] (the query aborts), while `SERVICE SILENT` swallows the
-//! failure to the join identity (one empty row) so the surrounding query proceeds
-//! unchanged. With no source configured, both raise [`EvalError::ServiceUnconfigured`]:
-//! no endpoint was reached, so there is no endpoint failure for `SILENT` to tolerate.
+//! SPARQL 1.1 Federated Query §3.2 defines the result of a `SERVICE` clause as the
+//! endpoint's answer "in case of a successful service invocation according to the SPARQL
+//! protocol, and otherwise Ω0 in case SilentOp is true, and otherwise error". This module
+//! reads that literally. Every invocation that does not succeed — a transport error, an
+//! undecodable response, a disabled or absent source ([`RemoteError::Unconfigured`], or
+//! no source at all), a catalog denial ([`RemoteError::Denied`]), a host denial
+//! ([`RemoteError::HostDenied`]), a variable endpoint bound to a term that is not an IRI
+//! — is an error without `SILENT` and Ω0, the join identity, with it. Each silenced
+//! failure is recorded as a [`SilencedInvocation`](purrdf_core::SilencedInvocation) on
+//! the execution's governor evidence, so the answer the specification requires is not
+//! also the only trace of the failure.
 //!
 //! A variable endpoint (`SERVICE ?e`) takes one of two routes, and they issue different
 //! numbers of requests. Bound by a pattern earlier in its group, the clause is the right
@@ -41,28 +47,21 @@
 //! name the same IRI send it two requests. Bound by the left operand of the group join,
 //! `OPTIONAL` or `MINUS` it sits in, or by the other side of a group join, the clause is
 //! evaluated apart from those solutions and sends one request to each distinct IRI `?e`
-//! takes there (see `service_endpoints`). One that no solution binds is not an endpoint
-//! failure but this engine's refusal, so it is an [`EvalError::Unsupported`] that
-//! `SILENT` does not swallow: `SILENT` tolerates an endpoint that fails, not a query that
-//! names none.
+//! takes there (see `service_endpoints`). One that no solution binds names no endpoint
+//! and makes no invocation at all, so it is this engine's refusal to evaluate the query
+//! as written, an [`EvalError::Unsupported`] with or without `SILENT`.
 //!
-//! [`RemoteError::Denied`] and [`RemoteError::HostDenied`] are exceptions too, and belong
-//! with the governors below rather than with the endpoint failures above: each is a
-//! refusal decided on *this* side of the seam, so `SILENT` never swallows it — at any
-//! nesting depth, which is why each travels as a structured error
-//! ([`EvalError::ServiceDenied`], [`EvalError::ServiceHostDenied`]) rather than as
-//! message text. See [`crate::service`] for the full contract table.
+//! # `SILENT` is about the invocation, never about this engine's budget
 //!
-//! # `SILENT` is about the endpoint, never about this engine's budget
-//!
-//! `SILENT` says "a federated endpoint I do not control may be unreachable, and I would
-//! rather have the rest of my answer than an error". It says nothing about the caller's
-//! own governors, so a governor trip reached through a `SERVICE` clause is
-//! **non-silenceable**: it propagates as a truncation whether or not `SILENT` is present
-//! (see [`RemoteError::Governed`]). Swallowing a trip to the join identity would leave the
-//! surrounding join a no-op and the final result indistinguishable from a complete one —
-//! an answer that looks complete and is wrong, which is worse than either an error or an
-//! honest partial.
+//! `SILENT` says "an invocation of a service I name may fail, and I would rather have the
+//! rest of my answer than an error". It says nothing about the caller's own governors,
+//! so a governor trip reached through a `SERVICE` clause propagates as a truncation
+//! whether or not `SILENT` is present (see [`RemoteError::Governed`]), and so does a
+//! stack refusal ([`RemoteError::StackExhausted`], [`RemoteError::HostStackExhausted`]):
+//! both are this engine running out of what it was given, not the invocation failing.
+//! Swallowing a trip to the join identity would leave the surrounding join a no-op and
+//! the final result indistinguishable from a complete one — an answer that looks complete
+//! and is wrong, which is worse than either an error or an honest partial.
 //!
 //! # A federated call is governed at both ends
 //!
@@ -103,10 +102,10 @@ pub struct ResolvedBindings {
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
-/// swallowed is decided by `eval_service` from the `SILENT` flag, not here. `SILENT`
-/// swallows only an endpoint that was contacted and failed ([`Self::Transport`],
-/// [`Self::Decode`], [`Self::Disabled`]); every other variant is a refusal or a budget
-/// outcome on this side of the seam, and `SILENT` cannot swallow it.
+/// swallowed is decided by `eval_service` from the `SILENT` flag, not here: `SILENT`
+/// swallows every variant that is a failure of the invocation, and none of the three
+/// that report this engine running out of what it was given ([`Self::Governed`],
+/// [`Self::GovernedAfterCompletion`], and the two stack refusals).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RemoteError {
@@ -120,29 +119,16 @@ pub enum RemoteError {
     /// nowhere to send the request — e.g. a host that answers some endpoints in process
     /// and supplied no handler for the rest. Carries the host's explanation.
     ///
-    /// **Not silenceable**: `SILENT` tolerates an endpoint that fails, and no endpoint
-    /// was reached. This is a fact about how the engine was configured, the same fault
-    /// as evaluating a `SERVICE` with no source at all, and swallowing it to the join
-    /// identity would answer as if an endpoint had been consulted and had imposed
-    /// nothing.
+    /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
+    /// evaluating a `SERVICE` with no source at all.
     Unconfigured(String),
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
     ///
-    /// **Not silenceable**, and grouped here with the governors rather than with the
-    /// endpoint failures above for the same reason they are: a denial is a decision this
-    /// host took, deterministically, before any endpoint was consulted. `SILENT` promises
-    /// to tolerate an endpoint that does not answer; it does not promise to hide a
-    /// refusal to ask one. Swallowing a denial would make the surrounding join a no-op
-    /// and the final result indistinguishable from a complete one — identically on every
-    /// run, so nothing would ever surface a symptom.
-    ///
-    /// Unlike [`Self::Governed`] this is not a budget outcome and carries no partial
-    /// answer to certify, so it surfaces as the structured
-    /// [`EvalError::ServiceDenied`] rather than as a truncation — structured, not a
-    /// formatted [`EvalError::Remote`], so that a denial raised by a nested `SERVICE`
-    /// inside a forwarded body can be recognized and re-raised as this variant instead of
-    /// decaying into a silenceable endpoint failure.
+    /// Without `SILENT` this surfaces as the structured [`EvalError::ServiceDenied`] —
+    /// structured, not a formatted [`EvalError::Remote`], so that a denial raised by a
+    /// nested `SERVICE` inside a forwarded body is recognized and re-raised as this
+    /// variant, and reported with the same wording at every depth.
     Denied(ServiceDenial),
     /// A [`ServiceResolver`] refused the service by its own policy, with **no catalog
     /// capability** to name as the cause — e.g. a host resolver's own rules (a rate
@@ -155,15 +141,7 @@ pub enum RemoteError {
     /// about the *catalog's* configuration, and reusing it here would invent a capability
     /// cause the host never stated. Reported instead as "the host denied the request",
     /// which is exactly what is known: a decision, not a reason drawn from policy this
-    /// engine can see.
-    ///
-    /// **Not silenceable**, for the identical reason [`Self::Denied`] is not: the refusal
-    /// is decided on this side of the seam, deterministically, before any endpoint was
-    /// consulted, so it is grouped with the governors rather than the endpoint failures.
-    /// Structured (not folded into a formatted [`EvalError::Remote`]) so a denial raised
-    /// by a nested `SERVICE` inside a forwarded body survives being recognized and
-    /// re-raised as this variant rather than decaying into a silenceable endpoint failure —
-    /// see [`Self::Denied`]'s identical concern.
+    /// engine can see. Structured for the reason [`Self::Denied`] is.
     HostDenied {
         /// The service IRI that was refused.
         endpoint: String,
@@ -173,7 +151,7 @@ pub enum RemoteError {
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
     ///
-    /// Not an endpoint failure and therefore not silenceable — see the module
+    /// Not a failure of the invocation and therefore never silenced — see the module
     /// documentation. A source returns this only for a governor it was handed (the stop
     /// signal threaded into [`ServiceResolver::resolve`]); an endpoint's own overload,
     /// throttling, or timeout is [`Self::Transport`], because that is the caller's
@@ -184,24 +162,23 @@ pub enum RemoteError {
     ///
     /// This is distinct from [`Self::Governed`] because completing and discarding a
     /// response removes the positional-prefix/resumption claim even though the lower
-    /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
+    /// answer bound remains sound. `SERVICE SILENT` swallows neither variant.
     GovernedAfterCompletion(TrippedGovernor),
     /// An in-process source ran out of stack parsing or evaluating the forwarded body:
     /// the [`EvalError::StackExhausted`] of that evaluation, or the
     /// [`purrdf_sparql_algebra::ParseError::StackExhausted`] of its re-parse, naming the
     /// construct.
     ///
-    /// **Not silenceable**, for the reason [`Self::Denied`] is not: no endpoint failed.
-    /// The body nests deeper than the stack of the thread evaluating it can hold, which
-    /// is a fact about this host, and swallowing it to the join identity would make the
-    /// surrounding join a no-op on exactly the requests that nest deepest.
+    /// Never silenced: the body nests deeper than the stack of the thread evaluating it
+    /// can hold, which is a fact about this host rather than about the invocation, and
+    /// the same body evaluated locally raises the same typed refusal.
     StackExhausted(&'static str),
     /// On `wasm32`, an in-process source's forwarded body nests deeper than the
     /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
     /// evaluation, or the [`purrdf_sparql_algebra::ParseError::HostStackExhausted`] of
     /// its re-parse, naming the construct.
     ///
-    /// **Not silenceable**, for the reason [`Self::StackExhausted`] is not.
+    /// Never silenced, for the reason [`Self::StackExhausted`] is not.
     HostStackExhausted(&'static str),
 }
 
@@ -260,10 +237,10 @@ pub struct ServiceRequest<'a> {
     /// own failure to an empty result because this flag was set would be reporting an
     /// answer it never established, and the evaluator would have no way to tell.
     ///
-    /// It is carried because a *policy* may legitimately depend on it: refusing
-    /// `SERVICE SILENT` against a credentialed service is a real, defensible rule — an
-    /// authentication failure swallowed to the join identity is a silent wrong answer —
-    /// and a resolver cannot state that rule without seeing the flag.
+    /// It is carried because a *policy* may legitimately depend on it — a host that
+    /// declines to spend a credential on a request whose failure the query already
+    /// tolerates, for instance — and a resolver cannot state such a rule without seeing
+    /// the flag. Whatever the policy answers is classified like any other error.
     pub silent: bool,
     /// The executing query's stop signal, or `None` when the caller set neither a
     /// deadline nor a cancellation. See [`ServiceResolver::resolve`].
@@ -395,97 +372,12 @@ pub trait ServiceResolver {
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteError`] on transport or decode failure, which `eval_service` may
-    /// swallow under `SILENT`; [`RemoteError::Denied`] when a per-service capability was
-    /// withheld; or [`RemoteError::Governed`]. Neither of the last two is ever swallowed
-    /// — see [`crate::service`]'s `SILENT` contract table.
+    /// Returns [`RemoteError`] on transport or decode failure, when a per-service
+    /// capability was withheld ([`RemoteError::Denied`]), or when the host refused
+    /// ([`RemoteError::HostDenied`]) — each of which `eval_service` swallows under
+    /// `SILENT` — or [`RemoteError::Governed`], which it never swallows. See
+    /// [`crate::service`]'s `SILENT` contract table.
     fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError>;
-}
-
-/// Whether `pattern` reaches a WRITTEN `LATERAL` keyword anywhere in the FULL
-/// forwardable body — including inside a nested `SERVICE` (fixed-IRI or
-/// variable-endpoint) and inside an expression-embedded `EXISTS` — shared by
-/// [`eval_service`]'s forward guard. Follows the same soundness-visitor idiom
-/// as `crate::property_fn_eval::pattern_reaches_property_function`, and the
-/// generic fallback below already recurses into `GraphPattern::Service`'s
-/// `inner` via `visit_pattern_parts`'s `Service` arm regardless of whether the
-/// endpoint is fixed or a variable — a written `LATERAL` nested inside
-/// `SERVICE ?g { … }` (which is itself nested arbitrarily deep) is therefore
-/// found no differently than one nested inside `SERVICE <fixed> { … }` or any
-/// other child position.
-///
-/// A `Lateral` whose right operand is a property-function call or a
-/// variable-endpoint `SERVICE` does NOT itself count as a written `LATERAL`:
-/// `purrdf_sparql_algebra::parser` wraps BOTH shapes in `Lateral`
-/// unconditionally as an internal representation detail (every
-/// property-function call, and every `SERVICE ?g`, is `Lateral`-wrapped even
-/// with no `LATERAL` keyword ever written), and its serializer's own
-/// `parser_rebuilds_the_lateral` mirrors this exact exclusion when deciding
-/// whether the `LATERAL` keyword needs to be emitted on re-parse. Forwarding
-/// either shape emits no `LATERAL` text AT THIS NODE — but the search does
-/// not stop there: `left` and the auto-wrapped `right` (a property-function
-/// call is a leaf with no children of its own; a variable-endpoint `Service`
-/// has an `inner` that may itself contain a written `LATERAL`, arbitrarily
-/// deeply nested) are both still searched, which is what closes the bypass
-/// where a written `LATERAL` sits inside a `SERVICE ?g { … }` auto-wrap.
-fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
-    // A walk over the whole forwarded body, from a `SERVICE` that may be deep. Neither
-    // answer is conservative (one refuses with a reason that would be false), so the
-    // walk runs in [`eval_service`]'s `crate::stack::walk` scope, which discards this.
-    if crate::stack::walk_is_low("SERVICE body") {
-        return false;
-    }
-    if let GraphPattern::Lateral { left, right } = pattern {
-        let parser_reconstructs_it = matches!(
-            right.as_ref(),
-            GraphPattern::PropertyFunction(_)
-                | GraphPattern::Service {
-                    name: NamedNodePattern::Variable(_),
-                    ..
-                }
-        );
-        return if parser_reconstructs_it {
-            pattern_reaches_lateral(left) || pattern_reaches_lateral(right)
-        } else {
-            true
-        };
-    }
-    let mut found = false;
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::PatternPart::Child(child, _edge) => {
-                pattern_reaches_lateral(child)
-            }
-            crate::governor::soundness::PatternPart::Expression(expr) => {
-                expression_reaches_lateral(expr)
-            }
-        };
-        found
-    });
-    found
-}
-
-/// [`pattern_reaches_lateral`] through an expression's embedded patterns
-/// (an `EXISTS`'s inner pattern, recursively).
-fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool {
-    // See `pattern_reaches_lateral`.
-    if crate::stack::walk_is_low("SERVICE body") {
-        return false;
-    }
-    let mut found = false;
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
-                pattern_reaches_lateral(pattern)
-            }
-            crate::governor::soundness::ExpressionPart::Sub(inner) => {
-                expression_reaches_lateral(inner)
-            }
-            crate::governor::soundness::ExpressionPart::Call(_) => false,
-        };
-        found
-    });
-    found
 }
 
 /// Strip every blank-node-carrying `VALUES` pushdown restriction from `pattern` before it
@@ -521,10 +413,9 @@ fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool 
 /// The two alternatives are worse. Serializing the cell as `_:label` produces syntax the
 /// `VALUES`/`DataBlock` grammar does not admit — it permits IRIs, literals, `UNDEF`, and,
 /// in SPARQL 1.2, ground triple terms, but never a blank node — so a conforming endpoint
-/// syntax-errors the request; under `SERVICE SILENT` that rejection degrades to the join
-/// identity, which is exactly the silent-wrong-answer hazard this module's other `SILENT`
-/// guards exist to close. A non-silent `SERVICE` would instead surface a confusing remote
-/// syntax error for a query that has a perfectly well-defined answer. Refusing to forward
+/// syntax-errors the request; under `SERVICE SILENT` that rejection becomes the join
+/// identity for a request that had a perfectly well-defined answer, and a non-silent
+/// `SERVICE` would instead surface a confusing remote syntax error for it. Refusing to forward
 /// at all would deliver a real answer by refusal. Stripping is the only one of the three
 /// that is both legal SPARQL and loses no information the local merge does not already
 /// supply.
@@ -871,15 +762,14 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 /// Evaluate a `SERVICE [SILENT] name { inner }` node to the remote result bag.
 ///
 /// The surrounding `Join` performs the federation join, so this returns only the
-/// remote bindings (or the join identity on a swallowed `SILENT` failure).
+/// remote bindings (or the join identity for a silenced invocation).
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Remote`] for a non-silent endpoint failure (a transport or decode
-/// error), [`EvalError::ServiceUnconfigured`] — under `SILENT` too — when no source
-/// reaches the endpoint, and [`EvalError::Unsupported`] — under
-/// `SILENT` too — for a variable endpoint no solution binds (see
-/// [`crate::service_endpoints`]).
+/// Without `SILENT`, the error of an invocation that did not succeed (see
+/// [`invoke_service`]); with or without it, [`EvalError::Unsupported`] for a body this
+/// engine refuses to forward and for a variable endpoint no solution binds (see
+/// [`crate::service_endpoints`]), and the typed stack refusals.
 ///
 /// # Under a truncation
 ///
@@ -888,7 +778,7 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 /// channel is concerned. Its result is a complete bag, a typed failure, or a truncation
 /// this node itself originates — from the stop signal, from the request charge, from the
 /// cell ceiling, or from a governor the source reports through [`RemoteError::Governed`].
-/// None of those four is silenceable.
+/// `SILENT` swallows none of those four.
 pub(crate) fn eval_service<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,
@@ -896,119 +786,103 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    // A `LATERAL` clause inside a forwarded body is refused ONLY under `SERVICE
-    // SILENT` — scoped to the hazard it actually guards against, the same
-    // treatment the custom-scalar-function refusal further down gets, rather than
-    // the unconditional treatment the property-function and custom-aggregate
-    // refusals get. `LATERAL` is a SEP-0006/Jena syntax extension most SPARQL
-    // 1.1/1.2-only endpoints do not implement, so a forwarded `LATERAL` is likely
-    // to be rejected by an endpoint that lacks it — and under `SERVICE SILENT`,
-    // that rejection would degrade to the join identity: a result that looks
-    // complete and is wrong. A plain, non-silent `SERVICE` has no such hazard to
-    // close: the endpoint's verdict — an answer from a `LATERAL`-capable endpoint
-    // (Jena's own extension; a Jena-backed endpoint answers it), or an honest
-    // `EvalError::Remote` from one that rejects it — surfaces exactly as it does
-    // for any other forwarded construct the remote might not support, so the body
-    // (including its `LATERAL { … }` text) is forwarded rather than refused.
-    if silent && crate::stack::walk(|| pattern_reaches_lateral(inner))? {
-        return Err(EvalError::unsupported(
-            "a LATERAL clause inside a SERVICE SILENT body: LATERAL is a SEP-0006/Jena syntax \
-             extension most remote SPARQL endpoints do not implement, and SILENT would swallow \
-             the endpoint's rejection into the join identity — a result that looks complete and \
-             is wrong; drop SILENT and the query forwards the LATERAL text, surfacing the \
-             endpoint's verdict (an answer, or an honest failure) instead",
-        ));
-    }
     // A property-function call inside a forwarded body is a HARD refusal, and it is
     // tested before anything else — before `SILENT`, before the endpoint, before any
     // charge. The body is serialized and sent as SPARQL text, and a call serializes as
     // an ordinary triple: the remote endpoint would match it against ITS data and return
-    // rows that are not the relation's, with no symptom anywhere. Silencing that under
-    // `SILENT` would be worse still, because `SILENT` promises an empty result from a
-    // failed endpoint, not a full one from a misread query.
+    // rows that are not the relation's, with no symptom anywhere. That is not an
+    // invocation that fails but one that succeeds with the wrong question, so `SILENT`
+    // has nothing to say about it.
     if crate::property_fn_eval::pattern_reaches_property_function(inner) {
         return Err(EvalError::unsupported(
-            "a property-function call inside a SERVICE body: the call would be forwarded as \
-             an ordinary triple pattern and matched against the remote endpoint's data, so \
-             the relation would never be invoked and the answer would be silently wrong",
+            "a property-function call inside a SERVICE body: the call would be forwarded as              an ordinary triple pattern and matched against the remote endpoint's data, so              the relation would never be invoked and the answer would be silently wrong",
         ));
     }
     // A custom aggregate call inside a forwarded body is refused the same way, for the
     // same reason: `AGG(<iri>, …)` serializes as text the remote endpoint has no
     // registered meaning for, and this engine's registry — the one place the IRI is
     // actually resolved — never sees the call at all once it has been shipped away.
-    // Hard, unconditional on `SILENT`, before any charge — the exact treatment the
-    // property-function refusal above gets, and for the identical reason: `SILENT`
-    // promises an empty result from an unreachable ENDPOINT, never a wrong (or
-    // endpoint-syntax-error) one from a request that could never have meant what it
-    // meant locally.
     if crate::property_fn_eval::pattern_reaches_custom_aggregate(inner) {
         return Err(EvalError::unsupported(
-            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded \
-             as text the remote endpoint has no registered meaning for, so this engine's \
-             aggregate registry would never resolve the call and the answer would be silently \
-             wrong",
+            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded              as text the remote endpoint has no registered meaning for, so this engine's              aggregate registry would never resolve the call and the answer would be silently              wrong",
         ));
     }
-    // A custom SCALAR function call inside a forwarded body is NOT the unconditional twin
-    // of the two refusals above — it is scoped to `SILENT` only, and deliberately so.
-    //
-    // `Function::Custom` serializes as ordinary function-call syntax (`<iri>(args…)`), and
-    // that is exactly the shape the SPARQL specification expects for a remote endpoint's
-    // OWN extension functions: `purrdf_sparql_algebra::parser` falls through to
-    // `Function::Custom` for every call-position IRI that is not a builtin and not under a
-    // *configured* extension namespace (see its module docs), so this call form is the
-    // normal, spec-sanctioned way to invoke a function the LOCAL engine does not know but
-    // the endpoint might. A property-function call and a custom-aggregate call have no such
-    // meaning at a remote endpoint — a relation IRI just matches ITS data as an ordinary
-    // triple with no symptom, and `AGG(<iri>, …)` is this engine's own registry syntax — so
-    // those two stay unconditional refusals (see above). A custom scalar function is
-    // different: an endpoint that has no such function fails LOUDLY on its own account
-    // (`pattern_reaches_custom_function`'s doc: this engine's own evaluation of an
-    // unresolved `Function::Custom` already raises a typed error rather than silently
-    // matching unrelated data), and the non-silent path below turns any such endpoint
-    // failure into an honest [`EvalError::Remote`] — there is no silent-wrong-answer hazard
-    // to close for a plain, non-silent `SERVICE`.
-    //
-    // The hazard is real ONLY under `SERVICE SILENT`: `SILENT` swallows an endpoint failure
-    // to the join identity, so a loud, honest "no such function" failure at the endpoint
-    // would be swallowed into a silent wrong answer. So the refusal is gated on `silent`,
-    // and its message names the escape — dropping `SILENT` makes the query forward and
-    // work — so the refusal is actionable rather than a dead end.
-    if silent && crate::property_fn_eval::pattern_reaches_custom_function(inner) {
-        return Err(EvalError::unsupported(
-            "a custom scalar-function call inside a SERVICE SILENT body: the call would be \
-             forwarded as ordinary function-call syntax, and if the remote endpoint has no \
-             such function the failure would degrade to the join identity under SILENT — a \
-             silent wrong answer rather than an honest one; drop SILENT and the query \
-             forwards and answers normally, with an unrecognized function surfacing as an \
-             honest remote failure instead",
-        ));
-    }
-    // Resolve the endpoint IRI. A variable endpoint still unresolved here was not
-    // substituted by a `LATERAL` (a pattern earlier in the same group), so it is answered
-    // over the endpoints an enclosing group join, `OPTIONAL` or `MINUS` lists for it — or
-    // refused, under `SILENT` too: `SILENT` tolerates an endpoint that fails, and a
-    // clause no solution names an endpoint for has not reached one. Swallowing that to
-    // the join identity would return an answer that looks complete when nothing was
-    // asked. See `crate::service_endpoints`.
-    let endpoint = match name {
-        NamedNodePattern::NamedNode(n) => n.as_str().to_owned(),
+    // A variable endpoint still unresolved here was not substituted by a `LATERAL` (a
+    // pattern earlier in the same group), so it is answered over the endpoints an
+    // enclosing group join, `OPTIONAL` or `MINUS` lists for it — or refused when none
+    // does. See `crate::service_endpoints`.
+    match name {
+        NamedNodePattern::NamedNode(endpoint) => Ok(
+            match invoke_service(endpoint.as_str(), inner, silent, ctx)? {
+                Invocation::Answered(evaluated) => evaluated,
+                Invocation::Silenced(record) => {
+                    ctx.record_silenced(record);
+                    Evaluated::Complete(identity_seq())
+                }
+            },
+        ),
         NamedNodePattern::Variable(variable) => {
-            return crate::service_endpoints::eval_variable_endpoint(node, variable, silent, ctx);
+            crate::service_endpoints::eval_variable_endpoint(node, variable, silent, ctx)
         }
-    };
+    }
+}
+
+/// How one `SERVICE` invocation ended, when it did not end in an error.
+pub(crate) enum Invocation<I: ViewTermId> {
+    /// The endpoint answered — completely, or truncated by this engine's governor.
+    Answered(Evaluated<I>),
+    /// The invocation did not succeed and the clause is `SILENT`: it contributes Ω0, and
+    /// the consumer records this failure on the evidence.
+    Silenced(purrdf_core::SilencedInvocation),
+}
+
+/// A failed invocation of `endpoint`: under `SILENT`, [`Invocation::Silenced`] carrying
+/// the record of `kind` and `error`; otherwise `error`.
+pub(crate) fn failed_invocation<I: ViewTermId>(
+    endpoint: &str,
+    kind: purrdf_core::SilencedKind,
+    error: EvalError,
+    silent: bool,
+) -> Result<Invocation<I>, EvalError> {
+    if !silent {
+        return Err(error);
+    }
+    Ok(Invocation::Silenced(purrdf_core::SilencedInvocation::new(
+        purrdf_core::SilencedTarget::Service {
+            endpoint: endpoint.to_owned(),
+        },
+        kind,
+        error.to_string(),
+    )))
+}
+
+/// Invoke `endpoint` with `inner` as the forwarded body.
+///
+/// # Errors
+///
+/// Without `SILENT`, [`EvalError::ServiceUnconfigured`] when no source reaches the
+/// endpoint, [`EvalError::ServiceDenied`] / [`EvalError::ServiceHostDenied`] when the
+/// request is refused, and [`EvalError::Remote`] when the endpoint fails; with or
+/// without it, the typed stack refusals.
+pub(crate) fn invoke_service<D: DatasetView + Sync>(
+    endpoint: &str,
+    inner: &GraphPattern,
+    silent: bool,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Invocation<D::Id>, EvalError> {
+    use purrdf_core::SilencedKind;
 
     // `Option<&dyn _>` is `Copy`, so this does NOT borrow `ctx` — leaving `&mut
     // ctx` free for interning the result below.
-    // No source: the engine was given nowhere to send the request. That is how the
-    // engine was configured, not an endpoint that failed, so it is refused under `SILENT`
-    // too — the join identity would claim an endpoint had been consulted.
     let Some(source) = ctx.remote else {
-        return Err(unconfigured(
+        return failed_invocation(
+            endpoint,
+            SilencedKind::Unconfigured,
+            EvalError::ServiceUnconfigured(format!(
+                "no remote query source configured for SERVICE <{endpoint}>"
+            )),
             silent,
-            format!("no remote query source configured for SERVICE <{endpoint}>"),
-        ));
+        );
     };
 
     // Poll the stop signal immediately before dispatch. The node-entry poll happens before
@@ -1017,18 +891,20 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // the call is the wait it exists to bound. Highest precedence, so it is tested ahead
     // of the charge below.
     if let Some(tripped) = ctx.stop_check() {
-        return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-            tripped,
+        return Ok(Invocation::Answered(Evaluated::Truncated(
+            Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                tripped,
+            ),
         )));
     }
 
     // The `remote-request-issued` charge point, plus the request against the remote
     // request ceiling — charged **before** the call, so an exhausted budget prevents the
-    // request rather than merely observing it afterwards. A budget trip is deliberately
-    // NOT silenceable here: `SILENT` is a statement about the endpoint, not about this
-    // engine's budget, and swallowing a trip to the join identity would return a result
-    // that looks complete and is wrong.
+    // request rather than merely observing it afterwards. A budget trip is never silenced:
+    // `SILENT` is a statement about the invocation, not about this engine's budget, and
+    // swallowing a trip to the join identity would return a result that looks complete
+    // and is wrong.
     if let Err(tripped) = ctx
         .charge(crate::governor::ChargePoint::RemoteRequestIssued)
         .and_then(|()| ctx.charge_amount(purrdf_core::ResourceDimension::RemoteRequests, 1))
@@ -1037,9 +913,11 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         // surrounding join a no-op, so returning it here would claim the remote endpoint
         // had been consulted and had imposed nothing. An empty bag claims only that no
         // remote row was established, which is exactly true and is a sound lower bound.
-        return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-            tripped,
+        return Ok(Invocation::Answered(Evaluated::Truncated(
+            Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                tripped,
+            ),
         )));
     }
 
@@ -1064,7 +942,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         .governor_state()
         .and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
     let response = source.resolve(
-        ServiceRequest::new(&endpoint, &query_text)
+        ServiceRequest::new(endpoint, &query_text)
             .silent(silent)
             .with_stop(stop.as_ref())
             .with_max_intermediate_cells(max_intermediate_cells),
@@ -1074,129 +952,96 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // SERVICE could launder a cancellation into `Complete` because no later operator
     // would ever poll it.
     let post_return_trip = ctx.stop_check();
-    let resolved = match response {
+    let error = match response {
         Ok(resolved) => {
             if let Some(tripped) = post_return_trip {
                 let schema = Arc::new(VarSchema::from_vars(resolved.variables));
-                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
-                    SolutionSeq::empty(schema),
-                    tripped,
+                return Ok(Invocation::Answered(Evaluated::Truncated(
+                    Truncation::bag_only_origin(SolutionSeq::empty(schema), tripped),
                 )));
             }
-            resolved
+            let (seq, tripped) = ingest(resolved, ctx)?;
+            return Ok(Invocation::Answered(match tripped {
+                None => Evaluated::Complete(seq),
+                Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
+            }));
         }
-        // A governor the source was handed. Not the endpoint's failure and so not
-        // silenceable — latched into the evidence so the receipt names the same governor
-        // the result does.
+        // A governor the source was handed. Not a failure of the invocation and so never
+        // silenced — latched into the evidence so the receipt names the same governor the
+        // result does.
         Err(RemoteError::Governed(governor)) => {
-            return Ok(Evaluated::Truncated(Truncation::origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-                ctx.record_trip(governor),
+            return Ok(Invocation::Answered(Evaluated::Truncated(
+                Truncation::origin(
+                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                    ctx.record_trip(governor),
+                ),
             )));
         }
         Err(RemoteError::GovernedAfterCompletion(governor)) => {
-            return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-                ctx.record_trip(governor),
+            return Ok(Invocation::Answered(Evaluated::Truncated(
+                Truncation::bag_only_origin(
+                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                    ctx.record_trip(governor),
+                ),
             )));
         }
-        // A capability the resolver's own policy withheld. Decided on THIS side of the
-        // seam before any endpoint was consulted, so — exactly like the two governor arms
-        // above, and unlike every endpoint failure below — `SILENT` does not swallow it.
-        // It is not a budget outcome and carries no partial answer to certify, so it is a
-        // hard error rather than a truncation. Placed ahead of the generic arm so it also
-        // outranks a stop that fired during the same call: a denial is not erased under
-        // SILENT, so it survives to be the reported fact, which is the same precedence a
-        // non-silent endpoint failure already gets below.
-        //
-        // Raised as the STRUCTURED `EvalError::ServiceDenied` rather than as a formatted
-        // `EvalError::Remote`, because this error may not be at the end of its journey: an
-        // in-process resolver evaluates a forwarded body itself, so a denial raised by a
-        // clause NESTED in that body comes back out through this same return. Flattened to
-        // a message it would be indistinguishable from an endpoint failure by the time
-        // `evaluate_in_memory` reclassified it, and an enclosing `SERVICE SILENT` would
-        // swallow it to the join identity.
-        Err(RemoteError::Denied(denial)) => {
-            return Err(EvalError::ServiceDenied(denial));
-        }
-        // The host's own resolver refused it with no catalog capability to name — same
-        // non-silenceable precedence as the capability denial above, and for the same
-        // reason: decided on this side of the seam before any endpoint was consulted.
-        // Kept a distinct arm (rather than folded into the one above) so the reported
-        // cause is never a capability the host never stated.
-        Err(RemoteError::HostDenied { endpoint, message }) => {
-            return Err(EvalError::ServiceHostDenied { endpoint, message });
-        }
-        // The forwarded body ran out of stack inside an in-process source: not the
-        // endpoint's failure, so — like a denial — never swallowed under `SILENT`, and
-        // re-raised as the same typed refusal it was, however deep the nesting of
-        // in-process sources that carried it out.
+        // The forwarded body ran out of stack inside an in-process source: this host's
+        // limit, not the invocation's failure, so it is re-raised as the same typed
+        // refusal it was, `SILENT` or not, however deep the nesting of in-process sources
+        // that carried it out.
         Err(RemoteError::StackExhausted(construct)) => {
             return Err(EvalError::StackExhausted { construct });
         }
         Err(RemoteError::HostStackExhausted(construct)) => {
             return Err(EvalError::HostStackExhausted { construct });
         }
-        // The source has nothing that reaches this endpoint: the same configuration
-        // fault as no source at all, and refused under `SILENT` the same way.
-        Err(RemoteError::Unconfigured(message)) => {
-            return Err(unconfigured(
-                silent,
-                format!("SERVICE <{endpoint}>: {message}"),
-            ));
-        }
-        Err(e) => {
-            // A real endpoint failure outranks a simultaneous stop. Under SILENT the
-            // endpoint failure is deliberately erased, so the stop becomes the surviving
-            // fact and must remain non-silenceable.
-            if silent && let Some(tripped) = post_return_trip {
-                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
-                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-                    tripped,
-                )));
-            }
-            return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"))
-                .map(Evaluated::Complete);
+        Err(error) => error,
+    };
+    // Every remaining variant is the invocation failing. Without `SILENT` the failure
+    // outranks a stop that fired during the same call; under `SILENT` the failure is
+    // erased, so the stop becomes the surviving fact and is reported as the governor it
+    // is.
+    if silent && let Some(tripped) = post_return_trip {
+        return Ok(Invocation::Answered(Evaluated::Truncated(
+            Truncation::bag_only_origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                tripped,
+            ),
+        )));
+    }
+    let (kind, error) = match error {
+        // Raised as the STRUCTURED `EvalError::ServiceDenied` rather than as a formatted
+        // `EvalError::Remote`, because this error may not be at the end of its journey:
+        // an in-process resolver evaluates a forwarded body itself, so a denial raised by
+        // a clause NESTED in that body comes back out through this same return, and
+        // `remote_error_for` recognizes it as the denial it is.
+        RemoteError::Denied(denial) => (SilencedKind::Denied, EvalError::ServiceDenied(denial)),
+        RemoteError::HostDenied { endpoint, message } => (
+            SilencedKind::HostDenied,
+            EvalError::ServiceHostDenied { endpoint, message },
+        ),
+        RemoteError::Unconfigured(message) => (
+            SilencedKind::Unconfigured,
+            EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}")),
+        ),
+        other => {
+            let kind = match &other {
+                RemoteError::Decode(_) => SilencedKind::Decode,
+                RemoteError::Disabled => SilencedKind::Disabled,
+                _ => SilencedKind::Transport,
+            };
+            (
+                kind,
+                EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
+            )
         }
     };
-
-    let (seq, tripped) = ingest(resolved, ctx)?;
-    Ok(match tripped {
-        None => Evaluated::Complete(seq),
-        Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
-    })
-}
-
-/// The refusal for a `SERVICE` the engine has no source to send to:
-/// [`EvalError::ServiceUnconfigured`] with `message`, which under `SILENT` also says why
-/// `SILENT` does not apply.
-fn unconfigured(silent: bool, message: String) -> EvalError {
-    if silent {
-        EvalError::ServiceUnconfigured(format!(
-            "{message}; SILENT does not apply: it tolerates an endpoint that fails, and no \
-             endpoint was reached — configure a remote query source for it"
-        ))
-    } else {
-        EvalError::ServiceUnconfigured(message)
-    }
-}
-
-/// On `SILENT`, return the join identity (one empty row, a no-op for the
-/// surrounding join); otherwise raise [`EvalError::Remote`] with `msg()`.
-fn silent_or_err<I: ViewTermId>(
-    silent: bool,
-    msg: impl FnOnce() -> String,
-) -> Result<SolutionSeq<I>, EvalError> {
-    if silent {
-        Ok(identity_seq())
-    } else {
-        Err(EvalError::remote(msg()))
-    }
+    failed_invocation(endpoint, kind, error, silent)
 }
 
 /// The join identity: a single empty-binding row. `Join(left, identity) == left`,
-/// so a swallowed `SERVICE SILENT` leaves the surrounding query unchanged.
-fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
+/// so a silenced `SERVICE SILENT` leaves the surrounding query unchanged.
+pub(crate) fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
     SolutionSeq {
         schema: VarSchema::empty_shared(),
         rows: vec![smallvec::smallvec![]],
@@ -1266,17 +1111,13 @@ fn ingest<D: DatasetView + Sync>(
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
 ///
 /// Everything the inner evaluation can fail with is, from the OUTER query's point of view,
-/// this endpoint failing to produce a decodable answer — with exactly two exceptions. A
-/// nested `SERVICE` clause resolved through the same (gated) resolver raises
+/// this endpoint failing to produce a decodable answer — with these exceptions. A nested
+/// `SERVICE` clause resolved through the same (gated) resolver raises
 /// [`EvalError::ServiceDenied`] (a withheld catalog capability) or
-/// [`EvalError::ServiceHostDenied`] (the host's own refusal, no capability to name), and
-/// both are a refusal decided on this side of the seam, not an endpoint that did not
-/// answer. Each must cross back as its own [`RemoteError`] variant — [`RemoteError::Denied`]
-/// or [`RemoteError::HostDenied`] respectively — so `eval_service` classifies it
-/// identically, with the same wording, at every depth: neither denial `SERVICE SILENT`
-/// ever swallows. Mapping either to [`RemoteError::Decode`] would make a nested denial
-/// silenceable when the same denial one level up is not, and the resulting answer would
-/// look complete, be wrong, and be wrong the same way on every run.
+/// [`EvalError::ServiceHostDenied`] (the host's own refusal, no capability to name); each
+/// crosses back as its own [`RemoteError`] variant, so `eval_service` reports — or, under
+/// `SILENT`, records — the denial it was, with the same wording at every depth. A stack
+/// refusal crosses back as the stack refusal it was, which no `SILENT` swallows.
 fn remote_error_for(error: EvalError) -> RemoteError {
     match error {
         EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
@@ -1403,10 +1244,10 @@ mod tests {
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let a = b.intern_iri("http://ex/a");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
+        let knows = b.intern_iri("http://example.org/knows");
+        let a = b.intern_iri("http://example.org/a");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
         b.push_quad(a, knows, x, None);
         b.push_quad(a, knows, y, None);
         b.freeze().expect("freeze")
@@ -1415,8 +1256,8 @@ mod tests {
     /// `:x :name "X"` (the remote endpoint graph) — only :x has a name.
     fn endpoint() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://ex/name");
-        let x = b.intern_iri("http://ex/x");
+        let name = b.intern_iri("http://example.org/name");
+        let x = b.intern_iri("http://example.org/x");
         let xn = b.intern_literal(RdfLiteral::simple("X"));
         b.push_quad(x, name, xn, None);
         b.freeze().expect("freeze")
@@ -1448,6 +1289,49 @@ mod tests {
         })
     }
 
+    /// [`run_with_source`] under a metering governor, with `source` optional, returning
+    /// the silenced invocations the evidence records beside the result.
+    fn run_recorded(
+        ds: &Arc<RdfDataset>,
+        source: Option<&(dyn ServiceResolver + Sync)>,
+        query: &str,
+    ) -> (
+        Result<SparqlResult, EvalError>,
+        Vec<purrdf_core::SilencedInvocation>,
+    ) {
+        use crate::eval::evaluate_query;
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(query)
+            .expect("parse");
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let mut ctx = EvalCtx::new(ds).with_governors(Arc::clone(&state));
+        if let Some(source) = source {
+            ctx = ctx.with_remote(source);
+        }
+        let result = evaluate_query(&parsed, &mut ctx).map(|outcome| match outcome {
+            Outcome::Solutions(seq) => {
+                let (variables, rows) = materialize_solutions(&seq, &ctx);
+                let aux = ctx.constructed_dataset(&rows);
+                SparqlResult::Solutions {
+                    variables,
+                    rows,
+                    aux,
+                }
+            }
+            Outcome::Boolean(b) => SparqlResult::Boolean(b),
+            Outcome::Graph(g) => SparqlResult::Graph(g),
+        });
+        (result, state.evidence().silenced)
+    }
+
+    /// Each record as `(endpoint, kind label)`.
+    fn kinds(records: &[purrdf_core::SilencedInvocation]) -> Vec<(String, &'static str)> {
+        records
+            .iter()
+            .map(|record| (record.target.name().to_owned(), record.kind.label()))
+            .collect()
+    }
+
     fn row_strings(result: &SparqlResult) -> Vec<Vec<String>> {
         match result {
             SparqlResult::Solutions { rows, .. } => {
@@ -1475,20 +1359,21 @@ mod tests {
 
     #[test]
     fn service_joins_remote_bindings_on_shared_var() {
-        let source = InProcessServiceResolver::new().with_endpoint("http://ep", endpoint());
+        let source =
+            InProcessServiceResolver::new().with_endpoint("http://example.org/ep", endpoint());
         let result = run_with_source(
             &local(),
             &source,
-            "SELECT ?s ?o ?n WHERE { ?s <http://ex/knows> ?o \
-             SERVICE <http://ep> { ?o <http://ex/name> ?n } }",
+            "SELECT ?s ?o ?n WHERE { ?s <http://example.org/knows> ?o \
+             SERVICE <http://example.org/ep> { ?o <http://example.org/name> ?n } }",
         )
         .expect("query");
         // Only ?o = :x has a remote name → exactly one joined row.
         assert_eq!(
             row_strings(&result),
             vec![vec![
-                "<http://ex/a>".to_owned(),
-                "<http://ex/x>".to_owned(),
+                "<http://example.org/a>".to_owned(),
+                "<http://example.org/x>".to_owned(),
                 "X".to_owned()
             ]]
         );
@@ -1502,15 +1387,21 @@ mod tests {
         let result = run_with_source(
             &local(),
             &source,
-            "SELECT ?s ?o WHERE { ?s <http://ex/knows> ?o \
-             SERVICE SILENT <http://missing> { ?o <http://ex/name> ?n } }",
+            "SELECT ?s ?o WHERE { ?s <http://example.org/knows> ?o \
+             SERVICE SILENT <http://example.org/missing> { ?o <http://example.org/name> ?n } }",
         )
         .expect("query");
         assert_eq!(
             row_strings(&result),
             vec![
-                vec!["<http://ex/a>".to_owned(), "<http://ex/x>".to_owned()],
-                vec!["<http://ex/a>".to_owned(), "<http://ex/y>".to_owned()],
+                vec![
+                    "<http://example.org/a>".to_owned(),
+                    "<http://example.org/x>".to_owned()
+                ],
+                vec![
+                    "<http://example.org/a>".to_owned(),
+                    "<http://example.org/y>".to_owned()
+                ],
             ]
         );
     }
@@ -1519,8 +1410,8 @@ mod tests {
 
     #[test]
     fn a_host_denial_nested_inside_a_forwarded_body_reaches_the_outer_seam_intact() {
-        const OUTER_EP: &str = "http://ep/outer";
-        const INNER_EP: &str = "http://ep/inner";
+        const OUTER_EP: &str = "http://example.org/ep/outer";
+        const INNER_EP: &str = "http://example.org/ep/inner";
 
         /// Forwards `OUTER_EP`'s body in-process (so the nested `SERVICE <INNER_EP>`
         /// inside it is resolved through `self` again, exactly as
@@ -1543,32 +1434,43 @@ mod tests {
             }
         }
 
-        for silent in [false, true] {
-            let query = format!(
-                "SELECT ?n WHERE {{ SERVICE {}<{OUTER_EP}> {{ \
-                 SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}",
-                if silent { "SILENT " } else { "" },
-            );
-            let err = run_with_source(&local(), &DenyingInner, &query)
-                .expect_err("a nested host denial must survive intact, SILENT or not");
-            let message = err.to_string();
-            assert!(
-                message.contains("the host denied the request: tenant blocked"),
-                "silent={silent}: {message}"
-            );
-            assert!(
-                !message.contains("withholds"),
-                "silent={silent}: a raw host denial must never read as a catalog-capability \
-                 one: {message}"
-            );
-            match err {
-                EvalError::ServiceHostDenied { endpoint, .. } => assert_eq!(endpoint, INNER_EP),
-                other => panic!("expected ServiceHostDenied, got {other:?}"),
-            }
+        let query = |silent: &str| {
+            format!(
+                "SELECT ?n WHERE {{ SERVICE {silent}<{OUTER_EP}> {{ \
+                 SERVICE <{INNER_EP}> {{ ?x <http://example.org/name> ?n }} }} }}"
+            )
+        };
+        // Without SILENT the nested host denial arrives intact, naming the inner endpoint
+        // and the host's own words, never a catalog capability.
+        let err = run_with_source(&local(), &DenyingInner, &query(""))
+            .expect_err("a nested host denial is an error without SILENT");
+        let message = err.to_string();
+        assert!(
+            message.contains("the host denied the request: tenant blocked"),
+            "{message}"
+        );
+        assert!(!message.contains("withholds"), "{message}");
+        match err {
+            EvalError::ServiceHostDenied { endpoint, .. } => assert_eq!(endpoint, INNER_EP),
+            other => panic!("expected ServiceHostDenied, got {other:?}"),
         }
 
+        // With SILENT on the outer clause the invocation failed, so it is Ω0 — one row,
+        // `?n` unbound — and the evidence records the outer endpoint as refused by the
+        // host, carrying the nested denial's own words.
+        let (result, silenced) = run_recorded(&local(), Some(&DenyingInner), &query("SILENT "));
+        assert_eq!(
+            row_strings(&result.expect("SILENT answers Ω0")),
+            vec![vec!["UNBOUND".to_owned()]]
+        );
+        assert_eq!(kinds(&silenced), [(OUTER_EP.to_owned(), "host-denied")]);
+        assert!(
+            silenced[0].message.contains("tenant blocked"),
+            "{silenced:?}"
+        );
+
         // The neighbouring VALID case: the identical nested shape, but the inner
-        // endpoint answers instead of being denied — proving the denial above is about
+        // endpoint answers instead of being denied — proving the outcomes above are about
         // the denial, not about nested `SERVICE` never working through this resolver.
         struct BothForward;
         impl ServiceResolver for BothForward {
@@ -1584,13 +1486,16 @@ mod tests {
                 evaluate_in_memory(&ds, request, &Self)
             }
         }
-        let query = format!(
-            "SELECT ?n WHERE {{ SERVICE <{OUTER_EP}> {{ \
-             SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}"
+        let (result, silenced) = run_recorded(&local(), Some(&BothForward), &query("SILENT "));
+        assert_eq!(
+            row_strings(&result.expect("the nested shape answers when not denied")),
+            vec![vec!["X".to_owned()]]
         );
-        let result = run_with_source(&local(), &BothForward, &query)
-            .expect("the identical nested shape answers when the inner endpoint is not denied");
-        assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
+        assert_eq!(
+            kinds(&silenced),
+            Vec::<(String, &str)>::new(),
+            "{silenced:?}"
+        );
     }
 
     #[test]
@@ -1602,8 +1507,8 @@ mod tests {
             .query(
                 &local(),
                 SparqlRequest {
-                    query: "SELECT ?o WHERE { ?s <http://ex/knows> ?o \
-                            SERVICE <http://ep> { ?o <http://ex/name> ?n } }",
+                    query: "SELECT ?o WHERE { ?s <http://example.org/knows> ?o \
+                            SERVICE <http://example.org/ep> { ?o <http://example.org/name> ?n } }",
                     base_iri: None,
                     substitutions: &[],
                 },
@@ -1611,6 +1516,207 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, EvalError::SERVICE_UNCONFIGURED_CODE);
         assert!(err.message.contains("SERVICE"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn silent_service_without_source_is_the_join_identity_and_is_recorded() {
+        // No source at all: the invocation cannot succeed, so SILENT answers Ω0 — every
+        // left row kept, unaugmented — and records the endpoint as unconfigured.
+        let query = "SELECT ?o ?n WHERE { ?s <http://example.org/knows> ?o \
+                     SERVICE SILENT <http://example.org/ep> { ?o <http://example.org/name> ?n } }";
+        let (result, silenced) = run_recorded(&local(), None, query);
+        assert_eq!(
+            row_strings(&result.expect("SILENT answers Ω0")),
+            vec![
+                vec!["<http://example.org/x>".to_owned(), "UNBOUND".to_owned()],
+                vec!["<http://example.org/y>".to_owned(), "UNBOUND".to_owned()],
+            ]
+        );
+        assert_eq!(
+            kinds(&silenced),
+            [("http://example.org/ep".to_owned(), "unconfigured")]
+        );
+        // The neighbour: the same clause without SILENT is the unconfigured error.
+        let (result, silenced) = run_recorded(&local(), None, &query.replace("SILENT ", ""));
+        assert!(
+            matches!(result, Err(EvalError::ServiceUnconfigured(_))),
+            "{result:?}"
+        );
+        assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
+        // And with a source that reaches the endpoint the same SILENT clause answers.
+        let source =
+            InProcessServiceResolver::new().with_endpoint("http://example.org/ep", endpoint());
+        let (result, silenced) = run_recorded(&local(), Some(&source), query);
+        assert_eq!(
+            row_strings(&result.expect("answers")),
+            vec![vec!["<http://example.org/x>".to_owned(), "X".to_owned()],]
+        );
+        assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
+    }
+
+    #[test]
+    fn a_catalog_denial_under_silent_is_the_join_identity_and_is_recorded() {
+        use crate::service::{
+            ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceProfile,
+        };
+        let denying = InProcessServiceResolver::new()
+            .with_endpoint("http://example.org/ep", endpoint())
+            .with_catalog(ServiceCatalog::new().with_service(
+                "http://example.org/ep",
+                ServiceProfile::new(ServiceCapabilities::granting([])),
+            ));
+        let query = "SELECT ?o ?n WHERE { ?s <http://example.org/knows> ?o \
+                     SERVICE SILENT <http://example.org/ep> { ?o <http://example.org/name> ?n } }";
+        let (result, silenced) = run_recorded(&local(), Some(&denying), query);
+        assert_eq!(
+            row_strings(&result.expect("SILENT answers Ω0")),
+            vec![
+                vec!["<http://example.org/x>".to_owned(), "UNBOUND".to_owned()],
+                vec!["<http://example.org/y>".to_owned(), "UNBOUND".to_owned()],
+            ]
+        );
+        assert_eq!(
+            kinds(&silenced),
+            [("http://example.org/ep".to_owned(), "denied")]
+        );
+        // Without SILENT: the structured denial.
+        let (result, _) = run_recorded(&local(), Some(&denying), &query.replace("SILENT ", ""));
+        assert!(
+            matches!(result, Err(EvalError::ServiceDenied(_))),
+            "{result:?}"
+        );
+        // A catalog that grants the service: the clause answers, nothing silenced.
+        let granting = InProcessServiceResolver::new()
+            .with_endpoint("http://example.org/ep", endpoint())
+            .with_catalog(ServiceCatalog::new().with_service(
+                "http://example.org/ep",
+                ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query])),
+            ));
+        let (result, silenced) = run_recorded(&local(), Some(&granting), query);
+        assert_eq!(
+            row_strings(&result.expect("answers")),
+            vec![vec!["<http://example.org/x>".to_owned(), "X".to_owned()]]
+        );
+        assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
+    }
+
+    /// Fails each endpoint whose local name is a failure kind with that failure, and
+    /// answers `?n = "ok"` for any other.
+    struct FailingKinds;
+
+    impl ServiceResolver for FailingKinds {
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+            let name = request
+                .endpoint
+                .strip_prefix("http://example.org/")
+                .unwrap_or(request.endpoint);
+            Err(match name {
+                "transport" => RemoteError::Transport("connection refused".to_owned()),
+                "decode" => RemoteError::Decode("not a results document".to_owned()),
+                "disabled" => RemoteError::Disabled,
+                "unconfigured" => RemoteError::Unconfigured("no handler".to_owned()),
+                "denied" => RemoteError::Denied(ServiceDenial::new(
+                    request.endpoint,
+                    crate::service::ServiceCapability::Network,
+                    "no network for it",
+                )),
+                "host-denied" => RemoteError::HostDenied {
+                    endpoint: request.endpoint.to_owned(),
+                    message: "rate limited".to_owned(),
+                },
+                _ => {
+                    return Ok(ResolvedBindings {
+                        variables: vec![Variable::new("n")],
+                        rows: vec![vec![Some(TermValue::Literal {
+                            lexical_form: "ok".to_owned(),
+                            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                            language: None,
+                            direction: None,
+                        })]],
+                        cell_limit_exceeded_at: None,
+                    });
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn every_failed_invocation_kind_is_silenced_and_recorded() {
+        const KINDS: [&str; 6] = [
+            "transport",
+            "decode",
+            "disabled",
+            "unconfigured",
+            "denied",
+            "host-denied",
+        ];
+        let arm = |name: &str, silent: &str| {
+            format!("{{ SERVICE {silent}<http://example.org/{name}> {{ ?a ?b ?n }} }}")
+        };
+        let mut arms: Vec<String> = KINDS.iter().map(|name| arm(name, "SILENT ")).collect();
+        arms.push("{ VALUES ?e { \"lit\" } SERVICE SILENT ?e { ?a ?b ?n } }".to_owned());
+        arms.push(arm("answers", "SILENT "));
+        let query = format!("SELECT ?n WHERE {{ {} }}", arms.join(" UNION "));
+        let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+        // Seven Ω0 rows and the one answer.
+        let mut expected = vec![vec!["UNBOUND".to_owned()]; 7];
+        expected.push(vec!["ok".to_owned()]);
+        assert_eq!(
+            row_strings(&result.expect("every failure is silenced")),
+            expected
+        );
+        let mut expected: Vec<(String, &str)> = KINDS
+            .iter()
+            .map(|name| (format!("http://example.org/{name}"), *name))
+            .collect();
+        expected.push(("\"lit\"".to_owned(), "not-an-iri"));
+        expected.sort();
+        assert_eq!(
+            kinds(&silenced),
+            expected,
+            "one record per failure, in order"
+        );
+        assert!(
+            silenced.iter().all(|record| !record.message.is_empty()),
+            "{silenced:?}"
+        );
+
+        // Without SILENT each is its own error, and nothing is recorded.
+        for name in KINDS {
+            let query = format!("SELECT ?n WHERE {} ", arm(name, ""));
+            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+            let error = result.expect_err(name);
+            match name {
+                "unconfigured" => {
+                    assert!(
+                        matches!(error, EvalError::ServiceUnconfigured(_)),
+                        "{error:?}"
+                    );
+                }
+                "denied" => assert!(matches!(error, EvalError::ServiceDenied(_)), "{error:?}"),
+                "host-denied" => {
+                    assert!(
+                        matches!(error, EvalError::ServiceHostDenied { .. }),
+                        "{error:?}"
+                    );
+                }
+                _ => assert!(matches!(error, EvalError::Remote(_)), "{error:?}"),
+            }
+            assert_eq!(
+                kinds(&silenced),
+                Vec::<(String, &str)>::new(),
+                "{name}: {silenced:?}"
+            );
+        }
+        let (result, _) = run_recorded(
+            &local(),
+            Some(&FailingKinds),
+            "SELECT ?n WHERE { VALUES ?e { \"lit\" } SERVICE ?e { ?a ?b ?n } }",
+        );
+        assert!(
+            matches!(result, Err(EvalError::Unsupported { .. })),
+            "{result:?}"
+        );
     }
 
     // ── custom-aggregate / custom-function SERVICE forwarding refusals ────────
@@ -1621,8 +1727,8 @@ mod tests {
         let err = run_with_source(
             &local(),
             &source,
-            "SELECT ?s WHERE { SERVICE <http://ep> { \
-             SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { ?s <http://ex/name> ?n } \
+            "SELECT ?s WHERE { SERVICE <http://example.org/ep> { \
+             SELECT ?s (AGG(<http://example.org/customAgg>, ?n) AS ?v) WHERE { ?s <http://example.org/name> ?n } \
              GROUP BY ?s } }",
         )
         .unwrap_err();
@@ -1640,8 +1746,8 @@ mod tests {
         let err = run_with_source(
             &local(),
             &source,
-            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
-             SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { ?s <http://ex/name> ?n } \
+            "SELECT ?s WHERE { SERVICE SILENT <http://example.org/ep> { \
+             SELECT ?s (AGG(<http://example.org/customAgg>, ?n) AS ?v) WHERE { ?s <http://example.org/name> ?n } \
              GROUP BY ?s } }",
         )
         .unwrap_err();
@@ -1656,29 +1762,60 @@ mod tests {
     // ── LATERAL / SERVICE forwarding guard ─────────────────────────────────────
 
     #[test]
-    fn silent_service_with_a_lateral_body_is_refused() {
-        // A `LATERAL` clause inside a `SERVICE SILENT` body is refused: `LATERAL`
-        // is a SEP-0006/Jena syntax extension most remote endpoints do not
-        // implement, and under `SILENT` a rejection would degrade to the join
-        // identity — a result that looks complete and is wrong. Never reaches the
-        // source (the source below has no registered endpoints, so a forwarded
-        // attempt would surface as a transport error instead of this typed one):
-        // the refusal is typed and happens before dispatch.
-        let source = InProcessServiceResolver::new();
-        let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
-                      ?s <https://example.org/lateral-forward#knows> ?o \
-                      LATERAL { ?o <https://example.org/lateral-forward#name> ?n } } }";
-        let err = run_with_source(&local(), &source, query).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
-        assert!(
-            err.to_string()
-                .contains("LATERAL clause inside a SERVICE SILENT body"),
-            "got {err}"
-        );
-        assert!(
-            err.to_string().contains("SILENT"),
-            "the refusal must name SILENT as the reason it fires: {err}"
-        );
+    fn silent_service_forwards_lateral_text_and_silences_a_rejection() {
+        // A written LATERAL inside a SERVICE SILENT body is forwarded like any other
+        // construct — including one nested inside a variable-endpoint SERVICE — and an
+        // endpoint that rejects it is an invocation that failed: Ω0 under SILENT, and an
+        // error without it.
+        let bodies = [
+            "?s <http://example.org/name> ?n LATERAL { ?n <http://example.org/knows> ?x }",
+            "?a <http://example.org/hasEndpoint> ?g SERVICE ?g { ?c <http://example.org/q> ?n \
+             LATERAL { ?e <http://example.org/f> ?f } }",
+        ];
+        for body in bodies {
+            let answering = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+                assert!(
+                    request.query_text.contains("LATERAL {"),
+                    "the LATERAL clause must reach the endpoint verbatim: {}",
+                    request.query_text
+                );
+                Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+                    {"n":{"type":"literal","value":"X"}}
+                ]}}"#
+                    .to_vec())
+            });
+            let rejecting = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
+                Err(RemoteError::Transport(
+                    "400: LATERAL is not supported".to_owned(),
+                ))
+            });
+            let silent = format!(
+                "SELECT ?n WHERE {{ SERVICE SILENT <http://example.org/ep> {{ {body} }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&answering), &silent);
+            assert_eq!(
+                row_strings(&result.expect("forwarded and answered")),
+                vec![vec!["X".to_owned()]],
+                "{body}"
+            );
+            assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
+            let (result, silenced) = run_recorded(&local(), Some(&rejecting), &silent);
+            assert_eq!(
+                row_strings(&result.expect("a rejection is silenced")),
+                vec![vec!["UNBOUND".to_owned()]],
+                "{body}"
+            );
+            assert_eq!(
+                kinds(&silenced),
+                [("http://example.org/ep".to_owned(), "transport")]
+            );
+            let (result, _) =
+                run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
+            assert!(
+                matches!(result, Err(EvalError::Remote(_))),
+                "{body}: {result:?}"
+            );
+        }
     }
 
     #[test]
@@ -1709,8 +1846,8 @@ mod tests {
         let result = run_with_source(
             &local(),
             &source,
-            "SELECT ?n WHERE { SERVICE <http://ep> { \
-             ?s <http://ex/name> ?n LATERAL { ?n <http://ex/knows> ?x } } }",
+            "SELECT ?n WHERE { SERVICE <http://example.org/ep> { \
+             ?s <http://example.org/name> ?n LATERAL { ?n <http://example.org/knows> ?x } } }",
         )
         .expect("a non-silent SERVICE body must forward a written LATERAL clause");
         assert_eq!(
@@ -1719,30 +1856,6 @@ mod tests {
             "the request must actually be issued, not refused locally"
         );
         assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
-    }
-
-    #[test]
-    fn silent_service_lateral_nested_in_variable_endpoint_is_refused() {
-        // The bypass this pins closed: a written LATERAL sitting inside a nested
-        // `SERVICE ?g { … }` (a variable-endpoint SERVICE, itself an auto-wrap
-        // `Lateral` the parser reconstructs without a keyword) used to escape the
-        // guard, because the guard's own `Lateral` arm recursed into `left` only
-        // and never inspected the auto-wrapped `right`'s `Service::inner`. A
-        // written LATERAL nested that way must still be found and refused under
-        // `SERVICE SILENT`.
-        let source = InProcessServiceResolver::new();
-        let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
-                      ?a <https://example.org/lateral-forward#hasEndpoint> ?g \
-                      SERVICE ?g { ?c <https://example.org/lateral-forward#q> ?d \
-                      LATERAL { ?e <https://example.org/lateral-forward#f> ?f } } } }";
-        let err = run_with_source(&local(), &source, query).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
-        assert!(
-            err.to_string()
-                .contains("LATERAL clause inside a SERVICE SILENT body"),
-            "the LATERAL nested inside the variable-endpoint SERVICE ?g must still be found: \
-             got {err}"
-        );
     }
 
     #[test]
@@ -1758,7 +1871,7 @@ mod tests {
         let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
             posts.fetch_add(1, Ordering::Relaxed);
             assert!(
-                request.query_text.contains("http://ex/customFn"),
+                request.query_text.contains("http://example.org/customFn"),
                 "the custom function call must reach the endpoint verbatim: {}",
                 request.query_text
             );
@@ -1770,8 +1883,8 @@ mod tests {
         let result = run_with_source(
             &local(),
             &source,
-            "SELECT ?n WHERE { SERVICE <http://ep> { \
-             ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
+            "SELECT ?n WHERE { SERVICE <http://example.org/ep> { \
+             ?s <http://example.org/name> ?n . FILTER(<http://example.org/customFn>(?n) > 0) } }",
         )
         .expect("a non-silent SERVICE body must forward a custom scalar-function call");
         assert_eq!(
@@ -1783,54 +1896,52 @@ mod tests {
     }
 
     #[test]
-    fn custom_function_inside_a_silent_service_body_is_refused_with_the_escape_named() {
-        let source = InProcessServiceResolver::new();
-        let err = run_with_source(
-            &local(),
-            &source,
-            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
-             ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
-        )
-        .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
-        assert!(
-            err.to_string()
-                .contains("custom scalar-function call inside a SERVICE SILENT body"),
-            "SILENT must not launder a forwarded custom-function call into a degrade-to-\
-             join-identity wrong answer: {err}"
-        );
-        assert!(
-            err.to_string().contains("drop SILENT"),
-            "the refusal must name the escape so it is actionable rather than a dead end: {err}"
-        );
-    }
-
-    #[test]
-    fn a_custom_function_nested_inside_another_calls_arguments_still_trips_the_silent_guard() {
-        // The regression this pins: `visit_expression_parts`'s `FunctionCall` arm visits
-        // each argument as `ExpressionPart::Sub`, and `expression_reaches_custom_function`
-        // recurses into every `Sub`, so a `Function::Custom` call need not be the
-        // OUTERMOST call in the expression tree to be found — it can be buried inside
-        // another call's argument list. `CONCAT(<http://ex/customFn>(?n), "a")` nests the
-        // custom call one level down; if the walk only inspected an expression's own
-        // `Call` part and never descended into `FunctionCall` arguments, this query would
-        // slip the guard and forward under `SILENT`.
-        let source = InProcessServiceResolver::new();
-        let err = run_with_source(
-            &local(),
-            &source,
-            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
-             ?s <http://ex/name> ?n . \
-             FILTER(CONCAT(<http://ex/customFn>(?n), \"a\") = \"Xa\") } }",
-        )
-        .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
-        assert!(
-            err.to_string()
-                .contains("custom scalar-function call inside a SERVICE SILENT body"),
-            "a custom call nested inside CONCAT's argument list must trip the same guard a \
-             top-level custom call does: {err}"
-        );
+    fn custom_function_inside_a_silent_service_body_forwards_and_silences_a_rejection() {
+        // A custom scalar function is how a remote endpoint's own extension functions are
+        // written, so a SERVICE SILENT body carrying one — at the top of a FILTER or
+        // nested inside another call's arguments — is forwarded; an endpoint that does not
+        // know it fails the invocation, which SILENT answers with Ω0.
+        for filter in [
+            "FILTER(<http://example.org/customFn>(?n) > 0)",
+            "FILTER(CONCAT(<http://example.org/customFn>(?n), \"a\") = \"Xa\")",
+        ] {
+            let answering = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+                assert!(
+                    request.query_text.contains("http://example.org/customFn"),
+                    "{}",
+                    request.query_text
+                );
+                Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+                    {"n":{"type":"literal","value":"X"}}
+                ]}}"#
+                    .to_vec())
+            });
+            let rejecting = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
+                Err(RemoteError::Transport("400: unknown function".to_owned()))
+            });
+            let silent = format!(
+                "SELECT ?n WHERE {{ SERVICE SILENT <http://example.org/ep> {{ \
+                 ?s <http://example.org/name> ?n . {filter} }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&answering), &silent);
+            assert_eq!(
+                row_strings(&result.expect("forwarded and answered")),
+                vec![vec!["X".to_owned()]]
+            );
+            assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
+            let (result, silenced) = run_recorded(&local(), Some(&rejecting), &silent);
+            assert_eq!(
+                row_strings(&result.expect("a rejection is silenced")),
+                vec![vec!["UNBOUND".to_owned()]]
+            );
+            assert_eq!(
+                kinds(&silenced),
+                [("http://example.org/ep".to_owned(), "transport")]
+            );
+            let (result, _) =
+                run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
+            assert!(matches!(result, Err(EvalError::Remote(_))), "{result:?}");
+        }
     }
 
     #[test]
@@ -1843,9 +1954,9 @@ mod tests {
             .query(
                 &local(),
                 SparqlRequest {
-                    query: "SELECT ?s WHERE { SERVICE <http://ep> { \
-                            SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { \
-                            ?s <http://ex/name> ?n } GROUP BY ?s } }",
+                    query: "SELECT ?s WHERE { SERVICE <http://example.org/ep> { \
+                            SELECT ?s (AGG(<http://example.org/customAgg>, ?n) AS ?v) WHERE { \
+                            ?s <http://example.org/name> ?n } GROUP BY ?s } }",
                     base_iri: None,
                     substitutions: &[],
                 },
@@ -1865,8 +1976,8 @@ mod tests {
         let err = run_with_source(
             &local(),
             &source,
-            "SELECT ?o WHERE { ?s <http://ex/knows> ?o \
-             SERVICE <http://missing> { ?o <http://ex/name> ?n } }",
+            "SELECT ?o WHERE { ?s <http://example.org/knows> ?o \
+             SERVICE <http://example.org/missing> { ?o <http://example.org/name> ?n } }",
         )
         .unwrap_err();
         assert!(matches!(err, EvalError::Remote(_)), "got {err:?}");
@@ -1874,13 +1985,13 @@ mod tests {
 
     // ── LATERAL variable-endpoint SERVICE forwarding counts ───────────────────
 
-    /// `:row{i} :endpoint <http://ex/ep{i}>` for `i` in `0..n`.
+    /// `:row{i} :endpoint <http://example.org/ep{i}>` for `i` in `0..n`.
     fn multi_endpoint_local(n: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let endpoint = b.intern_iri("http://ex/endpoint");
+        let endpoint = b.intern_iri("http://example.org/endpoint");
         for i in 0..n {
-            let row = b.intern_iri(&format!("http://ex/row{i}"));
-            let ep = b.intern_iri(&format!("http://ex/ep{i}"));
+            let row = b.intern_iri(&format!("http://example.org/row{i}"));
+            let ep = b.intern_iri(&format!("http://example.org/ep{i}"));
             b.push_quad(row, endpoint, ep, None);
         }
         b.freeze().expect("freeze")
@@ -1889,8 +2000,8 @@ mod tests {
     /// Endpoint `i` contains `:s :name "ep{i}"`.
     fn multi_endpoint(i: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://ex/name");
-        let s = b.intern_iri("http://ex/s");
+        let name = b.intern_iri("http://example.org/name");
+        let s = b.intern_iri("http://example.org/s");
         let lit = b.intern_literal(RdfLiteral::simple(format!("ep{i}")));
         b.push_quad(s, name, lit, None);
         b.freeze().expect("freeze")
@@ -1900,7 +2011,7 @@ mod tests {
     fn multi_source(n: usize) -> InProcessServiceResolver {
         let mut src = InProcessServiceResolver::new();
         for i in 0..n {
-            src = src.with_endpoint(format!("http://ex/ep{i}"), multi_endpoint(i));
+            src = src.with_endpoint(format!("http://example.org/ep{i}"), multi_endpoint(i));
         }
         src
     }
@@ -1941,8 +2052,8 @@ mod tests {
         let result = run_with_source(
             &ds,
             &counting,
-            "SELECT * WHERE { ?x <http://ex/endpoint> ?g \
-             SERVICE ?g { ?s <http://ex/name> ?name } }",
+            "SELECT * WHERE { ?x <http://example.org/endpoint> ?g \
+             SERVICE ?g { ?s <http://example.org/name> ?name } }",
         )
         .expect("query");
         assert_eq!(
@@ -2077,6 +2188,8 @@ mod tests {
         tripped: Option<TrippedGovernor>,
         /// Fuel charged.
         fuel: u64,
+        /// The invocations `SILENT` absorbed.
+        silenced: Vec<purrdf_core::SilencedInvocation>,
     }
 
     /// Evaluate `pattern` over an empty dataset under `governors`, with `source` injected.
@@ -2099,6 +2212,7 @@ mod tests {
             columns: evaluated.rows().schema.len(),
             tripped: evidence.tripped(),
             fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            silenced: evidence.silenced,
         }
     }
 
@@ -2134,6 +2248,10 @@ mod tests {
         assert_eq!(
             run.columns, 3,
             "an immediate trip still carries the SERVICE pattern's declared schema"
+        );
+        assert!(
+            run.silenced.is_empty(),
+            "a trip is not a silenced invocation"
         );
 
         // The identical SILENT clause with the ceiling lifted really does complete, so the
@@ -2360,6 +2478,45 @@ mod tests {
     }
 
     #[test]
+    fn a_fuel_trip_inside_service_silent_stays_a_trip() {
+        // Metered, the clause costs `fuel` in all; one unit less trips inside it, after
+        // the request went out. SILENT does not turn that into Ω0: the result is a
+        // truncation naming the fuel governor, and nothing is recorded as silenced.
+        let complete = run_governed(
+            &service_pattern(true),
+            &FixtureSource::new(3),
+            &QueryGovernors::METERED,
+        );
+        assert!(!complete.truncated);
+        assert_eq!(complete.rows, 3);
+        let source = FixtureSource::new(3);
+        let run = run_governed(
+            &service_pattern(true),
+            &source,
+            &QueryGovernors::METERED.with_fuel(complete.fuel - 1),
+        );
+        assert_eq!(source.calls(), 1, "the trip comes after the request");
+        assert!(run.truncated);
+        assert!(
+            matches!(
+                run.tripped,
+                Some(TrippedGovernor::Budget {
+                    dimension: ResourceDimension::Fuel,
+                    ..
+                })
+            ),
+            "{:?}",
+            run.tripped
+        );
+        assert_ne!(
+            (run.rows, run.columns),
+            (1, 0),
+            "never the join identity a silenced invocation answers"
+        );
+        assert_eq!(kinds(&run.silenced), Vec::<(String, &str)>::new());
+    }
+
+    #[test]
     fn a_transport_error_under_silent_still_yields_the_join_identity() {
         // The regression guard: `SILENT` is about the endpoint, and an unreachable
         // endpoint IS the endpoint. Governed or not, the behaviour is exactly what it was
@@ -2374,6 +2531,7 @@ mod tests {
             assert_eq!(run.tripped, None);
             assert_eq!(run.rows, 1, "the join identity is one row");
             assert_eq!(run.columns, 0, "…and it binds nothing");
+            assert_eq!(kinds(&run.silenced), [(format!("{EX}sparql"), "transport")]);
         }
     }
 
@@ -2387,8 +2545,8 @@ mod tests {
         let result = run_with_source(
             &ds,
             &counting,
-            "SELECT * WHERE { ?x <http://ex/endpoint> ?g \
-             SERVICE <http://ex/ep0> { ?s <http://ex/name> ?name } }",
+            "SELECT * WHERE { ?x <http://example.org/endpoint> ?g \
+             SERVICE <http://example.org/ep0> { ?s <http://example.org/name> ?name } }",
         )
         .expect("query");
         assert_eq!(
@@ -2401,26 +2559,26 @@ mod tests {
 
     // ── Forwarded-body sanitizer: blank-node VALUES pushdown stripping ────────────
 
-    /// `:s <http://ex/hasAnon> _:bn` — an outer row whose bound variable is a blank
+    /// `:s <http://example.org/hasAnon> _:bn` — an outer row whose bound variable is a blank
     /// node, the shape that drives correlated substitution's injected `Values`
     /// pushdown into a forwarded `SERVICE` body.
     fn local_with_blank() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let has_anon = b.intern_iri("http://ex/hasAnon");
-        let s = b.intern_iri("http://ex/s");
+        let has_anon = b.intern_iri("http://example.org/hasAnon");
+        let s = b.intern_iri("http://example.org/s");
         let bn = b.intern_blank("bn", BlankScope::DEFAULT);
         b.push_quad(s, has_anon, bn, None);
         b.freeze().expect("freeze")
     }
 
-    /// `:s <http://ex/hasTarget> <http://ex/t>` — the same LATERAL/SERVICE shape as
+    /// `:s <http://example.org/hasTarget> <http://example.org/t>` — the same LATERAL/SERVICE shape as
     /// [`local_with_blank`], but the outer-bound variable is an IRI: the pushdown
     /// restriction over it IS legal `VALUES` syntax and must survive forwarding.
     fn local_with_iri() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let has_target = b.intern_iri("http://ex/hasTarget");
-        let s = b.intern_iri("http://ex/s");
-        let t = b.intern_iri("http://ex/t");
+        let has_target = b.intern_iri("http://example.org/hasTarget");
+        let s = b.intern_iri("http://example.org/s");
+        let t = b.intern_iri("http://example.org/t");
         b.push_quad(s, has_target, t, None);
         b.freeze().expect("freeze")
     }
@@ -2439,16 +2597,16 @@ mod tests {
             posts.fetch_add(1, Ordering::Relaxed);
             *captured.lock().expect("lock") = request.query_text.to_owned();
             Ok(br#"{"head":{"vars":["x","bn"]},"results":{"bindings":[
-                {"x":{"type":"uri","value":"http://ex/remoteX"},
-                 "bn":{"type":"uri","value":"http://ex/notOurBlank"}}
+                {"x":{"type":"uri","value":"http://example.org/remoteX"},
+                 "bn":{"type":"uri","value":"http://example.org/notOurBlank"}}
             ]}}"#
                 .to_vec())
         });
         let result = run_with_source(
             &local_with_blank(),
             &source,
-            "SELECT * WHERE { ?s <http://ex/hasAnon> ?bn \
-             LATERAL { SERVICE <http://ep> { ?x <http://ex/rel> ?bn } } }",
+            "SELECT * WHERE { ?s <http://example.org/hasAnon> ?bn \
+             LATERAL { SERVICE <http://example.org/ep> { ?x <http://example.org/rel> ?bn } } }",
         )
         .expect("a forwarded blank-node pushdown must be stripped, never refused");
         assert_eq!(
@@ -2486,8 +2644,8 @@ mod tests {
         let _ = run_with_source(
             &local_with_iri(),
             &source,
-            "SELECT * WHERE { ?s <http://ex/hasTarget> ?t \
-             LATERAL { SERVICE <http://ep> { ?x <http://ex/rel> ?t } } }",
+            "SELECT * WHERE { ?s <http://example.org/hasTarget> ?t \
+             LATERAL { SERVICE <http://example.org/ep> { ?x <http://example.org/rel> ?t } } }",
         )
         .expect("query");
         assert_eq!(
@@ -2497,7 +2655,7 @@ mod tests {
         );
         let text = captured.lock().expect("lock").clone();
         assert!(
-            text.contains("VALUES") && text.contains("<http://ex/t>"),
+            text.contains("VALUES") && text.contains("<http://example.org/t>"),
             "the IRI pushdown restriction must survive forwarding: {text}"
         );
     }
@@ -2511,7 +2669,9 @@ mod tests {
             left: Box::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
-                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/p")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://example.org/p",
+                    )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
             }),
@@ -2520,11 +2680,13 @@ mod tests {
                 bindings: vec![vec![
                     Some(GroundTerm::Triple(Box::new(GroundTriple {
                         subject: GroundTerm::BlankNode(BlankNode::new("b1")),
-                        predicate: NamedNode::new_unchecked("http://ex/embeds"),
-                        object: GroundTerm::NamedNode(NamedNode::new_unchecked("http://ex/o")),
+                        predicate: NamedNode::new_unchecked("http://example.org/embeds"),
+                        object: GroundTerm::NamedNode(NamedNode::new_unchecked(
+                            "http://example.org/o",
+                        )),
                     }))),
                     Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
-                        "http://ex/keep",
+                        "http://example.org/keep",
                     ))),
                 ]],
             }),
@@ -2548,7 +2710,7 @@ mod tests {
         assert_eq!(
             bindings,
             &vec![vec![Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
-                "http://ex/keep"
+                "http://example.org/keep"
             )))]]
         );
     }
@@ -2561,7 +2723,9 @@ mod tests {
         let leaf = GraphPattern::Bgp {
             patterns: vec![TriplePattern {
                 subject: TermPattern::Variable(Variable::new("x")),
-                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/rel")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                    "http://example.org/rel",
+                )),
                 object: TermPattern::Variable(Variable::new("bn")),
             }],
         };
@@ -2582,7 +2746,7 @@ mod tests {
     /// A one-row block binding `?t` to a quoted triple — a cell Values Insertion joins in
     /// because no expression constant can spell it, and one sanitizing keeps.
     fn triple_block() -> GraphPattern {
-        let iri = |local: &str| NamedNode::new_unchecked(format!("http://ex/{local}"));
+        let iri = |local: &str| NamedNode::new_unchecked(format!("http://example.org/{local}"));
         GraphPattern::Values {
             variables: vec![Variable::new("t")],
             bindings: vec![vec![Some(GroundTerm::Triple(Box::new(GroundTriple {
@@ -2644,12 +2808,12 @@ mod tests {
         let inner_filter = if inner_reads {
             "!BOUND(?t)"
         } else {
-            "?o != <http://ex/x>"
+            "?o != <http://example.org/x>"
         };
-        let mut body = "?s <http://ex/knows> ?o".to_owned();
+        let mut body = "?s <http://example.org/knows> ?o".to_owned();
         for _ in 0..n {
             body = format!(
-                "GRAPH <http://ex/g> {{ ?s <http://ex/knows> ?o {body} \
+                "GRAPH <http://example.org/g> {{ ?s <http://example.org/knows> ?o {body} \
                  FILTER({inner_filter}) FILTER(!BOUND(?t)) }}"
             );
         }
@@ -2788,7 +2952,7 @@ mod tests {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-                        "http://ex/knows",
+                        "http://example.org/knows",
                     )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],

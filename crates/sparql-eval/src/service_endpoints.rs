@@ -49,19 +49,32 @@
 //! enclosing operator, which is why the positions it is used in are the ones
 //! [`served_endpoint_variables`] classifies as direct.
 //!
-//! A `SILENT` endpoint that fails contributes the single empty solution for **that
-//! endpoint only** — `{?e ↦ iri}` — so it neither joins with the left solutions bound to
-//! the other endpoints nor pads them. An `OPTIONAL` left solution whose endpoint answers
-//! nothing keeps its left bindings, as `OPTIONAL` always does.
+//! # `SILENT`, and `MINUS`
 //!
-//! # What is refused, and why `SILENT` does not change it
+//! A `SILENT` invocation that does not succeed — the endpoint fails, is refused, has no
+//! source, or the value `?e` takes is not an IRI — is Ω0 for that invocation alone
+//! (Federated Query §3.2), recorded on the evidence. Under a group join or an `OPTIONAL`
+//! the union formulation carries it as `{?e ↦ iri}`: it joins the left solutions bound to
+//! that endpoint exactly as Ω0 would, and no other. `OPTIONAL` keeps a left solution whose
+//! endpoint answers nothing, as it always does.
+//!
+//! `MINUS` cannot use the union formulation for a silenced endpoint: `{?e ↦ iri}` shares
+//! `?e` with every left solution bound to that endpoint and would remove them all, where
+//! Ω0 — which binds nothing — removes nothing. So under `MINUS` the left solutions are
+//! partitioned by their endpoint, the right operand is evaluated once per partition with
+//! that endpoint alone listed ([`minus_partitions`]), each partition is subtracted by its
+//! own result, and the survivors are merged back in left-solution order. A silenced
+//! endpoint contributes Ω0 to its own partition only. It is still one request per
+//! endpoint.
+//!
+//! # What is refused
 //!
 //! A `SERVICE ?e` evaluated where no solution names an endpoint has no endpoint to be sent
-//! to. Returning the join identity there would make the enclosing join a no-op and the
-//! answer look complete when nothing was asked, so the refusal is a hard
-//! [`EvalError::Unsupported`] that names the shapes that do evaluate and the rewrite —
-//! and it holds under `SILENT` as well, because `SILENT` tolerates an endpoint that fails,
-//! not a query that names none.
+//! to, and makes no invocation. Returning the join identity there would make the
+//! enclosing join a no-op and the answer look complete when nothing was asked, so the
+//! refusal is a hard [`EvalError::Unsupported`] that names the shapes that do evaluate
+//! and the rewrite, with or without `SILENT`: `SILENT` absorbs an invocation that fails,
+//! and there is none.
 
 use std::sync::Arc;
 
@@ -72,21 +85,58 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::governor::soundness::ExpressionPart;
+use crate::remote::Invocation;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-/// Whether the query being evaluated contains a variable-endpoint `SERVICE` anywhere.
+/// Whether the query being evaluated contains a variable-endpoint `SERVICE`, and if it
+/// does, where it is served.
 ///
-/// Computed once per query by [`crate::eval::prepare_query_context`] (and by
-/// [`crate::eval::eval`] for a bare pattern), so a query without one — nearly every
-/// query — pays one allocation-free walk of its algebra and nothing per join.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Computed once per evaluated query by [`crate::eval::prepare_query_context`] (and by
+/// [`crate::eval::eval`] for a bare pattern, and for an UPDATE's `WHERE`), so a query
+/// without one — nearly every query — pays one allocation-free walk of its algebra and
+/// nothing per join, and a query with one pays one more walk to build the
+/// [`ServedIndex`] and a map lookup per join.
+#[derive(Debug, Clone)]
 pub(crate) enum EndpointScan {
-    /// Not known: every join analyses its right operand. The state of a context no query
-    /// was prepared into.
-    Unknown,
     /// The query has no variable-endpoint `SERVICE`: nothing to analyse.
     Absent,
+    /// The query has one; the index answers for every operand of the query as written.
+    Present(Arc<ServedIndex>),
+}
+
+impl EndpointScan {
+    /// Whether the query has no variable-endpoint `SERVICE`.
+    pub(crate) const fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+/// The endpoint analysis of one query's algebra, keyed by node address.
+///
+/// Only nodes of the query the scan walked are keys. A pattern built during evaluation —
+/// a `LATERAL`'s substituted right operand, a deferred `EXISTS` body's copy, a
+/// user-defined function's body — is not, and is analysed where it is evaluated, as is
+/// every operand evaluated while a deferred `EXISTS` placeholder is in scope (the
+/// placeholder's substitution decides what its body serves, and the scan cannot see it).
+#[derive(Debug, Default)]
+pub(crate) struct ServedIndex {
+    /// Every operand of a group join (both sides), an `OPTIONAL` (right) and a `MINUS`
+    /// (right): the endpoint variables served in it (see [`served_endpoint_variables`]).
+    served: crate::DetHashMap<usize, Arc<[Variable]>>,
+    /// Every `EXISTS` body: the variable-endpoint `SERVICE` variables in it that no
+    /// `SELECT` inside it hides.
+    exists_uses: crate::DetHashMap<usize, Arc<[Variable]>>,
+}
+
+impl ServedIndex {
+    /// The variable-endpoint `SERVICE` variables in `body`, an `EXISTS` body of the
+    /// scanned query, or `None` when `body` is not one.
+    pub(crate) fn exists_uses(&self, body: &GraphPattern) -> Option<&[Variable]> {
+        self.exists_uses
+            .get(&(std::ptr::from_ref(body) as usize))
+            .map(AsRef::as_ref)
+    }
 }
 
 /// What a variable-endpoint `SERVICE` finds for its variable in the enclosing frames.
@@ -102,6 +152,20 @@ pub(crate) enum EndpointBinding<I> {
     Hidden,
 }
 
+/// Which operator an endpoint frame belongs to, which decides what a silenced
+/// invocation contributes to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameRole {
+    /// The right operand of a group join, or its left operand when the join takes its
+    /// endpoints from the right: a silenced endpoint contributes `{?v ↦ iri}`.
+    Join,
+    /// The right operand of an `OPTIONAL`: as [`Self::Join`].
+    Optional,
+    /// One partition of a `MINUS`'s left solutions: a silenced endpoint contributes Ω0,
+    /// which removes nothing.
+    Minus,
+}
+
 /// One enclosing operator's binding for one endpoint variable.
 #[derive(Debug, Clone)]
 pub(crate) struct EndpointFrame<I> {
@@ -109,6 +173,8 @@ pub(crate) struct EndpointFrame<I> {
     variable: Variable,
     /// What the operator binds it to.
     binding: EndpointBinding<I>,
+    /// The operator.
+    role: FrameRole,
 }
 
 /// How a `SERVICE ?v` inside an operand is reached from the operand's root.
@@ -363,13 +429,267 @@ fn expression_mentions_variable_endpoint(expr: &Expression) -> bool {
 }
 
 /// The scan [`crate::eval::prepare_query_context`] installs for `pattern`.
-pub(crate) fn scan(pattern: &GraphPattern) -> EndpointScan {
-    match crate::stack::walk(|| mentions_variable_endpoint(pattern)) {
-        Ok(false) => EndpointScan::Absent,
-        // Present, or the walk ran out of stack: analyse at every join, which is always
-        // correct.
-        Ok(true) | Err(_) => EndpointScan::Unknown,
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the walk runs out of stack.
+pub(crate) fn scan(pattern: &GraphPattern) -> Result<EndpointScan, EvalError> {
+    if !crate::stack::walk(|| mentions_variable_endpoint(pattern))? {
+        return Ok(EndpointScan::Absent);
     }
+    let mut index = ServedIndex::default();
+    crate::stack::walk(|| {
+        index.summarize(pattern);
+    })?;
+    Ok(EndpointScan::Present(Arc::new(index)))
+}
+
+/// One variable's variable-endpoint `SERVICE` occurrences below a node, relative to that
+/// node: `direct` when some occurrence carries its rows up to it, `conflict` when some
+/// occurrence reaches it only through an operator that could absorb, drop or re-select
+/// them. The bottom-up form of [`classify`].
+#[derive(Debug)]
+struct Occurrence {
+    variable: Variable,
+    direct: bool,
+    conflict: bool,
+}
+
+/// Fold `from` into `into`, one entry per variable.
+fn merge(into: &mut Vec<Occurrence>, from: Vec<Occurrence>) {
+    for occurrence in from {
+        if let Some(existing) = into
+            .iter_mut()
+            .find(|existing| existing.variable == occurrence.variable)
+        {
+            existing.direct |= occurrence.direct;
+            existing.conflict |= occurrence.conflict;
+        } else {
+            into.push(occurrence);
+        }
+    }
+}
+
+/// `summary` seen through an operator that does not carry its rows upwards.
+fn indirect(mut summary: Vec<Occurrence>) -> Vec<Occurrence> {
+    for occurrence in &mut summary {
+        occurrence.conflict |= occurrence.direct;
+        occurrence.direct = false;
+    }
+    summary
+}
+
+impl ServedIndex {
+    /// Record `operand`'s served variables.
+    fn note(&mut self, operand: &GraphPattern, summary: &[Occurrence]) {
+        let served: Arc<[Variable]> = summary
+            .iter()
+            .filter(|o| o.direct && !o.conflict)
+            .map(|o| o.variable.clone())
+            .collect();
+        self.served
+            .insert(std::ptr::from_ref(operand) as usize, served);
+    }
+
+    /// The occurrences below `pattern`, indexing every operand and `EXISTS` body on the
+    /// way. Wildcard-free, like [`classify`], whose classification it computes.
+    fn summarize(&mut self, pattern: &GraphPattern) -> Vec<Occurrence> {
+        // Run inside a `crate::stack::walk` scope, which discards the partial index when
+        // a level refuses.
+        if crate::stack::walk_is_low("SERVICE endpoint analysis") {
+            return Vec::new();
+        }
+        match pattern {
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_) => Vec::new(),
+            GraphPattern::Service { name, .. } => match name {
+                NamedNodePattern::Variable(variable) => vec![Occurrence {
+                    variable: variable.clone(),
+                    direct: true,
+                    conflict: false,
+                }],
+                NamedNodePattern::NamedNode(_) => Vec::new(),
+            },
+            GraphPattern::Join { left, right } => {
+                let mut summary = self.summarize(left);
+                let right_summary = self.summarize(right);
+                self.note(left, &summary);
+                self.note(right, &right_summary);
+                merge(&mut summary, right_summary);
+                summary
+            }
+            GraphPattern::Lateral { left, right } => {
+                let mut summary = self.summarize(left);
+                let right_summary = self.summarize(right);
+                merge(&mut summary, right_summary);
+                summary
+            }
+            GraphPattern::Union { arms } => {
+                let mut summary = Vec::new();
+                for arm in arms {
+                    let arm_summary = self.summarize(arm);
+                    merge(&mut summary, arm_summary);
+                }
+                summary
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                let mut summary = self.summarize(left);
+                let right_summary = self.summarize(right);
+                self.note(right, &right_summary);
+                merge(&mut summary, indirect(right_summary));
+                if let Some(expression) = expression {
+                    let expression_summary = self.summarize_expression(expression);
+                    merge(&mut summary, expression_summary);
+                }
+                summary
+            }
+            GraphPattern::Minus { left, right } => {
+                let mut summary = self.summarize(left);
+                let right_summary = self.summarize(right);
+                self.note(right, &right_summary);
+                merge(&mut summary, indirect(right_summary));
+                summary
+            }
+            GraphPattern::Filter { expr, inner } => {
+                let mut summary = self.summarize(inner);
+                let expression_summary = self.summarize_expression(expr);
+                merge(&mut summary, expression_summary);
+                summary
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            }
+            | GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                let mut summary = self.summarize(inner);
+                let expression_summary = self.summarize_expression(expression);
+                merge(&mut summary, expression_summary);
+                summary
+            }
+            GraphPattern::Graph { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner } => self.summarize(inner),
+            GraphPattern::OrderBy { inner, expression } => {
+                let mut summary = self.summarize(inner);
+                for key in expression {
+                    let key_summary =
+                        self.summarize_expression(crate::modifier::order_sort_key(key));
+                    merge(&mut summary, key_summary);
+                }
+                summary
+            }
+            GraphPattern::Project { inner, variables } => {
+                let mut summary = self.summarize(inner);
+                summary.retain(|o| variables.contains(&o.variable));
+                summary
+            }
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => {
+                let summary = self.summarize(inner);
+                if *start == 0 && length.is_none() {
+                    summary
+                } else {
+                    indirect(summary)
+                }
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                let mut summary = self.summarize(inner);
+                for occurrence in &mut summary {
+                    if !variables.contains(&occurrence.variable) {
+                        occurrence.conflict |= occurrence.direct;
+                        occurrence.direct = false;
+                    }
+                }
+                for (_, aggregate) in aggregates {
+                    for e in aggregate.args().iter().chain(
+                        aggregate
+                            .order_by()
+                            .iter()
+                            .map(crate::modifier::order_sort_key),
+                    ) {
+                        let expression_summary = self.summarize_expression(e);
+                        merge(&mut summary, expression_summary);
+                    }
+                }
+                summary
+            }
+        }
+    }
+
+    /// The occurrences inside an expression's `EXISTS` patterns: never direct.
+    fn summarize_expression(&mut self, expr: &Expression) -> Vec<Occurrence> {
+        if crate::stack::walk_is_low("SERVICE endpoint analysis") {
+            return Vec::new();
+        }
+        let mut summary = Vec::new();
+        crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+            match part {
+                ExpressionPart::Sub(sub) => {
+                    let sub_summary = self.summarize_expression(sub);
+                    merge(&mut summary, sub_summary);
+                }
+                ExpressionPart::Exists(body) => {
+                    let body_summary = self.summarize(body);
+                    let uses: Arc<[Variable]> =
+                        body_summary.iter().map(|o| o.variable.clone()).collect();
+                    self.exists_uses
+                        .insert(std::ptr::from_ref(body) as usize, uses);
+                    merge(&mut summary, indirect(body_summary));
+                }
+                ExpressionPart::Call(_) => {}
+            }
+            false
+        });
+        summary
+    }
+}
+
+/// The endpoint variables served in `operand` (see [`served_endpoint_variables`]): read
+/// from the query's index when `operand` is one of its nodes and no deferred `EXISTS`
+/// placeholder is in scope, and analysed here otherwise.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] from the analysis walk.
+fn served_in<D: DatasetView + Sync>(
+    operand: &GraphPattern,
+    index: &ServedIndex,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Arc<[Variable]>, EvalError> {
+    if ctx.deferred_exists.is_none()
+        && let Some(served) = index.served.get(&(std::ptr::from_ref(operand) as usize))
+    {
+        return Ok(Arc::clone(served));
+    }
+    let placeholders = ctx.deferred_exists.clone();
+    let served =
+        crate::stack::walk(|| served_endpoint_variables(operand, placeholders.as_deref()))?;
+    Ok(served.into())
+}
+
+/// The innermost frame for `variable`, if any frame names it.
+fn frame_for<'c, I>(
+    frames: &'c [EndpointFrame<I>],
+    variable: &Variable,
+) -> Option<&'c EndpointFrame<I>> {
+    frames
+        .iter()
+        .rev()
+        .find(|frame| &frame.variable == variable)
 }
 
 /// The innermost frame's binding for `variable`, if any frame names it.
@@ -377,16 +697,13 @@ fn binding_for<'c, I>(
     frames: &'c [EndpointFrame<I>],
     variable: &Variable,
 ) -> Option<&'c EndpointBinding<I>> {
-    frames
-        .iter()
-        .rev()
-        .find(|frame| &frame.variable == variable)
-        .map(|frame| &frame.binding)
+    frame_for(frames, variable).map(|frame| &frame.binding)
 }
 
 /// Evaluate `right`, the right operand of a group join, an `OPTIONAL` or a `MINUS` whose
 /// left operand produced `left`, with every variable-endpoint `SERVICE` in a direct
-/// position of `right` answered over the endpoints `left` binds.
+/// position of `right` answered over the endpoints `left` binds. `role` names the
+/// operator.
 ///
 /// # Errors
 ///
@@ -395,19 +712,20 @@ fn binding_for<'c, I>(
 pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
+    role: FrameRole,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    if ctx.endpoint_scan == EndpointScan::Absent {
+    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
         return eval_evaluated(right, ctx);
-    }
-    let placeholders = ctx.deferred_exists.clone();
-    let served = crate::stack::walk(|| served_endpoint_variables(right, placeholders.as_deref()))?;
+    };
+    let index = Arc::clone(index);
+    let served = served_in(right, &index, ctx)?;
     if served.is_empty() {
         return eval_evaluated(right, ctx);
     }
     let depth = ctx.endpoint_frames.len();
-    for variable in served {
-        let column = left.schema.index_of(&variable);
+    for variable in served.iter() {
+        let column = left.schema.index_of(variable);
         let binding = match column {
             Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
                 let mut seen = crate::DetHashSet::default();
@@ -424,7 +742,7 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
             // have listed them otherwise), so its rows reach that operator's join on the
             // variable: its list stays the one in force.
             _ if matches!(
-                binding_for(&ctx.endpoint_frames[..depth], &variable),
+                binding_for(&ctx.endpoint_frames[..depth], variable),
                 Some(EndpointBinding::Endpoints(_))
             ) =>
             {
@@ -433,8 +751,105 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
             Some(_) => EndpointBinding::PartlyUnbound,
             None => continue,
         };
-        ctx.endpoint_frames
-            .push(EndpointFrame { variable, binding });
+        ctx.endpoint_frames.push(EndpointFrame {
+            variable: variable.clone(),
+            binding,
+            role,
+        });
+    }
+    let evaluated = eval_evaluated(right, ctx);
+    ctx.endpoint_frames.truncate(depth);
+    evaluated
+}
+
+/// One partition of a `MINUS`'s left solutions: the positions of the solutions that bind
+/// every partitioning variable to `endpoints`, in left order.
+pub(crate) struct MinusPartition<I> {
+    /// Each partitioning variable with the term this partition binds it to.
+    endpoints: Vec<(Variable, SolutionTerm<I>)>,
+    /// The positions, in `left`, of the solutions in this partition.
+    pub(crate) rows: Vec<usize>,
+}
+
+/// Partition `left`, the left solutions of `left MINUS right`, by the endpoints of the
+/// variable-endpoint `SERVICE` clauses served in `right` — or `None` when there are none
+/// to partition by, and `right` is evaluated once, as [`eval_right_operand`] evaluates
+/// it.
+///
+/// A variable is partitioned by when every left solution binds it. One that some
+/// solution leaves unbound is not an endpoint list at all, and the `SERVICE` is refused
+/// where it is evaluated, so the whole operand takes the unpartitioned route; one an
+/// enclosing operator already lists endpoints for keeps that list, as in
+/// [`eval_right_operand`].
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] from the analysis walk.
+pub(crate) fn minus_partitions<D: DatasetView + Sync>(
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<Vec<MinusPartition<D::Id>>>, EvalError> {
+    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
+        return Ok(None);
+    };
+    let served = served_in(right, index, ctx)?;
+    let mut columns: Vec<(Variable, usize)> = Vec::new();
+    for variable in served.iter() {
+        match left.schema.index_of(variable) {
+            Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
+                columns.push((variable.clone(), c));
+            }
+            _ if matches!(
+                binding_for(&ctx.endpoint_frames, variable),
+                Some(EndpointBinding::Endpoints(_))
+            ) => {}
+            Some(_) => return Ok(None),
+            None => {}
+        }
+    }
+    if columns.is_empty() {
+        return Ok(None);
+    }
+    let mut partitions: Vec<MinusPartition<D::Id>> = Vec::new();
+    let mut by_key: crate::DetHashMap<Vec<SolutionTerm<D::Id>>, usize> =
+        crate::DetHashMap::default();
+    for (position, row) in left.rows.iter().enumerate() {
+        let key: Vec<SolutionTerm<D::Id>> = columns.iter().filter_map(|&(_, c)| row[c]).collect();
+        let slot = *by_key.entry(key).or_insert_with_key(|key| {
+            partitions.push(MinusPartition {
+                endpoints: columns
+                    .iter()
+                    .zip(key)
+                    .map(|((variable, _), term)| (variable.clone(), *term))
+                    .collect(),
+                rows: Vec::new(),
+            });
+            partitions.len() - 1
+        });
+        partitions[slot].rows.push(position);
+    }
+    Ok(Some(partitions))
+}
+
+/// Evaluate `right` for one [`MinusPartition`]: every partitioning variable's clause
+/// invokes only the partition's endpoint, and a silenced invocation contributes Ω0.
+///
+/// # Errors
+///
+/// Whatever evaluating `right` raises.
+pub(crate) fn eval_minus_partition<D: DatasetView + Sync>(
+    partition: &MinusPartition<D::Id>,
+    right: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let depth = ctx.endpoint_frames.len();
+    for (variable, endpoint) in &partition.endpoints {
+        ctx.endpoint_frames.push(EndpointFrame {
+            variable: variable.clone(),
+            binding: EndpointBinding::Endpoints(Arc::from([*endpoint])),
+            role: FrameRole::Minus,
+        });
     }
     let evaluated = eval_evaluated(right, ctx);
     ctx.endpoint_frames.truncate(depth);
@@ -464,26 +879,25 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
-    if ctx.endpoint_scan == EndpointScan::Absent {
+    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
+        return Ok(false);
+    };
+    let served = served_in(left, index, ctx)?;
+    if served.is_empty() || !served_in(right, index, ctx)?.is_empty() {
         return Ok(false);
     }
-    let placeholders = ctx.deferred_exists.clone();
+    if served.iter().any(|variable| {
+        matches!(
+            binding_for(&ctx.endpoint_frames, variable),
+            Some(EndpointBinding::Endpoints(_))
+        )
+    }) {
+        return Ok(false);
+    }
     crate::stack::walk(|| {
-        let served = served_endpoint_variables(left, placeholders.as_deref());
-        if served.is_empty()
-            || !served_endpoint_variables(right, placeholders.as_deref()).is_empty()
-        {
-            return false;
-        }
         let mut mentioned = crate::DetHashSet::default();
         crate::expr::pattern_all_vars(right, &mut mentioned);
         served.iter().any(|variable| mentioned.contains(variable))
-            && !served.iter().any(|variable| {
-                matches!(
-                    binding_for(&ctx.endpoint_frames, variable),
-                    Some(EndpointBinding::Endpoints(_))
-                )
-            })
     })
 }
 
@@ -505,17 +919,23 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
 /// per-solution evaluation would have reached, and a query it admits evaluates exactly as
 /// before.
 ///
+/// A value that is not an IRI is refused here only when no clause of the variable is
+/// `SILENT`: under `SILENT` it is an invocation that fails, and the substituted clause
+/// answers it with Ω0 and a silenced record (see `crate::expr::substitute_pattern`).
+///
 /// # Errors
 ///
 /// [`EvalError::Unsupported`] naming the value when a left solution binds `?v` to a term
-/// that is not an IRI ([`non_iri_endpoint`]), and when one leaves it unbound and no enclosing operator lists its endpoints ([`unbound_endpoint`]), under
-/// `SILENT` too; [`EvalError::StackExhausted`] from the analysis walk.
+/// that is not an IRI and the clause is not `SILENT` ([`non_iri_endpoint`]), and when
+/// one leaves it unbound and no enclosing operator lists its endpoints
+/// ([`unbound_endpoint`]), `SILENT` or not; [`EvalError::StackExhausted`] from the
+/// analysis walk.
 pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
-    if ctx.endpoint_scan == EndpointScan::Absent || left.rows.is_empty() {
+    if ctx.endpoint_scan.is_absent() || left.rows.is_empty() {
         return Ok(());
     }
     let uses = crate::stack::walk(|| {
@@ -534,12 +954,13 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
         for row in &left.rows {
             match column.and_then(|c| row[c]) {
                 None => unbound += 1,
-                Some(term) => {
+                Some(term) if !silent => {
                     let value = ctx.scratch.value_of(ctx.dataset, term);
                     if !matches!(value, TermValue::Iri(_)) {
-                        return Err(non_iri_endpoint(&variable, &value, silent));
+                        return Err(non_iri_endpoint(&variable, &value));
                     }
                 }
+                Some(_) => {}
             }
         }
         if unbound == 0 {
@@ -563,16 +984,19 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
 }
 
 /// Every variable-endpoint `SERVICE ?v` a per-solution evaluation of `pattern` reaches,
-/// with its `SILENT` flag, each variable once: not inside a `SERVICE` body (forwarded,
-/// never evaluated here) nor an expression, and not below a sub-`SELECT` that does not
-/// project `?v` (a different `?v`, which no substitution reaches).
+/// each variable once with whether every one of its clauses is `SILENT`: not inside a
+/// `SERVICE` body (forwarded, never evaluated here) nor an expression, and not below a
+/// sub-`SELECT` that does not project `?v` (a different `?v`, which no substitution
+/// reaches).
 fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
     match pattern {
         GraphPattern::Service { name, silent, .. } => {
-            if let NamedNodePattern::Variable(variable) = name
-                && !uses.iter().any(|(seen, _)| seen == variable)
-            {
-                uses.push((variable.clone(), *silent));
+            if let NamedNodePattern::Variable(variable) = name {
+                if let Some((_, all_silent)) = uses.iter_mut().find(|(seen, _)| seen == variable) {
+                    *all_silent &= *silent;
+                } else {
+                    uses.push((variable.clone(), *silent));
+                }
             }
         }
         GraphPattern::Project { inner, variables } => {
@@ -623,6 +1047,7 @@ pub(crate) fn eval_projected<D: DatasetView + Sync>(
         ctx.endpoint_frames.push(EndpointFrame {
             variable,
             binding: EndpointBinding::Hidden,
+            role: FrameRole::Join,
         });
     }
     let evaluated = eval_evaluated(inner, ctx);
@@ -635,25 +1060,37 @@ pub(crate) fn eval_projected<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Unsupported`] when no enclosing solution names an endpoint (under `SILENT`
-/// too) and when the clause's variable is bound to a term that is not an IRI (`SILENT`
-/// or not); and whatever each endpoint's evaluation raises.
+/// [`EvalError::Unsupported`] when no enclosing solution names an endpoint (`SILENT` or
+/// not) and, without `SILENT`, when the clause's variable is bound to a term that is not
+/// an IRI; and whatever each endpoint's invocation raises.
 pub(crate) fn eval_variable_endpoint<D: DatasetView + Sync>(
     node: &GraphPattern,
     variable: &Variable,
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    match binding_for(&ctx.endpoint_frames, variable) {
-        Some(EndpointBinding::Endpoints(endpoints)) => {
+    match frame_for(&ctx.endpoint_frames, variable) {
+        Some(EndpointFrame {
+            binding: EndpointBinding::Endpoints(endpoints),
+            role,
+            ..
+        }) => {
             let endpoints = Arc::clone(endpoints);
-            eval_over_endpoints(node, variable, &endpoints, silent, ctx)
+            let role = *role;
+            eval_over_endpoints(node, variable, &endpoints, silent, role, ctx)
         }
-        Some(EndpointBinding::PartlyUnbound) => Err(unbound_endpoint(
+        Some(EndpointFrame {
+            binding: EndpointBinding::PartlyUnbound,
+            ..
+        }) => Err(unbound_endpoint(
             variable,
             "some solutions of the pattern before it leave it unbound",
         )),
-        Some(EndpointBinding::Hidden) | None => Err(unbound_endpoint(
+        Some(EndpointFrame {
+            binding: EndpointBinding::Hidden,
+            ..
+        })
+        | None => Err(unbound_endpoint(
             variable,
             "it is not bound to an IRI where the SERVICE is evaluated",
         )),
@@ -674,29 +1111,21 @@ pub(crate) fn unbound_endpoint(variable: &Variable, cause: &str) -> EvalError {
          right side, an EXISTS, a LIMIT/OFFSET, an aggregate that does not group by ?{v}, \
          or a sub-SELECT that does not project ?{v}. Bind ?{v} before the SERVICE, e.g. \
          `?s <p> ?{v} . SERVICE ?{v} {{ … }}` or `?s <p> ?{v} LATERAL {{ SERVICE ?{v} {{ … }} \
-         }}`. SILENT does not change this: it tolerates an endpoint that fails, not a query \
-         that names none"
+         }}`. SILENT does not change this: no invocation is made, so there is no failed \
+         invocation for it to absorb"
     ))
 }
 
-/// The refusal for a `SERVICE ?variable` whose variable is bound to a term that is not an
-/// IRI: it names no endpoint, so there is nothing to send the request to — a request this
-/// engine refuses as written ([`EvalError::Unsupported`]), not a federation failure. Under
-/// `SILENT` the message says why `SILENT` does not apply.
-pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue, silent: bool) -> EvalError {
+/// The error for a `SERVICE ?variable` whose variable is bound to a term that is not an
+/// IRI: it names no endpoint, so there is nothing to send the request to. Under `SILENT`
+/// the invocation is silenced with this message instead.
+pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue) -> EvalError {
     let v = variable.as_str();
-    let mut message = format!(
+    EvalError::unsupported(format!(
         "SERVICE ?{v}: ?{v} is bound to {}, which is not an IRI, so there is no endpoint to \
          send the request to",
         describe_non_iri(value)
-    );
-    if silent {
-        message.push_str(
-            "; SILENT does not apply: it tolerates an endpoint that fails, not a value that \
-             names none",
-        );
-    }
-    EvalError::unsupported(message)
+    ))
 }
 
 /// A short description of a non-IRI term, for the error naming it.
@@ -709,68 +1138,146 @@ fn describe_non_iri(value: &TermValue) -> String {
     }
 }
 
-/// Each endpoint's own answer, in endpoint order.
-type EndpointBlocks<I> = Vec<(SolutionTerm<I>, SolutionSeq<I>)>;
+/// `value` written out as the endpoint of a silenced-invocation record: an IRI as
+/// itself, any other term in N-Triples form.
+fn endpoint_text(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => iri.clone(),
+        TermValue::Blank { label, .. } => format!("_:{label}"),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        } => match language {
+            Some(language) => format!("\"{lexical_form}\"@{language}"),
+            None if datatype == XSD_STRING => format!("\"{lexical_form}\""),
+            None => format!("\"{lexical_form}\"^^<{datatype}>"),
+        },
+        TermValue::Triple { s, p, o } => {
+            format!("<<( {} {} {} )>>", term_text(s), term_text(p), term_text(o))
+        }
+    }
+}
 
-/// `⋃ { ?variable ↦ e } ⋈ Invocation(e, node's body)` over `endpoints`, in their order.
+/// The datatype a simple literal carries.
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+/// [`endpoint_text`] inside a triple term, where an IRI is bracketed.
+fn term_text(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => format!("<{iri}>"),
+        other => endpoint_text(other),
+    }
+}
+
+/// What one endpoint contributed to the clause.
+enum Block<I: purrdf_core::ViewTermId> {
+    /// The endpoint's rows, each tagged with the endpoint.
+    Rows(SolutionSeq<I>),
+    /// A silenced invocation under `MINUS`: Ω0, untagged.
+    Identity,
+}
+
+/// Each endpoint's own contribution, in endpoint order.
+type EndpointBlocks<I> = Vec<(SolutionTerm<I>, Block<I>)>;
+
+/// `⋃ { ?variable ↦ e } ⋈ Invocation(e, node's body)` over `endpoints`, in their order —
+/// with a silenced invocation under a `MINUS` frame contributing Ω0 itself, untagged.
 fn eval_over_endpoints<D: DatasetView + Sync>(
     node: &GraphPattern,
     variable: &Variable,
     endpoints: &[SolutionTerm<D::Id>],
     silent: bool,
+    role: FrameRole,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let key = VarSchema::from_vars([variable.clone()]);
     let mut blocks: EndpointBlocks<D::Id> = Vec::with_capacity(endpoints.len());
     let mut stopped = None;
-    // A value that is not an IRI names no endpoint. That is the query's own fault, not an
-    // endpoint that failed, so it is refused under `SILENT` too — the join identity would
-    // claim an endpoint had been consulted — and it is refused before any request goes
+    // Without `SILENT`, a value that is not an IRI is refused before any request goes
     // out, so whether one does never depends on the order the endpoints are listed in.
-    for &endpoint in endpoints {
-        let value = ctx.scratch.value_of(ctx.dataset, endpoint);
-        if !matches!(value, TermValue::Iri(_)) {
-            return Err(non_iri_endpoint(variable, &value, silent));
+    if !silent {
+        for &endpoint in endpoints {
+            let value = ctx.scratch.value_of(ctx.dataset, endpoint);
+            if !matches!(value, TermValue::Iri(_)) {
+                return Err(non_iri_endpoint(variable, &value));
+            }
         }
     }
     for &endpoint in endpoints {
-        // The same substitution a `LATERAL` makes for one solution: the IRI becomes the
-        // clause's endpoint and is injected into its body wherever the body names it.
-        let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx);
-        let substituted = crate::expr::substitute_pattern(node, &row)?;
-        let GraphPattern::Service {
-            name: name @ NamedNodePattern::NamedNode(_),
-            inner,
-            silent: substituted_silent,
-        } = substituted.as_ref()
-        else {
-            return Err(EvalError::internal(
-                "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
-                 resolve its endpoint",
-            ));
+        let value = ctx.scratch.value_of(ctx.dataset, endpoint);
+        let invocation = if matches!(value, TermValue::Iri(_)) {
+            // The same substitution a `LATERAL` makes for one solution: the IRI becomes
+            // the clause's endpoint and is injected into its body wherever the body names
+            // it.
+            let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx);
+            let substituted = crate::expr::substitute_pattern(node, &row)?;
+            let GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri),
+                inner,
+                silent: substituted_silent,
+            } = substituted.as_ref()
+            else {
+                return Err(EvalError::internal(
+                    "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+                     resolve its endpoint",
+                ));
+            };
+            crate::remote::invoke_service(iri.as_str(), inner, *substituted_silent, ctx)?
+        } else {
+            crate::remote::failed_invocation(
+                &endpoint_text(&value),
+                purrdf_core::SilencedKind::NotAnIri,
+                non_iri_endpoint(variable, &value),
+                silent,
+            )?
         };
-        match crate::remote::eval_service(&substituted, name, inner, *substituted_silent, ctx)? {
-            Evaluated::Complete(seq) => blocks.push((endpoint, seq)),
+        match invocation {
+            Invocation::Answered(Evaluated::Complete(seq)) => {
+                blocks.push((endpoint, Block::Rows(seq)));
+            }
             // Commit per endpoint: the block this endpoint was producing is discarded
             // whole, and every block before it is complete — a prefix of this clause's
             // ordered output.
-            Evaluated::Truncated(truncation) => {
+            Invocation::Answered(Evaluated::Truncated(truncation)) => {
                 stopped = Some(truncation.split().1);
                 break;
+            }
+            Invocation::Silenced(record) => {
+                ctx.record_silenced(record);
+                blocks.push((
+                    endpoint,
+                    match role {
+                        FrameRole::Join | FrameRole::Optional => {
+                            Block::Rows(crate::remote::identity_seq())
+                        }
+                        FrameRole::Minus => Block::Identity,
+                    },
+                ));
             }
         }
     }
 
     let mut schema = VarSchema::from_vars([variable.clone()]);
     for (_, block) in &blocks {
-        for v in block.schema.vars() {
-            schema.push(v.clone());
+        if let Block::Rows(block) = block {
+            for v in block.schema.vars() {
+                schema.push(v.clone());
+            }
         }
     }
     let schema = Arc::new(schema);
     let width = schema.len();
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
     for (endpoint, block) in &blocks {
+        let block = match block {
+            Block::Rows(block) => block,
+            Block::Identity => {
+                rows.push(smallvec::smallvec![None; width]);
+                continue;
+            }
+        };
         let to_out: Vec<usize> = block
             .schema
             .vars()
@@ -922,6 +1429,65 @@ mod tests {
             .collect();
         out.sort();
         Ok(out)
+    }
+
+    /// Rendered rows, and each silenced invocation as `(endpoint, kind label)`.
+    type Recorded = (Vec<String>, Vec<(String, &'static str)>);
+
+    /// [`run`] under a metering governor, with the silenced invocations the evidence
+    /// records, each as its endpoint (local name for an IRI) and kind label.
+    fn run_recorded(source: &Endpoints, query: &str) -> Result<Recorded, EvalError> {
+        let ds = local();
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(query)
+            .expect("parse");
+        let state = Arc::new(crate::governor::GovernorState::new(
+            &crate::governor::QueryGovernors::METERED,
+        ));
+        let mut ctx = EvalCtx::new(&ds)
+            .with_remote(source)
+            .with_governors(Arc::clone(&state));
+        let Outcome::Solutions(seq) = evaluate_query(&parsed, &mut ctx)? else {
+            panic!("a SELECT answers solutions");
+        };
+        let (variables, rows) = materialize_solutions(&seq, &ctx);
+        let mut out: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                let mut cells: Vec<String> = variables
+                    .iter()
+                    .zip(row)
+                    .filter_map(|(v, cell)| {
+                        cell.as_ref().map(|value| {
+                            let text = match value {
+                                TermValue::Iri(iri) => {
+                                    iri.strip_prefix(EX).unwrap_or(iri).to_owned()
+                                }
+                                TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
+                                other => format!("{other:?}"),
+                            };
+                            format!("{v}={text}")
+                        })
+                    })
+                    .collect();
+                cells.sort();
+                cells.join("&")
+            })
+            .collect();
+        out.sort();
+        let silenced = state
+            .evidence()
+            .silenced()
+            .iter()
+            .map(|record| {
+                let name = record.target.name();
+                (
+                    name.strip_prefix(EX).unwrap_or(name).to_owned(),
+                    record.kind.label(),
+                )
+            })
+            .collect();
+        Ok((out, silenced))
     }
 
     fn q(pattern: &str) -> String {
@@ -1092,6 +1658,149 @@ mod tests {
     }
 
     #[test]
+    fn a_silenced_endpoint_under_minus_removes_none_of_its_rows() {
+        // `ex:down` fails. Under SILENT its invocation is Ω0, which binds nothing and so
+        // removes nothing: its left row survives, and the failure is recorded.
+        let only_down =
+            "VALUES ?e { ex:down } ?g ex:endpoint ?e MINUS { SERVICE SILENT ?e { ?s ?p ?x } }";
+        let source = Endpoints::default();
+        assert_eq!(
+            run_recorded(&source, &q(only_down)).expect("silenced"),
+            (
+                vec!["e=down&g=g5".to_owned()],
+                vec![("down".to_owned(), "transport")]
+            )
+        );
+        assert_eq!(requested(&source), ["down"]);
+        // The neighbour: the same shape over an endpoint that answers a row compatible
+        // with its left rows removes exactly those rows (both of `ex:e1`'s).
+        let only_e1 = only_down.replace("ex:down", "ex:e1");
+        let source = Endpoints::default();
+        assert_eq!(
+            run_recorded(&source, &q(&only_e1)).expect("answered"),
+            (Vec::<String>::new(), Vec::new())
+        );
+        assert_eq!(requested(&source), ["e1"]);
+        // Without SILENT the failing endpoint is an error.
+        let source = Endpoints::default();
+        let error = run(&source, &q(&only_down.replace("SILENT ", ""))).expect_err("fails");
+        assert!(matches!(error, EvalError::Remote(_)), "{error}");
+    }
+
+    #[test]
+    fn under_minus_a_failing_endpoint_keeps_its_rows_while_answering_ones_remove_theirs() {
+        // Every endpoint: `ex:e1` and `ex:e2` answer, so their rows go; `ex:e3` answers
+        // nothing and `ex:down` fails under SILENT, so theirs stay. One request each.
+        let source = Endpoints::default();
+        let (rows, silenced) = run_recorded(
+            &source,
+            &q("?g ex:endpoint ?e MINUS { SERVICE SILENT ?e { ?s ?p ?x } }"),
+        )
+        .expect("evaluates");
+        assert_eq!(rows, ["e=down&g=g5", "e=e3&g=g4"]);
+        assert_eq!(silenced, [("down".to_owned(), "transport")]);
+        assert_eq!(requested(&source), ["down", "e1", "e2", "e3"]);
+        // The rows keep the left side's order: `ex:g1`..`ex:g5` in data order, less the
+        // removed ones, is what an order-preserving merge of the partitions gives.
+        let source = Endpoints::default();
+        let ds = local();
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!(
+                "SELECT ?g WHERE {{ VALUES ?g {{ <{EX}g5> <{EX}g1> <{EX}g4> <{EX}g3> }} \
+                 ?g <{EX}endpoint> ?e MINUS {{ SERVICE SILENT ?e {{ ?s ?p ?x }} }} }}"
+            ))
+            .expect("parse");
+        let mut ctx = EvalCtx::new(&ds).with_remote(&source);
+        let Outcome::Solutions(seq) = evaluate_query(&parsed, &mut ctx).expect("evaluates") else {
+            panic!("a SELECT answers solutions");
+        };
+        let (_, ordered) = materialize_solutions(&seq, &ctx);
+        let ordered: Vec<String> = ordered
+            .iter()
+            .map(|row| match &row[0] {
+                Some(TermValue::Iri(iri)) => iri.strip_prefix(EX).unwrap_or(iri).to_owned(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(ordered, ["g5", "g4"]);
+    }
+
+    #[test]
+    fn the_served_index_agrees_with_the_walk_on_every_operand() {
+        use purrdf_sparql_algebra::GraphPattern;
+
+        fn operands<'p>(pattern: &'p GraphPattern, out: &mut Vec<&'p GraphPattern>) {
+            match pattern {
+                GraphPattern::Join { left, right } => {
+                    out.push(left);
+                    out.push(right);
+                }
+                GraphPattern::LeftJoin { right, .. } | GraphPattern::Minus { right, .. } => {
+                    out.push(right);
+                }
+                _ => {}
+            }
+            crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                match part {
+                    crate::governor::soundness::PatternPart::Child(child, _) => {
+                        operands(child, out);
+                    }
+                    crate::governor::soundness::PatternPart::Expression(expr) => {
+                        crate::governor::soundness::visit_expression_parts(expr, &mut |p| {
+                            if let crate::governor::soundness::ExpressionPart::Exists(body) = p {
+                                operands(body, out);
+                            }
+                            false
+                        });
+                    }
+                }
+                false
+            });
+        }
+
+        for body in [
+            "{ ?g ex:endpoint ?e } { SERVICE ?e { ?s ?p ?x } }",
+            "?g ex:endpoint ?e OPTIONAL { SERVICE ?e { ?s ?p ?x } } MINUS { SERVICE ?e { ?a ?b ?c } }",
+            "{ SELECT ?e WHERE { { ?g ex:endpoint ?e } { SERVICE ?e { ?s ?p ?x } } } } { ?g ex:other ?o }",
+            "{ ?g ex:endpoint ?e } { { SERVICE ?e { ?s ?p ?x } } UNION { ?s ?p ?x } }",
+            "{ ?g ex:endpoint ?e } { SELECT ?x WHERE { SERVICE ?e { ?s ?p ?x } } }",
+            "{ ?g ex:endpoint ?e } { SELECT ?e (COUNT(*) AS ?n) WHERE { SERVICE ?e { ?s ?p ?x } } GROUP BY ?e }",
+            "{ ?g ex:endpoint ?e } { SELECT ?x WHERE { SERVICE ?e { ?s ?p ?x } } LIMIT 1 }",
+            "{ ?g ex:endpoint ?e } { SERVICE ?e { ?s ?p ?x } FILTER EXISTS { { ?a ?b ?c } { SERVICE ?e { ?a ?b ?c } } } }",
+            "{ ?g ex:endpoint ?e } { ?g ex:other ?o OPTIONAL { SERVICE ?e { ?s ?p ?x } } }",
+        ] {
+            let query = q(body);
+            let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&query)
+                .expect("parse");
+            let pattern = crate::eval::query_pattern(&parsed);
+            let super::EndpointScan::Present(index) = super::scan(pattern).expect("scan") else {
+                panic!("{body}: the query has a variable endpoint");
+            };
+            let mut all = Vec::new();
+            operands(pattern, &mut all);
+            assert!(!all.is_empty(), "{body}");
+            for operand in all {
+                let walked = super::served_endpoint_variables(operand, None);
+                let indexed = index
+                    .served
+                    .get(&(std::ptr::from_ref(operand) as usize))
+                    .unwrap_or_else(|| panic!("{body}: an operand the scan did not index"));
+                assert_eq!(indexed.as_ref(), walked.as_slice(), "{body}");
+            }
+        }
+        // And a query with none is absent, with no index built.
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&q("{ ?g ex:endpoint ?e } { SERVICE ex:e1 { ?s ?p ?x } }"))
+            .expect("parse");
+        assert!(
+            super::scan(crate::eval::query_pattern(&parsed))
+                .expect("scan")
+                .is_absent()
+        );
+    }
+
+    #[test]
     fn an_endpoint_no_solution_binds_is_refused_even_under_silent() {
         for shape in [
             "SERVICE ?e { ?s ?p ?x }",
@@ -1193,60 +1902,65 @@ mod tests {
     }
 
     #[test]
-    fn an_endpoint_bound_to_a_literal_is_refused_under_silent_too() {
-        // A literal names no endpoint: refused, SILENT or not, on the endpoint-list route
-        // (a VALUES or a pattern before the SERVICE) and the substitution route
-        // (LATERAL), with no request.
-        for silent in ["", "SILENT "] {
-            for shape in [
-                "VALUES ?e { \"not-an-iri\" } OPTIONAL { SERVICE SILENT ?e { ?s ?p ?x } }",
-                "VALUES ?e { \"not-an-iri\" } SERVICE SILENT ?e { ?s ?p ?x }",
-                "BIND(\"not-an-iri\" AS ?e) SERVICE SILENT ?e { ?s ?p ?x }",
-                "VALUES ?e { \"not-an-iri\" } LATERAL { SERVICE SILENT ?e { ?s ?p ?x } }",
-            ] {
-                let shape = shape.replace("SILENT ", silent);
-                let source = Endpoints::default();
-                let error = run(&source, &q(&shape)).expect_err(&shape);
-                let text = error.to_string();
-                assert!(
-                    text.contains("?e is bound to the literal \"not-an-iri\", which is not an IRI")
-                        || text.contains("?e names the endpoint, but it is not bound to an IRI"),
-                    "{shape}: {text}"
-                );
-                if !silent.is_empty() {
-                    assert!(
-                        text.contains("SILENT does not apply")
-                            || text.contains("SILENT does not change this"),
-                        "{shape}: {text}"
-                    );
-                }
-                assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
-            }
+    fn an_endpoint_bound_to_a_literal_is_an_endpoint_failure() {
+        // SILENT: the single empty solution for that endpoint, on the endpoint-list route
+        // (a VALUES or a pattern before the SERVICE) and the substitution route (BIND,
+        // LATERAL), recorded as a value that is not an IRI, with no request.
+        for shape in [
+            "VALUES ?e { \"not-an-iri\" } OPTIONAL { SERVICE SILENT ?e { ?s ?p ?x } }",
+            "VALUES ?e { \"not-an-iri\" } SERVICE SILENT ?e { ?s ?p ?x }",
+            "BIND(\"not-an-iri\" AS ?e) SERVICE SILENT ?e { ?s ?p ?x }",
+            "VALUES ?e { \"not-an-iri\" } LATERAL { SERVICE SILENT ?e { ?s ?p ?x } }",
+        ] {
+            let source = Endpoints::default();
+            let (rows, silenced) = run_recorded(&source, &q(shape)).expect(shape);
+            assert_eq!(rows, ["e=not-an-iri"], "{shape}");
+            assert_eq!(
+                silenced,
+                [("\"not-an-iri\"".to_owned(), "not-an-iri")],
+                "{shape}"
+            );
+            assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
+            // Not SILENT: an error, and no request.
+            let plain = shape.replace("SILENT ", "");
+            let source = Endpoints::default();
+            let error = run(&source, &q(&plain)).expect_err(&plain);
+            assert!(
+                error
+                    .to_string()
+                    .contains("?e is bound to the literal \"not-an-iri\", which is not an IRI"),
+                "{plain}: {error}"
+            );
+            assert_eq!(source.requests(), Vec::<String>::new(), "{plain}");
         }
-        // The valid neighbours: an IRI endpoint under SILENT answers, one request; and a
-        // listed endpoint that fails at the transport is the identity under SILENT, for
-        // that endpoint alone.
+        // The neighbours: an IRI endpoint under SILENT answers, one request, nothing
+        // silenced; and a listed endpoint that fails at the transport is the identity
+        // under SILENT, for that endpoint alone, recorded as a transport failure.
         let source = Endpoints::default();
         assert_eq!(
-            run(
+            run_recorded(
                 &source,
                 &q("VALUES ?e { <http://example.org/e1> } SERVICE SILENT ?e { ?s ?p ?x }")
             )
             .expect("an IRI endpoint answers"),
-            ["e=e1&x=answer-from-e1"]
+            (vec!["e=e1&x=answer-from-e1".to_owned()], Vec::new())
         );
         assert_eq!(source.requests(), [format!("{EX}e1")]);
         let source = Endpoints::default();
         assert_eq!(
-            run(
+            run_recorded(
                 &source,
                 &q("VALUES ?e { <http://example.org/down> } SERVICE SILENT ?e { ?s ?p ?x }")
             )
             .expect("a failing endpoint is the identity under SILENT"),
-            ["e=down"]
+            (
+                vec!["e=down".to_owned()],
+                vec![("down".to_owned(), "transport")]
+            )
         );
         assert_eq!(source.requests(), [format!("{EX}down")]);
     }
+
     /// A left solution that names no endpoint — `?e` unbound, or bound to a literal — is
     /// refused before the clause asks any endpoint, whichever order the solutions come
     /// in: before, the solutions ahead of it had already sent their requests.
@@ -1270,7 +1984,7 @@ mod tests {
                 "?e is bound to the literal \"x\", which is not an IRI",
             ),
             (
-                "VALUES ?e { \"x\" ex:e1 } SERVICE SILENT ?e { ?s ?p ?x }",
+                "VALUES ?e { \"x\" ex:e1 } SERVICE ?e { ?s ?p ?x }",
                 "?e is bound to the literal \"x\", which is not an IRI",
             ),
         ] {
@@ -1300,6 +2014,21 @@ mod tests {
             )
             .expect("the right operand binds the endpoint itself"),
             ["e=e1&g=g1&x=answer-from-e1"]
+        );
+        assert_eq!(requested(&source), ["e1"]);
+        // Under SILENT a literal is an invocation that fails: Ω0 for its solution, and
+        // the IRI beside it is still asked.
+        let source = Endpoints::default();
+        assert_eq!(
+            run_recorded(
+                &source,
+                &q("VALUES ?e { \"x\" ex:e1 } SERVICE SILENT ?e { ?s ?p ?x }")
+            )
+            .expect("a literal endpoint is silenced"),
+            (
+                vec!["e=e1&x=answer-from-e1".to_owned(), "e=x".to_owned()],
+                vec![("\"x\"".to_owned(), "not-an-iri")]
+            )
         );
         assert_eq!(requested(&source), ["e1"]);
     }

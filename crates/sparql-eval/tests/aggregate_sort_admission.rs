@@ -166,6 +166,7 @@ fn aggregate_output_collisions_keep_their_error_when_the_child_would_truncate() 
 fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let engine = NativeSparqlEngine::new();
+    // No endpoint is registered, so every forwarded request fails at the transport.
     let source = InProcessServiceResolver::new();
     let mut relations = PropertyFunctionRegistry::new();
     relations.register(
@@ -175,6 +176,15 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
     let env =
         ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
     let options = QueryOptions::new().with_env(&env);
+    let query = |silent: &str, key: &str| {
+        format!(
+            "SELECT * WHERE {{ SERVICE {silent}<http://example.org/endpoint> {{ \
+             SELECT (FOLD(?v ORDER BY ASC({key})) AS ?list) WHERE {{ VALUES ?v {{ 1 }} }} \
+             }} }}"
+        )
+    };
+    // A relation call or a custom aggregate in a sort key cannot be forwarded with its
+    // meaning: refused before any request, SILENT or not.
     for (key, expected) in [
         (
             "EXISTS { ?s <http://example.org/relation> ?o }",
@@ -184,24 +194,36 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
             "EXISTS { SELECT (AGG(<http://example.org/custom>, ?x) AS ?n) WHERE { VALUES ?x { 1 } } }",
             "custom-aggregate call inside a SERVICE body",
         ),
-        (
-            "<http://example.org/custom>(?v)",
-            "custom scalar-function call inside a SERVICE SILENT body",
-        ),
-        (
-            "EXISTS { VALUES ?x { 1 } LATERAL { VALUES ?y { 2 } } }",
-            "LATERAL clause inside a SERVICE SILENT body",
-        ),
     ] {
-        let query = format!(
-            "SELECT * WHERE {{ SERVICE SILENT <http://example.org/endpoint> {{ \
-             SELECT (FOLD(?v ORDER BY ASC({key})) AS ?list) WHERE {{ VALUES ?v {{ 1 }} }} \
-             }} }}"
-        );
+        for silent in ["", "SILENT "] {
+            let error = engine
+                .query_with_source_view(&*data, request(&query(silent, key)), &source, options)
+                .unwrap_err();
+            assert!(error.message.contains(expected), "{silent}{key}: {error:?}");
+        }
+    }
+    // A custom scalar function and a LATERAL are forwarded as written: the failed
+    // invocation is an error without SILENT and the single empty solution with it.
+    for key in [
+        "<http://example.org/custom>(?v)",
+        "EXISTS { VALUES ?x { 1 } LATERAL { VALUES ?y { 2 } } }",
+    ] {
         let error = engine
-            .query_with_source_view(&*data, request(&query), &source, options)
+            .query_with_source_view(&*data, request(&query("", key)), &source, options)
             .unwrap_err();
-        assert!(error.message.contains(expected), "{error:?}");
+        assert!(
+            error.message.contains("no in-memory endpoint"),
+            "{key}: {error:?}"
+        );
+        let result = engine
+            .query_with_source_view(&*data, request(&query("SILENT ", key)), &source, options)
+            .unwrap();
+        match result {
+            purrdf_core::SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows, vec![vec![None]], "{key}");
+            }
+            other => panic!("{key}: {other:?}"),
+        }
     }
 }
 

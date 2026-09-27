@@ -76,7 +76,12 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
         if lift.is_truncated() {
             return Ok(lift.finish(SolutionSeq::empty(r.schema)));
         }
-        let evaluated = crate::service_endpoints::eval_right_operand(&r, left, ctx)?;
+        let evaluated = crate::service_endpoints::eval_right_operand(
+            &r,
+            left,
+            crate::service_endpoints::FrameRole::Join,
+            ctx,
+        )?;
         let Some(l) = lift.absorb(0, evaluated) else {
             return Ok(lift.withheld());
         };
@@ -90,7 +95,12 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     }
     // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
     // the left rows bind — see `crate::service_endpoints`.
-    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    let evaluated = crate::service_endpoints::eval_right_operand(
+        &l,
+        right,
+        crate::service_endpoints::FrameRole::Join,
+        ctx,
+    )?;
     let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
@@ -1023,7 +1033,14 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
         eval_evaluated(left, ctx)?,
         // A variable-endpoint `SERVICE` in the optional side is answered over the
         // endpoints the left rows bind — see `crate::service_endpoints`.
-        |l, ctx| crate::service_endpoints::eval_right_operand(l, right, ctx),
+        |l, ctx| {
+            crate::service_endpoints::eval_right_operand(
+                l,
+                right,
+                crate::service_endpoints::FrameRole::Optional,
+                ctx,
+            )
+        },
         expression,
         ctx,
     )
@@ -1397,12 +1414,53 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
     // A variable-endpoint `SERVICE` in the subtracted side is answered over the endpoints
-    // the left rows bind. `MINUS` still evaluates that side independently — nothing of a
-    // left row is substituted into it — and only the list of endpoints to invoke comes
-    // from the left: a row from any other endpoint binds the endpoint variable to a
-    // different IRI than every left row, so it could remove none of them. See
-    // `crate::service_endpoints`.
-    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    // the left rows bind, one partition of the left rows per endpoint: each partition is
+    // subtracted by the right side evaluated with its own endpoint alone listed, so a
+    // silenced endpoint contributes Ω0 to its own partition and removes nothing. Only the
+    // list of endpoints to invoke comes from the left: a row from any other endpoint binds
+    // the endpoint variable to a different IRI than every row of the partition, so it
+    // could remove none of them. See `crate::service_endpoints`.
+    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
+        let mut removed = vec![false; l.rows.len()];
+        for partition in &partitions {
+            let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;
+            let Some(r) = lift.absorb(1, evaluated) else {
+                return Ok(lift.withheld());
+            };
+            let shared = l.schema.shared_columns(&r.schema);
+            for &position in &partition.rows {
+                let lrow = &l.rows[position];
+                removed[position] = r.rows.iter().any(|rrow| {
+                    compatible(lrow, rrow, &shared)
+                        && shared
+                            .iter()
+                            .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
+                });
+            }
+            // A truncated right side subtracts less than the true one: the partitions not
+            // yet evaluated keep every row, which is the upper bound `MINUS` promises.
+            if lift.is_truncated() {
+                break;
+            }
+        }
+        let rows = l
+            .rows
+            .iter()
+            .zip(&removed)
+            .filter(|&(_, &removed)| !removed)
+            .map(|(row, _)| row.clone())
+            .collect();
+        return Ok(lift.finish(SolutionSeq {
+            schema: l.schema,
+            rows,
+        }));
+    }
+    let evaluated = crate::service_endpoints::eval_right_operand(
+        &l,
+        right,
+        crate::service_endpoints::FrameRole::Minus,
+        ctx,
+    )?;
     let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };

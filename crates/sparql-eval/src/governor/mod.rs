@@ -89,11 +89,12 @@ pub use ledger::{NodeCharges, PlanEstimate, ProfileIdentity, QueryExplanation};
 pub use lift::NonMonotoneBarrier;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use purrdf_core::{
-    GovernorEvidence, ResourceDimension, ResourceVector, StopCause, TrippedGovernor,
+    GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, StopCause,
+    TrippedGovernor,
 };
 use sha2::Digest;
 
@@ -333,7 +334,7 @@ impl StopSignal for WallDeadline {
 #[derive(Debug)]
 struct ScriptedClock {
     /// The reading every [`DeadlineClock::now_millis`] call returns until it is moved.
-    millis: std::sync::Mutex<f64>,
+    millis: Mutex<f64>,
 }
 
 #[cfg(test)]
@@ -341,7 +342,7 @@ impl ScriptedClock {
     /// A clock reading `millis`.
     fn new(millis: f64) -> Arc<Self> {
         Arc::new(Self {
-            millis: std::sync::Mutex::new(millis),
+            millis: Mutex::new(millis),
         })
     }
 
@@ -754,6 +755,10 @@ pub struct GovernorState {
     abandon: AtomicBool,
     /// The host-supplied stop signal, if any.
     stop: Option<Arc<dyn StopSignal>>,
+    /// Every invocation a `SILENT` clause absorbed, in the order they were recorded.
+    /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
+    /// forked evaluation was scheduled.
+    silenced: Mutex<Vec<SilencedInvocation>>,
 }
 
 impl GovernorState {
@@ -767,7 +772,16 @@ impl GovernorState {
             tripped: OnceLock::new(),
             abandon: AtomicBool::new(false),
             stop: governors.stop.clone(),
+            silenced: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Record an invocation a `SILENT` clause absorbed.
+    pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) {
+        self.silenced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(invocation);
     }
 
     /// The inclusive ceilings in force.
@@ -933,6 +947,13 @@ impl GovernorState {
                 .set(dimension, self.consumed_in(dimension));
         }
         evidence.tripped = self.tripped();
+        let mut silenced = self
+            .silenced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        silenced.sort();
+        evidence.silenced = silenced;
         evidence
     }
 

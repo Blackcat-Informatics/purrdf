@@ -624,7 +624,11 @@ fn delete_insert(
     //
     // Nothing has been written to `m` at this point (the mutations below are collected
     // first), so this return needs no undo of its own.
-    let seq = eval_evaluated(pattern, &mut ctx)
+    let seq = crate::service_endpoints::scan(pattern)
+        .and_then(|scan| {
+            ctx.endpoint_scan = scan;
+            eval_evaluated(pattern, &mut ctx)
+        })
         .map_err(|e| {
             RdfDiagnostic::error(
                 crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
@@ -1149,7 +1153,7 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::SparqlParser;
 
-    const EX: &str = "http://ex/";
+    const EX: &str = "http://example.org/";
 
     fn iri(local: &str) -> TermValue {
         TermValue::Iri(format!("{EX}{local}"))
@@ -2044,13 +2048,13 @@ mod tests {
         };
         let parser_options = purrdf_sparql_algebra::ParserOptions {
             extension_fn_namespaces: vec![],
-            property_fn_namespaces: vec!["http://ex/pf/".to_owned()],
+            property_fn_namespaces: vec!["http://example.org/pf/".to_owned()],
             property_fn_iris: Vec::new(),
         };
         let upd = SparqlParser::new()
             .parse_update_with(
-                "PREFIX ex: <http://ex/>\n\
-                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://ex/pf/split> ?a }",
+                "PREFIX ex: <http://example.org/>\n\
+                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://example.org/pf/split> ?a }",
                 &parser_options,
             )
             .expect("update parses: the namespace claims the predicate as a call node");
@@ -2066,7 +2070,7 @@ mod tests {
         let mut m = mut_with(&[]);
         let cache = BoundedOrderCache::default();
         let mut registry = crate::agg_fn::AggregateRegistry::new();
-        registry.register_statistical_aggregates("http://ex/agg#");
+        registry.register_statistical_aggregates("http://example.org/agg#");
         let options = QueryOptions {
             env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
                 .expect("the fixture declarations read cleanly"),
@@ -2082,7 +2086,7 @@ mod tests {
         // is an arity mismatch, not an unregistered IRI.
         let upd = parse(
             "INSERT { ex:x ex:p ?a } WHERE { \
-                 SELECT (AGG(<http://ex/agg#MEDIAN>, ?v, ?w) AS ?a) \
+                 SELECT (AGG(<http://example.org/agg#MEDIAN>, ?v, ?w) AS ?a) \
                  WHERE { ex:s ex:val ?v . ex:s ex:val2 ?w } GROUP BY ?v ?w \
              }",
         );

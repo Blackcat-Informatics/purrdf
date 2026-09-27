@@ -2887,25 +2887,6 @@ pub(crate) fn expression_reaches_custom_aggregate(expr: &Expression) -> bool {
     reaches(ReachNode::Expression(expr), ReachKind::Aggregate)
 }
 
-/// Whether `pattern` reaches a [`Function::Custom`] scalar-function call anywhere
-/// — including inside an expression-embedded `EXISTS`.
-///
-/// Used ONLY at the `SERVICE` forwarding boundary
-/// ([`crate::remote::eval_service`]): a `Custom` call serializes as an ordinary
-/// function-call syntax the remote endpoint does not define, so `SILENT` would
-/// launder a request that could never mean what it meant locally into an
-/// endpoint-side syntax error (best case) or a same-spelled-but-different builtin
-/// on the remote engine (worst case, and silent). Unlike
-/// [`pattern_reaches_custom_aggregate`], prepare-time admission has no analogous
-/// need for this walk: an unresolved [`Function::Custom`] IRI already fails
-/// LOUDLY at evaluation time (an XSD-cast attempt or a typed "undefined function"
-/// error — see `crate::expr`), so there is no silent-empty-answer hazard for
-/// `crate::property_fn_plan` to close the way there is for a relation's predicate
-/// or a `Custom` aggregate's registry mismatch.
-pub(crate) fn pattern_reaches_custom_function(pattern: &GraphPattern) -> bool {
-    reaches(ReachNode::Pattern(pattern), ReachKind::ScalarFunction)
-}
-
 /// Whether the admission pass has any registered call to check.
 pub(crate) fn pattern_needs_admission(pattern: &GraphPattern) -> bool {
     reaches(ReachNode::Pattern(pattern), ReachKind::Admission)
@@ -2920,7 +2901,6 @@ enum ReachNode<'a> {
 enum ReachKind {
     PropertyFunction,
     Aggregate,
-    ScalarFunction,
     Admission,
 }
 
@@ -2957,22 +2937,16 @@ fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
                 });
             }
             ReachNode::Expression(expr) => {
-                let found = visit_expression_parts(expr, &mut |part| {
+                visit_expression_parts(expr, &mut |part| {
                     match part {
                         ExpressionPart::Exists(pattern) => {
                             pending.push(ReachNode::Pattern(pattern));
                         }
                         ExpressionPart::Sub(inner) => pending.push(ReachNode::Expression(inner)),
-                        ExpressionPart::Call(function) => {
-                            return matches!(kind, ReachKind::ScalarFunction)
-                                && matches!(function, Function::Custom(_));
-                        }
+                        ExpressionPart::Call(_) => {}
                     }
                     false
                 });
-                if found {
-                    return true;
-                }
             }
         }
     }

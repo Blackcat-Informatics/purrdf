@@ -144,11 +144,11 @@ pub enum EvalError {
     /// it); it is surfaced rather than panicking so callers fail cleanly.
     Internal(String),
 
-    /// A `SERVICE` federation step failed (transport error, undecodable remote
-    /// response, or no remote source configured) and the `SERVICE` was **not**
-    /// `SILENT`. Per the hard-fail doctrine a non-silent federation failure aborts
-    /// the query rather than silently contributing no bindings; `SERVICE SILENT`
-    /// instead swallows the failure to the join identity.
+    /// A `SERVICE` federation step failed (transport error or undecodable remote
+    /// response) and the `SERVICE` was **not** `SILENT`. Per the hard-fail doctrine a
+    /// non-silent federation failure aborts the query rather than silently contributing
+    /// no bindings; `SERVICE SILENT` instead answers the join identity and records the
+    /// failure on the execution's evidence.
     Remote(String),
 
     /// A `SERVICE` had no source to send its request to: the engine was given no remote
@@ -158,24 +158,23 @@ pub enum EvalError {
     /// Distinct from [`Self::Remote`] because the two are different facts with different
     /// owners: [`Self::Remote`] is an endpoint that was asked and failed, this is a host
     /// that was never given a way to ask — its own configuration, not the endpoint's
-    /// fault. `SERVICE SILENT` does not swallow it, for that reason. It renders exactly as
-    /// [`Self::Remote`] does; the two differ in [`Self::code`].
+    /// fault. Like every failed invocation, `SERVICE SILENT` answers it with the join
+    /// identity and records it. It renders exactly as [`Self::Remote`] does; the two
+    /// differ in [`Self::code`].
     ServiceUnconfigured(String),
 
     /// A [`ServiceResolver`](crate::ServiceResolver)'s per-service policy withheld a
     /// capability, so the `SERVICE` step was refused before any endpoint was consulted.
     ///
     /// Structurally distinct from [`Self::Remote`] rather than folded into its string,
-    /// because the two are classified oppositely and the difference has to survive being
-    /// carried. An in-process resolver evaluates a forwarded `SERVICE` body *itself*, so a
-    /// denial raised by a **nested** clause travels back out through that inner
-    /// evaluation's error channel; flattened to a message it would be indistinguishable
-    /// from an endpoint failure, and an enclosing `SERVICE SILENT` — entitled to swallow
-    /// endpoint failures — would reduce it to the join identity. The surrounding join
-    /// would become a no-op and the query would answer completely and wrongly, identically
-    /// on every run. Keeping the [`ServiceDenial`](crate::ServiceDenial) whole is what lets
+    /// because the difference has to survive being carried. An in-process resolver
+    /// evaluates a forwarded `SERVICE` body *itself*, so a denial raised by a **nested**
+    /// clause travels back out through that inner evaluation's error channel; keeping the
+    /// [`ServiceDenial`](crate::ServiceDenial) whole is what lets
     /// `crate::remote::evaluate_in_memory` hand it back as
-    /// [`RemoteError::Denied`](crate::RemoteError::Denied), which `SILENT` never swallows.
+    /// [`RemoteError::Denied`](crate::RemoteError::Denied), so the enclosing clause reports
+    /// it — or, under `SILENT`, records it — as the denial it was rather than as an
+    /// undecodable response.
     ServiceDenied(crate::service::ServiceDenial),
 
     /// A [`ServiceResolver`](crate::ServiceResolver) refused a `SERVICE` request as its
@@ -189,7 +188,7 @@ pub enum EvalError {
     /// allowlist the host keeps outside any catalog, …) refuses on its own, independent of
     /// any catalog. Structurally distinct for the same reason [`Self::ServiceDenied`] is —
     /// it must survive an in-process resolver's nested `SERVICE` body without decaying
-    /// into endpoint-failure text that `SERVICE SILENT` is entitled to swallow.
+    /// into endpoint-failure text.
     ServiceHostDenied {
         /// The service IRI that was refused.
         endpoint: String,
