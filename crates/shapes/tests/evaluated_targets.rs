@@ -502,10 +502,12 @@ fn extension_usage_reads_the_sparql_inside_a_target_node_expression() {
 /// SHACL Advanced Features, "SPARQL-based Targets": "SHACL Full processors should be
 /// able to derive an equivalent ASK query from the SELECT query, pre-bind the potential
 /// focus node, and check whether the potential focus node needs to be validated against
-/// the shape". PurRDF answers the same question by evaluating the target's SELECT once
-/// per binding and looking the candidate up, which agrees with the derived ASK for every
-/// SELECT that meets the recommended restriction and stays correct for one that does not
-/// — so no `sh:ask` is ever needed. The target here selects only the FIRST subject
+/// the shape". For a target without `sh:ask`, PurRDF answers the same question by
+/// evaluating the target's SELECT once per binding and looking the candidate up, which
+/// agrees with the derived ASK for every SELECT that meets the recommended restriction
+/// and stays correct for one that does not. (A target that declares `sh:ask` is checked
+/// by its ASK instead: `a_candidate_is_checked_against_a_sparql_target_by_its_ask`.)
+/// The target here selects only the FIRST subject
 /// (`ORDER BY ?this LIMIT 1`), a SELECT whose derived ASK would also accept `ex:b`;
 /// validating the candidates `ex:a` and `ex:b` checks `ex:a` alone, and the full
 /// validation agrees.
@@ -530,4 +532,159 @@ fn a_candidate_is_checked_against_a_sparql_target_by_its_select() {
         focus_nodes(&validate(shapes_ttl, data_ttl)),
         focus_nodes(&bounded)
     );
+}
+
+/// The named example IRIs, as the terms a bounded validation takes.
+fn candidates<const N: usize>(locals: [&str; N]) -> [purrdf_shapes::term::Term; N] {
+    locals.map(|local| {
+        purrdf_shapes::term::Term::NamedNode(purrdf_shapes::term::NamedNode::from(
+            format!("http://example.org/ns#{local}").as_str(),
+        ))
+    })
+}
+
+/// The focus set a bounded validation over `candidates` produces.
+fn bounded(
+    shapes_ttl: &str,
+    data_ttl: &str,
+    candidates: &[purrdf_shapes::term::Term],
+) -> Vec<String> {
+    let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(shapes_ttl)));
+    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    focus_nodes(
+        &validator
+            .validate_focus_nodes(candidates)
+            .expect("validates"),
+    )
+}
+
+/// A SPARQL-based target whose `sh:select` and `sh:ask` agree.
+const CONSISTENT_ASK: &str = "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+    sh:target [ a sh:SPARQLTarget ;
+      sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> 1 }\" ;
+      sh:ask \"ASK { $this <http://example.org/ns#p> 1 }\" ] .";
+
+/// [`CONSISTENT_ASK`] without its `sh:ask`.
+const SELECT_ONLY: &str = "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+    sh:target [ a sh:SPARQLTarget ;
+      sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> 1 }\" ] .";
+
+/// SHACL Advanced Features §3.1: "SPARQL-based targets have at most one value for the
+/// property sh:ask." A target carrying one loads and validates, and where its ASK agrees
+/// with its SELECT every answer — the whole validation and a bounded one over candidates
+/// on both sides of the target — is the select-only target's. The target is a strict
+/// subset of the data's subjects, so an ignored target (every subject) or a dropped one
+/// (nothing) would differ.
+#[test]
+fn a_sparql_target_with_an_ask_validates_as_its_select_does() {
+    let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 . ex:c ex:p 1 .";
+    let whole = focus_nodes(&validate(CONSISTENT_ASK, data_ttl));
+    assert_eq!(whole, vec![ex("a"), ex("c")]);
+    assert_eq!(whole, focus_nodes(&validate(SELECT_ONLY, data_ttl)));
+    let candidates = candidates(["a", "b", "c", "ghost"]);
+    let with_ask = bounded(CONSISTENT_ASK, data_ttl, &candidates);
+    assert_eq!(with_ask, vec![ex("a"), ex("c")]);
+    assert_eq!(with_ask, bounded(SELECT_ONLY, data_ttl, &candidates));
+}
+
+/// "A SHACL engine can then determine whether a given shape applies to a given node by
+/// executing the ASK query with the variable this pre-bound to the node. If the ASK query
+/// evaluates to true then the node is in the target of the shape." The SELECT here
+/// selects only the first subject (`ORDER BY ?this LIMIT 1`, which fails the recommended
+/// restriction), and the ASK accepts exactly the nodes with value 2. Checking the
+/// candidates `ex:a` and `ex:b` runs the ASK: `ex:b` is in the target and `ex:a`, the
+/// SELECT's only answer, is not — so the SELECT is observably not what answered. The
+/// whole validation enumerates the SELECT and checks `ex:a` alone; the neighbour without
+/// `sh:ask` checks `ex:a` on both paths.
+#[test]
+fn a_candidate_is_checked_against_a_sparql_target_by_its_ask() {
+    let select = "SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o } ORDER BY ?this LIMIT 1";
+    let with_ask = format!(
+        "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+           sh:target [ a sh:SPARQLTarget ; sh:select \"{select}\" ;
+             sh:ask \"ASK {{ $this <http://example.org/ns#p> 2 }}\" ] ."
+    );
+    let without_ask = format!(
+        "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+           sh:target [ a sh:SPARQLTarget ; sh:select \"{select}\" ] ."
+    );
+    let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 .";
+    let candidates = candidates(["a", "b"]);
+    assert_eq!(bounded(&with_ask, data_ttl, &candidates), vec![ex("b")]);
+    assert_eq!(focus_nodes(&validate(&with_ask, data_ttl)), vec![ex("a")]);
+    assert_eq!(bounded(&without_ask, data_ttl, &candidates), vec![ex("a")]);
+    assert_eq!(
+        focus_nodes(&validate(&without_ask, data_ttl)),
+        vec![ex("a")]
+    );
+}
+
+/// The ASK answers for the node itself, whether or not the data graph holds it: a
+/// candidate the dataset never interned is in the target when the ASK accepts it. Its
+/// neighbour, a candidate the ASK rejects, is not validated.
+#[test]
+fn a_sparql_target_ask_answers_for_a_node_the_data_graph_does_not_hold() {
+    let shapes_ttl = "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+        sh:target [ a sh:SPARQLTarget ;
+          sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o }\" ;
+          sh:ask \"ASK { FILTER ($this = <http://example.org/ns#ghost>) }\" ] .";
+    let data_ttl = "ex:a ex:p 1 .";
+    assert_eq!(
+        bounded(shapes_ttl, data_ttl, &candidates(["ghost", "phantom"])),
+        vec![ex("ghost")]
+    );
+}
+
+/// "At most one value for the property sh:ask": a target with two is refused, naming
+/// `sh:ask`; its neighbour with one of them loads.
+#[test]
+fn a_sparql_target_with_two_ask_values_is_refused() {
+    let target = |asks: &str| {
+        format!(
+            "{PREFIXES}ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+               sh:target [ a sh:SPARQLTarget ;
+                 sh:select \"SELECT ?this WHERE {{ ?this <http://example.org/ns#p> ?o }}\" ;
+                 sh:ask {asks} ] ."
+        )
+    };
+    let error = parse_shapes(
+        &target("\"ASK { $this <http://example.org/ns#p> 1 }\", \"ASK { $this <http://example.org/ns#p> 2 }\""),
+        None,
+    )
+    .expect_err("two sh:ask values are refused")
+    .to_string();
+    assert!(error.contains("http://www.w3.org/ns/shacl#ask"), "{error}");
+    parse_shapes(
+        &target("\"ASK { $this <http://example.org/ns#p> 1 }\""),
+        None,
+    )
+    .expect("one sh:ask loads");
+}
+
+/// The value of `sh:ask` is an ASK query: a SELECT there is refused, and so is an ASK
+/// that breaks a pre-binding restriction for `$this` (a `VALUES`), since it runs with
+/// `$this` pre-bound. The neighbour ASK loads.
+#[test]
+fn a_sparql_target_ask_must_be_an_ask_that_meets_the_prebinding_restrictions() {
+    let target = |ask: &str| {
+        format!(
+            "{PREFIXES}ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+               sh:target [ a sh:SPARQLTarget ;
+                 sh:select \"SELECT ?this WHERE {{ ?this <http://example.org/ns#p> ?o }}\" ;
+                 sh:ask \"{ask}\" ] ."
+        )
+    };
+    let not_ask = parse_shapes(&target("SELECT ?this WHERE { ?this ?p ?o }"), None)
+        .expect_err("a SELECT is not an ASK")
+        .to_string();
+    assert!(not_ask.contains("sh:ask"), "{not_ask}");
+    let values = parse_shapes(
+        &target("ASK { VALUES ?x { 1 } $this <http://example.org/ns#p> ?x }"),
+        None,
+    )
+    .expect_err("VALUES is refused under pre-binding")
+    .to_string();
+    assert!(values.contains("VALUES"), "{values}");
+    parse_shapes(&target("ASK { $this <http://example.org/ns#p> ?x }"), None)
+        .expect("the neighbour ASK loads");
 }

@@ -420,13 +420,26 @@ impl PreparedTargets {
                 Target::Node(term) => prepared.insert_explicit(data.core_view(), term.clone()),
                 Target::Sparql {
                     select,
+                    ask,
                     substitutions,
                 } => {
                     let candidates =
                         crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                             .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
-                    for candidate in candidates {
-                        prepared.insert_explicit(data.core_view(), candidate);
+                    match ask {
+                        // SHACL-AF §3.1: the SELECT's results are what a whole validation
+                        // enumerates; a candidate is a target node when the ASK says so.
+                        Some(ask) => {
+                            for candidate in candidates {
+                                prepared.insert_enumerated(data.core_view(), candidate);
+                            }
+                            prepared.asks.push(ask.clone());
+                        }
+                        None => {
+                            for candidate in candidates {
+                                prepared.insert_explicit(data.core_view(), candidate);
+                            }
+                        }
                     }
                 }
                 Target::ImplicitClass(_) => {}
@@ -466,6 +479,14 @@ impl PreparedTargets {
         }
     }
 
+    fn insert_enumerated(&mut self, dataset: &impl ShaclRead, term: Term) {
+        if let Some(id) = resolve_id(dataset, &term) {
+            self.enumerated_ids.insert(id);
+        } else {
+            self.enumerated_foreign.insert(term);
+        }
+    }
+
     /// Whether this shape's targets contain `focus` — **the definition** of
     /// bounded-target membership.
     ///
@@ -484,6 +505,13 @@ impl PreparedTargets {
     /// to disagree; this one has three, and one test binding all of them.
     #[cfg(test)]
     fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
+        let asked = self
+            .asks
+            .iter()
+            .any(|ask| target_ask(data, ask, focus).expect("a target's sh:ask evaluates"));
+        if asked {
+            return true;
+        }
         let Some(id) = focus.id() else {
             return focus
                 .foreign()
@@ -557,15 +585,38 @@ impl PreparedTargets {
                 }
             }
         }
+        for &id in &self.enumerated_ids {
+            if seen_ids.insert(id) {
+                nodes.push(FocusNode::Interned(id));
+            }
+        }
         nodes.extend(
             self.explicit_foreign
                 .iter()
+                .chain(
+                    self.enumerated_foreign
+                        .iter()
+                        .filter(|term| !self.explicit_foreign.contains(*term)),
+                )
                 .cloned()
                 .map(FocusNode::Foreign),
         );
         sort_focus_nodes(dataset, &mut nodes);
         nodes
     }
+}
+
+/// Whether `focus` is a target node of a SHACL-SPARQL target by its `sh:ask`: SHACL-AF
+/// §3.1, "executing the ASK query with the variable this pre-bound to the node. If the
+/// ASK query evaluates to true then the node is in the target of the shape."
+///
+/// # Errors
+///
+/// When the ASK fails to evaluate — an unanswerable target is not an empty one.
+fn target_ask(data: &ShaclData, ask: &str, focus: &FocusNode) -> Result<bool, String> {
+    let term = focus.to_term(data.core_view());
+    crate::sparql::eval_target_ask_view(data.sparql_view(), ask, &term)
+        .map_err(|error| format!("sh:target SPARQLTarget sh:ask failed: {error}"))
 }
 
 /// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
@@ -604,6 +655,9 @@ pub(crate) struct TargetDispatch {
     subject_predicates: FastMap<TermId, Vec<usize>>,
     /// `sh:targetObjectsOf` predicate identity → the shapes declaring it.
     object_predicates: FastMap<TermId, Vec<usize>>,
+    /// Every SHACL-SPARQL target's `sh:ask`, with the shape declaring it: asked of each
+    /// focus node, since an ASK answers for one node and inverts to no index.
+    asks: Vec<(usize, String)>,
 }
 
 impl TargetDispatch {
@@ -638,23 +692,44 @@ impl TargetDispatch {
                     .or_default()
                     .push(position);
             }
+            for ask in &prepared.asks {
+                dispatch.asks.push((position, ask.clone()));
+            }
         }
         dispatch
     }
 
     /// Every shape position claiming `focus`, ascending and duplicate-free, into
     /// `out` (which is cleared first, so one buffer serves a whole focus set).
-    fn claimants(&self, data: &ShaclData, focus: &FocusNode, out: &mut Vec<usize>) {
+    ///
+    /// # Errors
+    ///
+    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate.
+    fn claimants(
+        &self,
+        data: &ShaclData,
+        focus: &FocusNode,
+        out: &mut Vec<usize>,
+    ) -> Result<(), String> {
         out.clear();
+        // An `sh:ask` answers for the node itself, interned or not: the query may
+        // reach a node the data graph does not hold (a constant, a BIND).
+        for (position, ask) in &self.asks {
+            if !out.contains(position) && target_ask(data, ask, focus)? {
+                out.push(*position);
+            }
+        }
         let Some(id) = focus.id() else {
-            // A focus node this dataset never interned can only be an EXPLICIT
-            // target: every other target form is a fact ABOUT the data graph, and
-            // a node absent from it participates in none of them. That is exactly
-            // the answer `contains` gives an id-less focus node.
+            // A focus node this dataset never interned can otherwise only be an
+            // EXPLICIT target: every other target form is a fact ABOUT the data
+            // graph, and a node absent from it participates in none of them. That
+            // is exactly the answer `contains` gives an id-less focus node.
             if let Some(positions) = focus.foreign().and_then(|term| self.foreign.get(term)) {
                 out.extend(positions.iter().copied());
             }
-            return;
+            out.sort_unstable();
+            out.dedup();
+            return Ok(());
         };
         if let Some(positions) = self.explicit.get(&id) {
             out.extend(positions.iter().copied());
@@ -685,18 +760,23 @@ impl TargetDispatch {
         }
         out.sort_unstable();
         out.dedup();
+        Ok(())
     }
 
     /// Dispatch a whole focus set: for each of `shape_count` shape positions, the
     /// focus nodes that position claims.
     ///
     /// One pass over the focus nodes for ALL shapes, which is the entire point.
+    ///
+    /// # Errors
+    ///
+    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate.
     fn claims(
         &self,
         data: &ShaclData,
         focus_nodes: &[FocusNode],
         shape_count: usize,
-    ) -> Vec<ClaimedFocus> {
+    ) -> Result<Vec<ClaimedFocus>, String> {
         // Both of these are INPUT-sized and both are sized here, because an
         // unhinted collection that fills to N reallocates about log2(N) times and
         // that is a real growth term in the focus count — small enough to have
@@ -708,7 +788,7 @@ impl TargetDispatch {
         claims.resize_with(shape_count, ClaimedFocus::default);
         let mut positions: Vec<usize> = Vec::with_capacity(shape_count);
         for focus in focus_nodes {
-            self.claimants(data, focus, &mut positions);
+            self.claimants(data, focus, &mut positions)?;
             for &position in &positions {
                 // A prepared-target row exists for every node shape, so a position
                 // out of range is impossible; ignoring one rather than indexing is
@@ -719,7 +799,7 @@ impl TargetDispatch {
                 }
             }
         }
-        claims
+        Ok(claims)
     }
 }
 
@@ -1017,6 +1097,7 @@ pub(crate) fn resolve_focus_nodes(
             Target::Sparql {
                 select,
                 substitutions,
+                ..
             } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
             Target::NodeExpression(expr) => crate::target_eval::node_expression_targets(
@@ -2355,7 +2436,7 @@ impl PreparedValidator {
         let claims =
             self.bound
                 .dispatch()
-                .claims(&self.data, focus_nodes, self.shapes.node_shapes.len());
+                .claims(&self.data, focus_nodes, self.shapes.node_shapes.len())?;
         let mut all_results = Vec::new();
         for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
@@ -3552,11 +3633,11 @@ mod tests {
         std::collections::BTreeSet<String>,
     )> {
         let candidates = every_candidate_focus_node(validator);
-        let claims = validator.bound.dispatch().claims(
-            &validator.data,
-            &candidates,
-            shapes.node_shapes.len(),
-        );
+        let claims = validator
+            .bound
+            .dispatch()
+            .claims(&validator.data, &candidates, shapes.node_shapes.len())
+            .expect("every target evaluates");
         let key = |focus: &FocusNode| focus.to_term(validator.data.core_view()).to_string();
         (0..shapes.node_shapes.len())
             .map(|position| {
@@ -3617,6 +3698,11 @@ mod tests {
                 sh:target [ a sh:SPARQLTarget ; sh:select
                     "SELECT ?this WHERE { ?this <http://example.org/ns#active> true }" ] ;
                 sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:AskShape a sh:NodeShape ;
+                sh:target [ a sh:SPARQLTarget ;
+                    sh:select "SELECT ?this WHERE { ?this <http://example.org/ns#asked> true }" ;
+                    sh:ask "ASK { $this <http://example.org/ns#asked> true }" ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
             ex:WhereShape a sh:NodeShape ;
                 sh:targetWhere [ sh:datatype xsd:boolean ] ;
                 sh:property [ sh:path ex:required ; sh:minCount 1 ] .
@@ -3634,6 +3720,7 @@ mod tests {
             ex:tail ex:link ex:head .
             ex:explicit ex:required ex:anything .
             ex:activeNode ex:active true .
+            ex:askedNode ex:asked true .
             ex:flagged ex:flag true .
             ex:ExpressionShape ex:pointsAt ex:pointed .
             ex:declared sh:shape ex:DeclaredShape .
@@ -3643,9 +3730,12 @@ mod tests {
         // The fixture's claim to be exhaustive is itself checked: a fixture that
         // quietly stopped covering a variant would leave this test green while
         // testing less, which is the failure mode an agreement test is for.
-        let mut covered = [false; 8];
+        // A SHACL-SPARQL target with `sh:ask` is its own row (8): membership reads the
+        // ASK there, not the SELECT.
+        let mut covered = [false; 9];
         for target in shapes.node_shapes.iter().flat_map(|shape| &shape.targets) {
             covered[match target {
+                Target::Sparql { ask: Some(_), .. } => 8,
                 Target::Class(_) => 0,
                 Target::SubjectsOf(_) => 1,
                 Target::ObjectsOf(_) => 2,

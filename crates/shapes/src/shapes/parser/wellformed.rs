@@ -84,9 +84,10 @@ const COMPONENT_DECLARATION_TERMS: [&str; 4] = [
     sh::PROPERTY_VALIDATOR,
 ];
 
-/// The terms a `sh:SPARQLTarget` node carries (SHACL 1.2 SPARQL Extensions,
-/// "SPARQL-based Targets"): its SELECT query and its prefixes.
-const SPARQL_TARGET_TERMS: [&str; 2] = [sh::SELECT, sh::PREFIXES];
+/// The terms a `sh:SPARQLTarget` node carries (SHACL Advanced Features §3.1,
+/// "SPARQL-based Targets"): its SELECT query, its prefixes, and at most one ASK query
+/// ("SPARQL-based targets have at most one value for the property sh:ask").
+const SPARQL_TARGET_TERMS: [&str; 3] = [sh::SELECT, sh::ASK, sh::PREFIXES];
 
 impl Parser<'_> {
     /// Check every shape of the shapes graph against the census. See the

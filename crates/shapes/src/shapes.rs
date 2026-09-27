@@ -178,9 +178,22 @@ pub enum Target {
     /// native SPARQL engine re-parses the text at eval time, so only the query
     /// string is retained. `substitutions` holds pre-bound parameter values for
     /// `sh:SPARQLTargetType` instances; it is empty for plain `sh:SPARQLTarget`.
+    ///
+    /// `ask` is a plain `sh:SPARQLTarget`'s `sh:ask` (SHACL-AF §3.1: "SPARQL-based
+    /// targets have at most one value for the property sh:ask"). The SELECT defines the
+    /// target nodes; the ASK answers the inverse question, "is this node a target?": "A
+    /// SHACL engine can then determine whether a given shape applies to a given node by
+    /// executing the ASK query with the variable this pre-bound to the node. If the ASK
+    /// query evaluates to true then the node is in the target of the shape." The engine
+    /// uses it wherever it checks given candidate nodes rather than enumerating the
+    /// target ([`crate::engine::PreparedValidator::validate_focus_nodes`] and every
+    /// bounded or change-path validation).
     Sparql {
         /// The SPARQL SELECT query text (with any injected PREFIX header).
         select: String,
+        /// The SPARQL ASK query text (with the same PREFIX header), when the target
+        /// declares `sh:ask`.
+        ask: Option<String>,
         /// Pre-bound parameter substitutions for `sh:SPARQLTargetType` instances.
         substitutions: Vec<(String, Term)>,
     },
@@ -2401,7 +2414,8 @@ impl<'s> Parser<'s> {
                         )
                     })?;
                 // SHACL-AF sh:prefixes may be declared on the shape or the target node.
-                let select = format!("{}{raw_select}", self.prefix_header(&[id, &t_node])?);
+                let header = self.prefix_header(&[id, &t_node])?;
+                let select = format!("{header}{raw_select}");
 
                 // Parse-time query validation via the native parser (hard-fail on
                 // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
@@ -2433,8 +2447,10 @@ impl<'s> Parser<'s> {
                     }
                 }
 
+                let ask = self.parse_sparql_target_ask(id, &t_node, &header)?;
                 targets.push(Target::Sparql {
                     select,
+                    ask,
                     substitutions: vec![],
                 });
                 continue;
@@ -2572,11 +2588,58 @@ impl<'s> Parser<'s> {
 
             targets.push(Target::Sparql {
                 select,
+                ask: None,
                 substitutions,
             });
         }
 
         Ok(targets)
+    }
+
+    /// A plain `sh:SPARQLTarget`'s `sh:ask`, with `header` (the target's PREFIX block)
+    /// prepended: `None` when the target declares none. SHACL-AF §3.1 permits "at most
+    /// one value for the property sh:ask" — a second is refused by the built-in
+    /// cardinality check before shapes are parsed. The value is a string that parses as
+    /// an ASK query; it runs with `$this` pre-bound, so it meets the pre-binding
+    /// restrictions (SHACL 1.2 SPARQL Extensions, Appendix A) for `this`, SERVICE
+    /// included.
+    fn parse_sparql_target_ask(
+        &self,
+        id: &Term,
+        t_node: &Term,
+        header: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(value) = self.first_object_of(t_node, sh::ASK) else {
+            return Ok(None);
+        };
+        let Term::Literal(literal) = value else {
+            return Err(format!(
+                "sh:SPARQLTarget {t_node} on shape {id} has a sh:ask value {value} that is not a \
+                 string literal"
+            ));
+        };
+        let ask = format!("{header}{}", literal.value());
+        match purrdf_sparql_algebra::SparqlParser::new().parse_query(&ask) {
+            Ok(query @ purrdf_sparql_algebra::Query::Ask { .. }) => {
+                if let Err(e) = crate::prebinding::check_ask(&query, &["this"])
+                    .and_then(|()| crate::prebinding::check_no_service(&query))
+                {
+                    return Err(
+                        self.refuse_prebinding(crate::error::PrebindingViolation::new(
+                            format!("the sh:ask of the sh:SPARQLTarget {t_node} of shape {id}"),
+                            e,
+                        )),
+                    );
+                }
+                Ok(Some(ask))
+            }
+            Ok(_) => Err(format!(
+                "sh:SPARQLTarget {t_node} on shape {id} has a sh:ask that is not an ASK query"
+            )),
+            Err(e) => Err(format!(
+                "sh:SPARQLTarget {t_node} on shape {id} has an unparsable sh:ask query: {e}"
+            )),
+        }
     }
 
     /// Parse a property shape node.

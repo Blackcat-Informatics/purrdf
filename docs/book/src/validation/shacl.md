@@ -527,6 +527,20 @@ SHOULD at least report a warning". A warning beside a report about focus nodes
 nobody computed would still be that report, so PurRDF refuses, which is stronger.
 A SHACL-JS target is refused as `ShapesError::ShaclJs`.
 
+A `sh:SPARQLTarget` may also carry one `sh:ask`. SHACL Advanced Features §3.1
+says "SPARQL-based targets have at most one value for the property sh:ask", for
+a SELECT that cannot be turned into an equivalent ASK: "A SHACL engine can then
+determine whether a given shape applies to a given node by executing the ASK
+query with the variable this pre-bound to the node." PurRDF does exactly that
+wherever it checks given nodes instead of enumerating the target:
+`PreparedValidator::validate_focus_nodes`, its id-native twin, and every
+change-path validation. The candidate is pre-bound to `$this`, so the ASK must
+meet the pre-binding restrictions, and a node the data graph does not hold is
+answered too. A whole validation still enumerates the target with its SELECT.
+A second `sh:ask`, a value that is not an ASK query, or an ASK that breaks a
+pre-binding restriction is refused at load. A target without `sh:ask` checks a
+candidate by looking it up in its SELECT's results.
+
 ## SHACL 1.2 conformance
 
 The complete W3C `shacl12-test-suite` is vendored byte-exact under

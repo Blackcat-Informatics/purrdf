@@ -772,10 +772,12 @@ impl AstWriter {
             }
             Target::Sparql {
                 select,
+                ask,
                 substitutions,
             } => {
                 self.tag(5);
                 self.text(select);
+                self.opt_text(ask.as_deref());
                 self.count(substitutions.len());
                 for (name, value) in substitutions {
                     self.text(name);
@@ -2002,6 +2004,7 @@ impl<'a> AstReader<'a> {
             4 => Target::ImplicitClass(self.term()?),
             5 => Target::Sparql {
                 select: self.text()?,
+                ask: self.opt_text()?,
                 substitutions: self.seq(|reader| {
                     let name = reader.text()?;
                     let value = reader.term()?;

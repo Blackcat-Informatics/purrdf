@@ -47,6 +47,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   shapes-graph refusals (Python `ValueError`, WebAssembly `Error`, C
   `PURRDF_STATUS_PARSE_ERROR`, CLI exit `1`).
 
+- **shapes (BREAKING):** a `sh:SPARQLTarget` may carry one `sh:ask`, which used to be
+  refused. SHACL Advanced Features §3.1: "SPARQL-based targets have at most one value for
+  the property sh:ask"; "A SHACL engine can then determine whether a given shape applies
+  to a given node by executing the ASK query with the variable this pre-bound to the
+  node." The SELECT still defines the target a whole validation enumerates; every path
+  that checks given candidates — `PreparedValidator::validate_focus_nodes`,
+  `validate_focus_node_ids` and the change path — runs the ASK with `$this` pre-bound to
+  the candidate, a node the data graph does not hold included. The ASK is checked at
+  load: an ASK query, meeting the pre-binding restrictions for `$this` (`SERVICE`
+  included); a second `sh:ask` is refused by the built-in cardinality check.
+  `Target::Sparql` gains `ask: Option<String>`; the prepared-product codec carries it,
+  so the product stage id changes and existing products must be rebuilt.
+
 - **shapes, validate, cli, python, wasm, capi:** an empty `sh:in` or `sh:xone` list is
   a MANDATORY DIAGNOSTIC (maintainer decision). Appendix A's `in-minListLength` and
   `xone-minListLength` ("Each such list SHOULD have at least one member") constrain the

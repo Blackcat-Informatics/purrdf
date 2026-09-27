@@ -190,6 +190,7 @@ fn sample_targets() -> Vec<Target> {
         Target::ImplicitClass(ex_term("Person")),
         Target::Sparql {
             select: "SELECT ?this WHERE { ?this a <https://example.org/Person> }".to_owned(),
+            ask: Some("ASK { $this a <https://example.org/Person> }".to_owned()),
             substitutions: vec![("kind".to_owned(), ex_term("Manager"))],
         },
         Target::NodeExpression(NodeExpr::Path(Path::Predicate(ex("pointsAt")))),
@@ -585,6 +586,38 @@ fn roundtrip_tags<T>(
         "{label}: an unknown tag names a capability this build lacks, not a malformed byte \
          string: {error}",
     );
+}
+
+/// A SPARQL-based target without `sh:ask` round-trips with the query absent, and is not
+/// the same bytes as its neighbour with one: the option is written, not dropped.
+#[test]
+fn a_sparql_target_without_ask_round_trips_absent() {
+    let encode = |ask: Option<&str>| {
+        let mut writer = test_writer();
+        writer
+            .target(&Target::Sparql {
+                select: "SELECT ?this WHERE { ?this a <https://example.org/Robot> }".to_owned(),
+                ask: ask.map(ToOwned::to_owned),
+                substitutions: Vec::new(),
+            })
+            .expect("writes");
+        writer.out
+    };
+    let without = encode(None);
+    let with = encode(Some("ASK { $this a <https://example.org/Robot> }"));
+    assert_ne!(without, with);
+    for (bytes, expected) in [
+        (&without, None),
+        (&with, Some("ASK { $this a <https://example.org/Robot> }")),
+    ] {
+        let mut reader = test_reader(bytes);
+        let value = reader.target().expect("reads");
+        assert_eq!(reader.pos, bytes.len());
+        let Target::Sparql { ask, .. } = value else {
+            panic!("a SPARQL-based target decodes as one");
+        };
+        assert_eq!(ask.as_deref(), expected);
+    }
 }
 
 /// A `Shapes` carrying `node_shapes` and nothing else caller-supplied.

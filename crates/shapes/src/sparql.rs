@@ -97,6 +97,25 @@ pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
     Ok(nodes)
 }
 
+/// Answer a SPARQL-based target's `sh:ask` for one node (SHACL Advanced Features
+/// §3.1): the ASK runs with `$this` pre-bound to `focus`, under the SHACL-SPARQL
+/// pre-binding rules, and its boolean is whether `focus` is in the target.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if execution fails or the query is not an ASK.
+pub(crate) fn eval_target_ask_view<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    ask: &str,
+    focus: &Term,
+) -> Result<bool, String> {
+    let subs = [Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    }];
+    run_ask_with_shacl_prebinding_view(dataset, ask, &subs)
+}
+
 /// Execute a SHACL-AF `sh:SPARQLConstraint` SELECT query for a single focus node,
 /// mapping each solution row to a [`ValidationResult`].
 ///

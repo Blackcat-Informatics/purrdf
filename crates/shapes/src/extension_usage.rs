@@ -454,8 +454,11 @@ fn walk_property(property: &PropertyShape, sink: &mut dyn SparqlSink, flight: &m
 fn walk_targets(targets: &[Target], owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     for target in targets {
         match target {
-            Target::Sparql { select, .. } => {
+            Target::Sparql { select, ask, .. } => {
                 sink.record(format!("sh:target on {owner}"), select);
+                if let Some(ask) = ask {
+                    sink.record(format!("sh:ask of sh:target on {owner}"), ask);
+                }
             }
             Target::NodeExpression(expr) => {
                 walk_node_expr(expr, &format!("sh:targetNode on {owner}"), sink, flight);

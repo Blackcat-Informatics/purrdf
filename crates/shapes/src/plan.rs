@@ -1997,6 +1997,12 @@ fn pair_optional<'a, A, B>(
 /// data graph) target results are resolved once at preparation, into
 /// `explicit_ids` / `explicit_foreign`, because none of them can be answered
 /// through a Core pattern lookup.
+///
+/// A SHACL-SPARQL target that declares `sh:ask` is the exception (SHACL-AF §3.1): its
+/// SELECT still defines the target nodes a whole validation enumerates, held in
+/// `enumerated_ids` / `enumerated_foreign`, but a CANDIDATE is a target node exactly
+/// when its ASK, with `$this` pre-bound to the candidate, is true — so candidate
+/// membership reads `asks`, never the SELECT's results.
 #[derive(Debug, Default)]
 pub(crate) struct PreparedTargets {
     pub(crate) explicit_ids: IdSet,
@@ -2004,6 +2010,14 @@ pub(crate) struct PreparedTargets {
     pub(crate) target_class_ids: IdSet,
     pub(crate) subject_predicates: IdSet,
     pub(crate) object_predicates: IdSet,
+    /// The SELECT results of every SHACL-SPARQL target that declares `sh:ask`: what a
+    /// whole validation enumerates, and nothing a candidate check reads.
+    pub(crate) enumerated_ids: IdSet,
+    /// [`Self::enumerated_ids`]' results the dataset does not intern.
+    pub(crate) enumerated_foreign: FastSet<Term>,
+    /// The `sh:ask` query of every SHACL-SPARQL target that declares one, which a
+    /// candidate check runs with `$this` pre-bound to the candidate.
+    pub(crate) asks: Vec<String>,
 }
 
 // ── The walk ────────────────────────────────────────────────────────────────────
