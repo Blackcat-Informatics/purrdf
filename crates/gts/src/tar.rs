@@ -367,16 +367,8 @@ fn parse_mtime(value: Option<&str>) -> Result<u64, TarError> {
     let Some(value) = value else {
         return Ok(0);
     };
-    let dt = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
-        .or_else(|_| {
-            let text = value.strip_suffix('Z').unwrap_or(value);
-            time::OffsetDateTime::parse(
-                &(text.to_string() + "+00:00"),
-                &time::format_description::well_known::Rfc3339,
-            )
-        })
+    let (timestamp, _) = crate::rfc3339::parse(value)
         .map_err(|err| TarError::new(format!("parse mtime {value}: {err}")))?;
-    let timestamp = dt.unix_timestamp();
     if timestamp < 0 {
         return Err(TarError::new(format!("negative tar mtime: {value}")));
     }
