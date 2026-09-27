@@ -82,15 +82,46 @@ one this script claims to close.
 Each ban list entry names the replacement so the failure message teaches the
 fix. A dependency joins a list in the change that removes it, so this gate
 never lies about the present.
+
+**The allowed half** (``dependency-ledger.toml``, ``[packages]``): the ban
+lists say what may not come back; the ledger says what may stay. Every
+external (non-workspace) package in every committed ``Cargo.lock`` has an
+entry with a category — ``spec-codec``, ``crypto``, ``runtime``, ``oracle``,
+``bench`` or ``binding`` for a direct dependency of a workspace member,
+``transitive:<direct>`` for a package only reached through that direct
+dependency — a one-line ``reason``, and a ``metrics`` table computed from
+``cargo metadata --locked --offline`` (never the network):
+
+* ``direct`` — a workspace member names it directly, on any edge kind;
+* ``exclusive_closure`` — for a direct dependency, how many external packages
+  leave the graph if every workspace edge to it is cut (itself included); 0
+  for a transitive one;
+* ``release`` — reached over normal and build edges from a crate whose
+  ``publish`` is not false;
+* ``wasm`` — the same, in the ``--filter-platform wasm32-unknown-unknown``
+  resolution;
+* ``build_script`` / ``proc_macro`` — the package has a build script / is a
+  procedural macro.
+
+The gate fails on an unlisted package, on a listed package no lock resolves,
+on a name resolved at two versions without a ``duplicate_reason``, on an
+uncategorized skeleton, on a ``transitive:<direct>`` category whose direct
+dependency does not reach the package, and on metrics drift.
+``--update-metrics`` rewrites the ``[packages]`` section deterministically
+(adding flagged skeletons for new packages and reporting, never dropping,
+entries whose package vanished); ``--report`` prints the graph counts.
 """
 
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -509,6 +540,654 @@ def direct_edge_offenders(root: Path) -> dict[str, list[str]]:
     return offenders
 
 
+# ---------------------------------------------------------------------------
+# The allowed half: dependency-ledger.toml's [packages] section.
+# ---------------------------------------------------------------------------
+
+LEDGER_PATH = REPO_ROOT / "dependency-ledger.toml"
+
+# Everything above this line in the ledger is hand-authored and preserved
+# byte-for-byte by --update-metrics; everything below it is re-rendered.
+PACKAGES_MARKER = (
+    "# ==== [packages] — rendered by `python3 scripts/check-banned-deps.py "
+    "--update-metrics` ===="
+)
+PACKAGES_PREAMBLE = """\
+# Every external (non-workspace) package in every committed Cargo.lock, with
+# why it stays. `category` and `reason` (and `duplicate_reason`, required when
+# a name resolves at more than one version) are authored; `metrics` is computed
+# from `cargo metadata --locked --offline` and must match it exactly. This
+# section is re-rendered by --update-metrics, so a comment written here is
+# lost: put the rationale in `reason`.
+#
+# category: spec-codec | crypto | runtime | oracle | bench | binding for a
+# direct dependency of a workspace member, transitive:<direct> for a package
+# only reached through that direct dependency."""
+
+DIRECT_CATEGORIES = ("spec-codec", "crypto", "runtime", "oracle", "bench", "binding")
+TRANSITIVE_PREFIX = "transitive:"
+UNCATEGORIZED = "UNCATEGORIZED"
+METRIC_KEYS = (
+    "direct",
+    "exclusive_closure",
+    "release",
+    "wasm",
+    "build_script",
+    "proc_macro",
+)
+WASM_TARGET = "wasm32-unknown-unknown"
+
+
+class MetadataError(RuntimeError):
+    """Raised when ``cargo metadata`` cannot produce the resolved graph.
+
+    Never downgraded to "skip the metrics": the ledger is only as honest as
+    the graph it is checked against.
+    """
+
+
+@dataclass
+class ResolvedGraph:
+    """One lockfile's resolved package graph, as ``cargo metadata`` reports it."""
+
+    names: dict[str, str]  # package id -> name
+    external: set[str]  # ids of non-workspace packages
+    workspace: set[str]
+    published: set[str]  # workspace ids whose `publish` is not false
+    build_script: set[str]
+    proc_macro: set[str]
+    # id -> [(dependency id, edge kinds)], kinds drawn from normal/build/dev.
+    edges: dict[str, list[tuple[str, frozenset[str]]]] = field(default_factory=dict)
+
+
+def graph_from_metadata(meta: dict) -> ResolvedGraph:
+    """Build a ``ResolvedGraph`` from ``cargo metadata --format-version 1`` JSON."""
+    workspace = set(meta["workspace_members"])
+    names: dict[str, str] = {}
+    build_script: set[str] = set()
+    proc_macro: set[str] = set()
+    published: set[str] = set()
+    for package in meta["packages"]:
+        pid = package["id"]
+        names[pid] = package["name"]
+        kinds = {kind for target in package["targets"] for kind in target["kind"]}
+        if "custom-build" in kinds:
+            build_script.add(pid)
+        if "proc-macro" in kinds:
+            proc_macro.add(pid)
+        # `publish = false` surfaces as an empty registry list.
+        if pid in workspace and package.get("publish") != []:
+            published.add(pid)
+    edges: dict[str, list[tuple[str, frozenset[str]]]] = {}
+    for node in meta["resolve"]["nodes"]:
+        edges[node["id"]] = [
+            (
+                dep["pkg"],
+                frozenset(kind["kind"] or "normal" for kind in dep["dep_kinds"]),
+            )
+            for dep in node["deps"]
+        ]
+    return ResolvedGraph(
+        names=names,
+        external=set(names) - workspace,
+        workspace=workspace,
+        published=published,
+        build_script=build_script,
+        proc_macro=proc_macro,
+        edges=edges,
+    )
+
+
+def reach(
+    graph: ResolvedGraph,
+    roots: Iterable[str],
+    kinds: frozenset[str],
+    cut_name: str | None = None,
+) -> set[str]:
+    """Package ids reachable from ``roots`` over edges carrying any of ``kinds``.
+
+    ``cut_name`` removes every edge from a workspace member to a package of that
+    name — the "cut the direct edge" of the exclusive-closure metric.
+    """
+    seen = set(roots)
+    stack = list(seen)
+    while stack:
+        current = stack.pop()
+        for dep, dep_kinds in graph.edges.get(current, ()):
+            if dep in seen or not (dep_kinds & kinds):
+                continue
+            if (
+                cut_name is not None
+                and current in graph.workspace
+                and graph.names[dep] == cut_name
+            ):
+                continue
+            seen.add(dep)
+            stack.append(dep)
+    return seen
+
+
+ALL_KINDS = frozenset({"normal", "build", "dev"})
+RELEASE_KINDS = frozenset({"normal", "build"})
+
+
+@dataclass
+class LedgerFacts:
+    """What the committed locks and their resolved graphs say, merged."""
+
+    lock_package_count: int = 0
+    # external name -> set of versions, per lock (a duplicate is two versions
+    # of one name inside ONE lock, never across locks).
+    versions: dict[str, set[str]] = field(default_factory=dict)
+    duplicated: set[str] = field(default_factory=set)
+    metrics: dict[str, dict[str, object]] = field(default_factory=dict)
+    # direct name -> external names its closure reaches (any edge kind).
+    closure_of_direct: dict[str, set[str]] = field(default_factory=dict)
+    reachable: int = 0
+    release: int = 0
+    wasm: int = 0
+
+
+def lock_external_versions(lock_text: str) -> tuple[int, dict[str, set[str]]]:
+    """(``[[package]]`` count, external name -> versions) for one lockfile.
+
+    External means the entry records a ``source``: workspace and path packages
+    have none.
+    """
+    packages = tomllib.loads(lock_text).get("package", [])
+    versions: dict[str, set[str]] = {}
+    for package in packages:
+        if "source" in package:
+            versions.setdefault(package["name"], set()).add(package["version"])
+    return len(packages), versions
+
+
+def merge_facts(
+    facts: LedgerFacts,
+    lock_text: str,
+    full: ResolvedGraph,
+    wasm: ResolvedGraph,
+) -> None:
+    """Fold one lockfile and its two resolved graphs into ``facts``."""
+    count, versions = lock_external_versions(lock_text)
+    facts.lock_package_count += count
+    for name, found in versions.items():
+        facts.versions.setdefault(name, set()).update(found)
+        if len(found) > 1:
+            facts.duplicated.add(name)
+
+    reachable = reach(full, full.workspace, ALL_KINDS)
+    release = reach(full, full.published, RELEASE_KINDS)
+    wasm_release = reach(wasm, wasm.published, RELEASE_KINDS)
+    facts.reachable += len(reachable & full.external)
+    facts.release += len(release & full.external)
+    facts.wasm += len(wasm_release & wasm.external)
+
+    direct = {
+        full.names[dep]
+        for member in full.workspace
+        for dep, _ in full.edges.get(member, ())
+        if dep in full.external
+    }
+    reachable_external = {full.names[pid] for pid in reachable & full.external}
+
+    for name in versions:
+        ids = {pid for pid in full.external if full.names[pid] == name}
+        wasm_ids = {pid for pid in wasm.external if wasm.names[pid] == name}
+        closure = 0
+        if name in direct:
+            kept = {
+                full.names[pid]
+                for pid in reach(full, full.workspace, ALL_KINDS, cut_name=name)
+                & full.external
+            }
+            closure = len(reachable_external - kept)
+            own = reach(full, ids, ALL_KINDS) & full.external
+            facts.closure_of_direct.setdefault(name, set()).update(
+                full.names[pid] for pid in own
+            )
+        computed = {
+            "direct": name in direct,
+            "exclusive_closure": closure,
+            "release": bool(ids & release),
+            "wasm": bool(wasm_ids & wasm_release),
+            "build_script": bool(ids & full.build_script),
+            "proc_macro": bool(ids & full.proc_macro),
+        }
+        previous = facts.metrics.get(name)
+        if previous is None:
+            facts.metrics[name] = computed
+        else:
+            # The same name in a second lock: a property held in any lock holds.
+            for key in METRIC_KEYS:
+                if key == "exclusive_closure":
+                    previous[key] = max(previous[key], computed[key])
+                else:
+                    previous[key] = previous[key] or computed[key]
+
+
+def cargo_metadata(manifest: Path, platform: str | None = None) -> dict:
+    """``cargo metadata --locked --offline`` for one workspace root."""
+    command = [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--manifest-path",
+        str(manifest),
+    ]
+    if platform is not None:
+        command += ["--filter-platform", platform]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, check=True, text=True, cwd=REPO_ROOT
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or exc
+        raise MetadataError(
+            f"`{' '.join(command)}` failed, so the ledger metrics cannot be "
+            f"computed: {str(detail).strip()}"
+        ) from exc
+    return json.loads(completed.stdout)
+
+
+def collect_facts(root: Path) -> LedgerFacts:
+    """Facts for every committed lockfile under ``root``."""
+    facts = LedgerFacts()
+    for lockfile in committed_lockfiles(root):
+        manifest = lockfile.parent / "Cargo.toml"
+        full = graph_from_metadata(cargo_metadata(manifest))
+        wasm = graph_from_metadata(cargo_metadata(manifest, WASM_TARGET))
+        merge_facts(facts, lockfile.read_text(encoding="utf-8"), full, wasm)
+    return facts
+
+
+def ledger_failures(packages: dict[str, dict], facts: LedgerFacts) -> list[str]:
+    """Every way the ``[packages]`` table disagrees with the resolved graph."""
+    failures: list[str] = []
+    resolved = set(facts.versions)
+    listed = set(packages)
+    for name in sorted(resolved - listed):
+        failures.append(
+            f"FAIL: `{name}` {sorted(facts.versions[name])} is resolved by a "
+            "committed Cargo.lock but has no dependency-ledger.toml entry; run "
+            "`python3 scripts/check-banned-deps.py --update-metrics` and fill "
+            "in its category and reason (or remove the dependency)"
+        )
+    for name in sorted(listed - resolved):
+        failures.append(
+            f"FAIL: dependency-ledger.toml lists `{name}`, which no committed "
+            "Cargo.lock resolves any more; delete its entry"
+        )
+    for name in sorted(listed & resolved):
+        entry = packages[name]
+        category = entry.get("category", "")
+        reason = str(entry.get("reason", "")).strip()
+        metrics = facts.metrics[name]
+        if category == UNCATEGORIZED or not category:
+            failures.append(
+                f"FAIL: `{name}` is an uncategorized skeleton in "
+                "dependency-ledger.toml; give it a category and a reason"
+            )
+        elif metrics["direct"]:
+            if category not in DIRECT_CATEGORIES:
+                failures.append(
+                    f"FAIL: `{name}` is a direct dependency of a workspace "
+                    f"member, so its category must be one of "
+                    f"{', '.join(DIRECT_CATEGORIES)} (found `{category}`)"
+                )
+        elif not category.startswith(TRANSITIVE_PREFIX):
+            failures.append(
+                f"FAIL: `{name}` is not a direct dependency of any workspace "
+                f"member, so its category must be transitive:<direct> "
+                f"(found `{category}`)"
+            )
+        else:
+            via = category[len(TRANSITIVE_PREFIX) :]
+            if name not in facts.closure_of_direct.get(via, set()):
+                failures.append(
+                    f"FAIL: `{name}` is categorized {category}, but `{via}` is "
+                    "not a direct dependency whose closure reaches it"
+                )
+        if not reason:
+            failures.append(f"FAIL: `{name}` has no reason in dependency-ledger.toml")
+        duplicate_reason = str(entry.get("duplicate_reason", "")).strip()
+        if name in facts.duplicated and not duplicate_reason:
+            failures.append(
+                f"FAIL: `{name}` resolves at {len(facts.versions[name])} versions "
+                f"{sorted(facts.versions[name])} in one lock with no "
+                "`duplicate_reason` recorded"
+            )
+        if name not in facts.duplicated and duplicate_reason:
+            failures.append(
+                f"FAIL: `{name}` records a duplicate_reason but resolves at a "
+                "single version; delete the stale reason"
+            )
+        recorded = entry.get("metrics", {})
+        if recorded != metrics:
+            drifted = sorted(
+                key
+                for key in set(METRIC_KEYS) | set(recorded)
+                if recorded.get(key) != metrics.get(key)
+            )
+            failures.append(
+                f"FAIL: `{name}` metrics drifted ({', '.join(drifted)}): ledger "
+                f"says {recorded}, the graph says {metrics}; run "
+                "`python3 scripts/check-banned-deps.py --update-metrics`"
+            )
+    return failures
+
+
+BARE_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def toml_string(value: str) -> str:
+    """A TOML basic string."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return toml_string(str(value))
+
+
+def render_packages(packages: dict[str, dict]) -> str:
+    """The ``[packages]`` section, sorted by name, byte-identical per input."""
+    lines = [PACKAGES_MARKER, PACKAGES_PREAMBLE, ""]
+    for name in sorted(packages):
+        entry = packages[name]
+        key = name if BARE_KEY_RE.fullmatch(name) else toml_string(name)
+        lines.append(f"[packages.{key}]")
+        lines.append(f"category = {toml_string(entry.get('category', UNCATEGORIZED))}")
+        lines.append(f"reason = {toml_string(entry.get('reason', ''))}")
+        if entry.get("duplicate_reason"):
+            lines.append(
+                f"duplicate_reason = {toml_string(entry['duplicate_reason'])}"
+            )
+        metrics = entry.get("metrics", {})
+        rendered = ", ".join(
+            f"{key} = {toml_value(metrics[key])}" for key in METRIC_KEYS if key in metrics
+        )
+        lines.append(f"metrics = {{ {rendered} }}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def split_ledger(text: str) -> str:
+    """The hand-authored head of the ledger (everything above the marker)."""
+    head, _, _ = text.partition(PACKAGES_MARKER)
+    return head.rstrip("\n") + "\n\n"
+
+
+def updated_packages(
+    packages: dict[str, dict], facts: LedgerFacts
+) -> tuple[dict[str, dict], list[str], list[str]]:
+    """(new ``[packages]`` table, skeleton names added, stale names kept).
+
+    A vanished package's entry is kept verbatim and reported, never silently
+    dropped: the plain gate then fails on it until someone deletes it on
+    purpose.
+    """
+    result: dict[str, dict] = {}
+    skeletons: list[str] = []
+    stale: list[str] = []
+    for name in sorted(set(packages) | set(facts.versions)):
+        if name not in facts.versions:
+            result[name] = packages[name]
+            stale.append(name)
+            continue
+        entry = dict(packages.get(name, {}))
+        if name not in packages:
+            entry = {"category": UNCATEGORIZED, "reason": ""}
+            skeletons.append(name)
+        entry["metrics"] = dict(facts.metrics[name])
+        result[name] = entry
+    return result, skeletons, stale
+
+
+def load_ledger(path: Path) -> tuple[str, dict[str, dict]]:
+    text = path.read_text(encoding="utf-8")
+    return text, tomllib.loads(text).get("packages", {})
+
+
+def update_metrics() -> int:
+    facts = collect_facts(REPO_ROOT)
+    text, packages = load_ledger(LEDGER_PATH)
+    new_packages, skeletons, stale = updated_packages(packages, facts)
+    LEDGER_PATH.write_text(
+        split_ledger(text) + render_packages(new_packages), encoding="utf-8"
+    )
+    for name in skeletons:
+        print(f"NEW: `{name}` added as an {UNCATEGORIZED} skeleton; categorize it")
+    for name in stale:
+        print(
+            f"STALE: `{name}` is no longer resolved by any committed Cargo.lock; "
+            "its entry was kept — delete it"
+        )
+    print(
+        f"OK: rewrote {len(new_packages)} dependency-ledger.toml entries "
+        f"({len(skeletons)} new, {len(stale)} stale)"
+    )
+    return 0
+
+
+def report_lines(facts: LedgerFacts) -> list[str]:
+    external = len(facts.versions)
+    rows = [
+        ("lockfile packages ([[package]], all committed locks)", facts.lock_package_count),
+        ("  external (non-workspace) lockfile packages", external),
+        ("reachable non-workspace packages", facts.reachable),
+        ("release graph (normal+build from published crates)", facts.release),
+        (f"{WASM_TARGET} release graph", facts.wasm),
+        ("dev-only (reachable, outside the release graph)", facts.reachable - facts.release),
+    ]
+    width = max(len(label) for label, _ in rows)
+    return [f"{label:<{width}}  {value:>4}" for label, value in rows]
+
+
+def fixture_metadata(dev_on_wasm: bool = True) -> dict:
+    """A miniature ``cargo metadata`` document: published member ``a``,
+    unpublished member ``t``; ``a`` depends on ``x`` (which pulls ``y``) and,
+    dev-only, on ``d`` and ``t``; ``t`` depends on ``m``, a proc macro with a build
+    script. The wasm variant drops ``d``'s edge like a target filter would."""
+
+    def package(pid: str, publish: object = None, kinds: tuple = ("lib",)) -> dict:
+        return {
+            "id": pid,
+            "name": pid,
+            "publish": publish,
+            "targets": [{"kind": [kind]} for kind in kinds],
+        }
+
+    def dep(pid: str, kind: str | None = None) -> dict:
+        return {"pkg": pid, "dep_kinds": [{"kind": kind, "target": None}]}
+
+    a_deps = [dep("x"), dep("t", "dev")]
+    if dev_on_wasm:
+        a_deps.append(dep("d", "dev"))
+    return {
+        "workspace_members": ["a", "t"],
+        "packages": [
+            package("a"),
+            package("t", publish=[]),
+            package("x"),
+            package("y", kinds=("lib", "custom-build")),
+            package("d"),
+            package("m", kinds=("proc-macro", "custom-build")),
+        ],
+        "resolve": {
+            "nodes": [
+                {"id": "a", "deps": a_deps},
+                {"id": "t", "deps": [dep("m")]},
+                {"id": "x", "deps": [dep("y")]},
+                {"id": "y", "deps": []},
+                {"id": "d", "deps": []},
+                {"id": "m", "deps": []},
+            ]
+        },
+    }
+
+
+FIXTURE_REGISTRY = 'source = "registry+https://github.com/rust-lang/crates.io-index"'
+
+
+def fixture_lock(extra: Iterable[tuple[str, str]] = ()) -> str:
+    entries = [("a", None), ("t", None)] + [
+        (name, "1.0.0") for name in ("x", "y", "d", "m")
+    ]
+    blocks = []
+    for name, version in entries:
+        if version is None:
+            blocks.append(f'[[package]]\nname = "{name}"\nversion = "0.1.0"\n')
+        else:
+            blocks.append(
+                f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+                f"{FIXTURE_REGISTRY}\n"
+            )
+    for name, version in extra:
+        blocks.append(
+            f'[[package]]\nname = "{name}"\nversion = "{version}"\n{FIXTURE_REGISTRY}\n'
+        )
+    return "version = 4\n\n" + "\n".join(blocks)
+
+
+FIXTURE_CATEGORIES = {
+    "x": ("runtime", "the fixture's direct runtime dependency"),
+    "y": ("transitive:x", "reached only through x"),
+    "d": ("oracle", "the fixture's dev-only oracle"),
+    "m": ("runtime", "the unpublished member's proc macro"),
+}
+
+
+def fixture_facts(lock_text: str) -> LedgerFacts:
+    facts = LedgerFacts()
+    merge_facts(
+        facts,
+        lock_text,
+        graph_from_metadata(fixture_metadata()),
+        graph_from_metadata(fixture_metadata(dev_on_wasm=False)),
+    )
+    return facts
+
+
+def fixture_ledger(facts: LedgerFacts) -> dict[str, dict]:
+    packages, _, _ = updated_packages({}, facts)
+    for name, (category, reason) in FIXTURE_CATEGORIES.items():
+        packages[name]["category"] = category
+        packages[name]["reason"] = reason
+    return packages
+
+
+def ledger_self_test() -> list[str]:
+    """Self-test cases for the allowed half (the dependency ledger)."""
+    failures: list[str] = []
+    facts = fixture_facts(fixture_lock())
+    packages = fixture_ledger(facts)
+
+    # --- metrics are what the fixture graph says.
+    expected_metrics = {
+        "x": (True, 2, True, True, False, False),
+        "y": (False, 0, True, True, True, False),
+        "d": (True, 1, False, False, False, False),
+        "m": (True, 1, False, False, True, True),
+    }
+    for name, values in expected_metrics.items():
+        got = tuple(facts.metrics[name][key] for key in METRIC_KEYS)
+        if got != values:
+            failures.append(f"fixture metrics for {name}: got {got}, expected {values}")
+    counts = (facts.lock_package_count, facts.reachable, facts.release, facts.wasm)
+    if counts != (6, 4, 2, 2):
+        failures.append(f"fixture report counts {counts}, expected (6, 4, 2, 2)")
+
+    # --- the complete, categorized fixture ledger passes (the valid neighbour
+    #     of every refusal below).
+    clean = ledger_failures(packages, facts)
+    if clean:
+        failures.append(f"a complete fixture ledger was refused: {clean}")
+
+    # --- an injected unlisted package fails.
+    injected = fixture_facts(fixture_lock([("intruder", "0.1.0")]))
+    if not any("`intruder`" in m and "no dependency-ledger.toml entry" in m
+               for m in ledger_failures(packages, injected)):
+        failures.append("an injected unlisted package was not flagged")
+
+    # --- a listed package no lock resolves fails.
+    ghost = dict(packages, ghost={"category": "runtime", "reason": "gone"})
+    if not any("`ghost`" in m for m in ledger_failures(ghost, facts)):
+        failures.append("a listed but absent package was not flagged")
+
+    # --- a duplicate version fails without a reason and passes with one.
+    duplicated = fixture_facts(fixture_lock([("y", "2.0.0")]))
+    if not any("duplicate_reason" in m for m in ledger_failures(packages, duplicated)):
+        failures.append("a duplicate version without a reason was not flagged")
+    reasoned = {name: dict(entry) for name, entry in packages.items()}
+    reasoned["y"]["duplicate_reason"] = "x's two majors resolve side by side"
+    if ledger_failures(reasoned, duplicated):
+        failures.append(
+            f"a duplicate with a recorded reason was refused: "
+            f"{ledger_failures(reasoned, duplicated)}"
+        )
+    if not any("stale reason" in m for m in ledger_failures(reasoned, facts)):
+        failures.append("a duplicate_reason with no duplicate was not flagged")
+
+    # --- metrics drift fails.
+    drifted = {name: dict(entry) for name, entry in packages.items()}
+    drifted["x"]["metrics"] = dict(drifted["x"]["metrics"], wasm=False)
+    if not any("drifted" in m for m in ledger_failures(drifted, facts)):
+        failures.append("metrics drift was not flagged")
+
+    # --- a skeleton, a wrong transitive owner and a mis-kinded category fail.
+    for name, category, needle in (
+        ("x", UNCATEGORIZED, "uncategorized"),
+        ("y", "transitive:d", "closure reaches it"),
+        ("y", "runtime", "must be transitive"),
+        ("x", "transitive:x", "must be one of"),
+    ):
+        broken = {key: dict(entry) for key, entry in packages.items()}
+        broken[name]["category"] = category
+        if not any(needle in m for m in ledger_failures(broken, facts)):
+            failures.append(f"category {category!r} on {name} was not flagged")
+
+    # --- --update-metrics keeps and reports a vanished entry, adds a flagged
+    #     skeleton for a new one, and renders deterministically.
+    updated, skeletons, stale = updated_packages(ghost, injected)
+    if skeletons != ["intruder"] or stale != ["ghost"] or "ghost" not in updated:
+        failures.append(
+            f"update-metrics skeletons={skeletons} stale={stale}; expected "
+            "['intruder'] and a kept ['ghost']"
+        )
+    if updated["intruder"]["category"] != UNCATEGORIZED:
+        failures.append("a new package's skeleton is not flagged UNCATEGORIZED")
+    rendered = render_packages(packages)
+    if rendered != render_packages(dict(reversed(list(packages.items())))):
+        failures.append("the rendered [packages] section depends on input order")
+    if tomllib.loads(rendered).get("packages") != packages:
+        failures.append("the rendered [packages] section does not round-trip")
+
+    # --- the real tree passes.
+    try:
+        real_facts = collect_facts(REPO_ROOT)
+        _, real_packages = load_ledger(LEDGER_PATH)
+    except (TrackedFileDiscoveryError, MetadataError, OSError) as exc:
+        failures.append(f"could not check the real dependency ledger: {exc}")
+    else:
+        real = ledger_failures(real_packages, real_facts)
+        if real:
+            failures.append(f"the real tree fails the ledger: {real[:3]}")
+    return failures
+
+
 def self_test() -> int:
     failures: list[str] = []
 
@@ -805,6 +1484,9 @@ def self_test() -> int:
                         f"{scanned_path}: {exc}"
                     )
 
+    # --- the allowed half: the dependency ledger.
+    failures.extend(ledger_self_test())
+
     if failures:
         for message in failures:
             print(f"SELF-TEST FAIL: {message}")
@@ -814,8 +1496,19 @@ def self_test() -> int:
 
 
 def main() -> int:
-    if "--self-test" in sys.argv[1:]:
+    arguments = sys.argv[1:]
+    if "--self-test" in arguments:
         return self_test()
+    try:
+        if "--update-metrics" in arguments:
+            return update_metrics()
+        if "--report" in arguments:
+            for line in report_lines(collect_facts(REPO_ROOT)):
+                print(line)
+            return 0
+    except (TrackedFileDiscoveryError, MetadataError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
 
     failures: list[str] = []
 
@@ -847,6 +1540,14 @@ def main() -> int:
             "first-party edge (a transitive third-party use is not flagged)"
         )
 
+    try:
+        facts = collect_facts(REPO_ROOT)
+        _, packages = load_ledger(LEDGER_PATH)
+    except (MetadataError, OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
+    failures.extend(ledger_failures(packages, facts))
+
     if failures:
         for message in failures:
             print(message)
@@ -854,6 +1555,10 @@ def main() -> int:
 
     total = len(BANNED_ANY_EDGE) + len(BANNED_DIRECT_ONLY)
     print(f"OK: none of the {total} replaced dependencies re-entered the workspace")
+    print(
+        f"OK: all {len(packages)} external packages are in dependency-ledger.toml "
+        "with current metrics"
+    )
     return 0
 
 
