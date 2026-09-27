@@ -74,11 +74,7 @@ fn walk_everything(query: Query) -> usize {
 /// frame: `Ok(())`, or the refusal.
 fn parse_on(query: &str, bytes: usize) -> Result<(), ParseError> {
     let query = query.to_owned();
-    on_stack(bytes, move || {
-        SparqlParser::new().parse_query(&query).map(|parsed| {
-            core::hint::black_box(walk_everything(parsed));
-        })
-    })
+    on_stack(bytes, move || parse_and_walk(&query))
 }
 
 /// `open` written `n` times around `core`, closed by `close` written `n` times.
@@ -295,21 +291,42 @@ fn the_small_stack_still_parses_a_shallow_query() {
     parse_on(&chain, SMALL).unwrap_or_else(|e| panic!("a flat chain on a small stack: {e}"));
 }
 
+/// Parse `query` and walk the tree it built from the same frame: `Ok(())`, or the
+/// refusal.
+fn parse_and_walk(query: &str) -> Result<(), ParseError> {
+    SparqlParser::new().parse_query(query).map(|parsed| {
+        core::hint::black_box(walk_everything(parsed));
+    })
+}
+
 /// The largest `n` whose form parses (and is walked) with `bytes` left, found by
 /// bisection, and the refusal one level deeper.
+///
+/// Every probe — the one-level floor, each bisection step and the final one-level-deeper
+/// re-parse — runs on one thread from one frame, so each starts from the very same stack
+/// pointer. [`on_stack`] only places a thread's remaining stack to within a 4 KiB frame,
+/// and a fresh thread per probe would move the boundary by up to that much between
+/// probes: a level refused in one probe could parse in the next.
 fn deepest(form: &Form, bytes: usize) -> (usize, Result<(), ParseError>) {
-    let (mut parses, mut refused) = (1_usize, 50_000_usize);
-    parse_on(&(form.text)(parses), bytes)
-        .unwrap_or_else(|e| panic!("{}: one level parses with {bytes} bytes: {e}", form.name));
-    while refused - parses > 1 {
-        let mid = parses.midpoint(refused);
-        if parse_on(&(form.text)(mid), bytes).is_ok() {
-            parses = mid;
-        } else {
-            refused = mid;
+    let text = form.text;
+    let (one, parses, refused) = on_stack(bytes, move || {
+        let one = parse_and_walk(&text(1));
+        if one.is_err() {
+            return (one, 1, Ok(()));
         }
-    }
-    (parses, parse_on(&(form.text)(refused), bytes))
+        let (mut parses, mut refused) = (1_usize, 50_000_usize);
+        while refused - parses > 1 {
+            let mid = parses.midpoint(refused);
+            if parse_and_walk(&text(mid)).is_ok() {
+                parses = mid;
+            } else {
+                refused = mid;
+            }
+        }
+        (one, parses, parse_and_walk(&text(refused)))
+    });
+    one.unwrap_or_else(|e| panic!("{}: one level parses with {bytes} bytes: {e}", form.name));
+    (parses, refused)
 }
 
 /// The real limit of every form on a 1 MiB and a 2 MiB stack: the deepest level that
