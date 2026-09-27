@@ -15,3 +15,6 @@ crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff
 # byte-for-byte, including the crate-local runtime copy of the vocabularies.
 vectors/shacl12/** -text -diff
 crates/shapes/spec/** -text -diff
+
+# Preserve the digest-pinned DASH document byte-for-byte.
+vectors/dash/dash.ttl -text -diff
