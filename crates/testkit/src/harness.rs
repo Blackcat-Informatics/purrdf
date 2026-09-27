@@ -850,8 +850,7 @@ fn execute(name: &str, body: Body, echo: bool) -> Outcome {
     let result = panic::catch_unwind(AssertUnwindSafe(body));
     let captured = CAPTURE
         .with(|slot| slot.borrow_mut().take())
-        .map(|capture| capture.message)
-        .unwrap_or_default();
+        .map_or_default(|capture| capture.message);
     match result {
         Ok(Ok(())) => Outcome::Passed,
         Ok(Err(failed)) => Outcome::Failed(failed.message.unwrap_or_default()),

@@ -750,8 +750,7 @@ impl Compiler<'_> {
                     let properties = map
                         .get("properties")
                         .and_then(Value::as_object)
-                        .map(|members| members.keys().cloned().collect())
-                        .unwrap_or_default();
+                        .map_or_default(|members| members.keys().cloned().collect());
                     let mut patterns = Vec::new();
                     if let Some(members) = map.get("patternProperties").and_then(Value::as_object) {
                         for source in members.keys() {

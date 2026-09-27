@@ -282,8 +282,7 @@ fn cpu_flags() -> Vec<String> {
         .lines()
         .find(|line| line.starts_with("flags") || line.starts_with("Features"))
         .and_then(|line| line.split_once(':'))
-        .map(|(_, flags)| flags.split_whitespace().map(str::to_owned).collect())
-        .unwrap_or_default()
+        .map_or_default(|(_, flags)| flags.split_whitespace().map(str::to_owned).collect())
 }
 
 /// When `PURRDF_REQUIRE_HASH_PATHS` is set (comma-separated path names), each
