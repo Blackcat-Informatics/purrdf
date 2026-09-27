@@ -498,8 +498,12 @@ union — with the endpoints to try taken from the evaluation order, which it al
   type or any format name `Dataset.parse` accepts, and `base` defaults to the IRI;
 - a `Response`, whose `Content-Type` names the media type;
 - a `Dataset`;
-- `{ kind: "transport" }`, which `LOAD SILENT` swallows;
-- `{ kind: "denied" }`, which fails the request even under `LOAD SILENT`.
+- `{ kind: "transport" }` when the document could not be fetched or read;
+- `{ kind: "denied" }` when the host's policy refuses the request.
+
+Either failure fails the request. `LOAD SILENT` succeeds over either — and over a
+missing `resolveLoad` — with nothing loaded (SPARQL 1.1 Update §3.1.4), and the job's
+`evidence.async.silenced` records the source's `iri` and the failure's `kind`.
 
 A bare string or bytes carry no media type and are a fault. A document that does not
 parse is the `LOAD`'s own failure.

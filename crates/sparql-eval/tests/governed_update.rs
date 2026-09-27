@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
-    ResourceDimension, SparqlEngine, SparqlRequest, StopCause, TrippedGovernor,
+    DatasetMut, GraphMatchValue, MutableDataset, RdfDataset, RdfDatasetBuilder, ResourceDimension,
+    SparqlEngine, SparqlRequest, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
@@ -160,7 +160,7 @@ impl GraphResolver for CountingResolver {
     fn resolve(
         &self,
         _request: purrdf_sparql_eval::GraphResolveRequest<'_>,
-    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    ) -> Result<Arc<RdfDataset>, purrdf_sparql_eval::LoadError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::clone(&self.document))
     }
@@ -188,7 +188,7 @@ impl GraphResolver for CancellingResolver {
     fn resolve(
         &self,
         request: purrdf_sparql_eval::GraphResolveRequest<'_>,
-    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    ) -> Result<Arc<RdfDataset>, purrdf_sparql_eval::LoadError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         assert!(request.stop.is_some(), "LOAD must carry the stop signal");
         // Complete the fetch after firing cancellation: the engine's post-return poll,

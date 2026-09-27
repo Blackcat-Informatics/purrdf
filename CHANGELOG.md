@@ -526,9 +526,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Every query path, `CONSTRUCT` into a view, EXPLAIN and an UPDATE's `WHERE` see the
   request's sources, so a `SERVICE` inside `INSERT … WHERE` or `DELETE WHERE`
   federates exactly as it does in a query. The `*_with_source` entries are thin
-  wrappers over these fields, with unchanged signatures. `LOAD_DENIED`
-  (`native-sparql-load-denied`) is the code a `GraphResolver` reports when the
-  host's policy refuses a source. `protocol` is a SPARQL 1.1 Protocol module:
+  wrappers over these fields, with unchanged signatures. `protocol` is a SPARQL 1.1
+  Protocol module:
   `ProtocolRequest::parse` reads a query by `GET`, or by `POST` with a direct body
   or URL-encoded parameters, and an update by `POST` in either form, together with
   the dataset parameters, and every refusal is a typed `ProtocolError`.
@@ -746,11 +745,6 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **sparql-algebra:** a `BIND` or `UNFOLD` after a braced group containing a
   `FILTER` was serialized unbraced, so on re-parse the `FILTER` moved above the
   `BIND` and the forwarded query meant something else.
-
-- **sparql-eval:** `LOAD SILENT` swallowed a source the host's policy refused, as if
-  the source were unreachable. A resolver now reports a policy refusal as
-  `LOAD_DENIED`, which fails the request even under `LOAD SILENT`, matching how a
-  denied `SERVICE` is never silenced. An unreachable source is still swallowed.
 
 - **sparql-eval:** `SERVICE SILENT ?e` swallowed the engine's own refusal of an
   endpoint variable no solution bound. The clause became the join identity: the
@@ -2451,6 +2445,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   query whether or not `SILENT` is written; so do the refusals of a property-function
   call or a custom aggregate inside a forwarded body. Without `SILENT` every outcome
   is the error it was.
+
+- **BREAKING** **sparql-eval, wasm:** `GraphResolver::resolve` returns a typed
+  `LoadError` — `Transport`, `Decode`, `Denied` (a `ServiceDenial`), `HostDenied`,
+  `Fault` or `Governed` (the request's own stop signal) — where it returned an
+  `RdfDiagnostic`; `LoadError::code` is the diagnostic code a `LOAD` without
+  `SILENT` fails with (`native-sparql-load-failed`, the new
+  `native-sparql-load-decode`, `native-sparql-load-denied`,
+  `native-sparql-load-fault`, `native-sparql-load-stopped`), and the message is
+  `LOAD <iri>: ` followed by the error. An implementation maps its failure onto a
+  variant instead of choosing a code. `LOAD SILENT` follows SPARQL 1.1 Update
+  §3.1.4, under which the operation "will still return success" when it fails:
+  every `LoadError` but `Governed`, and a missing resolver, is a success with nothing
+  loaded, recorded on the update's evidence as a `SilencedInvocation` naming the
+  source. That is 2.0.2's behaviour for an unreachable source and a missing
+  resolver, now extended to a refusal. `Governed` is reported as the governor trip,
+  `SILENT` or not, on a governed update.
 
 - **BREAKING** **sparql-eval:** each `SERVICE` outcome carries its own code at the
   engine boundary, where every one used to carry `native-sparql-query-eval` or

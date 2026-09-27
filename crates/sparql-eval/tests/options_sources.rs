@@ -19,7 +19,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     GovernedOutcome, GovernedUpdateOutcome, GraphResolveRequest, GraphResolver,
-    InProcessServiceResolver, NativeSparqlEngine, QueryGovernors, QueryOptions,
+    InProcessServiceResolver, LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions,
 };
 
 /// The federated endpoint every fixture names.
@@ -166,7 +166,7 @@ impl FixedDocument {
 }
 
 impl GraphResolver for FixedDocument {
-    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
         assert_eq!(request.iri, DOC, "LOAD names the fixture document");
         Ok(Arc::clone(&self.document))
     }

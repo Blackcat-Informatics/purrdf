@@ -1745,8 +1745,8 @@ impl NativeSparqlEngine {
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.
     /// A request that names its own ([`QueryOptions::load`]) uses that one instead.
-    /// Without either, LOAD hard-fails (`native-sparql-load-no-resolver`), `SILENT` or
-    /// not: `SILENT` tolerates a source that fails, and none was reached.
+    /// Without either, `LOAD` fails (`native-sparql-load-no-resolver`) and `LOAD SILENT`
+    /// succeeds with nothing loaded.
     #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn GraphResolver>) -> Self {
         self.resolver = Some(resolver);
@@ -3201,8 +3201,8 @@ pub struct QueryOptions<'a> {
     ///
     /// `None` — the default — falls back to the engine's own resolver
     /// ([`NativeSparqlEngine::with_resolver`]), which is what every UPDATE did before
-    /// this field existed; with neither, a `LOAD` hard-fails
-    /// (`native-sparql-load-no-resolver`), `SILENT` or not. When set it wins over the engine's
+    /// this field existed; with neither, a `LOAD` fails (`native-sparql-load-no-resolver`)
+    /// and a `LOAD SILENT` loads nothing. When set it wins over the engine's
     /// resolver for this request alone: the per-request source is the more specific
     /// statement of where this caller's documents come from, and a caller that went
     /// to the trouble of naming one did not mean "unless the engine already had one".
@@ -6021,7 +6021,7 @@ mod tests {
         fn resolve(
             &self,
             _request: crate::update::GraphResolveRequest<'_>,
-        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        ) -> Result<Arc<RdfDataset>, crate::update::LoadError> {
             Ok(self.ds.clone())
         }
     }
@@ -6163,32 +6163,17 @@ mod tests {
     }
 
     #[test]
-    fn load_silent_without_resolver_is_a_hard_error_too() {
+    fn load_silent_without_resolver_is_a_noop_ok() {
         let engine = NativeSparqlEngine::new();
         let mut ds = social();
-        let before = quad_set(&ds);
-        let err = engine
-            .update(
-                &mut ds,
-                SparqlRequest {
-                    query: "LOAD SILENT <http://ex/doc>",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .unwrap_err();
-        assert_eq!(err.code, "native-sparql-load-no-resolver");
-        assert!(
-            err.message.contains("SILENT does not apply"),
-            "{}",
-            err.message
-        );
-        assert_eq!(quad_set(&ds), before, "nothing was applied");
+        let before = ds.quad_count();
+        update(&engine, &mut ds, "LOAD SILENT <http://example.org/doc>");
+        assert_eq!(ds.quad_count(), before, "silent load no-ops");
     }
 
-    /// The valid neighbour: `SILENT` still swallows a source that fails — a resolver
-    /// that cannot reach the document — as the no-op the standard gives it, while the
-    /// same failure without `SILENT` fails the request.
+    /// `SILENT` swallows a source that fails — a resolver that cannot reach the
+    /// document — as the no-op the standard gives it, while the same failure without
+    /// `SILENT` fails the request.
     #[test]
     fn load_silent_with_a_failing_resolver_is_a_noop_ok() {
         struct Unreachable;
@@ -6196,23 +6181,23 @@ mod tests {
             fn resolve(
                 &self,
                 request: crate::update::GraphResolveRequest<'_>,
-            ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-                Err(RdfDiagnostic::error(
-                    "native-sparql-load-failed",
-                    format!("<{}> is unreachable", request.iri),
-                ))
+            ) -> Result<Arc<RdfDataset>, crate::update::LoadError> {
+                Err(crate::update::LoadError::Transport(format!(
+                    "<{}> is unreachable",
+                    request.iri
+                )))
             }
         }
         let engine = NativeSparqlEngine::new().with_resolver(Arc::new(Unreachable));
         let mut ds = social();
         let before = quad_set(&ds);
-        update(&engine, &mut ds, "LOAD SILENT <http://ex/doc>");
+        update(&engine, &mut ds, "LOAD SILENT <http://example.org/doc>");
         assert_eq!(quad_set(&ds), before, "silent load no-ops");
         let err = engine
             .update(
                 &mut ds,
                 SparqlRequest {
-                    query: "LOAD <http://ex/doc>",
+                    query: "LOAD <http://example.org/doc>",
                     base_iri: None,
                     substitutions: &[],
                 },
@@ -7791,7 +7776,7 @@ mod tests {
         fn resolve(
             &self,
             _request: crate::update::GraphResolveRequest<'_>,
-        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        ) -> Result<Arc<RdfDataset>, crate::update::LoadError> {
             unimplemented!("this stub only proves `with_load` set the field")
         }
     }

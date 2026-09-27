@@ -595,8 +595,9 @@ export function createFetchServiceResolver(options) {
  *
  * Before any fetch — and before *every* redirect hop — the catalog authorizes the IRI
  * (`ServiceCatalog.authorizeLoad`: the `network` capability, and `credentials` for a
- * credential); a refusal is a `{ kind: "denied" }` failure, which fails even a
- * `LOAD SILENT`, whether it is the initial IRI or one a redirect retargeted to. Each
+ * credential); a refusal is a `{ kind: "denied" }` failure — an error, and under
+ * `LOAD SILENT` a success with nothing loaded — whether it is the initial IRI or one a
+ * redirect retargeted to. Each
  * hop's request sends an `Accept` naming every RDF syntax the engine parses, and the
  * `User-Agent`, headers and credential of *that hop's own* authorization — never the
  * previous hop's, so a redirect to a different origin never carries along a credential or

@@ -153,10 +153,10 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   resolves to exactly what its synchronous twin returns; a refused product rejects with
   the same `ShaclProductRefusal`.
 - **Host handlers** — `resolveService(request, ctx)` answers a `SERVICE` request with
-  SPARQL Results JSON, a `Response`, or a typed failure: `{ kind: "transport" }`, which
-  `SERVICE SILENT` swallows to the join identity, or `{ kind: "denied" }`, which fails
-  even under `SILENT`. A handler that throws has faulted, and a fault fails the job even
-  under `SILENT`. `ctx.silent` is for information only; an empty answer is not the
+  SPARQL Results JSON, a `Response`, or a typed failure: `{ kind: "transport" }` or
+  `{ kind: "denied" }`. Either fails the query, and under `SERVICE SILENT` either is the
+  join identity, recorded on the evidence's `silenced`. A handler that throws has
+  faulted, and a fault fails the job even under `SILENT`. `ctx.silent` is for information only; an empty answer is not the
   handler's to invent. `resolveLoad` answers `LOAD` the same way, with a document and its
   media type. A `ServiceCatalog` authorizes every request before the handler is called
   (deny by default), and `localServices` answers named endpoints in process from a
@@ -195,7 +195,7 @@ denial, an endpoint's failure, and a request served while a long query runs.
 - **In-memory only** — the oxigraph `Store` (RocksDB) and the logic engine do not
   compile to wasm and are excluded by design. SPARQL runs over the in-memory
   dataset. The synchronous methods install no `SERVICE` or `LOAD` source, so there a
-  remote `SERVICE` or `LOAD` fails explicitly, `SILENT` or not; the
+  remote `SERVICE` or `LOAD` fails explicitly unless written `SILENT`; the
   asynchronous twins reach remote endpoints only through the handlers the host
   passes them.
 - Text codecs ride purrdf's native codecs — no Store dependency and no

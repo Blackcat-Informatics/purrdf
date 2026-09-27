@@ -17,13 +17,13 @@
 //! rather than silently returning an empty or partial result: a synchronous call cannot
 //! wait for the network, and a false answer is worse than an error.
 //!
-//! The one exception is the caller's own: `SERVICE SILENT` succeeds with nothing
-//! fetched. `SILENT` is the query author writing "an invocation that fails is not an
-//! error" into the request, and SPARQL 1.1 Federated Query §3.2 answers a failed
-//! invocation under it with the join identity — so the surrounding pattern's own
-//! solutions come back, unaugmented. The governed entries record each such invocation on
-//! [`GovernorEvidence::silenced`]. `LOAD SILENT` still hard-fails on this lane. Drop
-//! `SILENT` to get the hard failure.
+//! The one exception is the caller's own: `SERVICE SILENT` and `LOAD SILENT` succeed
+//! with nothing fetched. `SILENT` is the query author writing "an invocation that fails
+//! is not an error" into the request, and SPARQL 1.1 (Federated Query §3.2, Update
+//! §3.1.4) requires it to be honoured: `SERVICE SILENT` contributes the join identity (so
+//! the surrounding pattern's own solutions come back, unaugmented) and `LOAD SILENT`
+//! leaves the dataset untouched. The governed entries record each such invocation on
+//! [`GovernorEvidence::silenced`]. Drop `SILENT` to get the hard failure.
 //!
 //! The second lane is the `async_query` module: every evaluating method here has an
 //! asynchronous twin that runs the same evaluator as a job suspending through JSPI on
@@ -1775,9 +1775,9 @@ impl Dataset {
     /// byte-identical Turtle exactly as before; see `default_graph_format`.
     ///
     /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause (unresolvable
-    /// on this lane) throws a JsError — never a silent empty result. `SERVICE SILENT` is
-    /// the caller's own opt-out and succeeds with nothing fetched, as SPARQL 1.1 requires;
-    /// see this module's federation note.
+    /// on this lane) throws a JsError — never a silent empty result. The `SILENT` forms
+    /// are the caller's own opt-out and succeed with nothing fetched, as SPARQL 1.1
+    /// requires; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {

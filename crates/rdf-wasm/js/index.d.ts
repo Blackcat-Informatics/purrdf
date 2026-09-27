@@ -1401,8 +1401,8 @@ export interface AsyncLoadContext {
 /**
  * A typed failure a handler returns (never throws): `"transport"` — unreachable or
  * unreadable — or `"denied"` — the host's policy refused it. Either fails the request;
- * under `SERVICE SILENT` either is the join identity, recorded on the evidence's
- * `silenced`.
+ * under `SERVICE SILENT` either is the join identity and under `LOAD SILENT` a success
+ * with nothing loaded, recorded on the evidence's `silenced`.
  */
 export interface ServiceFailure {
   readonly kind: "transport" | "denied";
@@ -1443,7 +1443,7 @@ export type AsyncLoadResolver = (
 export interface AsyncHostOptions {
   /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously: an error, and under `SILENT` the join identity. */
   readonly resolveService?: AsyncServiceResolver | null;
-  /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously, `SILENT` or not. */
+  /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously: an error, and under `SILENT` a success with nothing loaded. */
   readonly resolveLoad?: AsyncLoadResolver | null;
   /** Cancels the job; an already-aborted signal rejects before the job begins. */
   readonly signal?: AbortSignal | null;

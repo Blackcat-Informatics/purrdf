@@ -147,13 +147,13 @@
 //! information only; an empty answer is not the host's to invent.
 //!
 //! A `LOAD` effect answered with a transport failure becomes the evaluator's
-//! `native-sparql-load-failed`, which `LOAD SILENT` swallows exactly as it swallows an
-//! unreachable document. A denial becomes
-//! [`LOAD_DENIED`](purrdf_sparql_eval::LOAD_DENIED), whose message reads "the host denied
-//! the request: …" (there is no native catalog gate for `LOAD` the way there is for
-//! `SERVICE`, so every `LOAD` denial is, from this evaluator's point of view, the host's
-//! own decision — see [`load_answer`]); it fails the request even under `LOAD SILENT`, as
-//! a denied `SERVICE` does. A host fault is latched and so trips the request.
+//! [`LoadError::Transport`] (`native-sparql-load-failed`), and a denial
+//! [`LoadError::HostDenied`] (`native-sparql-load-denied`), whose message reads "the host
+//! denied the request: …" (there is no native catalog gate for `LOAD` the way there is
+//! for `SERVICE`, so every `LOAD` denial is, from this evaluator's point of view, the
+//! host's own decision — see [`load_answer`]). Either fails the request, and `LOAD SILENT`
+//! succeeds over either with nothing loaded, recorded on [`AsyncEvidence::silenced`]. A
+//! host fault is latched and fails the job, `SILENT` or not.
 //!
 //! # Yielding: poll-count slicing, and where it happens
 //!
@@ -217,14 +217,14 @@ use std::time::Duration;
 
 use purrdf::{
     ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, RdfDataset,
-    RdfDiagnostic, parse_dataset, query_with_entailment_governed,
+    parse_dataset, query_with_entailment_governed,
 };
 use purrdf_core::SparqlResult;
 use purrdf_sparql_eval::protocol::negotiate;
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorState, GraphResolveRequest,
     GraphResolver, HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
-    NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ResolvedBindings,
+    LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ResolvedBindings,
     ServiceCapabilities, ServiceCapability, ServiceCatalog as NativeServiceCatalog,
     ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver, StopCause, StopSignal,
     TrippedGovernor, WallDeadline,
@@ -1398,30 +1398,23 @@ fn service_answer(
 
 /// Map what a host delivered for a `LOAD` effect onto the `LOAD` seam.
 ///
-/// A fired signal is reported as a diagnostic here, but it is not what the request
-/// reports: the evaluator polls the same signal the moment this returns and aborts the
-/// request with the trip, `SILENT` or not.
+/// A fired signal is the job's own stop, [`LoadError::Governed`]: the evaluator reports
+/// the trip, `SILENT` or not.
 fn load_answer(
     iri: &str,
     fired: Option<StopCause>,
     delivered: Option<Delivered>,
     slots: &JobSlots,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+) -> Result<Arc<RdfDataset>, LoadError> {
     if let Some(cause) = fired {
-        return Err(RdfDiagnostic::error(
-            "native-sparql-load-stopped",
-            format!("LOAD <{iri}>: {}", TrippedGovernor::Stopped { cause }),
-        ));
+        return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
     }
     match delivered {
         Some(Delivered::Graph(dataset)) => Ok(dataset),
         Some(Delivered::Failure {
             kind: FailureKind::Transport,
             message,
-        }) => Err(RdfDiagnostic::error(
-            "native-sparql-load-failed",
-            format!("LOAD <{iri}>: {message}"),
-        )),
+        }) => Err(LoadError::Transport(message)),
         // Unlike a `SERVICE` denial, there is no native catalog gate for `LOAD` (see this
         // module's doc comment): `ServiceCatalog::authorizeLoad` is a check the HOST makes
         // of its own accord, before it ever calls back here, so whatever this delivery
@@ -1430,10 +1423,7 @@ fn load_answer(
         Some(Delivered::Failure {
             kind: FailureKind::Denied,
             message,
-        }) => Err(RdfDiagnostic::error(
-            purrdf_sparql_eval::LOAD_DENIED,
-            format!("LOAD <{iri}>: the host denied the request: {message}"),
-        )),
+        }) => Err(LoadError::HostDenied(message)),
         other => {
             let message = match other {
                 Some(Delivered::Governed) => format!(
@@ -1444,7 +1434,7 @@ fn load_answer(
                 _ => format!("resolver returned without a delivery for LOAD <{iri}>"),
             };
             slots.latch_fault(message.clone());
-            Err(RdfDiagnostic::error("native-sparql-load-fault", message))
+            Err(LoadError::Fault(message))
         }
     }
 }
@@ -1580,7 +1570,7 @@ struct JspiGraphResolver {
 }
 
 impl GraphResolver for JspiGraphResolver {
-    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
         let slots = &self.watch.slots;
         let payload = EffectPayload::Load {
             iri: request.iri.to_owned(),
@@ -4619,8 +4609,8 @@ mod tests {
             &slots,
         )
         .expect_err("a failure");
-        assert_eq!(failed.code, "native-sparql-load-failed");
-        assert!(failed.message.contains("HTTP 404"), "{}", failed.message);
+        assert_eq!(failed, LoadError::Transport("HTTP 404".to_owned()));
+        assert_eq!(failed.code(), "native-sparql-load-failed");
         let denied = load_answer(
             "http://example.org/doc",
             None,
@@ -4631,21 +4621,17 @@ mod tests {
             &slots,
         )
         .expect_err("a denial");
-        assert_eq!(denied.code, purrdf_sparql_eval::LOAD_DENIED);
+        assert_eq!(denied.code(), "native-sparql-load-denied");
         assert_eq!(
-            denied.message,
-            "LOAD <http://example.org/doc>: the host denied the request: policy"
+            denied,
+            LoadError::HostDenied("policy".to_owned()),
+            "a LOAD denial reports the host's own decision, never an invented catalog cause"
         );
-        assert!(
-            !denied.message.contains("withholds the"),
-            "a LOAD denial reports the host's own decision, never an invented catalog cause: \
-             {}",
-            denied.message
-        );
+        assert_eq!(denied.to_string(), "the host denied the request: policy");
         assert!(slots.fault().is_none(), "failures are answers, not faults");
         let missing =
             load_answer("http://example.org/doc", None, None, &slots).expect_err("no delivery");
-        assert_eq!(missing.code, "native-sparql-load-fault");
+        assert_eq!(missing.code(), "native-sparql-load-fault");
         assert!(slots.fault().is_some(), "a missing delivery is a fault");
     }
 
@@ -5477,6 +5463,49 @@ mod tests {
 
     const INSERT: &str =
         "INSERT DATA { <http://example.org/n> <http://example.org/p> <http://example.org/o> }";
+
+    #[test]
+    fn load_silent_without_a_handler_loads_nothing_and_records_it() {
+        let engine = QueryEngine::new();
+        let mut dataset = seed();
+        // Without SILENT the job fails, as the synchronous lane does.
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Update,
+            "LOAD <http://example.org/doc>",
+            &options(),
+        );
+        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert!(
+            job.take_error()
+                .expect("an error")
+                .contains("native-sparql-load-no-resolver")
+        );
+        job.finish();
+        // With SILENT it applies, loads nothing, and the evidence names the source.
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Update,
+            &format!("LOAD SILENT <http://example.org/doc> ; {INSERT}"),
+            &options(),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let silenced = job.take_evidence().silenced();
+        assert_eq!(silenced.len(), 1);
+        assert_eq!(silenced[0].target(), "load");
+        assert_eq!(silenced[0].iri().as_deref(), Some("http://example.org/doc"));
+        assert_eq!(silenced[0].endpoint(), None);
+        assert_eq!(silenced[0].kind(), "unconfigured");
+        job.inner.commit_into(&mut dataset).expect("commits");
+        assert_eq!(
+            dataset.size(),
+            3,
+            "the INSERT beside it applied, nothing was loaded"
+        );
+        job.finish();
+    }
 
     #[test]
     fn an_update_commits_into_the_dataset_it_read() {

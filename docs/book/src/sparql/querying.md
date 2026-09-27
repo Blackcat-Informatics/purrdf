@@ -100,7 +100,7 @@ Anything outside this surface — and every malformed query — is a typed
   PurRDF ships no HTTP client (the exchange is an `HttpTransport` trait the
   Rust host implements). The CLI, Python and C surfaces install no resolver,
   and neither do the wasm package's synchronous methods, so a `SERVICE` or
-  `LOAD` there fails by name, `SILENT` or not. The wasm package's asynchronous
+  `LOAD` there fails by name unless written `SILENT`. The wasm package's asynchronous
   methods take host resolvers — JavaScript handlers the job suspends on
   through JSPI (see
   [Getting Started: JavaScript](../getting-started/javascript.md#asynchronous-queries-and-federation)).
@@ -474,19 +474,17 @@ there is refused by name rather than misparsed as a subject term.
 ### `SERVICE` forwarding
 
 A pattern containing a written `LATERAL` clause — anywhere in the forwarded
-body, including nested inside another `SERVICE` — is refused only under
-`SERVICE SILENT`: there, a remote's rejection of the `LATERAL` extension
-would otherwise be swallowed into the identity table, a silent wrong answer
-rather than a typed refusal. A plain, non-silent `SERVICE` with a fixed IRI forwards the body
-with its `LATERAL { … }` text intact, so the endpoint's actual verdict — an
-answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own extension,
-so a Jena-backed endpoint answers it), or an honest failure from one that does
-not implement it — surfaces the same way any other unsupported forwarded
-construct's rejection would. A variable-endpoint `SERVICE ?g` is refused only
-when nothing supplies `?g`'s binding — nothing in the incoming solution names
-an IRI for the remote evaluator to resolve — and `SERVICE SILENT` does not
-change that, because `SILENT` tolerates an endpoint that fails, not a query
-that names none. When an enclosing pattern binds `?g` — a preceding triple
+body, including nested inside another `SERVICE` — is forwarded with its
+`LATERAL { … }` text intact, `SILENT` or not, so the endpoint's actual verdict
+— an answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own
+extension, so a Jena-backed endpoint answers it), or a failure from one that
+does not implement it — surfaces the same way any other forwarded construct's
+rejection would: an error, or under `SILENT` the join identity recorded on the
+evidence. A custom scalar function call is forwarded the same way. A
+variable-endpoint `SERVICE ?g` is refused only when nothing supplies `?g`'s
+binding — nothing in the incoming solution names an IRI for the remote
+evaluator to resolve — and `SERVICE SILENT` does not change that, because no
+invocation is made for `SILENT` to absorb. When an enclosing pattern binds `?g` — a preceding triple
 pattern in the same group, or a `LATERAL` left-hand side's per-row correlation
 — the endpoint resolves to that IRI before the remote call is made (the same
 per-row substitution described under "Points of disagreement with Jena" above)
@@ -557,56 +555,47 @@ handed the **absolute** IRI, which is the form a `ServiceCatalog` is keyed on.
 
 ### The `SILENT` contract
 
-SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached
-"will be considered to have matched with a single, empty, solution" — the join
-identity, so the surrounding query proceeds unchanged. PurRDF keeps that promise
-exactly, and confines it to what it is a promise *about*:
+SPARQL 1.1 Federated Query §3.2 defines a `SERVICE` clause as the endpoint's
+answer "in case of a successful service invocation according to the SPARQL
+protocol, and otherwise Ω0 in case SilentOp is true, and otherwise error". Ω0
+is the single empty solution — the join identity, so the surrounding query
+proceeds unchanged. PurRDF reads "otherwise" as written:
 
 | Outcome | `SERVICE` | `SERVICE SILENT` |
 |---|---|---|
-| The endpoint is unreachable, or its response undecodable | query error | join identity |
-| A capability was denied, or the host refused the request | query error | query error |
-| No endpoint was reached: no source is configured, or the endpoint value is not an IRI | query error | query error |
-| This engine's own governor tripped | truncation | truncation |
+| The invocation fails, for any reason: the endpoint is unreachable or its response undecodable; no source reaches it; a capability was denied or the host refused the request; a variable endpoint is bound to a term that is not an IRI | query error | join identity, recorded on the evidence |
+| This engine's own governor tripped, or its stack ran out | truncation, or the stack refusal | truncation, or the stack refusal |
 
-The first and last rows are long-standing behaviour: `SILENT` is a statement
-about an endpoint the caller does not control, never about the caller's own
+`SILENT` is a statement about the invocation, never about the caller's own
 budget, so a governor trip reached through a `SERVICE` clause propagates as a
-truncation whether or not `SILENT` is written.
+truncation whether or not `SILENT` is written. A denial is an invocation that
+did not succeed, and the query's author wrote `SILENT` knowing the service
+might not answer.
 
-The denial row follows from that same principle. A capability denial is a
-decision taken on *this* side of the seam — by the host running the engine,
-deterministically, before any endpoint was consulted — so it is exactly like a
-governor trip and nothing like an unreachable endpoint. Swallowing one would put
-the join identity into the surrounding join, making it a no-op, and hand back an
-answer that looks complete and is wrong; and because a denial is permanent
-rather than transient, it would be wrong identically on every run, so nothing
-would ever surface a symptom.
+The answer `SILENT` gives is indistinguishable from an endpoint that answered
+with nothing to add, so every silenced invocation is recorded:
+`GovernorEvidence::silenced` lists one `SilencedInvocation` per failure — the
+endpoint, the kind of failure (`transport`, `decode`, `disabled`,
+`unconfigured`, `denied`, `host-denied`, `not-an-iri`) and the message the
+error would have carried. Every governed query carries it; an ungoverned call
+returns a bare result, so run it under `QueryGovernors::METERED` to read the
+record. A denial raised by a `SERVICE` nested inside a body an
+`InProcessServiceResolver` evaluates travels back out as the structured denial
+it is, so the enclosing clause reports it — or records it — as a denial at
+every depth.
 
-That row holds at every nesting depth. `InProcessServiceResolver` evaluates a
-forwarded body itself, so a denial raised by a `SERVICE` nested inside one
-travels back out through that inner evaluation — as a structured denial, never
-flattened into a message. Flattening it would make a nested denial silenceable
-by an enclosing `SERVICE SILENT` while the identical denial one level up is not,
-which is the same look-complete-and-be-wrong outcome the row exists to prevent.
+`LOAD SILENT` follows SPARQL 1.1 Update §3.1.4, under which the operation
+"will still return success" when it fails: a document that cannot be fetched
+or parsed, a refusal, a fault, and the absence of a `GraphResolver` are each a
+success with nothing loaded, recorded on the update's evidence as a
+`SilencedInvocation` naming the source IRI. A `GraphResolver` reports why it
+produced no document as a typed `LoadError`, whose `code()` is the diagnostic
+code a `LOAD` without `SILENT` fails with.
 
-The row after it is the same rule seen from the query's side. `SILENT` tolerates
-an endpoint that fails, and when the engine was given no source to send the
-request to, or the endpoint variable is bound to a literal or a blank node, no
-endpoint was reached at all: the first is how the engine was configured, the
-second a query that names no endpoint. Answering the join identity would claim
-an endpoint had been consulted, so both are refused with a message that says
-why `SILENT` does not apply. `LOAD SILENT` with no `GraphResolver` is refused the
-same way.
-
-There is deliberately no knob that softens this. A host that genuinely wants a
-blocked service to behave like an unreachable one already has an exact way to
-say so: return a transport error from its own resolver. That is an honest claim
-that the endpoint did not answer, and `SILENT` swallows it under the first row.
-Adding a visibility flag would have bought no expressive power, only a second
-spelling of an existing one — and with it the possibility of two callers running
-the same query over the same data through the same resolver and getting
-different answers.
+Under `MINUS`, a variable endpoint's left solutions are partitioned by endpoint
+and each partition is subtracted by the right side evaluated with its own
+endpoint alone, so a silenced endpoint — Ω0, which binds nothing — removes none
+of its own rows while every answering endpoint still removes its matches.
 
 ## EXISTS under SEP-0007
 

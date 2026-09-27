@@ -433,48 +433,33 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   lossless.free();
 });
 
-// The `SILENT` forms are the query author's own opt-out for a remote endpoint or document
-// that fails (SPARQL 1.1 §10 for SERVICE, §3.1.4 for LOAD). The synchronous lane installs
-// no SERVICE or LOAD source, so there no endpoint and no document is ever reached: that is
-// how the lane is configured, not a failure `SILENT` tolerates, and both forms are refused
-// with it too, saying so. (With a source whose endpoint fails, `SILENT` is the join
-// identity and a no-op `LOAD`: see `async.test.mjs`.) This pins both halves beside each
-// other so the prose and the behaviour cannot drift apart again.
-test("SERVICE SILENT and LOAD SILENT are refused on the synchronous lane, which has no source", () => {
+// The `SILENT` forms are the query author's own opt-out, and SPARQL 1.1 (Federated
+// Query §3.2 for SERVICE, Update §3.1.4 for LOAD) requires them to succeed with nothing
+// fetched when the invocation fails — including on this lane, which has no source to
+// reach anything with. This pins both halves beside each other so the prose and the
+// behaviour cannot drift apart again.
+test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
   const ds = Dataset.parse("@prefix ex: <https://example.org/> . ex:a ex:p ex:b .", "turtle");
-  const before = ds.canonicalize();
-  const refusal = (fn) => {
-    try {
-      fn();
-    } catch (error) {
-      return error.message;
-    }
-    assert.fail("expected a refusal");
-  };
 
-  // Without SILENT: a hard failure, because no source is installed.
-  const loud = refusal(() =>
+  // Without SILENT: a hard failure, because no resolver is installed.
+  assert.throws(() =>
     ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"),
   );
-  assert.match(loud, /no remote query source configured for SERVICE <https:\/\/example\.org\/endpoint>$/);
-  // With SILENT: the same refusal, saying why SILENT does not apply — never the local
-  // row joined with an identity no endpoint produced.
-  const silent = refusal(() =>
+
+  // With SILENT: the surrounding pattern's own solutions come back, joined against
+  // the identity — so the local row survives and nothing remote is bound.
+  const json = JSON.parse(
     ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
   );
-  assert.equal(
-    silent,
-    `${loud}; SILENT does not apply: it tolerates an endpoint that fails, and no endpoint was reached — configure a remote query source for it`,
-  );
+  assert.equal(json.results.bindings.length, 1);
+  assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
+  assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
 
   const engine = new QueryEngine();
-  const loudLoad = refusal(() => engine.update(ds, "LOAD <https://example.org/doc>"));
-  assert.match(loudLoad, /native-sparql-load-no-resolver/);
-  const silentLoad = refusal(() => engine.update(ds, "LOAD SILENT <https://example.org/doc>"));
-  assert.match(silentLoad, /^error native-sparql-load-no-resolver: LOAD <https:\/\/example\.org\/doc> needs a GraphResolver host seam, none was provided; SILENT does not apply/);
-  assert.equal(ds.canonicalize(), before, "nothing was applied");
-  // The instance is intact: an ordinary query answers.
-  assert.equal(JSON.parse(ds.query("SELECT * WHERE { ?s ?p ?o }")).results.bindings.length, 1);
+  const before = ds.canonicalize();
+  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
+  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
+  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 });
 
 // How deep a request may nest is bounded by the stacks it runs on, not by a fixed count.

@@ -732,24 +732,19 @@ pub fn update_eval_options(env: &purrdf_sparql_eval::ExtensionEnv) -> QueryOptio
 /// The `LOAD` source every update case runs with: the network the suite assumes, in which
 /// no document can be fetched. The suite's `LOAD` cases name a source that does not
 /// exist (`load-silent` loads `somescheme://www.example.com/THIS-GRAPH-DOES-NOT-EXIST/`)
-/// and expect `LOAD SILENT` to succeed with nothing loaded, which is the source failing
-/// — `native-sparql-load-failed`, the failure `SILENT` tolerates. Running with no
-/// resolver at all would be a different claim, that the engine was given nowhere to
-/// fetch from, which `SILENT` does not swallow.
+/// and expect `LOAD SILENT` to succeed with nothing loaded, which is the fetch failing at
+/// the transport, as the network would.
 struct OfflineLoadResolver;
 
 impl purrdf_sparql_eval::GraphResolver for OfflineLoadResolver {
     fn resolve(
         &self,
         request: purrdf_sparql_eval::GraphResolveRequest<'_>,
-    ) -> Result<Arc<RdfDataset>, purrdf_core::RdfDiagnostic> {
-        Err(purrdf_core::RdfDiagnostic::error(
-            "native-sparql-load-failed",
-            format!(
-                "<{}> cannot be fetched: the conformance harness has no network",
-                request.iri
-            ),
-        ))
+    ) -> Result<Arc<RdfDataset>, purrdf_sparql_eval::LoadError> {
+        Err(purrdf_sparql_eval::LoadError::Transport(format!(
+            "<{}> cannot be fetched: the conformance harness has no network",
+            request.iri
+        )))
     }
 }
 

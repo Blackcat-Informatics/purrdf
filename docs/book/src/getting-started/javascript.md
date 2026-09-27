@@ -101,7 +101,9 @@ More on the RDF/JS mapping in [RDF/JS in JavaScript](../interop/rdfjs.md).
 ## Asynchronous queries and federation
 
 The synchronous methods are the offline lane: they install no `SERVICE` or
-`LOAD` source, so a `SERVICE` or `LOAD` fails by name, `SILENT` or not. Every
+`LOAD` source, so a `SERVICE` or `LOAD` fails by name unless written `SILENT`,
+which succeeds with nothing fetched, as SPARQL 1.1 requires for an invocation
+that fails. Every
 evaluating method also has a Promise-returning twin — `queryAsync`,
 `selectAsync`, `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
 `queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
@@ -150,9 +152,10 @@ the catalog profile's headers and credential as `[name, value]` pairs in sending
 order. `ctx` carries `signal` (fires on cancellation or the deadline),
 `remainingDeadlineMs`, `silent` and `maxIntermediateCells`. The handler answers
 with SPARQL Results JSON (bytes or a string), a `Response` (a non-2xx status is a
-transport failure), `{ kind: "transport", message }` — which `SERVICE SILENT`
-swallows to the join identity — or `{ kind: "denied", message }`, which fails
-the query even under `SILENT`. A handler that throws, rejects or returns
+transport failure), `{ kind: "transport", message }` or
+`{ kind: "denied", message }`. Either fails the query; under `SERVICE SILENT`
+either is the join identity, and the evidence's `silenced` records the endpoint
+and the failure's `kind`. A handler that throws, rejects or returns
 anything else has faulted, and a fault fails the job even under `SERVICE
 SILENT`, because it is not an answer. `ctx.silent` is for information only: an
 empty answer is not the handler's to invent.
@@ -201,11 +204,11 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 
 A `ServiceCatalog` passed as `catalog` authorizes every request before the
 handler is called (deny by default, one profile per endpoint, an optional
-fallback); a denial fails the query even under `SERVICE SILENT`.
-`localServices` answers named endpoints in process from a `Dataset`.
+fallback); a denial fails the query, and under `SERVICE SILENT` is the join
+identity. `localServices` answers named endpoints in process from a `Dataset`.
 `resolveLoad` answers `LOAD` the same way, with a document and its media type, a
-`Response`, a `Dataset`, or a typed failure: `LOAD SILENT` swallows a transport
-failure and never a denial.
+`Response`, a `Dataset`, or a typed failure: either failure fails the request,
+and `LOAD SILENT` succeeds over it with nothing loaded.
 
 In a browser, the remote endpoint's CORS policy governs whether `fetch` can
 read its answer: an endpoint that does not allow the page's origin surfaces as a
@@ -229,15 +232,19 @@ side, which need not bind it), the right side is still evaluated on its own, the
 left side supplies only the list of endpoints to ask, and each distinct IRI is
 asked once. A left row whose endpoint answers nothing keeps its bindings under
 `OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an endpoint
-that fails contributes one row binding only `?e`, so its own left rows survive
-unextended and no other endpoint's rows change. An `?e` bound to a literal or
-a blank node names no endpoint and is refused, `SILENT` or not. A clause for
+that fails is the join identity for its own left rows alone: under a group join
+or `OPTIONAL` it contributes one row binding only `?e`, so its left rows survive
+unextended and no other endpoint's rows change; under `MINUS` the left rows are
+subtracted one endpoint at a time, so it removes none of its own rows while an
+answering endpoint still removes its matches. An `?e` bound to a literal or a
+blank node names no endpoint: an error, and under `SILENT` the join identity for
+its rows. A clause for
 which no solution
 binds `?e` — bound nowhere, bound in only some left solutions, or bound only
 outside a further `OPTIONAL` or `MINUS` right side, an `EXISTS`, a
 `LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-`SELECT` that does
-not project it — is refused, `SILENT` or not: `SILENT` tolerates an endpoint
-that fails, not a query that names none. The error names the rewrite: bind `?e`
+not project it — is refused, `SILENT` or not: no invocation is made for `SILENT`
+to absorb. The error names the rewrite: bind `?e`
 before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 
 ### Yielding, cancellation and concurrency
@@ -373,7 +380,7 @@ is the complete reference for these contracts.
 
 - **In-memory only.** SPARQL queries run over the in-memory dataset. The
   synchronous methods install no `SERVICE` or `LOAD` source, so there a remote
-  `SERVICE` or `LOAD` fails explicitly, `SILENT` or not; the
+  `SERVICE` or `LOAD` fails explicitly unless written `SILENT`; the
   asynchronous twins reach remote endpoints only through the handlers the host
   passes them.
 - **Triple terms per format.** `serialize` is the writer-native lane: an
