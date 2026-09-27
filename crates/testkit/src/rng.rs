@@ -165,17 +165,14 @@ mod tests {
         assert_eq!(generator.up_to(0), 0);
     }
 
-    /// Every `#[cfg(test)]` SplitMix64 copy that used to live in
     /// `purrdf-iri`, `purrdf-columnar`, `purrdf-entail` and
-    /// `purrdf-sparql-results` had this exact body — one golden-ratio
-    /// increment and the SplitMix64 finalizer — under different names
-    /// (`splitmix64_next` in three crates, `mix` in the fourth). This test
-    /// pins the first 16 outputs from seed 0 and from
-    /// `0x9E3779B97F4A7C15`, recorded from those copies before they were
-    /// deleted, so a future edit to this module cannot silently change what
-    /// any of those crates' existing tests generate.
+    /// `purrdf-sparql-results` share this exact SplitMix64 body — one
+    /// golden-ratio increment and the SplitMix64 finalizer — through this
+    /// module. This test pins the first 16 outputs from seed 0 and from
+    /// `0x9E3779B97F4A7C15`, so a future edit to this module cannot silently
+    /// change what any of those crates' existing tests generate.
     #[test]
-    fn splitmix64_next_matches_the_deleted_crate_local_copies() {
+    fn splitmix64_next_matches_the_pinned_reference_outputs() {
         const SEED_ZERO: [u64; 16] = [
             0xE220_A839_7B1D_CDAF,
             0x6E78_9E6A_A1B9_65F4,
@@ -221,11 +218,11 @@ mod tests {
         assert_eq!(seed_golden_ratio, SEED_GOLDEN_RATIO);
     }
 
-    /// The self-composed stream `purrdf-core` and `purrdf-sparql-eval` each
-    /// copied under the name `splitmix64_step`, pinned from state
-    /// `0xC057` before their copies were deleted.
+    /// `purrdf-core` and `purrdf-sparql-eval` each use this self-composed
+    /// stream under the name `splitmix64_step`. This test pins its output
+    /// from state `0xC057`.
     #[test]
-    fn splitmix64_step_matches_the_deleted_crate_local_copies() {
+    fn splitmix64_step_matches_the_pinned_reference_outputs() {
         const FROM_0XC057: [u64; 16] = [
             0x1C22_A3B7_31BC_110E,
             0x5973_9F6F_16CD_4B42,

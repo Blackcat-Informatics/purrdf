@@ -109,12 +109,11 @@ IPv6address or IPvFuture production, rather than a permissive character bag.
 
 ## The host differential table
 
-`host_differential_vectors.txt` freezes the verdicts of the two address
-parsers `purrdf-jsonschema` once carried for its `ipv4` format (the RFC 2673
-§3.2 dotted quad) and its `ipv6` format (the RFC 4291 §2.2 text form), a second
-address parser beside the one this crate validates IP literals with. Both
-formats now call `purrdf_iri::host::is_ipv4_address` and
-`purrdf_iri::host::is_ipv6_address`, and the old parsers are deleted.
+`host_differential_vectors.txt` freezes verdicts for RFC 3986 §3.2.2
+`IPv4address` (equivalently, RFC 2673 §3.2's dotted quad) and `IPv6address`
+(equivalently, RFC 4291 §2.2's text form) membership — the same productions
+`purrdf-jsonschema`'s `ipv4` and `ipv6` format checks decide by calling
+`purrdf_iri::host::is_ipv4_address` and `purrdf_iri::host::is_ipv6_address`.
 
 * **What was taken.** Their `accept`/`reject` answers, and nothing else. They
   were first-party code, and none of it was carried into `host`: the
