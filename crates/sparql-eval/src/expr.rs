@@ -9709,9 +9709,17 @@ mod tests {
             &VarSchema::new(),
             &mut ctx,
         );
+        // The failure names which way the call went rather than printing its value:
+        // the value comes out of a query evaluation whose truncation record static
+        // analysis reads as a credential, and the shape is the diagnostic that matters.
         assert!(
             matches!(answer, Ok(Some(_))),
-            "a registered custom function can answer for an unbound argument: {answer:?}"
+            "a registered custom function can answer for an unbound argument, but it {}",
+            match &answer {
+                Ok(Some(_)) => "answered",
+                Ok(None) => "answered no value",
+                Err(_) => "was refused",
+            }
         );
         assert!(
             !crate::property_fn_plan::strict_in_argument(&custom, 0),

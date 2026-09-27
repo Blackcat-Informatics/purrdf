@@ -3539,20 +3539,20 @@ pub fn graph_entails_to_string(
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
-    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
+    let entailment = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
         .map_err(|error| render_entail_error(regime, &error))?;
     Ok(ReasoningAnswer {
-        answer: render_entailment_answer(&certificate),
-        certificate: render_reasoning_report(certificate.report()),
+        answer: render_entailment_answer(&entailment),
+        certificate: render_reasoning_report(entailment.report()),
         proof: None,
     })
 }
 
 /// The `mechanism`/`entailment`/evidence block shared by [`graph_entails_to_string`] and
 /// [`verify_entailment_to_string`].
-fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
-    let mut answer = render_mechanism(certificate.mechanism());
-    match certificate.outcome() {
+fn render_entailment_answer(entailment: &EntailmentCertificate) -> String {
+    let mut answer = render_mechanism(entailment.mechanism());
+    match entailment.outcome() {
         EntailmentOutcome::Entailed(warrant) => {
             answer.push_str("entailment entailed\n");
             // A COMPOSITE names its constituents, in the fixed cost order the fold tried them.
@@ -3644,10 +3644,10 @@ pub fn verify_entailment_to_string(
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
-    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
+    let entailment = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
         .map_err(|error| render_entail_error(regime, &error))?;
-    let mut answer = render_entailment_answer(&certificate);
-    match certificate.warrant() {
+    let mut answer = render_entailment_answer(&entailment);
+    match entailment.warrant() {
         Some(warrant) => {
             answer.push_str("warrant present\n");
             let _ = writeln!(
@@ -3663,7 +3663,7 @@ pub fn verify_entailment_to_string(
     }
     Ok(ReasoningAnswer {
         answer,
-        certificate: render_reasoning_report(certificate.report()),
+        certificate: render_reasoning_report(entailment.report()),
         proof: None,
     })
 }
