@@ -5,7 +5,8 @@
 //! harness that runs them — the library harness (`w3c12_conformance.rs`) and the
 //! command-line harness in `purrdf-cli`, which runs the same entries through the built
 //! binary — so the two cannot mean different things by "the output agrees", and the
-//! upstream errata are one table, not two.
+//! entries whose approved result spells a decimal non-canonically are one table, not
+//! two.
 //!
 //! The output must equal the `mf:result` list TERM FOR TERM (RDF 1.2 term equality:
 //! lexical form, datatype, language and direction), in order unless the entry sets
@@ -24,28 +25,32 @@ use purrdf_shapes::term::{Literal, Term};
 pub(crate) const DECIMAL_CANONICAL_MAP: &str = "XSD 1.1 Part 2 §3.3.3.1 + §E.1 decimalCanonicalMap: \
      an integer-valued xsd:decimal maps through noDecimalPtCanonicalMap (no decimal point)";
 
-/// UPSTREAM ERRATA: node-expression entries whose W3C expected literal is NOT in
-/// the canonical lexical form XSD 1.1 Part 2 assigns its value: `(test id,
-/// expected lexical, XSD 1.1 canonical lexical, canonical-mapping clause)`.
+/// NON-CANONICAL EXPECTED DECIMALS: node-expression entries whose approved result
+/// spells a computed `xsd:decimal` in a lexical form that is not its XSD 1.1 canonical
+/// form: `(test id, expected lexical, XSD 1.1 canonical lexical, canonical-mapping
+/// clause)`.
 ///
-/// Each expects an integer-valued `xsd:decimal` spelled the XSD 1.0 way (`"4.0"`,
-/// `"00"`); PurRDF emits the XSD 1.1 canonical form (`"4"`, `"0"`), as the
+/// The expected VALUE is correct in every entry. Each is an integer-valued decimal the
+/// approved result spells `"4.0"`, `"3.0"`, `"42.0"` or `"00"`, where the XSD 1.1
+/// canonical form is `"4"`, `"3"`, `"42"` or `"0"`. (`"00"` is the canonical form in
+/// neither XSD 1.1 nor XSD 1.0, whose canonical decimal zero is `"0.0"`.) The suite says
+/// the output must be "equal" to the expected result without saying whether that means
+/// term equality or value equality. PurRDF emits the XSD 1.1 canonical form, as the
 /// approved W3C SPARQL suite itself expects of CEIL, FLOOR, ROUND and SECONDS
-/// (`functions#ceil01`, `floor01`, `round01`, `seconds` expect `"3"`, `"2"`,
-/// `"1"`, `"0"`). These entries are therefore NOT passes of the approved suite:
-/// each harness reports them under their own `upstream-errata` label, pinned by
-/// [`NON_CANONICAL_EXPECTATIONS_COUNT`], and grades each one exactly as follows.
+/// (`functions#ceil01`, `floor01`, `round01`, `seconds` expect `"3"`, `"2"`, `"1"`,
+/// `"0"`).
 ///
-/// RDF 1.2 literal equality compares lexical forms, and PurRDF emits canonical
-/// forms, so an expectation spelled non-canonically can never be met by a
-/// canonical engine — and it is not relaxed by comparing VALUES instead, which
-/// would equally accept a genuinely non-canonical engine output. Each entry
-/// instead swaps the one expected lexical form for its canonical form and grades
-/// the output against THAT, exactly. The table is checked in both directions:
-/// `w3c12_conformance::non_canonical_expectations_are_really_non_canonical` proves each expected
-/// form is non-canonical and that the stated canonical form is what the XSD 1.1
-/// canonical mapping produces, and each harness proves the engine's output equals
-/// the canonical form term for term.
+/// Each entry is graded by substituting the canonical spelling for the expected one and
+/// comparing the output against THAT, term for term. For these six, where the two
+/// spellings name the same value, that is exactly value comparison; it is not a general
+/// relaxation to value equality, which would also accept a non-canonical engine output.
+/// They are counted on their own scoreboard line, `non-canonical-expected-decimal`,
+/// pinned by [`NON_CANONICAL_EXPECTATIONS_COUNT`], and never among the passes of the
+/// approved suite as written. The table is checked in both directions:
+/// `w3c12_conformance::non_canonical_expectations_are_really_non_canonical` proves each
+/// expected form is non-canonical and that the stated canonical form is what the XSD 1.1
+/// canonical mapping produces, and each harness proves the engine's output equals the
+/// canonical form term for term.
 pub(crate) const NON_CANONICAL_EXPECTATIONS: &[(&str, &str, &str, &str)] = &[
     (
         "node-expr/shnex-sparql/ceil-example",

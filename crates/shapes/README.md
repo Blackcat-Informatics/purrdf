@@ -108,9 +108,9 @@ as DASH, which declares `sh:JSValidator`s beside SPARQL ones, can be imported.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
-tests) runs, and of the 544 an upstream manifest lists, 537 pass as approved,
-6 are upstream errata and 1 is refused for an unresolvable import, with an
-empty expected-failure ledger:
+tests) runs, and of the 544 an upstream manifest lists, 538 pass as approved
+and 6 are counted apart as non-canonical expected decimals, with an empty
+expected-failure ledger:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
@@ -123,10 +123,16 @@ them, `core/node/xone-003`, is graded with one amendment that quotes its clause
 results carry the value node as `sh:value`, as the approved
 `core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
 names both the triple term and the reifier `t`); a non-conforming reifier's own
-results ride along as `sh:detail`. Six node-expression tests are upstream errata,
-reported apart from the passes: each expects a non-canonical `xsd:decimal`
-lexical form and is graded exactly against the XSD 1.1 canonical form, which
-PurRDF emits. SPARQL
+results ride along as `sh:detail`. In six node-expression tests the approved
+result spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`,
+`"42.0"`, `"00"` for the XSD 1.1 canonical `"4"`, `"3"`, `"42"`, `"0"`); the
+expected value is correct, and the suite does not say whether "equal" means term
+or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six by
+substituting the canonical spelling, which for them equals value comparison. They
+are counted apart from the passes. `sparql/component/validator-001` imports DASH;
+the harness supplies the vendored document served at its IRI (`vectors/dash/`)
+and the W3C SHACL 1.2 vocabulary DASH imports through the import table, and the
+case passes by name. SPARQL
 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
 `data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
 well; `docs/CONFORMANCE.md` has the live numbers.

@@ -158,8 +158,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `expr_turtle` between `expr` and `focus`, with `expr` nullable. All 143
   W3C SHACL 1.2 `sht:EvalNodeExpr` tests run through the `purrdf node-expr`
   binary, each entry's expression named by the walk `mf:action` then
-  `sht:nodeExpr`. The six upstream errata are graded by the same table the
-  library harness applies.
+  `sht:nodeExpr`. The six entries whose approved result spells a computed
+  decimal non-canonically are graded by the same table the library harness
+  applies.
 - **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
   pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
   it: each normal character and character range gains its variants, and every
@@ -754,17 +755,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   are vendored byte-exact under `vectors/shacl12/` by `scripts/vendor-shacl12.py` and
   frozen by SHA-256 manifests. The new harness
   (`crates/shapes/tests/w3c12_conformance.rs`) runs every test type through the
-  library API. Of the 544 entries an upstream manifest lists, 537 pass as approved,
-  6 are upstream errata (non-canonical `xsd:decimal` expectations, graded exactly
-  against the XSD 1.1 canonical form) and 1 is an exact expected refusal of an
-  unresolvable import (`validator-001`, which imports DASH); the expected-failure
-  ledger is empty. The 3 entries of vendored files no manifest includes are graded
+  library API. Of the 544 entries an upstream manifest lists, 538 pass as approved
+  and 6 are counted apart as non-canonical expected decimals: the approved result
+  spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`, `"42.0"`,
+  `"00"`) where the expected value is correct, and they are graded by substituting
+  the XSD 1.1 canonical spelling, which for these six equals value comparison.
+  `validator-001` imports DASH, which imports the SHACL namespace: the harnesses of
+  both suites supply the document served at the DASH IRI, vendored under
+  `vectors/dash/` by `scripts/vendor-dash.py` and digest-pinned, and the W3C SHACL
+  1.2 vocabulary through the import table, and the case passes by name in both
+  (129 / 129 in the SHACL 1.0 suite). The expected-failure ledger is empty. The 3 entries of vendored files no manifest includes are graded
   and reported apart. The matrix gains a SHACL 1.2 row and a row for the unlisted
   files, and the prepared-product equivalence row now covers the SHACL 1.2
-  `sht:Validate` entries (362 shapes graphs). Beside it,
+  `sht:Validate` entries (364 shapes graphs). Beside it,
   `vocabulary_import_invariance.rs` proves that merging the vocabularies changes no
   report, `shacl_shacl_differential.rs` holds the parser's refusals to the verdicts
-  of `shacl-shacl.ttl` over 375 shapes graphs and 683 generated mutants,
+  of `shacl-shacl.ttl` over 376 shapes graphs and 724 generated mutants,
   `node_expr_reference.rs` compares the evaluator with a clause-by-clause reference
   interpreter over 2048 generated cases, and `scripts/check-shapes-parser-drops.py`
   (in `make check` and CI) forbids the parser patterns that dropped terms silently.

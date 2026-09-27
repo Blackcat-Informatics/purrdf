@@ -8,8 +8,9 @@
 //! (`crates/shapes/tests/shacl_corpora`, included here by path), with its drift guards:
 //! the discovered total and per-type counts are asserted before anything runs. Grading is
 //! its own `sht:EvalNodeExpr` grader (`shacl_corpora::node_expr_grading`): exact RDF 1.2
-//! term equality, in order unless `sht:ignoreOrder true`, with the one upstream errata
-//! table applied exactly as the library harness applies it.
+//! term equality, in order unless `sht:ignoreOrder true`, with the one table of entries
+//! whose approved result spells a decimal non-canonically applied exactly as the
+//! library harness applies it.
 //!
 //! Each entry's expression is an anonymous `[ … ]` node (or a constant) that no caller
 //! could label, so it is named the way the manifest itself names it: from the entry,
@@ -130,19 +131,21 @@ fn every_w3c_node_expression_runs_through_the_cli() {
     );
 
     let mut passed = 0usize;
-    let mut errata = 0usize;
+    let mut noncanonical = 0usize;
     let mut errors: Vec<String> = Vec::new();
     for (id, tc) in &node_expr {
         let entry_iri = format!("{root_iri}/{id}");
         match run_case(id, &entry_iri, tc) {
-            Ok(()) if NON_CANONICAL_EXPECTATIONS.iter().any(|(e, ..)| e == id) => errata += 1,
+            Ok(()) if NON_CANONICAL_EXPECTATIONS.iter().any(|(e, ..)| e == id) => {
+                noncanonical += 1;
+            }
             Ok(()) => passed += 1,
             Err(e) => errors.push(format!("FAIL [{id}]: {e}")),
         }
     }
     println!(
         "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, \
-         upstream-errata {errata}, failed {}",
+         non-canonical-expected-decimal {noncanonical}, failed {}",
         errors.len()
     );
     assert!(
@@ -152,13 +155,14 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         errors.join("\n\n")
     );
     assert_eq!(
-        errata, NON_CANONICAL_EXPECTATIONS_COUNT,
-        "every upstream erratum is reported as one, and nothing else is"
+        noncanonical, NON_CANONICAL_EXPECTATIONS_COUNT,
+        "every entry with a non-canonical expected decimal is counted as one, and nothing \
+         else is"
     );
     assert_eq!(
-        passed + errata,
+        passed + noncanonical,
         NODE_EXPR_CASES,
-        "every entry is a pass or an upstream erratum"
+        "every entry is a pass or a non-canonical expected decimal"
     );
 }
 

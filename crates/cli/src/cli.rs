@@ -1378,7 +1378,7 @@ pub(crate) enum ShapesCommand {
     /// Certify a shapes graph, COLD: everything PurRDF can say about it before any data is
     /// validated, in one deterministic report.
     ///
-    /// Four sections. `load`: the loader's own verdict — accepted, or the refusal it
+    /// Five sections. `load`: the loader's own verdict — accepted, or the refusal it
     /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, …).
     /// `shacl-shacl`: every result of validating the shapes graph, as data, against the
     /// W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs; a result SHACL 1.2
@@ -1388,13 +1388,17 @@ pub(crate) enum ShapesCommand {
     /// `native`, `custom`, `sparql-registered` or `host-extension`. `validators`: every
     /// validator the graph declares for a built-in constraint component (a vocabulary
     /// such as DASH gives SHACL Core components SPARQL validators), which the native
-    /// implementation supersedes and never runs; never a finding.
+    /// implementation supersedes and never runs; never a finding. `inert`: every defect of
+    /// a declaration no shape reaches — an ill-formed validator of a built-in component or
+    /// of a component no shape uses, an ill-formed `sh:SPARQLFunction` nothing calls —
+    /// which the load accepts; each is a finding.
     ///
     /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
     /// on request.
     ///
     /// Exit codes follow `shacl verify`, the other certify verb: **0** when the report is
-    /// clean — the loader accepted the graph and every `shacl-shacl` result is superseded.
+    /// clean — the loader accepted the graph, every `shacl-shacl` result is superseded and
+    /// no unreached declaration is defective.
     /// **1** when it carries a finding, and for a document that does not parse or an
     /// `owl:imports` no `--import` resolves; the report is still written when there is one.
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`

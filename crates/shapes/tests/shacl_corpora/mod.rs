@@ -43,8 +43,9 @@
 //!   `sht:Validate` entry parser, adding the 1.2 test types.
 //! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
 //!   asserts none, so both W3C harnesses grade a validation case identically.
-//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the upstream
-//!   errata table, shared by the library harness and the command-line harness.
+//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the table of
+//!   entries whose approved result spells a decimal non-canonically, shared by the
+//!   library harness and the command-line harness.
 
 #![allow(
     dead_code,
@@ -345,61 +346,68 @@ pub(crate) fn norm(t: &Term) -> String {
 
 // ── The vendored suites' owl:imports ─────────────────────────────────────────
 
-/// DASH, the TopBraid vocabulary the vendored W3C `sparql/component/validator-001`
+/// DASH, the TopQuadrant library the vendored W3C `sparql/component/validator-001`
 /// cases (SHACL 1.0 and SHACL 1.2) import.
 pub(crate) const DASH: &str = "http://datashapes.org/dash";
 
-/// The imports no document can be supplied for, so a case that imports one is an
-/// EXPECTED REFUSAL rather than a validation.
-///
-/// DASH cannot be supplied as it is published, because it is not well-formed
-/// SHACL: it gives `sh:validator` values that are `sh:JSValidator`s, where SHACL 1.2
-/// SPARQL Extensions §4.2.3 says "The values of sh:validator must be ASK-based
-/// validators", and `dash:uriTemplate` declares a parameter named `value`, which
-/// §4.2.1 forbids. Its shapes would also change the case's verdict. A stand-in
-/// document would be a fabricated ontology. PurRDF fetches nothing and refuses a
-/// shapes graph whose imports closure is not in hand, so the honest grade of such a
-/// case is that refusal, exactly.
-pub(crate) const UNRESOLVABLE_IMPORTS: &[&str] = &[DASH];
+/// The SHACL namespace, which DASH imports.
+pub(crate) const SHACL_NAMESPACE: &str = "http://www.w3.org/ns/shacl#";
 
-/// The vendored W3C cases whose shapes graph imports an [`UNRESOLVABLE_IMPORTS`]
-/// ontology: `(case id, the imports it must be refused for)`. The same id names the
-/// case in the SHACL 1.0 and the SHACL 1.2 suite. Each is graded by
-/// [`report_grading::grade_refused_import`] as an exact expected refusal and
-/// reported as "refused: unresolvable import" — never as a pass.
-pub(crate) const REFUSED_UNRESOLVABLE_IMPORT: &[(&str, &[&str])] =
-    &[("sparql/component/validator-001", &[DASH])];
+/// The document served at [`DASH`], vendored by `scripts/vendor-dash.py`.
+pub(crate) const DASH_DOCUMENT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/dash/dash.ttl");
 
-/// The expected refusal of `id`, if it is one.
-pub(crate) fn refused_import(id: &str) -> Option<&'static [&'static str]> {
-    REFUSED_UNRESOLVABLE_IMPORT
-        .iter()
-        .find(|(case, _)| *case == id)
-        .map(|(_, iris)| *iris)
+/// The W3C SHACL 1.2 vocabulary, vendored by `scripts/vendor-shacl12.py`: the document
+/// that declares [`SHACL_NAMESPACE`] an ontology.
+pub(crate) const SHACL_VOCABULARY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../vectors/shacl12/vocabularies/shacl.ttl"
+);
+
+/// The document the harness supplies for an `owl:imports` of `iri`, if it supplies one.
+fn supplied_document(iri: &str) -> Option<&'static str> {
+    match iri {
+        DASH => Some(DASH_DOCUMENT),
+        SHACL_NAMESPACE => Some(SHACL_VOCABULARY),
+        _ => None,
+    }
 }
 
 /// The import table a vendored W3C case's shapes graph loads with: for every
-/// `owl:imports` the graph does not already resolve itself, the document the harness
-/// supplies for it.
+/// `owl:imports` in its closure that the graph does not already resolve itself, the
+/// vendored document the harness supplies for it.
 ///
 /// PurRDF refuses a shapes graph whose imports closure is not in hand. A harness is a
-/// caller like any other, so it resolves imports the way a caller does: by supplying a
-/// document. The prefix idiom the suites use (`owl:imports` of a node the case describes
-/// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. An
-/// [`UNRESOLVABLE_IMPORTS`] ontology is left unresolved on purpose, so the load refuses
-/// it. Any other import panics: a newly vendored case with an import has to be resolved
-/// here on purpose, not skipped.
+/// caller like any other, so it resolves imports the way a caller does: by supplying
+/// documents through the production import table ([`ShapesImports`]). The closure is
+/// followed to its end — DASH itself imports the SHACL namespace — and a document is
+/// supplied only for an import the closure reaches, since the table refuses one nothing
+/// imports. The prefix idiom the suites use (`owl:imports` of a node the case describes
+/// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. Any
+/// other import panics: a newly vendored case with an import has to be resolved here on
+/// purpose, not skipped.
 pub(crate) fn w3c_case_imports(dataset: &RdfDataset) -> ShapesImports {
-    let imports = ShapesImports::new();
-    for iri in imports.import_map().unresolved_imports(dataset) {
-        assert!(
-            UNRESOLVABLE_IMPORTS.contains(&iri.as_str()),
-            "a vendored case owl:imports <{iri}>, which the harness does not supply a \
-             document for; resolve it in `w3c_case_imports` or, if no document can be \
-             supplied, list it in UNRESOLVABLE_IMPORTS"
-        );
+    let mut imports = ShapesImports::new();
+    loop {
+        let unresolved = imports.import_map().closure(dataset).unresolved().to_vec();
+        if unresolved.is_empty() {
+            return imports;
+        }
+        for iri in unresolved {
+            let path = supplied_document(&iri).unwrap_or_else(|| {
+                panic!(
+                    "a vendored case's owl:imports closure reaches <{iri}>, which the harness \
+                     does not supply a document for; vendor it and resolve it in \
+                     `supplied_document`"
+                )
+            });
+            let turtle = fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("cannot read the vendored document {path}: {e}"));
+            imports
+                .insert_turtle(&iri, &turtle)
+                .unwrap_or_else(|e| panic!("the vendored document for <{iri}> loads: {e}"));
+        }
     }
-    imports
 }
 
 pub(crate) fn file_iri(path: &Path) -> String {

@@ -112,10 +112,10 @@ Two of the terms the engine evaluates need a note:
 Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
-The W3C SHACL 1.0 `data-shapes` suite passes as approved (128/129, zero ledgered
-gaps at the time of writing; the other case is refused for an import no
-document can be supplied for), and so does the approved W3C SHACL 1.2 suite
-apart from its upstream errata and that same refused case (537/544); the live
+The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero ledgered
+gaps at the time of writing), and so does the approved W3C SHACL 1.2 suite apart
+from six entries whose approved result spells a decimal non-canonically, which are
+counted on their own line (538/544); the live
 numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
@@ -348,9 +348,9 @@ The complete W3C `shacl12-test-suite` is vendored byte-exact under
 `vectors/shacl12/` and run through the library API: 547 tests, covering 174
 `sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203
 SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
-upstream manifest lists 544 of them. Of those, 537 pass as approved, 6 are
-upstream errata and 1 is refused for an unresolvable import, all described
-below, and the expected-failure ledger is empty. The other 3 are entries of
+upstream manifest lists 544 of them. Of those, 538 pass as approved and 6 are
+counted apart because their approved result spells a decimal non-canonically, as
+described below, and the expected-failure ledger is empty. The other 3 are entries of
 vendored files that no manifest includes, and they are reported apart. A
 negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
 an earlier one.
@@ -361,7 +361,7 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
 The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 537, upstream-errata 6, refused-unresolvable-import 1, xfailed 0, ledger 0`,
+`W3C12 TOTAL: passed 538, non-canonical-expected-decimal 6, xfailed 0, ledger 0`,
 and the unlisted files' own line is
 `W3C12 UNLISTED: passed 3, exact 2, with-delta 1, total 3`.
 
@@ -391,26 +391,30 @@ non-conforming reifier also carries the reifier's own validation results as
 the reifier and says why it fails. A missing reification has no reifier and
 carries no details.
 
-Six node-expression tests expect an integer-valued `xsd:decimal` in a lexical
-form that is not canonical, such as `"4.0"` or `"00"`. XSD 1.1 Part 2 (section
-3.3.3.1 and the `decimalCanonicalMap` of E.1) makes the canonical form `"4"`
-and `"0"`, which is also what the approved W3C SPARQL tests `ceil01`,
-`floor01`, `round01` and `seconds` expect. PurRDF emits canonical forms. These
-six are upstream errata, not passes: the harness reports them under their own
-label, and grades each one exactly against the canonical form, not by
-comparing values.
+In six node-expression tests the approved result spells a computed
+`xsd:decimal` in a lexical form that is not canonical: `"4.0"`, `"3.0"`,
+`"42.0"` and `"00"`, where XSD 1.1 Part 2 (section 3.3.3.1 and the
+`decimalCanonicalMap` of E.1) makes the canonical form `"4"`, `"3"`, `"42"` and
+`"0"`. (`"00"` is canonical in neither XSD 1.1 nor XSD 1.0, whose canonical
+decimal zero is `"0.0"`.) The expected value is correct in each, and the suite
+says the results must be "equal" without saying whether that is term or value
+equality. PurRDF emits the XSD 1.1 canonical form, which is also what the
+approved W3C SPARQL tests `ceil01`, `floor01`, `round01` and `seconds` expect.
+The harness grades these six by substituting the canonical spelling for the
+expected one and comparing term for term, which for these six is the same as
+comparing values. They are counted on their own line,
+`non-canonical-expected-decimal`, not among the passes.
 
 `sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
-imports DASH (`<http://datashapes.org/dash>`). No document can be supplied for
-it. DASH is not well-formed SHACL: some of its `sh:validator` values are
-`sh:JSValidator`s, but SHACL 1.2 SPARQL Extensions section 4.2.3 says "The
-values of sh:validator must be ASK-based validators". Its `dash:uriTemplate`
-also declares a parameter named `value`, which section 4.2.1 forbids. Its
-shapes would also change the verdict. PurRDF fetches nothing and refuses an
-unresolved import. So the case is graded as an exact expected refusal: loading
-must fail with `ShapesImportError::Unresolved` naming exactly that IRI, and a
-load that succeeds is a failure. The case is reported as "refused: unresolvable
-import", never as a pass.
+imports DASH (`<http://datashapes.org/dash>`), and DASH imports the SHACL
+namespace. PurRDF fetches nothing, so the harness supplies both documents
+through the import table, exactly as a caller would: the document served at the
+DASH IRI, vendored and digest-pinned under `vectors/dash/`, and the vendored
+W3C SHACL 1.2 vocabulary. The case then passes by name. Some DASH declarations
+are not well-formed SHACL 1.2, such as an ASK validator under
+`sh:nodeValidator` and a `sh:SPARQLFunction` parameter named `value`. No shape
+of the case reaches them, so the load accepts them as inert defects, and
+`purrdf shapes lint` reports each as a finding.
 
 SPARQL 1.2 RL grammar rule [2],
 `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is

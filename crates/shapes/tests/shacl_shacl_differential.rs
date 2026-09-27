@@ -71,7 +71,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        234,
+        236,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -110,15 +110,6 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "the pre-binding restrictions of SHACL 1.2 SPARQL Extensions, Appendix A (no MINUS, \
          VALUES or SERVICE, no assignment to a pre-bound variable, subqueries project it) are \
          rules about SPARQL text, which shacl-shacl.ttl does not parse",
-    ),
-    (
-        "unresolved-import",
-        "unresolved-import: the shapes graph's owl:imports closure names <http://datashapes.org/dash>",
-        2,
-        "sparql/component/validator-001, in the SHACL 1.0 and the SHACL 1.2 suite, imports \
-         DASH, which no document is supplied for: PurRDF fetches nothing and refuses a shapes \
-         graph whose owl:imports closure is not in hand, where shacl-shacl.ttl reads only the \
-         graph it is given. Both conformance harnesses grade exactly this refusal",
     ),
     (
         "sparql-constraint-severity",
@@ -487,8 +478,8 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 376;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 192 literal-for-IRI, 101
-/// non-integer counts, 157 lists-for-single-values, 35 non-boolean flags and 235
+/// mutation kind that finds a statement to rewrite): 193 literal-for-IRI, 102
+/// non-integer counts, 158 lists-for-single-values, 35 non-boolean flags and 236
 /// misspelled predicates.
 ///
 /// # What some bases contribute
@@ -533,13 +524,16 @@ const BASE_INPUTS: usize = 376;
 ///   list-for-single-value kinds its property shape's `sh:minCount` (2), and the
 ///   property shape gains a misspelled predicate (1, refused under `unknown-term`).
 ///
+/// * `sparql/component/validator-001`, once in each vendored suite, loads with the
+///   vendored DASH document supplied for its import: the list-for-single-value kind
+///   rewrites a parameter declaration's `sh:datatype` (1 each) and its shape gains a
+///   misspelled predicate (1 each, refused under `unknown-term`).
+///
 /// Some bases are not mutated because they are not a base both sides accept:
 /// `equals-002`, `disjoint-002`, `lessThan-003` and `lessThanOrEquals-002` (see
 /// `path-valued-property-pair`) and `targetNode-select-001` (see
-/// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags;
-/// and `sparql/component/validator-001`, once in each vendored suite, whose import
-/// of the DASH document no one supplies PurRDF refuses (see `unresolved-import`).
-const MUTANT_INPUTS: usize = 720;
+/// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags.
+const MUTANT_INPUTS: usize = 724;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -658,9 +652,9 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     let expected_by_kind: BTreeMap<&str, usize> = [
         ("literal-where-an-IRI-is-required", 193),
         ("non-integer-count", 102),
-        ("list-where-a-single-value-is-required", 156),
+        ("list-where-a-single-value-is-required", 158),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 234),
+        (UNKNOWN_TERM, 236),
     ]
     .into_iter()
     .collect();

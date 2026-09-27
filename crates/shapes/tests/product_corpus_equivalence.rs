@@ -139,23 +139,14 @@ const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES + W3C12_VAL
 ///   seven, all under `sparql/pre-binding/`, each carrying a `sh:sparql` body that
 ///   SHACL's pre-binding rules forbid; the SHACL 1.2 suite has
 ///   [`W3C12_DECLARED_FAILURES`];
-/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason; and
-/// * a case both conformance harnesses grade as an EXACT expected refusal of an
-///   unresolvable import (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`):
-///   `sparql/component/validator-001` in the SHACL 1.0 and the SHACL 1.2 suite,
-///   which imports DASH, a document no one supplies.
+/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason.
 ///
 /// So this bucket is not an excuse list, and `Case::refusal_is_declared` enforces
 /// that correspondence case by case rather than trusting the number.
 ///
 /// The count is asserted in addition to the rule, because the rule alone would
 /// be satisfied by a parser that had started refusing NOTHING at all.
-const UNLOADABLE_CASES: usize =
-    7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len() + REFUSED_IMPORT_CASES;
-
-/// The cases, across both vendored suites, graded as an expected refusal of an
-/// unresolvable import: `validator-001` once in each.
-const REFUSED_IMPORT_CASES: usize = 2;
+const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len();
 
 /// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
 /// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
@@ -169,7 +160,7 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
 ///
 /// It is empty: every SHACL 1.2 `sht:Validate` shapes graph that is not a declared
-/// failure or an unresolvable import loads, packs and agrees — including
+/// failure loads, packs and agrees — including
 /// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
 /// regime runs the rules before validation.
 const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[];
@@ -211,15 +202,17 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 ///
 /// # What it counts
 ///
-/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 168 of the
-/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`] and `validator-001`,
-/// whose unresolvable import is graded as a refusal (see
-/// [`REFUSED_IMPORT_CASES`]). The other 194 come from the SHACL 1.0 suite and the
+/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 169 of the
+/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`]. `validator-001`, which
+/// imports DASH, is among them in both suites: its shapes graph is loaded with the
+/// vendored DASH document and SHACL vocabulary supplied through the import table,
+/// and packed and restored as the merged graph. The other 195 come from the SHACL
+/// 1.0 suite and the
 /// first-party corpus. Among them are the first-party case whose shapes graph
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
 /// which the product round trip carries without refusing the function.
-const AGREED_ON_REPORT_CASES: usize = 362;
+const AGREED_ON_REPORT_CASES: usize = 364;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -260,7 +253,7 @@ const AGREED_ON_REPORT_CASES: usize = 362;
 /// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
 /// deactivates) and `property-select-001` (whose computed full name satisfies
 /// `sh:hasValue "John Muir"`).
-const AGREED_WITH_RESULTS_CASES: usize = 341;
+const AGREED_WITH_RESULTS_CASES: usize = 343;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -544,8 +537,7 @@ fn product_corpus_equivalence() {
     for case in w3c_cases() {
         cases.push(Case {
             id: format!("w3c/{}", case.id),
-            refusal_is_declared: matches!(case.expected, Expected::Failure)
-                || shacl_corpora::refused_import(&case.id).is_some(),
+            refusal_is_declared: matches!(case.expected, Expected::Failure),
             loaded: load_w3c(&case),
         });
     }
@@ -563,7 +555,6 @@ fn product_corpus_equivalence() {
         let id = format!("w3c12/{}", case.id);
         cases.push(Case {
             refusal_is_declared: matches!(case.expected, Expected::Failure)
-                || shacl_corpora::refused_import(&case.id).is_some()
                 || W3C12_REFUSED_AT_LOAD
                     .iter()
                     .any(|(ledgered, _)| *ledgered == id),

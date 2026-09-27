@@ -91,17 +91,16 @@ const TOTAL_CASES: usize = 376;
 ///   about `inference-rules/rules-entailment-validation`'s shapes graph, so the
 ///   merge changes no rule and no validation result.
 ///
-/// `sparql/component/validator-001`, once in each vendored suite, is an expected
-/// refusal of an unresolvable import (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`):
-/// the DASH document it imports is not supplied, so it is compared on an identical
-/// load error (see [`DECLARED_REFUSAL_CASES`]).
-const COMPARED_ON_REPORT: usize = 362;
+/// `sparql/component/validator-001`, once in each vendored suite, imports DASH; both
+/// runs load it with the vendored DASH document supplied through the import table
+/// (`shacl_corpora::w3c_case_imports`), and it is compared on a report like every
+/// other case.
+const COMPARED_ON_REPORT: usize = 364;
 
 /// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared
-/// `sht:Failure` inputs, and the 2 expected refusals of an unresolvable import.
-/// With [`COMPARED_ON_REPORT`] they account for every case, so the
-/// refused-at-load gap is 0.
-const DECLARED_REFUSAL_CASES: usize = 14;
+/// `sht:Failure` inputs. With [`COMPARED_ON_REPORT`] they account for every case, so
+/// the refused-at-load gap is 0.
+const DECLARED_REFUSAL_CASES: usize = 12;
 
 /// One case, reduced to what both parses need.
 struct Input {
@@ -110,9 +109,8 @@ struct Input {
     base: Option<String>,
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
-    /// The manifest expects `sht:Failure`, or the conformance harnesses grade the
-    /// case as an expected refusal of an unresolvable import: the two reasons a
-    /// case may be compared on an identical load error rather than on a report.
+    /// The manifest expects `sht:Failure`: the one reason a case may be compared on an
+    /// identical load error rather than on a report.
     declared_failure: bool,
     /// The data graph, parsed once and shared by both runs.
     data: Result<Arc<RdfDataset>, String>,
@@ -183,8 +181,7 @@ fn inputs() -> Vec<Input> {
             base: Some(file_iri(&case.shapes_path)),
             box_role_vocab: None,
             shapes_graph: case.shapes_graph_iri.clone(),
-            declared_failure: matches!(case.expected, Expected::Failure)
-                || shacl_corpora::refused_import(&case.id).is_some(),
+            declared_failure: matches!(case.expected, Expected::Failure),
             data,
         });
     }

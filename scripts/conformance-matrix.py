@@ -232,34 +232,25 @@ def _suite_codec() -> SuiteResult:
 
 def _suite_shacl_w3c() -> SuiteResult:
     """The vendored W3C SHACL 1.0 suite plus the `af/` seam: scrape the harness's
-    own `TOTAL` line. A case graded as an exact expected refusal of an
-    unresolvable import is reported in the XFail/Skip column and named in the
-    detail, never folded into Pass."""
+    own `TOTAL` line. Ledgered xfails are counted in the XFail/Skip column."""
     cmd = [
         "cargo", "test", "-p", "purrdf-shapes", "--locked",
         "--test", "w3c_conformance", "--", "--nocapture",
     ]
     rc, out = _run(cmd, _REPO_ROOT)
     _, _, failed = _cargo_tally(out)
-    m = re.search(
-        r"TOTAL: passed (\d+), refused-unresolvable-import (\d+), xfailed (\d+), "
-        r"ledger (\d+)",
-        out,
-    )
+    m = re.search(r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
     if m:
-        passed, refused, xfailed = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        detail = (
-            f"{passed} pass as approved · {refused} refused: unresolvable import · "
-            f"{xfailed} ledgered"
-        )
+        passed, xfailed = int(m.group(1)), int(m.group(2))
+        detail = f"{passed} pass as approved · {xfailed} ledgered"
         return SuiteResult(
             "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-            passed=passed, xskip=refused + xfailed, failed=0,
+            passed=passed, xskip=xfailed, failed=0,
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _no_scoreboard(
         "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-        "`TOTAL: passed N, refused-unresolvable-import N, xfailed N, ledger N`", cmd, out,
+        "`TOTAL: passed N, xfailed N, ledger N`", cmd, out,
     )
 
 
@@ -277,10 +268,9 @@ def _suite_shacl12_w3c() -> SuiteResult:
 
     Only the APPROVED suite — the entries an upstream manifest lists — is this
     row. Pass is the entries that agree with their approved expectation exactly.
-    Upstream errata (graded exactly against the canonical form of a
-    non-canonical expected literal) and expected refusals of an unresolvable
-    import are counted in the XFail/Skip column and named in the detail, never
-    folded into Pass. The entries of vendored files no manifest includes are
+    The entries whose approved result spells a computed decimal non-canonically
+    (graded by substituting the XSD 1.1 canonical spelling) are counted in the
+    XFail/Skip column and named in the detail, never folded into Pass. The entries of vendored files no manifest includes are
     their own row, `_suite_shacl12_unlisted`."""
     cmd = [
         "cargo", "test", "-p", "purrdf-shapes", "--locked",
@@ -289,25 +279,24 @@ def _suite_shacl12_w3c() -> SuiteResult:
     rc, out = _run(cmd, _REPO_ROOT)
     _, _, failed = _cargo_tally(out)
     m = re.search(
-        r"W3C12 TOTAL: passed (\d+), upstream-errata (\d+), "
-        r"refused-unresolvable-import (\d+), xfailed (\d+), ledger (\d+)",
+        r"W3C12 TOTAL: passed (\d+), non-canonical-expected-decimal (\d+), "
+        r"xfailed (\d+), ledger (\d+)",
         out,
     )
     if m:
-        passed, errata, refused, xfailed = (int(m.group(i)) for i in range(1, 5))
+        passed, noncanonical, xfailed = (int(m.group(i)) for i in range(1, 4))
         detail = (
-            f"{passed} pass as approved · {errata} upstream errata (canonical XSD 1.1 "
-            f"decimal) · {refused} refused: unresolvable import · {xfailed} ledgered"
+            f"{passed} pass as approved · {noncanonical} non-canonical expected decimals "
+            f"(graded by the XSD 1.1 canonical spelling) · {xfailed} ledgered"
         )
         return SuiteResult(
             _SHACL12_NAME, _SHACL12_SOURCE,
-            passed=passed, xskip=errata + refused + xfailed, failed=0,
+            passed=passed, xskip=noncanonical + xfailed, failed=0,
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _no_scoreboard(
         _SHACL12_NAME, _SHACL12_SOURCE,
-        "`W3C12 TOTAL: passed N, upstream-errata N, refused-unresolvable-import N, "
-        "xfailed N, ledger N`",
+        "`W3C12 TOTAL: passed N, non-canonical-expected-decimal N, xfailed N, ledger N`",
         cmd, out,
     )
 
@@ -404,7 +393,7 @@ def _suite_product_equivalence() -> SuiteResult:
             f"{passed}/{total} shapes graphs agree across parse/admit/rebuild; "
             f"{ledgered} refused by the product writer; {unparsable} whose shapes graph "
             "the conformance harnesses require the loader to refuse (a declared "
-            "sht:Failure, or an exact expected refusal of an unresolvable import)"
+            "sht:Failure)"
         )
         return SuiteResult(
             "SHACL prepared-product equivalence",
@@ -1500,11 +1489,8 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         _suite_shacl_w3c,
         (
             _noise("W3C SHACL conformance scoreboard (9 tests):"),
-            _noise(
-                "  core/node                     passed   4  "
-                "refused-unresolvable-import  1  xfailed   1"
-            ),
-            _board("  TOTAL: passed 6, refused-unresolvable-import 1, xfailed 2, ledger 2"),
+            _noise("  core/node                     passed   4  xfailed   1"),
+            _board("  TOTAL: passed 6, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),
@@ -1517,12 +1503,12 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
                 "unlisted vendored files reported apart):"
             ),
             _noise(
-                "  core/node                            passed   4  upstream-errata  1  "
-                "refused-unresolvable-import  1  xfailed   1"
+                "  core/node                            passed   4  "
+                "non-canonical-expected-decimal  1  xfailed   1"
             ),
             _board(
-                "  W3C12 TOTAL: passed 5, upstream-errata 1, "
-                "refused-unresolvable-import 1, xfailed 2, ledger 2"
+                "  W3C12 TOTAL: passed 5, non-canonical-expected-decimal 1, xfailed 2, "
+                "ledger 2"
             ),
             _noise(_CARGO_OK),
         ),

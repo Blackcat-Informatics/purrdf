@@ -114,27 +114,6 @@ fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
     Ok((shapes_dataset, shapes))
 }
 
-/// Grade a case listed in [`super::REFUSED_UNRESOLVABLE_IMPORT`]: loading its shapes
-/// graph must fail with EXACTLY `ShapesImportError::Unresolved` naming exactly
-/// `iris`, in that order. A load that SUCCEEDS is a hard failure — the import was
-/// resolved by something nobody supplied — and so is any other error, which would
-/// be refusing the case for a reason that is not the one it is reported under.
-pub(crate) fn grade_refused_import(tc: &W3cCase, iris: &[&str]) -> Result<(), String> {
-    let (_, loaded) = no_panic(|| load_shapes(tc))?;
-    match loaded {
-        Err(purrdf_shapes::ShapesError::Imports(
-            purrdf_shapes::ShapesImportError::Unresolved { iris: refused },
-        )) if refused.iter().map(String::as_str).eq(iris.iter().copied()) => Ok(()),
-        Err(other) => Err(format!(
-            "expected a refusal of exactly the unresolved imports {iris:?}, got: {other}"
-        )),
-        Ok(_) => Err(format!(
-            "expected a refusal of the unresolved imports {iris:?}, but the shapes graph \
-             LOADED — an import nobody supplied was resolved"
-        )),
-    }
-}
-
 /// Load graphs, run the engine. `Err` carries the parse/validation error.
 pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     let (shapes_dataset, shapes) = load_shapes(tc)?;

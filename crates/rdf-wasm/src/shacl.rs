@@ -673,8 +673,9 @@ pub struct ShaclLintReport {
 
 #[wasm_bindgen]
 impl ShaclLintReport {
-    /// Whether the report carries no finding: the loader accepted the graph and every
-    /// `shacl-shacl.ttl` result is superseded (flagged there, well-formed SHACL 1.2 Core).
+    /// Whether the report carries no finding: the loader accepted the graph, every
+    /// `shacl-shacl.ttl` result is superseded (flagged there, well-formed SHACL 1.2 Core)
+    /// and no declaration no shape reaches is defective.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn clean(&self) -> bool {
@@ -682,7 +683,7 @@ impl ShaclLintReport {
     }
 
     /// The finding count: one for a load refusal, plus every `shacl-shacl.ttl` result no
-    /// supersession covers.
+    /// supersession covers, plus every defect of a declaration no shape reaches.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn findings(&self) -> usize {
@@ -698,9 +699,10 @@ impl ShaclLintReport {
 
     /// The whole report as the deterministic text every PurRDF host prints: the `load`,
     /// `shacl-shacl` (`result …` lines, `superseded NAME` where SHACL 1.2 Core makes the
-    /// flagged graph well-formed), `functions` (`call BINDING <IRI> in OWNER`) and
+    /// flagged graph well-formed), `functions` (`call BINDING <IRI> in OWNER`),
     /// `validators` (`alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE
-    /// superseded-by-native`, one per validator declared for a built-in component)
+    /// superseded-by-native`, one per validator declared for a built-in component) and
+    /// `inert` (`defect DECLARATION`, one per defect of a declaration no shape reaches)
     /// sections, then `findings N` and `clean true|false`.
     #[wasm_bindgen(getter)]
     #[must_use]
