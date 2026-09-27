@@ -507,6 +507,24 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: Run the Worker recipe under workerd
+        # The README's Worker recipe and the Cloudflare adapter, served from the package
+        # built above by real workerd through Miniflare: a joined SERVICE, SERVICE SILENT
+        # over a failing endpoint, a catalog denial (403), an upstream 500 (502), and a
+        # request served while a long query runs. The upstream is answered in process;
+        # no request leaves the runner. Miniflare is installed exactly pinned into a
+        # scratch directory, never into the package's devDependencies, so a local
+        # `npm ci` does not download workerd; the driver refuses to run without it.
+        working-directory: crates/rdf-wasm/js
+        timeout-minutes: 8
+        env:
+          PURRDF_MINIFLARE_DIR: ${{ github.workspace }}/.ci-workerd-harness
+        run: |
+          mkdir -p "$PURRDF_MINIFLARE_DIR"
+          npm install --prefix "$PURRDF_MINIFLARE_DIR" --no-save --no-package-lock \
+            --ignore-scripts --no-audit --no-fund miniflare@4.20260730.0
+          node tests/workerd/run-worker-recipe.mjs
+
   # The cross-target (wasm32 vs native) determinism suites executed in Node.
   # Split from `wasm` above: `make wasm-test` builds in DEBUG profile (no
   # `--release`), a different target-dir subtree from every `--release` step

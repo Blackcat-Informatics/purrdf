@@ -185,7 +185,10 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
 
 The package [README](./js/README.md#asynchronous-queries-federation-and-the-cloudflare-adapter)
 states the full contracts and carries a `fetch`-based `resolveService` and a complete
-Worker, both executed by `js/tests/docs-worker-recipe.test.mjs`.
+Worker, both executed by `js/tests/docs-worker-recipe.test.mjs`. CI also runs the Worker
+under real workerd (`js/tests/workerd/run-worker-recipe.mjs`, through an exactly pinned
+Miniflare): a joined `SERVICE`, `SERVICE SILENT` over a failing endpoint, a catalog
+denial, an endpoint's failure, and a request served while a long query runs.
 
 ## Scope
 
