@@ -34,6 +34,17 @@
 //! charged the same total in a different order, or truncated at a different row, moves
 //! this golden.
 //!
+//! # Updates
+//!
+//! Every `UpdateEvaluationTest` is traced into a second golden, `update.trace`, applied
+//! exactly as the conformance run applies it (the same pre-state, extension environment
+//! and offline `LOAD` source, through `run::update_eval_*`). Each records the post-state
+//! graph store — default and named graphs — as its RDFC-1.0 canonical N-Quads, the form
+//! the comparer judges an update in (or the refusal's code); the consumption of the
+//! request under `update_governed` with [`QueryGovernors::METERED`]; and the governed
+//! request under the same fuel sweep. A tripped update applies nothing, so each tripped
+//! point also records that the store it left is the pre-state.
+//!
 //! # Nondeterminism
 //!
 //! Blank nodes are relabelled away by the canonical forms. `NOW()` reads the wall clock
@@ -46,6 +57,7 @@
 //!
 //! ```text
 //! cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored regenerate_evaluator_trace
+//! cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored regenerate_update_trace
 //! ```
 
 use std::collections::BTreeSet;
@@ -59,7 +71,8 @@ use purrdf_core::{
 use purrdf_sparql_conformance::compare::canonical_solutions;
 use purrdf_sparql_conformance::manifest::{SparqlTestCase, TestKind};
 use purrdf_sparql_conformance::run::{
-    query_eval_dataset, query_eval_engine, query_eval_env, query_eval_is_ordered,
+    query_eval_dataset, query_eval_engine, query_eval_env, query_eval_is_ordered, update_eval_env,
+    update_eval_options,
 };
 use purrdf_sparql_eval::governor::NodeCharges;
 use purrdf_sparql_eval::{
@@ -73,16 +86,15 @@ const DENSE_SWEEP_MAX: u64 = 64;
 /// The largest metered total swept at every unit; above it the sweep turns geometric.
 const EXHAUSTIVE_SWEEP_MAX: u64 = 4096;
 
+/// A floor on the number of update-evaluation cases traced.
+const MIN_UPDATE_CASES: usize = 100;
+
 /// A floor on the number of query-evaluation cases traced, so a corpus walk that stopped
 /// finding cases cannot leave the trace passing over nothing.
 const MIN_CASES: usize = 300;
 
 fn suite_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
-}
-
-fn golden_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/evaluator-trace/suite.trace")
 }
 
 /// Every `manifest.ttl` under `root`, sorted.
@@ -330,31 +342,42 @@ fn sweep_points(total: u64) -> Vec<u64> {
     points.into_iter().collect()
 }
 
-fn render_sweep(prepared: &Prepared<'_>, total: u64, out: &mut String) {
-    let mut run: Option<(u64, u64, usize, String)> = None;
-    let flush = |run: &mut Option<(u64, u64, usize, String)>, out: &mut String| {
-        if let Some((first, last, count, observed)) = run.take() {
-            if count == 1 {
-                writeln!(out, "fuel {first} {observed}").expect("write");
-            } else {
-                writeln!(out, "fuel {first}..={last} x{count} {observed}").expect("write");
-            }
+/// Append one sweep point to the current run of identical observations, flushing the run
+/// when the observation changes.
+fn fold_point(
+    run: &mut Option<(u64, u64, usize, String)>,
+    fuel: u64,
+    observed: String,
+    out: &mut String,
+) {
+    match run {
+        Some((_, last, count, previous)) if *previous == observed => {
+            *last = fuel;
+            *count += 1;
         }
-    };
-    for fuel in sweep_points(total) {
-        let observed = render_point(prepared, fuel);
-        match &mut run {
-            Some((_, last, count, previous)) if *previous == observed => {
-                *last = fuel;
-                *count += 1;
-            }
-            _ => {
-                flush(&mut run, out);
-                run = Some((fuel, fuel, 1, observed));
-            }
+        _ => {
+            flush_run(run, out);
+            *run = Some((fuel, fuel, 1, observed));
         }
     }
-    flush(&mut run, out);
+}
+
+fn flush_run(run: &mut Option<(u64, u64, usize, String)>, out: &mut String) {
+    if let Some((first, last, count, observed)) = run.take() {
+        if count == 1 {
+            writeln!(out, "fuel {first} {observed}").expect("write");
+        } else {
+            writeln!(out, "fuel {first}..={last} x{count} {observed}").expect("write");
+        }
+    }
+}
+
+fn render_sweep(prepared: &Prepared<'_>, total: u64, out: &mut String) {
+    let mut run = None;
+    for fuel in sweep_points(total) {
+        fold_point(&mut run, fuel, render_point(prepared, fuel), out);
+    }
+    flush_run(&mut run, out);
 }
 
 fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
@@ -439,7 +462,164 @@ fn render_case(case: &SparqlTestCase, header: &str, out: &mut String) {
     render_sweep(&prepared, total, out);
 }
 
-fn render_trace() -> String {
+/// The canonical rendering of a graph store — default and named graphs — in the form
+/// the conformance comparer compares update post-states in: RDFC-1.0 canonical N-Quads.
+fn render_store(store: &RdfDataset, volatile: bool, out: &mut String) {
+    let nquads = purrdf_core::canonicalize(store).nquads;
+    writeln!(out, "store quads={}", nquads.lines().count()).expect("write");
+    if !volatile {
+        margin(&nquads, out);
+    }
+}
+
+/// The store's quad count and — unless volatile — the digest of its canonical form.
+fn store_digest(store: &RdfDataset, volatile: bool) -> String {
+    let nquads = purrdf_core::canonicalize(store).nquads;
+    let quads = nquads.lines().count();
+    if volatile {
+        format!("quads={quads}")
+    } else {
+        format!("quads={quads} digest={}", digest(&nquads))
+    }
+}
+
+/// One `UpdateEvaluationTest`: the post-state store (or the refusal's code), the metered
+/// governed application's consumption, and the governed application under the same fuel
+/// sweep a query gets. A governed update that trips applies nothing, so a tripped point
+/// records whether the store it left is the pre-state.
+fn render_update_case(case: &SparqlTestCase, header: &str, out: &mut String) {
+    writeln!(out, "== {header}").expect("write");
+    let request_text = std::fs::read_to_string(&case.query)
+        .unwrap_or_else(|error| panic!("read update {}: {error}", case.query.display()));
+    let Ok(pre) =
+        purrdf_sparql_conformance::run::build_dataset(&case.base, &case.data, &case.graph_data)
+    else {
+        out.push_str("dataset-unloadable\n");
+        return;
+    };
+    let Ok(env) = update_eval_env(case) else {
+        out.push_str("environment-unreadable\n");
+        return;
+    };
+    let volatile = is_volatile(&request_text);
+    if volatile {
+        out.push_str("volatile\n");
+    }
+    let request = || SparqlRequest {
+        query: &request_text,
+        base_iri: Some(&case.base),
+        substitutions: &[],
+    };
+    let pre_digest = store_digest(&pre, volatile);
+
+    // 1. The post-state, through the ungoverned entry the conformance run uses.
+    let mut store = Arc::clone(&pre);
+    match purrdf_sparql_eval::NativeSparqlEngine::new().update_with_options(
+        &mut store,
+        request(),
+        update_eval_options(&env),
+    ) {
+        Ok(()) => render_store(&store, volatile, out),
+        Err(error) => writeln!(out, "error {}", error.code).expect("write"),
+    }
+
+    let governed = |governors: &QueryGovernors| {
+        let mut store = Arc::clone(&pre);
+        purrdf_sparql_eval::NativeSparqlEngine::new()
+            .update_governed(&mut store, request(), update_eval_options(&env), governors)
+            .map(|outcome| (outcome, store))
+    };
+
+    // 2. The metered consumption.
+    let total = match governed(&QueryGovernors::METERED) {
+        Ok((outcome, _)) => {
+            writeln!(
+                out,
+                "metered {} {}",
+                outcome
+                    .tripped()
+                    .map_or("applied", |tripped| tripped.label()),
+                render_consumption(outcome.evidence(), volatile)
+            )
+            .expect("write");
+            outcome.evidence().consumed_in(ResourceDimension::Fuel)
+        }
+        Err(error) => {
+            writeln!(out, "metered error {}", error.code).expect("write");
+            return;
+        }
+    };
+
+    // 3. The fuel sweep.
+    let mut run: Option<(u64, u64, usize, String)> = None;
+    for fuel in sweep_points(total) {
+        let observed = match governed(&QueryGovernors::UNBOUNDED.with_fuel(fuel)) {
+            Err(error) => format!("error {}", error.code),
+            Ok((outcome, store)) => {
+                let after = store_digest(&store, volatile);
+                let head = match outcome.tripped() {
+                    None => format!("applied {after}"),
+                    Some(tripped) if after == pre_digest => {
+                        format!("tripped {} store=pre-state", render_tripped(tripped))
+                    }
+                    Some(tripped) => {
+                        format!("tripped {} store=MOVED {after}", render_tripped(tripped))
+                    }
+                };
+                format!(
+                    "{head} | {}",
+                    render_consumption(outcome.evidence(), volatile)
+                )
+            }
+        };
+        fold_point(&mut run, fuel, observed, out);
+    }
+    flush_run(&mut run, out);
+}
+
+/// Which cases a trace walks, and how it renders each.
+#[derive(Clone, Copy)]
+enum Corpus {
+    /// Every `QueryEvaluationTest`.
+    Query,
+    /// Every `UpdateEvaluationTest`.
+    Update,
+}
+
+impl Corpus {
+    const fn admits(self, kind: TestKind) -> bool {
+        match self {
+            Self::Query => matches!(kind, TestKind::QueryEval),
+            Self::Update => matches!(kind, TestKind::UpdateEval),
+        }
+    }
+
+    const fn min_cases(self) -> usize {
+        match self {
+            Self::Query => MIN_CASES,
+            Self::Update => MIN_UPDATE_CASES,
+        }
+    }
+
+    fn golden_path(self) -> PathBuf {
+        let name = match self {
+            Self::Query => "suite.trace",
+            Self::Update => "update.trace",
+        };
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/goldens/evaluator-trace")
+            .join(name)
+    }
+
+    const fn regenerate_test(self) -> &'static str {
+        match self {
+            Self::Query => "regenerate_evaluator_trace",
+            Self::Update => "regenerate_update_trace",
+        }
+    }
+}
+
+fn render_trace(corpus: Corpus) -> String {
     let root = suite_root();
     let mut manifests = Vec::new();
     discover_manifests(&root, &mut manifests);
@@ -460,7 +640,7 @@ fn render_trace() -> String {
         let cases = purrdf_sparql_conformance::manifest::load(manifest)
             .unwrap_or_else(|error| panic!("load {}: {error}", manifest.display()));
         for case in &cases {
-            if !matches!(case.kind, TestKind::QueryEval) {
+            if !corpus.admits(case.kind) {
                 continue;
             }
             traced += 1;
@@ -470,12 +650,15 @@ fn render_trace() -> String {
                 "two cases share the trace header {header:?}, so a difference in one could be \
                  reported against the other"
             );
-            render_case(case, &header, &mut out);
+            match corpus {
+                Corpus::Query => render_case(case, &header, &mut out),
+                Corpus::Update => render_update_case(case, &header, &mut out),
+            }
         }
     }
     assert!(
-        traced >= MIN_CASES,
-        "the query-evaluation corpus shrank: only {traced} cases were traced"
+        traced >= corpus.min_cases(),
+        "the evaluation corpus shrank: only {traced} cases were traced"
     );
     out
 }
@@ -512,14 +695,19 @@ fn first_difference(golden: &str, actual: &str) -> String {
     }
 }
 
-#[test]
-fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
-    let actual = render_trace();
-    let golden = std::fs::read_to_string(golden_path()).unwrap_or_else(|error| {
+/// Compare a freshly rendered trace against its committed golden, reporting the first
+/// cases whose block moved.
+fn assert_matches_golden(corpus: Corpus) {
+    let actual = render_trace(corpus);
+    let path = corpus.golden_path();
+    let regenerate = format!(
+        "cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored {}",
+        corpus.regenerate_test()
+    );
+    let golden = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
-            "read {}: {error}; regenerate with `cargo test -p purrdf-sparql-conformance --test \
-             evaluator_trace -- --ignored regenerate_evaluator_trace`",
-            golden_path().display()
+            "read {}: {error}; regenerate with `{regenerate}`",
+            path.display()
         )
     });
     if actual == golden {
@@ -556,19 +744,40 @@ fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
     }
     panic!(
         "the evaluator's trace moved on {differing} case(s) (first ten shown):\n{report}\nif \
-         the change is intended, regenerate with `cargo test -p purrdf-sparql-conformance \
-         --test evaluator_trace -- --ignored regenerate_evaluator_trace` and review the diff"
+         the change is intended, regenerate with `{regenerate}` and review the diff"
     );
 }
 
-/// Regeneration path for the trace. Ignored by default because it WRITES the committed
-/// golden.
+fn write_golden(corpus: Corpus) {
+    let path = corpus.golden_path();
+    std::fs::create_dir_all(path.parent().expect("the golden has a parent directory"))
+        .expect("create the golden directory");
+    std::fs::write(&path, render_trace(corpus)).expect("write the golden");
+    println!("wrote {}", path.display());
+}
+
+#[test]
+fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
+    assert_matches_golden(Corpus::Query);
+}
+
+#[test]
+fn the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden() {
+    assert_matches_golden(Corpus::Update);
+}
+
+/// Regeneration path for the query trace. Ignored by default because it WRITES the
+/// committed golden.
 #[test]
 #[ignore = "regeneration path: writes the committed golden"]
 fn regenerate_evaluator_trace() {
-    let path = golden_path();
-    std::fs::create_dir_all(path.parent().expect("the golden has a parent directory"))
-        .expect("create the golden directory");
-    std::fs::write(&path, render_trace()).expect("write the golden");
-    println!("wrote {}", path.display());
+    write_golden(Corpus::Query);
+}
+
+/// Regeneration path for the update trace. Ignored by default because it WRITES the
+/// committed golden.
+#[test]
+#[ignore = "regeneration path: writes the committed golden"]
+fn regenerate_update_trace() {
+    write_golden(Corpus::Update);
 }

@@ -570,21 +570,14 @@ pub fn run(
             // Apply the `ut:request` update to the pre-state dataset; the mutated
             // dataset is diffed against the expected post-state in `compare`.
             let mut dataset = build_dataset(&case.base, &case.data, &case.graph_data)?;
-            let env = purrdf_sparql_eval::ExtensionEnv::over_options(ParserOptions {
-                extension_fn_namespaces: vec![EXT_NS.to_owned()],
-                property_fn_namespaces: vec![REL_NS.to_owned()],
-                property_fn_iris: Vec::new(),
-            })
-            .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
+            let env = update_eval_env(case)?;
             let engine = NativeSparqlEngine::new();
             let request = SparqlRequest {
                 query: &query_text,
                 base_iri: Some(&case.base),
                 substitutions: &[],
             };
-            let options = QueryOptions::new()
-                .with_env(&env)
-                .with_load(Some(&OfflineLoadResolver));
+            let options = update_eval_options(&env);
             engine
                 .update_with_options(&mut dataset, request, options)
                 .map_err(|e| format!("apply update {}: {e}", case.iri))?;
@@ -711,6 +704,29 @@ pub fn query_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::Exten
 #[must_use]
 pub fn query_eval_is_ordered(query_text: &str) -> bool {
     query_is_top_level_ordered(query_text, &query_eval_parser_options())
+}
+
+/// The extension environment an `UpdateEvaluationTest` is read against:
+/// [`query_eval_parser_options`] with no registries.
+///
+/// # Errors
+///
+/// Returns a message if the declarations do not read as one environment.
+pub fn update_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
+    purrdf_sparql_eval::ExtensionEnv::over_options(query_eval_parser_options())
+        .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))
+}
+
+/// The options an `UpdateEvaluationTest` is applied with: `env`, and the offline `LOAD`
+/// source (see `OfflineLoadResolver`).
+///
+/// Public so a differential corpus that re-applies a suite update applies it exactly as
+/// [`run`] does.
+#[must_use]
+pub fn update_eval_options(env: &purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'_> {
+    QueryOptions::new()
+        .with_env(env)
+        .with_load(Some(&OfflineLoadResolver))
 }
 
 /// The `LOAD` source every update case runs with: the network the suite assumes, in which

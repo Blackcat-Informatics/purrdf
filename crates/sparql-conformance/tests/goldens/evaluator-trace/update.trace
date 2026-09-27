@@ -1,0 +1,1492 @@
+== purrdf-update <http://purrdf.test/update#delete-insert-where> DELETE/INSERT ... WHERE rewrites a predicate
+store quads=1
+| <http://example.org/a> <http://example.org/new> <http://example.org/b> .
+metered applied fuel=5 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=4 x2 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5..=64 x60 applied quads=1 digest=d555898b50a2fe35 | fuel=5
+== purrdf-update <http://purrdf.test/update#insert-data> INSERT DATA into an empty default graph
+store quads=1
+| <http://example.org/s> <http://example.org/p> <http://example.org/o> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=1 digest=c91179c0c486cdda | fuel=1
+== purrdf-update <http://purrdf.test/update#named-graph-insert> INSERT DATA into a named graph, empty default graph result
+store quads=1
+| <http://example.org/s> <http://example.org/p> <http://example.org/o> <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=1 digest=a51205962748409f | fuel=1
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add01> ADD 1
+store quads=9
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" <http://example.org/g1> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> <http://example.org/g1> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=9 digest=d311f782e9036e92 | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add02> ADD 2
+store quads=6
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" <http://example.org/g1> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> <http://example.org/g1> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=6 digest=4fef514426d76f40 | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add03> ADD 3
+store quads=12
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g2> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g2> .
+| <http://example.org/sue> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/sue> <http://xmlns.com/foaf/0.1/givenName> "Susan" <http://example.org/g2> .
+| <http://example.org/sue> <http://xmlns.com/foaf/0.1/mbox> <mailto:sue@example.org> <http://example.org/g2> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=12 digest=958d8c7c275f82d1 | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add04> ADD 4
+store quads=9
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g2> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g2> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=9 digest=b881c2284579ce76 | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add05> ADD 5
+store quads=10
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g3> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g3> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/knows> <http://example.org/sue> <http://example.org/g3> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g3> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=10 digest=be1d6088036709cd | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add06> ADD 6
+store quads=6
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=6 digest=94000d8d589d09a7 | nothing
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add07> ADD 7
+store quads=9
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=9 digest=71830c5928252580 | fuel=3
+== w3c-sparql11/add <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/add/manifest#add08> ADD 8
+store quads=6
+| <http://example.org/john> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/givenName> "John" <http://example.org/g1> .
+| <http://example.org/john> <http://xmlns.com/foaf/0.1/mbox> <mailto:johnny@example.org> <http://example.org/g1> .
+| <http://example.org/william> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/givenName> "William" .
+| <http://example.org/william> <http://xmlns.com/foaf/0.1/mbox> <mailto:bill@example.org> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=6 digest=94000d8d589d09a7 | nothing
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-05a> INSERT same bnode twice
+store quads=1
+| <http://example.org/s> <http://example.org/p> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
+metered applied fuel=29 intermediate-cells=4 scratch-bytes=73
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11 tripped fuel-exhausted consumed=12 store=pre-state | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 store=pre-state | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 store=pre-state | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 store=pre-state | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 store=pre-state | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 store=pre-state | fuel=27
+fuel 27 tripped fuel-exhausted consumed=28 store=pre-state | fuel=28
+fuel 28 tripped fuel-exhausted consumed=29 store=pre-state | fuel=29
+fuel 29..=64 x36 applied quads=1 digest=c84a91cd9eb98341 | fuel=29
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-data-same-bnode> INSERTing the same bnode with INSERT DATA into two different Graphs is the same bnode
+store quads=1
+| <http://example.org/s> <http://example.org/p> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
+metered applied fuel=25 intermediate-cells=4 scratch-bytes=73
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11 tripped fuel-exhausted consumed=12 store=pre-state | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 store=pre-state | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 store=pre-state | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 store=pre-state | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25..=64 x40 applied quads=1 digest=c84a91cd9eb98341 | fuel=25
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-data-spo-named1> Simple insert data named 1
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=1 digest=04ba1a9cf9d53d15 | fuel=1
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-data-spo-named2> Simple insert data named 2
+store quads=2
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o2> <http://example.org/g1> .
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=2 digest=713d178d4ee5cb17 | fuel=1
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-data-spo-named3> Simple insert data named 3
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=1 digest=04ba1a9cf9d53d15 | fuel=1
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-data-spo1> Simple insert data 1
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=1 digest=faf647cd73bfada0 | fuel=1
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-using-01> INSERT USING 01
+store quads=5
+| <http://example.org/a> <http://example.org/b> <http://example.org/c> .
+| <http://example.org/g1> <http://example.org/p> "q" .
+| <http://example.org/g1> <http://example.org/p> "y" <http://example.org/g1> .
+| <http://example.org/g2> <http://example.org/p> "q" .
+| <http://example.org/g2> <http://example.org/p> "z" <http://example.org/g2> .
+metered applied fuel=7 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=2 x2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5..=6 x2 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7..=64 x58 applied quads=5 digest=41520914bcde6a58 | fuel=7
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-01> INSERT 01
+store quads=2
+| <http://example.org/s> <http://example.org/p> "o" .
+| <http://example.org/s> <http://example.org/p> "q" .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=2 digest=6e3841fa75f9207b | fuel=4
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-02> INSERT 02
+store quads=2
+| <http://example.org/s> <http://example.org/p> "o" .
+| <http://example.org/s> <http://example.org/p> "q" <http://example.org/g1> .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=2 digest=ed33e1a4b09e5e1a | fuel=4
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-03> INSERT 03
+store quads=3
+| <http://example.org/a> <http://example.org/b> <http://example.org/c> .
+| <http://example.org/s> <http://example.org/p> "o" <http://example.org/g1> .
+| <http://example.org/s> <http://example.org/p> "z" <http://example.org/g1> .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=3 digest=c56573bcd151a959 | fuel=4
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-04> INSERT 04
+store quads=3
+| <http://example.org/a> <http://example.org/b> <http://example.org/c> .
+| <http://example.org/s> <http://example.org/p> "o" <http://example.org/g1> .
+| <http://example.org/s> <http://example.org/p> "q" .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=3 digest=9b9d87731dc14ee5 | fuel=4
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-same-bnode> INSERTing the same bnode with two INSERT WHERE statement within one request is NOT the same bnode
+store quads=3
+| <http://example.org/s> <http://example.org/p> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
+| <http://example.org/s> <http://example.org/p> <http://example.org/o> .
+| <http://example.org/s> <http://example.org/q> <http://example.org/r> .
+metered applied fuel=36 intermediate-cells=6 scratch-bytes=73
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11 tripped fuel-exhausted consumed=12 store=pre-state | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 store=pre-state | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 store=pre-state | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 store=pre-state | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19..=20 x2 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 store=pre-state | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 store=pre-state | fuel=27
+fuel 27 tripped fuel-exhausted consumed=28 store=pre-state | fuel=28
+fuel 28 tripped fuel-exhausted consumed=29 store=pre-state | fuel=29
+fuel 29 tripped fuel-exhausted consumed=30 store=pre-state | fuel=30
+fuel 30 tripped fuel-exhausted consumed=31 store=pre-state | fuel=31
+fuel 31 tripped fuel-exhausted consumed=32 store=pre-state | fuel=32
+fuel 32 tripped fuel-exhausted consumed=33 store=pre-state | fuel=33
+fuel 33 tripped fuel-exhausted consumed=34 store=pre-state | fuel=34
+fuel 34..=35 x2 tripped fuel-exhausted consumed=36 store=pre-state | fuel=36
+fuel 36..=64 x29 applied quads=3 digest=cfe3bbd622e7a968 | fuel=36
+== w3c-sparql11/basic-update <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/basic-update/manifest#insert-where-same-bnode2> INSERTing the same bnode with two INSERT WHERE statement within one request is NOT the same bnode even if both WHERE clauses have the empty solution mapping as the only solution.
+store quads=3
+| <http://example.org/s> <http://example.org/p> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g3> .
+| <http://example.org/s> <http://example.org/p> <http://example.org/o> .
+| <http://example.org/s> <http://example.org/q> <http://example.org/r> .
+metered applied fuel=34 intermediate-cells=6 scratch-bytes=73
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11 tripped fuel-exhausted consumed=12 store=pre-state | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 store=pre-state | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 store=pre-state | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 store=pre-state | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17..=18 x2 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 store=pre-state | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 store=pre-state | fuel=27
+fuel 27 tripped fuel-exhausted consumed=28 store=pre-state | fuel=28
+fuel 28 tripped fuel-exhausted consumed=29 store=pre-state | fuel=29
+fuel 29 tripped fuel-exhausted consumed=30 store=pre-state | fuel=30
+fuel 30 tripped fuel-exhausted consumed=31 store=pre-state | fuel=31
+fuel 31 tripped fuel-exhausted consumed=32 store=pre-state | fuel=32
+fuel 32..=33 x2 tripped fuel-exhausted consumed=34 store=pre-state | fuel=34
+fuel 34..=64 x31 applied quads=3 digest=cfe3bbd622e7a968 | fuel=34
+== w3c-sparql11/clear <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/clear/manifest#dawg-clear-all-01> CLEAR ALL
+store quads=0
+metered applied fuel=4
+fuel 0..=3 x4 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=0 digest=cbf29ce484222325 | fuel=4
+== w3c-sparql11/clear <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/clear/manifest#dawg-clear-default-01> CLEAR DEFAULT
+store quads=3
+| <http://example.org/g1> <http://example.org/description> "Graph 1" <http://example.org/g1> .
+| <http://example.org/g1> <http://example.org/name> "G1" <http://example.org/g1> .
+| <http://example.org/g2> <http://example.org/name> "G2" <http://example.org/g2> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=3 digest=d1c192758cbeeab0 | fuel=1
+== w3c-sparql11/clear <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/clear/manifest#dawg-clear-graph-01> CLEAR GRAPH
+store quads=2
+| <http://example.org/g2> <http://example.org/name> "G2" <http://example.org/g2> .
+| <http://purrdf.test/manifest/crates/sparql-conformance/suite/w3c-sparql11/clear/clear-default.ttl> <http://example.org/name> "Default Graph" .
+metered applied fuel=2
+fuel 0..=1 x2 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=2 digest=74ffaddf3f6e342e | fuel=2
+== w3c-sparql11/clear <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/clear/manifest#dawg-clear-named-01> CLEAR NAMED
+store quads=1
+| <http://purrdf.test/manifest/crates/sparql-conformance/suite/w3c-sparql11/clear/clear-default.ttl> <http://example.org/name> "Default Graph" .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=1 digest=a6c8a5671e0a0529 | fuel=3
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy01> COPY 1
+store quads=6
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" <http://example.org/g1> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> <http://example.org/g1> .
+metered applied fuel=6
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=5 x3 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=6 digest=33c57d8bb1976670 | fuel=6
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy02> COPY 2
+store quads=6
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" <http://example.org/g1> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> <http://example.org/g1> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=6 digest=33c57d8bb1976670 | fuel=3
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy03> COPY 3
+store quads=9
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g2> .
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> .
+metered applied fuel=6
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=5 x3 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=9 digest=d2a990de6e82fb76 | fuel=6
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy04> COPY 4
+store quads=9
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g2> .
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=9 digest=d2a990de6e82fb76 | fuel=3
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy06> COPY 6
+store quads=6
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g1> .
+metered applied fuel=6
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=5 x3 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=6 digest=59920b958dba2ed4 | fuel=6
+== w3c-sparql11/copy <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/copy/manifest#copy07> COPY 7
+store quads=6
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g1> .
+| <http://example.org/ron> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/givenName> "Ronnie" .
+| <http://example.org/ron> <http://xmlns.com/foaf/0.1/mbox> <mailto:ronnie@example.org> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=6 digest=a75e2d7201eb8e9f | nothing
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-01> Simple DELETE 1
+store quads=3
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+metered applied fuel=8 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=7 x2 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=64 x57 applied quads=3 digest=37334910bd1b6e66 | fuel=8
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-02> Simple DELETE 2
+store quads=3
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+metered applied fuel=11 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=4 x2 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=10 x2 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=3 digest=12544b559d3beb61 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-03> Simple DELETE 3
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=5 digest=bde2f1da7c9371d7 | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-04> Simple DELETE 4
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=2
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=5 digest=0a2b7c6c513ee128 | fuel=2
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-05> Graph-specific DELETE 1
+store quads=14
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=8 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=7 x2 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=64 x57 applied quads=14 digest=e2f6d4fa32701c17 | fuel=8
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-06> Graph-specific DELETE 2
+store quads=14
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=11 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=4 x2 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=10 x2 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=14 digest=ed6a6e76ae8dcc53 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-07> Simple DELETE 7
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=3 intermediate-cells=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=5 digest=bde2f1da7c9371d7 | fuel=3
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-01> Simple DELETE 1 (USING)
+store quads=9
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+metered applied fuel=11 intermediate-cells=12
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=4 x3 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=10 x3 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=9 digest=ab07dcd76dd41da2 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-02a> Simple DELETE 2 (USING)
+store quads=16
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=16 digest=0dba1f0f8c4088e2 | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-03> Simple DELETE 3 (USING)
+store quads=11
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=11 digest=ac77b7de9cfc9d53 | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-04> Simple DELETE 4 (USING)
+store quads=16
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=16 digest=152a6a63b487396a | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-05> Graph-specific DELETE 1 (USING)
+store quads=13
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=11 intermediate-cells=12
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=4 x3 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=10 x3 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=13 digest=2559900fc20f1211 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-using-06a> Graph-specific DELETE 2 (USING)
+store quads=16
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=16 digest=f2898dc59af078f9 | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-01> Simple DELETE 1 (WITH)
+store quads=3
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+metered applied fuel=8 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=7 x2 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=64 x57 applied quads=3 digest=12544b559d3beb61 | fuel=8
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-02> Simple DELETE 2 (WITH)
+store quads=9
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+metered applied fuel=11 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=4 x2 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=10 x2 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=9 digest=54677e3ddec69b21 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-03> Simple DELETE 3 (WITH)
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=5 digest=0a2b7c6c513ee128 | fuel=1
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-04> Simple DELETE 4 (WITH)
+store quads=11
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+metered applied fuel=2
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=11 digest=7ffdc9bdc025f6e8 | fuel=2
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-05> Graph-specific DELETE 1 (WITH)
+store quads=13
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=11 intermediate-cells=12
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=4 x3 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=10 x3 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=13 digest=2559900fc20f1211 | fuel=11
+== w3c-sparql11/delete <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete/manifest#dawg-delete-with-06> Graph-specific DELETE 2 (WITH)
+store quads=14
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=11 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=4 x2 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=10 x2 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=14 digest=ed6a6e76ae8dcc53 | fuel=11
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-01> Simple DELETE DATA 1
+store quads=4
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=4 digest=bf350c1d7a55c19d | fuel=1
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-02> Simple DELETE DATA 2
+store quads=4
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=4 digest=f5e145ec8cf7151f | fuel=1
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-03> Simple DELETE DATA 3
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=5 digest=bde2f1da7c9371d7 | fuel=1
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-04> Simple DELETE DATA 4
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=5 digest=0a2b7c6c513ee128 | fuel=1
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-05> Graph-specific DELETE DATA 1
+store quads=15
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=15 digest=ee69091e5674f050 | fuel=1
+== w3c-sparql11/delete-data <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-data/manifest#dawg-delete-data-06> Graph-specific DELETE DATA 2
+store quads=15
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=15 digest=b55a021c518ff2b3 | fuel=1
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-01> DELETE INSERT 1
+store quads=9
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/a> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/a> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=13 intermediate-cells=24
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=3 x3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7..=12 x6 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13..=64 x52 applied quads=9 digest=93bdd9ad1f2d0155 | fuel=13
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-01b> DELETE INSERT 1b
+store quads=6
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=11 intermediate-cells=12
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=3 x3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7..=9 x3 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=64 x54 applied quads=6 digest=cffa96aabb2b6aca | fuel=11
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-01c> DELETE INSERT 1c
+store quads=6
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=29 intermediate-cells=24
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=3 x3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7..=9 x3 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11..=16 x6 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23..=28 x6 tripped fuel-exhausted consumed=29 store=pre-state | fuel=29
+fuel 29..=64 x36 applied quads=6 digest=cffa96aabb2b6aca | fuel=29
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-02> DELETE INSERT 2
+store quads=7
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=8 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=7 x2 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=64 x57 applied quads=7 digest=7da67d1ca162b8cc | fuel=8
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-04> DELETE INSERT 4
+store quads=7
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=214 intermediate-cells=108
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=16 x9 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 store=pre-state | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 store=pre-state | fuel=27
+fuel 27..=35 x9 tripped fuel-exhausted consumed=36 store=pre-state | fuel=36
+fuel 36 tripped fuel-exhausted consumed=37 store=pre-state | fuel=37
+fuel 37 tripped fuel-exhausted consumed=38 store=pre-state | fuel=38
+fuel 38 tripped fuel-exhausted consumed=39 store=pre-state | fuel=39
+fuel 39 tripped fuel-exhausted consumed=40 store=pre-state | fuel=40
+fuel 40 tripped fuel-exhausted consumed=41 store=pre-state | fuel=41
+fuel 41 tripped fuel-exhausted consumed=42 store=pre-state | fuel=42
+fuel 42 tripped fuel-exhausted consumed=43 store=pre-state | fuel=43
+fuel 43 tripped fuel-exhausted consumed=44 store=pre-state | fuel=44
+fuel 44 tripped fuel-exhausted consumed=45 store=pre-state | fuel=45
+fuel 45 tripped fuel-exhausted consumed=46 store=pre-state | fuel=46
+fuel 46..=54 x9 tripped fuel-exhausted consumed=55 store=pre-state | fuel=55
+fuel 55 tripped fuel-exhausted consumed=56 store=pre-state | fuel=56
+fuel 56 tripped fuel-exhausted consumed=57 store=pre-state | fuel=57
+fuel 57 tripped fuel-exhausted consumed=58 store=pre-state | fuel=58
+fuel 58 tripped fuel-exhausted consumed=59 store=pre-state | fuel=59
+fuel 59 tripped fuel-exhausted consumed=60 store=pre-state | fuel=60
+fuel 60 tripped fuel-exhausted consumed=61 store=pre-state | fuel=61
+fuel 61 tripped fuel-exhausted consumed=62 store=pre-state | fuel=62
+fuel 62 tripped fuel-exhausted consumed=63 store=pre-state | fuel=63
+fuel 63 tripped fuel-exhausted consumed=64 store=pre-state | fuel=64
+fuel 64 tripped fuel-exhausted consumed=65 store=pre-state | fuel=65
+fuel 65 tripped fuel-exhausted consumed=66 store=pre-state | fuel=66
+fuel 66..=74 x9 tripped fuel-exhausted consumed=75 store=pre-state | fuel=75
+fuel 75 tripped fuel-exhausted consumed=76 store=pre-state | fuel=76
+fuel 76 tripped fuel-exhausted consumed=77 store=pre-state | fuel=77
+fuel 77 tripped fuel-exhausted consumed=78 store=pre-state | fuel=78
+fuel 78 tripped fuel-exhausted consumed=79 store=pre-state | fuel=79
+fuel 79 tripped fuel-exhausted consumed=80 store=pre-state | fuel=80
+fuel 80 tripped fuel-exhausted consumed=81 store=pre-state | fuel=81
+fuel 81 tripped fuel-exhausted consumed=82 store=pre-state | fuel=82
+fuel 82 tripped fuel-exhausted consumed=83 store=pre-state | fuel=83
+fuel 83 tripped fuel-exhausted consumed=84 store=pre-state | fuel=84
+fuel 84 tripped fuel-exhausted consumed=85 store=pre-state | fuel=85
+fuel 85 tripped fuel-exhausted consumed=86 store=pre-state | fuel=86
+fuel 86..=94 x9 tripped fuel-exhausted consumed=95 store=pre-state | fuel=95
+fuel 95 tripped fuel-exhausted consumed=96 store=pre-state | fuel=96
+fuel 96 tripped fuel-exhausted consumed=97 store=pre-state | fuel=97
+fuel 97 tripped fuel-exhausted consumed=98 store=pre-state | fuel=98
+fuel 98 tripped fuel-exhausted consumed=99 store=pre-state | fuel=99
+fuel 99 tripped fuel-exhausted consumed=100 store=pre-state | fuel=100
+fuel 100 tripped fuel-exhausted consumed=101 store=pre-state | fuel=101
+fuel 101 tripped fuel-exhausted consumed=102 store=pre-state | fuel=102
+fuel 102 tripped fuel-exhausted consumed=103 store=pre-state | fuel=103
+fuel 103 tripped fuel-exhausted consumed=104 store=pre-state | fuel=104
+fuel 104 tripped fuel-exhausted consumed=105 store=pre-state | fuel=105
+fuel 105 tripped fuel-exhausted consumed=106 store=pre-state | fuel=106
+fuel 106..=114 x9 tripped fuel-exhausted consumed=115 store=pre-state | fuel=115
+fuel 115 tripped fuel-exhausted consumed=116 store=pre-state | fuel=116
+fuel 116 tripped fuel-exhausted consumed=117 store=pre-state | fuel=117
+fuel 117 tripped fuel-exhausted consumed=118 store=pre-state | fuel=118
+fuel 118 tripped fuel-exhausted consumed=119 store=pre-state | fuel=119
+fuel 119 tripped fuel-exhausted consumed=120 store=pre-state | fuel=120
+fuel 120 tripped fuel-exhausted consumed=121 store=pre-state | fuel=121
+fuel 121 tripped fuel-exhausted consumed=122 store=pre-state | fuel=122
+fuel 122 tripped fuel-exhausted consumed=123 store=pre-state | fuel=123
+fuel 123 tripped fuel-exhausted consumed=124 store=pre-state | fuel=124
+fuel 124 tripped fuel-exhausted consumed=125 store=pre-state | fuel=125
+fuel 125 tripped fuel-exhausted consumed=126 store=pre-state | fuel=126
+fuel 126 tripped fuel-exhausted consumed=127 store=pre-state | fuel=127
+fuel 127 tripped fuel-exhausted consumed=128 store=pre-state | fuel=128
+fuel 128 tripped fuel-exhausted consumed=129 store=pre-state | fuel=129
+fuel 129 tripped fuel-exhausted consumed=130 store=pre-state | fuel=130
+fuel 130 tripped fuel-exhausted consumed=131 store=pre-state | fuel=131
+fuel 131 tripped fuel-exhausted consumed=132 store=pre-state | fuel=132
+fuel 132 tripped fuel-exhausted consumed=133 store=pre-state | fuel=133
+fuel 133 tripped fuel-exhausted consumed=134 store=pre-state | fuel=134
+fuel 134 tripped fuel-exhausted consumed=135 store=pre-state | fuel=135
+fuel 135 tripped fuel-exhausted consumed=136 store=pre-state | fuel=136
+fuel 136 tripped fuel-exhausted consumed=137 store=pre-state | fuel=137
+fuel 137 tripped fuel-exhausted consumed=138 store=pre-state | fuel=138
+fuel 138 tripped fuel-exhausted consumed=139 store=pre-state | fuel=139
+fuel 139 tripped fuel-exhausted consumed=140 store=pre-state | fuel=140
+fuel 140 tripped fuel-exhausted consumed=141 store=pre-state | fuel=141
+fuel 141 tripped fuel-exhausted consumed=142 store=pre-state | fuel=142
+fuel 142 tripped fuel-exhausted consumed=143 store=pre-state | fuel=143
+fuel 143 tripped fuel-exhausted consumed=144 store=pre-state | fuel=144
+fuel 144 tripped fuel-exhausted consumed=145 store=pre-state | fuel=145
+fuel 145 tripped fuel-exhausted consumed=146 store=pre-state | fuel=146
+fuel 146 tripped fuel-exhausted consumed=147 store=pre-state | fuel=147
+fuel 147 tripped fuel-exhausted consumed=148 store=pre-state | fuel=148
+fuel 148 tripped fuel-exhausted consumed=149 store=pre-state | fuel=149
+fuel 149 tripped fuel-exhausted consumed=150 store=pre-state | fuel=150
+fuel 150 tripped fuel-exhausted consumed=151 store=pre-state | fuel=151
+fuel 151 tripped fuel-exhausted consumed=152 store=pre-state | fuel=152
+fuel 152 tripped fuel-exhausted consumed=153 store=pre-state | fuel=153
+fuel 153 tripped fuel-exhausted consumed=154 store=pre-state | fuel=154
+fuel 154 tripped fuel-exhausted consumed=155 store=pre-state | fuel=155
+fuel 155 tripped fuel-exhausted consumed=156 store=pre-state | fuel=156
+fuel 156 tripped fuel-exhausted consumed=157 store=pre-state | fuel=157
+fuel 157 tripped fuel-exhausted consumed=158 store=pre-state | fuel=158
+fuel 158 tripped fuel-exhausted consumed=159 store=pre-state | fuel=159
+fuel 159 tripped fuel-exhausted consumed=160 store=pre-state | fuel=160
+fuel 160 tripped fuel-exhausted consumed=161 store=pre-state | fuel=161
+fuel 161 tripped fuel-exhausted consumed=162 store=pre-state | fuel=162
+fuel 162 tripped fuel-exhausted consumed=163 store=pre-state | fuel=163
+fuel 163 tripped fuel-exhausted consumed=164 store=pre-state | fuel=164
+fuel 164 tripped fuel-exhausted consumed=165 store=pre-state | fuel=165
+fuel 165 tripped fuel-exhausted consumed=166 store=pre-state | fuel=166
+fuel 166 tripped fuel-exhausted consumed=167 store=pre-state | fuel=167
+fuel 167 tripped fuel-exhausted consumed=168 store=pre-state | fuel=168
+fuel 168 tripped fuel-exhausted consumed=169 store=pre-state | fuel=169
+fuel 169 tripped fuel-exhausted consumed=170 store=pre-state | fuel=170
+fuel 170 tripped fuel-exhausted consumed=171 store=pre-state | fuel=171
+fuel 171 tripped fuel-exhausted consumed=172 store=pre-state | fuel=172
+fuel 172 tripped fuel-exhausted consumed=173 store=pre-state | fuel=173
+fuel 173 tripped fuel-exhausted consumed=174 store=pre-state | fuel=174
+fuel 174 tripped fuel-exhausted consumed=175 store=pre-state | fuel=175
+fuel 175 tripped fuel-exhausted consumed=176 store=pre-state | fuel=176
+fuel 176 tripped fuel-exhausted consumed=177 store=pre-state | fuel=177
+fuel 177 tripped fuel-exhausted consumed=178 store=pre-state | fuel=178
+fuel 178 tripped fuel-exhausted consumed=179 store=pre-state | fuel=179
+fuel 179 tripped fuel-exhausted consumed=180 store=pre-state | fuel=180
+fuel 180 tripped fuel-exhausted consumed=181 store=pre-state | fuel=181
+fuel 181 tripped fuel-exhausted consumed=182 store=pre-state | fuel=182
+fuel 182 tripped fuel-exhausted consumed=183 store=pre-state | fuel=183
+fuel 183 tripped fuel-exhausted consumed=184 store=pre-state | fuel=184
+fuel 184 tripped fuel-exhausted consumed=185 store=pre-state | fuel=185
+fuel 185 tripped fuel-exhausted consumed=186 store=pre-state | fuel=186
+fuel 186 tripped fuel-exhausted consumed=187 store=pre-state | fuel=187
+fuel 187 tripped fuel-exhausted consumed=188 store=pre-state | fuel=188
+fuel 188 tripped fuel-exhausted consumed=189 store=pre-state | fuel=189
+fuel 189 tripped fuel-exhausted consumed=190 store=pre-state | fuel=190
+fuel 190 tripped fuel-exhausted consumed=191 store=pre-state | fuel=191
+fuel 191 tripped fuel-exhausted consumed=192 store=pre-state | fuel=192
+fuel 192 tripped fuel-exhausted consumed=193 store=pre-state | fuel=193
+fuel 193 tripped fuel-exhausted consumed=194 store=pre-state | fuel=194
+fuel 194 tripped fuel-exhausted consumed=195 store=pre-state | fuel=195
+fuel 195 tripped fuel-exhausted consumed=196 store=pre-state | fuel=196
+fuel 196 tripped fuel-exhausted consumed=197 store=pre-state | fuel=197
+fuel 197 tripped fuel-exhausted consumed=198 store=pre-state | fuel=198
+fuel 198 tripped fuel-exhausted consumed=199 store=pre-state | fuel=199
+fuel 199 tripped fuel-exhausted consumed=200 store=pre-state | fuel=200
+fuel 200 tripped fuel-exhausted consumed=201 store=pre-state | fuel=201
+fuel 201 tripped fuel-exhausted consumed=202 store=pre-state | fuel=202
+fuel 202..=213 x12 tripped fuel-exhausted consumed=214 store=pre-state | fuel=214
+fuel 214 applied quads=7 digest=7da67d1ca162b8cc | fuel=214
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-04b> DELETE INSERT 4b
+store quads=7
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=8 intermediate-cells=8
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=7 x2 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8..=64 x57 applied quads=7 digest=7da67d1ca162b8cc | fuel=8
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-05b> DELETE INSERT 5b
+store quads=8
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/a> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=10 intermediate-cells=16
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=3 x2 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=9 x4 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10..=64 x55 applied quads=8 digest=e978d586db9bc3b5 | fuel=10
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#dawg-delete-insert-06b> DELETE INSERT 6b
+store quads=7
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> <mailto:alan@example.org> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> <mailto:bob@example.org> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> <mailto:claire@example.org> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Claire" .
+metered applied fuel=2
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=7 digest=7da67d1ca162b8cc | fuel=2
+== w3c-sparql11/delete-insert <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-insert/manifest#delete-insert-halloween-problem> Halloween Problem: A delete/insert operation should not be able to read its own writes
+store quads=4
+| <http://example.com/boss> <http://example.com/salary> "1600"^^<http://www.w3.org/2001/XMLSchema#integer> .
+| <http://example.com/s2> <http://example.com/salary> "1350"^^<http://www.w3.org/2001/XMLSchema#integer> .
+| <http://example.com/s3> <http://example.com/salary> "1380"^^<http://www.w3.org/2001/XMLSchema#integer> .
+| <http://example.com/s> <http://example.com/salary> "1300"^^<http://www.w3.org/2001/XMLSchema#integer> .
+metered applied fuel=32 intermediate-cells=24 scratch-bytes=304
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=6 x4 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 store=pre-state | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 store=pre-state | fuel=11
+fuel 11 tripped fuel-exhausted consumed=12 store=pre-state | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 store=pre-state | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 store=pre-state | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 store=pre-state | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 store=pre-state | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 store=pre-state | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 store=pre-state | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 store=pre-state | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 store=pre-state | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 store=pre-state | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 store=pre-state | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 store=pre-state | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 store=pre-state | fuel=26
+fuel 26..=31 x6 tripped fuel-exhausted consumed=32 store=pre-state | fuel=32
+fuel 32..=64 x33 applied quads=4 digest=bd682347fe43246e | fuel=32
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-01> Simple DELETE WHERE 1
+store quads=4
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=4 digest=bf350c1d7a55c19d | fuel=4
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-02> Simple DELETE WHERE 2
+store quads=4
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=6 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=4 digest=f5e145ec8cf7151f | fuel=6
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-03> Simple DELETE WHERE 3
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=5 digest=bde2f1da7c9371d7 | fuel=1
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-04> Simple DELETE WHERE 4
+store quads=5
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" <http://example.org/g1> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g1> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g1> .
+metered applied fuel=2
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=5 digest=0a2b7c6c513ee128 | fuel=2
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-05> Graph-specific DELETE WHERE 1
+store quads=15
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=4 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=15 digest=ee69091e5674f050 | fuel=4
+== w3c-sparql11/delete-where <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/delete-where/manifest#dawg-delete-where-06> Graph-specific DELETE WHERE 2
+store quads=15
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/knows> <http://example.org/b> <http://example.org/g2> .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/mbox> "alan@example.org" .
+| <http://example.org/a> <http://xmlns.com/foaf/0.1/name> "Alan" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/knows> <http://example.org/c> <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/mbox> "bob@example.org" <http://example.org/g2> .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" .
+| <http://example.org/b> <http://xmlns.com/foaf/0.1/name> "Bob" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/knows> <http://example.org/d> <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g2> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/mbox> "chris@example.org" <http://example.org/g3> .
+| <http://example.org/c> <http://xmlns.com/foaf/0.1/name> "Chris" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/mbox> "dan@example.org" <http://example.org/g3> .
+| <http://example.org/d> <http://xmlns.com/foaf/0.1/name> "Dan" <http://example.org/g3> .
+metered applied fuel=6 intermediate-cells=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=15 digest=b55a021c518ff2b3 | fuel=6
+== w3c-sparql11/drop <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/drop/manifest#dawg-drop-all-01> DROP ALL
+store quads=0
+metered applied fuel=4
+fuel 0..=3 x4 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=0 digest=cbf29ce484222325 | fuel=4
+== w3c-sparql11/drop <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/drop/manifest#dawg-drop-default-01> DROP DEFAULT
+store quads=3
+| <http://example.org/g1> <http://example.org/description> "Graph 1" <http://example.org/g1> .
+| <http://example.org/g1> <http://example.org/name> "G1" <http://example.org/g1> .
+| <http://example.org/g2> <http://example.org/name> "G2" <http://example.org/g2> .
+metered applied fuel=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=3 digest=d1c192758cbeeab0 | fuel=1
+== w3c-sparql11/drop <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/drop/manifest#dawg-drop-graph-01> DROP GRAPH
+store quads=2
+| <http://example.org/g2> <http://example.org/name> "G2" <http://example.org/g2> .
+| <http://purrdf.test/manifest/crates/sparql-conformance/suite/w3c-sparql11/drop/drop-default.ttl> <http://example.org/name> "Default Graph" .
+metered applied fuel=2
+fuel 0..=1 x2 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2..=64 x63 applied quads=2 digest=af40fb541b681a2a | fuel=2
+== w3c-sparql11/drop <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/drop/manifest#dawg-drop-named-01> DROP NAMED
+store quads=1
+| <http://purrdf.test/manifest/crates/sparql-conformance/suite/w3c-sparql11/drop/drop-default.ttl> <http://example.org/name> "Default Graph" .
+metered applied fuel=3
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=64 x62 applied quads=1 digest=970426ce1b28d861 | fuel=3
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move01> MOVE 1
+store quads=3
+| <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/givenName> "Tom" <http://example.org/g1> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/mbox> <mailto:tom@example.org> <http://example.org/g1> .
+metered applied fuel=9
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=8 x6 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=64 x56 applied quads=3 digest=18e37e955e3f7429 | fuel=9
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move02> MOVE 2
+store quads=3
+| <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/givenName> "Tom" <http://example.org/g1> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/mbox> <mailto:tom@example.org> <http://example.org/g1> .
+metered applied fuel=6
+fuel 0..=5 x6 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=3 digest=18e37e955e3f7429 | fuel=6
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move03> MOVE 3
+store quads=6
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g2> .
+| <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/givenName> "Tom" .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/mbox> <mailto:tom@example.org> .
+metered applied fuel=9
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=8 x6 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=64 x56 applied quads=6 digest=7aa2ab7eca3aa455 | fuel=9
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move04> MOVE 4
+store quads=6
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g2> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g2> .
+| <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/givenName> "Tom" .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/mbox> <mailto:tom@example.org> .
+metered applied fuel=6
+fuel 0..=5 x6 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6..=64 x59 applied quads=6 digest=7aa2ab7eca3aa455 | fuel=6
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move06> MOVE 6
+store quads=3
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> .
+metered applied fuel=9
+fuel 0..=2 x3 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3..=8 x6 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=64 x56 applied quads=3 digest=e1edc8909d53f512 | fuel=9
+== w3c-sparql11/move <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/move/manifest#move07> MOVE 7
+store quads=6
+| <http://example.org/jerry> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/givenName> "Jerry" <http://example.org/g1> .
+| <http://example.org/jerry> <http://xmlns.com/foaf/0.1/mbox> <mailto:jerry@example.org> <http://example.org/g1> .
+| <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/givenName> "Tom" .
+| <http://example.org/tom> <http://xmlns.com/foaf/0.1/mbox> <mailto:tom@example.org> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=6 digest=75bdc6ccace8b5be | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#add-silent> ADD SILENT
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g2> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=1377e6647138ec7c | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#add-to-default-silent> ADD SILENT TO DEFAULT
+store quads=0
+metered applied nothing
+fuel 0..=64 x65 applied quads=0 digest=cbf29ce484222325 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#clear-default-silent> CLEAR SILENT DEFAULT
+store quads=0
+metered applied nothing
+fuel 0..=64 x65 applied quads=0 digest=cbf29ce484222325 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#clear-silent> CLEAR SILENT GRAPH iri
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=faf647cd73bfada0 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#copy-silent> COPY SILENT
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g2> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=1377e6647138ec7c | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#copy-to-default-silent> COPY SILENT TO DEFAULT
+store quads=0
+metered applied nothing
+fuel 0..=64 x65 applied quads=0 digest=cbf29ce484222325 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#create-silent> CREATE SILENT iri
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g1> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=04ba1a9cf9d53d15 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#drop-default-silent> DROP SILENT DEFAULT
+store quads=0
+metered applied nothing
+fuel 0..=64 x65 applied quads=0 digest=cbf29ce484222325 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#drop-silent> DROP SILENT GRAPH iri
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=faf647cd73bfada0 | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#load-into-silent> LOAD SILENT INTO
+store quads=0
+metered applied fuel=1 remote-requests=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=0 digest=cbf29ce484222325 | fuel=1
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#load-silent> LOAD SILENT
+store quads=0
+metered applied fuel=1 remote-requests=1
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1..=64 x64 applied quads=0 digest=cbf29ce484222325 | fuel=1
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#move-silent> MOVE SILENT
+store quads=1
+| <http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#o> <http://example.org/g2> .
+metered applied nothing
+fuel 0..=64 x65 applied quads=1 digest=1377e6647138ec7c | nothing
+== w3c-sparql11/update-silent <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/update-silent/manifest#move-to-default-silent> MOVE SILENT TO DEFAULT
+store quads=0
+metered applied nothing
+fuel 0..=64 x65 applied quads=0 digest=cbf29ce484222325 | nothing
+== w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#update-1> Reified triples - Update
+store quads=6
+| <http://example/s1> <http://example/p1> <http://example/o1> <http://example/g1> .
+| <http://example/s2> <http://example/p2> <http://example/o2> <http://example/g2> .
+| _:c14n0 <http://example/source> <http://example/g1> <urn:purrdf:rdfc:annotation> .
+| _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/s1> <http://example/p1> <http://example/o1> )>> .
+| _:c14n1 <http://example/source> <http://example/g2> <urn:purrdf:rdfc:annotation> .
+| _:c14n1 <urn:purrdf:rdfc:reifies> <<( <http://example/s2> <http://example/p2> <http://example/o2> )>> .
+metered applied fuel=13 intermediate-cells=16
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=12 x4 tripped fuel-exhausted consumed=13 store=pre-state | fuel=13
+fuel 13..=64 x52 applied quads=6 digest=6e46d1264082e149 | fuel=13
+== w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#update-2> Reified triples - Update - annotation
+store quads=6
+| <http://example/s1> <http://example/p1> <http://example/o1> .
+| <http://example/s2> <http://example/p2> <http://example/o2> .
+| _:c14n0 <http://example/source> <http://example/g1> <urn:purrdf:rdfc:annotation> .
+| _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/s1> <http://example/p1> <http://example/o1> )>> .
+| _:c14n1 <http://example/source> <http://example/g2> <urn:purrdf:rdfc:annotation> .
+| _:c14n1 <urn:purrdf:rdfc:reifies> <<( <http://example/s2> <http://example/p2> <http://example/o2> )>> .
+metered applied fuel=17 intermediate-cells=32
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 store=pre-state | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 store=pre-state | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 store=pre-state | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 store=pre-state | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 store=pre-state | fuel=9
+fuel 9..=16 x8 tripped fuel-exhausted consumed=17 store=pre-state | fuel=17
+fuel 17..=64 x48 applied quads=6 digest=3454e912af1b416c | fuel=17
+== w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#update-3> Reified triples - Update - data
+store quads=2
+| _:c14n0 <http://example/source> <http://example/faraway> <urn:purrdf:rdfc:annotation> .
+| _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
+metered applied fuel=4
+fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
+fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
+fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 store=pre-state | fuel=4
+fuel 4..=64 x61 applied quads=2 digest=844ffeff6b50d6f5 | fuel=4
