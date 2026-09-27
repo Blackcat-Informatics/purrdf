@@ -23,7 +23,8 @@ first-party edge from here would close a cycle through that member.
   site), `TempDir::for_unit_test()` and `NamedTempFile::for_unit_test()` in a
   crate's `src/` unit tests. Names are unique per process, thread and instant;
   creation is exclusive and a collision is an error; the path is removed on
-  drop. The system temporary directory is never used.
+  drop. A caller may place the target directory under the system temporary
+  directory; these helpers still keep every path beneath that target.
 * **Frozen differential vectors** — `purrdf_testkit::vectors` records an
   implementation's answers to a line-oriented file whose header carries a
   SHA-256 of its own body, and replays the file against a replacement,

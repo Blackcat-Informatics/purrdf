@@ -8,7 +8,7 @@
 //!   `PURRDF_REGENERATE_GOLDEN=1`. Call it through [`assert_golden!`], which
 //!   resolves `tests/golden/` against the *calling* crate.
 //! * [`TempDir`] and [`NamedTempFile`] — scratch space under the cargo target
-//!   directory, never the system temporary directory. Integration tests and
+//!   directory, including when that directory is placed under `/tmp`. Integration tests and
 //!   benches create them through [`temp_dir!`] and [`temp_file!`], which read
 //!   `CARGO_TARGET_TMPDIR` in the calling target; a crate's `src/` unit tests,
 //!   where cargo does not set that variable, use [`TempDir::for_unit_test`] and
@@ -110,7 +110,7 @@ macro_rules! harness_main {
 /// `env!` where the macro is *expanded*, so it resolves in the integration test
 /// or bench that calls it — cargo sets it for exactly those targets, and using
 /// the macro anywhere else is a compile error rather than a silent fallback to
-/// the system temporary directory. Evaluates to
+/// a different directory. Evaluates to
 /// `std::io::Result<TempDir>`.
 #[cfg(not(target_arch = "wasm32"))]
 #[macro_export]

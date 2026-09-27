@@ -591,6 +591,45 @@ fn a_passing_property_runs_exactly_its_configured_cases() {
     assert_eq!(Config::default().cases, 256);
 }
 
+#[test]
+fn zero_case_configuration_cannot_pass_without_exercising_the_property() {
+    for config in [
+        Config::with_cases(0),
+        Config {
+            cases: 0,
+            ..Config::default()
+        },
+    ] {
+        let result = std::panic::catch_unwind(|| Runner::with_seed(config, "zero", 1));
+        assert!(
+            result.is_err(),
+            "zero cases must be refused at construction"
+        );
+    }
+}
+
+#[test]
+fn a_generator_overrun_fails_immediately_without_spending_the_reject_budget() {
+    struct Overrun<'a>(&'a Cell<u32>);
+    impl Strategy for Overrun<'_> {
+        type Value = ();
+
+        fn generate(&self, _: &mut Choices) -> Result<(), Invalid> {
+            self.0.set(self.0.get() + 1);
+            Err(Invalid::Overrun)
+        }
+    }
+
+    let generated = Cell::new(0);
+    let result =
+        Runner::with_seed(Config::default(), "overrun", 7).run(&Overrun(&generated), |()| Ok(()));
+    assert!(matches!(
+        result,
+        Err(Failure::GeneratorOverrun { passed: 0, .. })
+    ));
+    assert_eq!(generated.get(), 1);
+}
+
 thread_local! {
     static MACRO_CASES: Cell<u32> = const { Cell::new(0) };
 }
@@ -789,11 +828,21 @@ fn an_exhausted_budget_and_a_runaway_generator_are_invalid() {
         );
     }
     let mut empty = Choices::from_bytes(&[]);
-    assert_eq!(
-        empty.weighted_index(&weights),
-        Ok(0),
-        "a replay reads the recorded index"
-    );
+    assert_eq!(empty.weighted_index(&weights), Ok(1));
+    let mut replay = Choices::from_hex("00").expect("zero ticket");
+    assert_eq!(replay.weighted_index(&weights), Ok(1));
+    let mut last = Choices::from_hex("02").expect("last ticket");
+    assert_eq!(last.weighted_index(&weights), Ok(1));
+}
+
+#[test]
+fn shrinking_a_weighted_union_cannot_enter_a_zero_weight_arm() {
+    let weighted = prop_oneof![0 => Just(0u8), 3 => Just(1u8), 0 => Just(2u8)];
+    let failed = failure(&weighted, "zero_weight_shrink", |_| {
+        Err(TestCaseError::fail("planted failure"))
+    });
+    assert_eq!(failed.minimal, "1");
+    assert_eq!(replay(&weighted, &failed.choices_hex), 1);
 }
 
 #[test]

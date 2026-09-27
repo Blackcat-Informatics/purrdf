@@ -198,8 +198,8 @@ impl Choices {
         Ok(self.draw_with(1, |_| u64::from(wanted))? == 1)
     }
 
-    /// An index into `weights`, chosen in proportion to them in random mode.
-    /// Index 0 is the shrink target.
+    /// An index into `weights`, chosen in proportion to them. Shrinking lowers
+    /// the ticket, so the first positive-weight alternative is the target.
     pub fn weighted_index(&mut self, weights: &[u32]) -> Result<usize, Invalid> {
         assert!(
             !weights.is_empty(),
@@ -207,19 +207,15 @@ impl Choices {
         );
         let total: u64 = weights.iter().map(|&weight| u64::from(weight)).sum();
         assert!(total > 0, "a weighted choice needs a positive total weight");
-        let max = (weights.len() - 1) as u64;
-        let index = self.draw_with(max, |rng| {
-            let mut ticket = rng.up_to(total - 1);
-            for (index, &weight) in weights.iter().enumerate() {
-                let weight = u64::from(weight);
-                if ticket < weight {
-                    return index as u64;
-                }
-                ticket -= weight;
+        let mut ticket = self.draw(total - 1)?;
+        for (index, &weight) in weights.iter().enumerate() {
+            let weight = u64::from(weight);
+            if ticket < weight {
+                return Ok(index);
             }
-            unreachable!("the ticket is below the total weight")
-        })?;
-        Ok(index as usize)
+            ticket -= weight;
+        }
+        unreachable!("the ticket is below the total weight")
     }
 
     /// A random-mode target size in `min..=max`, not recorded: a replay's

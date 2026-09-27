@@ -180,6 +180,16 @@ pub enum Failure {
         /// The rejecter that exhausted the budget.
         reason: String,
     },
+    /// A generator exceeded the per-value draw limit; retrying cannot turn
+    /// that programming error into a valid property sample.
+    GeneratorOverrun {
+        /// The property's name.
+        name: String,
+        /// The seed the run used.
+        seed: u64,
+        /// Cases that passed before the runaway value.
+        passed: u32,
+    },
 }
 
 impl fmt::Display for Failure {
@@ -215,6 +225,11 @@ impl fmt::Display for Failure {
                 "property `{name}` exhausted its reject budget after {passed} passing case(s); \
                  the last rejection was: {reason} (seed {seed:#018x})"
             ),
+            Self::GeneratorOverrun { name, seed, passed } => write!(
+                f,
+                "property `{name}` exceeded the generator draw limit after {passed} passing case(s) \
+                 (seed {seed:#018x})"
+            ),
         }
     }
 }
@@ -246,6 +261,7 @@ impl Runner {
 
     /// A runner with an explicit seed, ignoring the environment.
     pub fn with_seed(config: Config, name: &str, seed: u64) -> Self {
+        assert!(config.cases > 0, "a property must run at least one case");
         Self {
             config,
             name: name.to_owned(),
@@ -284,7 +300,13 @@ impl Runner {
                 Outcome::Invalid(Invalid::RejectLimit) => choices
                     .take_reject_reason()
                     .unwrap_or_else(|| "a generator rejected its candidates".to_owned()),
-                Outcome::Invalid(Invalid::Overrun) => Invalid::Overrun.to_string(),
+                Outcome::Invalid(Invalid::Overrun) => {
+                    return Err(Failure::GeneratorOverrun {
+                        name: self.name.clone(),
+                        seed: self.seed,
+                        passed,
+                    });
+                }
                 Outcome::Reject(reason) => reason,
             };
             if rejects_left == 0 {

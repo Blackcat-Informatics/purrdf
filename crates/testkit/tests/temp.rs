@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `TempDir` / `NamedTempFile`: distinct under concurrency, removed on drop,
-//! under the target directory and never the system temporary directory, and
+//! under the target directory, even when that directory lives in `/tmp`, and
 //! exclusive on creation.
 //!
 //! These run where a test can create a path; wasm32-unknown-unknown has no file
@@ -17,22 +17,11 @@ use std::sync::Barrier;
 
 use purrdf_testkit::{NamedTempFile, TempDir, temp_dir, temp_file};
 
-/// Asserts `path` is under this target's `CARGO_TARGET_TMPDIR` and not under
-/// the system temporary directory or `/tmp`.
+/// Asserts `path` is under this target's `CARGO_TARGET_TMPDIR`.
 fn assert_under_target(path: &Path) {
     assert!(
         path.starts_with(env!("CARGO_TARGET_TMPDIR")),
         "{} is not under CARGO_TARGET_TMPDIR",
-        path.display()
-    );
-    assert!(
-        !path.starts_with(std::env::temp_dir()),
-        "{} is under the system temporary directory",
-        path.display()
-    );
-    assert!(
-        !path.starts_with("/tmp"),
-        "{} is under /tmp",
         path.display()
     );
 }

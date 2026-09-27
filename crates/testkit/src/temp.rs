@@ -3,10 +3,10 @@
 
 //! Temporary directories and files under the cargo target directory.
 //!
-//! Scratch space lives under `target/`, never the system temporary directory:
-//! it is then cleaned by `cargo clean`, it sits on the same file system as the
-//! build, and nothing outside the workspace can remove it while a test holds
-//! it. A name is `<prefix><pid>-<counter>-<nanos>`: the process id separates
+//! Scratch space lives under Cargo's target directory, which a caller may
+//! place beneath the system temporary directory:
+//! it is then cleaned by `cargo clean` and sits on the same file system as the
+//! build. A name is `<prefix><pid>-<counter>-<nanos>`: the process id separates
 //! concurrent test binaries, the process-wide monotonic counter separates
 //! threads of one binary, and the wall-clock nanoseconds separate a binary
 //! from a stale directory an earlier process with a recycled id left behind.
@@ -250,7 +250,6 @@ mod tests {
         let expected_root = build_root.join("tmp");
         assert_eq!(dir.path().parent(), Some(expected_root.as_path()));
         assert!(dir.path().is_dir());
-        assert!(!dir.path().starts_with(std::env::temp_dir()));
 
         let file = NamedTempFile::for_unit_test().expect("unit-test temp file");
         assert_eq!(file.path().parent(), Some(expected_root.as_path()));
