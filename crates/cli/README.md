@@ -871,7 +871,7 @@ Certify a shapes graph cold: everything PurRDF can say about it before any data
 is validated, in one deterministic report. Validation never pays for this; the
 verb is where it is paid, on request. The loader is configured by the same
 `--import`, `--box-role-vocab` and `--shapes-graph` flags `validate` takes, so
-the graph certified is the graph validation would use. The report has four
+the graph certified is the graph validation would use. The report has five
 sections:
 
 ```text
@@ -882,6 +882,7 @@ functions 1
 call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
 validators 1
 alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
+inert 0
 findings 0
 clean true
 ```
@@ -909,6 +910,16 @@ clean true
   runs, so each declared validator is `superseded-by-native` and is never
   executed. These lines are not findings. It reads `validators unavailable`
   when the loader refused the graph.
+- **`inert`** lists every defect of a declaration no shape reaches: an
+  ill-formed validator of a built-in component or of a custom component no
+  shape uses, or an ill-formed `sh:SPARQLFunction` nothing calls. Each is a
+  `defect` line naming the declaration, followed by its `error` lines. The
+  loader accepts such a declaration, because nothing runs it, and each defect
+  is a finding here. It reads `inert unavailable` when the loader refused the
+  graph.
+
+A report is clean when the loader accepted the graph, every `shacl-shacl`
+result is superseded and no unreached declaration is defective.
 
 The report goes to `OUT` either way, and `shapes lint clean true|false` and
 `shapes lint findings N` always go to stderr.

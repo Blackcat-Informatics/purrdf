@@ -48,8 +48,10 @@ as Turtle comments in the converted files where present.
 - DASH-specific metadata (`dash:GraphValidationTestCase`,
   `dash:FunctionTestCase`, `dash:expectedResult`, `dash:expression`) was
   removed and replaced with W3C-style `mf:Manifest` / `sht:Validate` entries.
-- `owl:imports <http://datashapes.org/dash>` was removed; the DASH ontology is
-  not vendored and not required for validation semantics exercised here.
+- `owl:imports <http://datashapes.org/dash>` was removed; the validation
+  semantics exercised here do not require the DASH ontology. (The DASH document
+  itself is vendored separately under `vectors/dash/` for the W3C SHACL cases
+  that import it.)
 - `function/simpleSPARQLFunction.test.ttl` was a `dash:FunctionTestCase`; it
   was converted into validation tests by wrapping each function call inside an
   `sh:expression` constraint.
