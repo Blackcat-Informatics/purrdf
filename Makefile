@@ -123,6 +123,11 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
 	python3 scripts/bench-criterion-targets.py --self-test
+	python3 scripts/cleanroom/transcript_audit.py --self-test
+	python3 scripts/cleanroom/guard_hook.py --self-test
+	python3 scripts/cleanroom/deny_settings.py --self-test
+	python3 scripts/cleanroom/similarity.py --self-test
+	python3 scripts/cleanroom/provenance.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test

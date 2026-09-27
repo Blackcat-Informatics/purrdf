@@ -166,6 +166,21 @@ jobs:
       - name: Check the bench comparison selects criterion suites only
         run: python3 scripts/bench-criterion-targets.py --self-test
 
+      - name: Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+        run: python3 scripts/cleanroom/transcript_audit.py --self-test
+
+      - name: Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+        run: python3 scripts/cleanroom/guard_hook.py --self-test
+
+      - name: Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+        run: python3 scripts/cleanroom/deny_settings.py --self-test
+
+      - name: Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+        run: python3 scripts/cleanroom/similarity.py --self-test
+
+      - name: Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+        run: python3 scripts/cleanroom/provenance.py --self-test
+
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 

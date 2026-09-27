@@ -21,6 +21,7 @@ vendored root and is enforced with zero changes here.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import subprocess
@@ -511,6 +512,19 @@ def self_test() -> int:
             print("SELF-TEST FAIL: a literal-string license did not parse")
             ok = False
 
+    # 8. THE PROVENANCE SCHEMA refuses and accepts in both directions (its own self-test
+    #    executes a refused file beside its accepted neighbour), and the tracked tree's
+    #    PROVENANCE.toml files, however many there are, all pass it.
+    if _provenance_module().self_test() != 0:
+        print("SELF-TEST FAIL: the provenance schema self-test failed")
+        ok = False
+    count, problems = provenance_offenders(root)
+    if problems:
+        print(f"SELF-TEST FAIL: tracked PROVENANCE.toml problems: {problems[:3]}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {count} tracked PROVENANCE.toml file(s) follow the schema")
+
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
 
@@ -653,6 +667,40 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
     return offenders
 
 
+# ── Every tracked PROVENANCE.toml follows the clean-room provenance schema ────
+#
+# A module that replaces a third-party crate states what it was written from and
+# what proves it right, in a `PROVENANCE.toml` beside it. That statement is a
+# licensing claim -- "the replaced crate's source was not consulted" is what keeps
+# the replaced crate's licence out of this tree -- so it is judged here, by the
+# schema `scripts/cleanroom/provenance.py` owns, over exactly the tracked files.
+def _provenance_module():
+    spec = importlib.util.spec_from_file_location(
+        "cleanroom_provenance", repo_root() / "scripts" / "cleanroom" / "provenance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def provenance_offenders(root: Path) -> tuple[int, list[str]]:
+    """How many tracked `PROVENANCE.toml` files there are, and every schema problem in them."""
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        sys.exit(f"check-licenses: git ls-files failed: {listing.stderr.strip()}")
+    files = [
+        root / rel
+        for rel in sorted(part for part in listing.stdout.split("\0") if part)
+        if Path(rel).name == "PROVENANCE.toml"
+    ]
+    return len(files), _provenance_module().check(files)
+
+
 def main() -> int:
     # ARGUMENTS ARE PARSED, and an unknown one is refused. This file used to ignore argv
     # entirely, so every flag was a silent no-op that still printed OK.
@@ -720,11 +768,23 @@ def main() -> int:
             print(f"  {problem}", file=sys.stderr)
         return 1
 
+    provenance_count, provenance_problems = provenance_offenders(root)
+    if provenance_problems:
+        print(
+            "License hygiene FAILED: a PROVENANCE.toml does not follow the clean-room\n"
+            "provenance schema (scripts/cleanroom/provenance.py):",
+            file=sys.stderr,
+        )
+        for problem in provenance_problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
+
     total = sum(1 for _ in roots)
     print(
         f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; "
         f"every first-party SPDX header declares {expected!r}; every published crate "
-        f"README states that offer in full."
+        f"README states that offer in full; {provenance_count} PROVENANCE.toml file(s) "
+        f"follow the provenance schema."
     )
     return 0
 
