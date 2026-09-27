@@ -3253,8 +3253,11 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 ///
 /// Beside it, each service takes `premise_iris`: the IRIs the premise DOCUMENT was read from
 /// (its retrieval IRI, or the base it was parsed under), which a host that read it from a
-/// file knows and a host handed bare N-Quads text does not — the empty slice. An
-/// `owl:imports` of one of these names the premise itself, so it is resolved in place
+/// file knows and a host handed bare N-Quads text does not — the empty slice. Each is the
+/// premise's own IRI, so an `owl:imports` on one of these is one of the premise's imports
+/// (besides those of its `owl:Ontology` header; an `owl:imports` on any other node is a
+/// premise triple, not an import). An `owl:imports` of one of these names the premise
+/// itself, so it is resolved in place
 /// ([`purrdf_entail::ImportMap::declare_loaded`]) rather than refused as missing. So is an
 /// import of an ontology the premise already declares (`<X> a owl:Ontology`, or an
 /// `owl:versionIRI` naming it), with no argument needed:
@@ -3439,6 +3442,8 @@ fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatase
 /// // A premise that IMPORTS its schema answers from the imports closure, with its
 /// // `owl:imports` triple left exactly where the caller put it.
 /// let importing = "<http://example.org/o> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n\
+///     <http://example.org/o> \
 ///     <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
 ///     <http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
@@ -6776,17 +6781,22 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     /// A premise that IMPORTS its schema, with the `owl:imports` triple left where the
     /// caller wrote it.
     const IMPORTING_PREMISE: &str = "<http://example.org/o> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n\
+<http://example.org/o> \
 <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
 <http://example.org/socrates> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Man> .\n";
 
-    /// A premise whose `owl:imports` names the premise DOCUMENT itself: refused when the host
-    /// cannot say where the premise came from, answered in place when it can — through all
-    /// three services, with the same verdict an import-free premise reaches.
+    /// A premise whose ontology header's `owl:imports` names the premise DOCUMENT itself:
+    /// refused when the host cannot say where the premise came from, answered in place when
+    /// it can — through all three services, with the same verdict an import-free premise
+    /// reaches.
     #[test]
     fn a_premise_that_imports_its_own_iri_resolves_when_the_host_names_it() {
         const SELF: &str = "file:///premises/self.ttl";
         let premise = "<file:///premises/self.ttl#p> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n\
+<file:///premises/self.ttl#p> \
 <http://www.w3.org/2002/07/owl#imports> <file:///premises/self.ttl> .\n\
 <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
 <http://example.org/B> .\n\

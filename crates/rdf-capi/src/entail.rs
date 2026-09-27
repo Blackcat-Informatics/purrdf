@@ -887,8 +887,11 @@ unsafe fn premise_iri_list<'a>(
 /// caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
 ///
 /// `premise_iris` / `premise_iri_count` are the IRIs the premise DOCUMENT was read from —
-/// its retrieval IRI, or the base it was parsed under, when the host knows one. An
-/// `owl:imports` of one of these names the premise itself, so it is resolved in place
+/// its retrieval IRI, or the base it was parsed under, when the host knows one. Each is the
+/// premise's own IRI: an `owl:imports` on one of these, like one on the premise's
+/// `owl:Ontology` header, is an import, while an `owl:imports` on any other node is a premise
+/// triple and names no document. An `owl:imports` of one of these names the premise itself,
+/// so it is resolved in place
 /// rather than refused as missing. `premise_iri_count == 0` (the array may then be NULL) is
 /// the ordinary case for a host handed bare text; like the import table it is required, in
 /// the same position on every host.
@@ -2833,7 +2836,8 @@ mod tests {
         const IRI: &str = "http://example.org/premise";
         let regime = CString::new("simple").expect("no interior NUL");
         let premise = CString::new(format!(
-            "<{IRI}> <http://www.w3.org/2002/07/owl#imports> <{IRI}> .\n\
+            "<{IRI}#ontology> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n\
+             <{IRI}#ontology> <http://www.w3.org/2002/07/owl#imports> <{IRI}> .\n\
              <https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
         ))
         .expect("no interior NUL");

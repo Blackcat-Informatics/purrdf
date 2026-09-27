@@ -155,7 +155,7 @@ const COMPOSITE_CONCLUSION: &str = concat!(
 const IMPORTING_PREMISE: &str = concat!(
     "@prefix ex: <http://example.org/> .\n",
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
-    "ex:o owl:imports ex:schema .\n",
+    "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
     "ex:tom a ex:Cat .\n",
 );
 
@@ -618,9 +618,11 @@ fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
 
 // ── `--import`: the documents the premise says it is not all of ─────────────────
 
-/// A premise that `owl:imports` its OWN document IRI — by its `file://` retrieval IRI, or by
-/// `--base` — needs no pair: the import names the document being read. The neighbour, an
-/// import of a document that is NOT the premise, is still refused by name.
+/// A premise whose ontology header `owl:imports` its OWN document IRI — by its `file://`
+/// retrieval IRI, or by `--base` — needs no pair: the import names the document being read.
+/// The neighbour, a header importing a document that is NOT the premise, is still refused by
+/// name; and the same `owl:imports` on a node that is no ontology header is a premise triple,
+/// not an import, so that premise is answered with no pair.
 #[test]
 fn a_premise_importing_its_own_iri_needs_no_pair() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -629,7 +631,10 @@ fn a_premise_importing_its_own_iri_needs_no_pair() {
     let own = write_file(
         dir,
         "own.ttl",
-        &format!("<#o> <http://www.w3.org/2002/07/owl#imports> <> .\n{SUBCLASS_PREMISE}"),
+        &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <> .\n{SUBCLASS_PREMISE}"
+        ),
     );
     for extra in [&[][..], &["--base", "http://example.org/premise"][..]] {
         let mut args = vec![
@@ -655,9 +660,33 @@ fn a_premise_importing_its_own_iri_needs_no_pair() {
         dir,
         "other.ttl",
         &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let data = write_file(
+        dir,
+        "data.ttl",
+        &format!(
             "<#o> <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
              {SUBCLASS_PREMISE}"
         ),
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &data,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\nentailment entailed\n"),
+        "{}",
+        stdout(&o)
     );
     let o = run(&[
         "entails",

@@ -749,22 +749,25 @@ fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
 }
 
 /// SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on `example.org`): the
-/// `owl:imports` target is a node the shapes graph describes with `sh:declare`, so the
-/// command line validates it with no `--import`, and the prefixes declared along
+/// `owl:imports` sits on `ex:TestPrefixes`, which is neither the shapes document's IRI nor
+/// an ontology header, so it is a prefix edge and not an import. The command line validates
+/// it with no `--import`, and the prefixes declared along
 /// `sh:prefixes/owl:imports*/sh:declare` — `imp:` on the target, `test:` on the importing
 /// node, neither a Turtle `@prefix` — reach the query, which reports `ex:Invalid`. The
-/// neighbour describes the target only with `rdfs:label` and is refused by name.
+/// neighbour types `ex:TestPrefixes` `owl:Ontology`: its `owl:imports` is then an import of
+/// a document nothing in hand declares, and it is refused by name.
 #[test]
-fn the_shacl_prefix_idiom_validates_without_an_import_and_a_labelled_target_is_refused() {
-    let idiom = |description: &str| {
+fn the_shacl_prefix_idiom_validates_without_an_import_and_a_header_import_is_refused() {
+    let idiom = |importer_type: &str| {
         format!(
             "@prefix ex: <http://example.org/ns#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
              @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
-             <http://example.org/ns#> {description} .\n\
-             ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+             <http://example.org/ns#> sh:declare [ sh:prefix \"imp\" ; \
+               sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ] .\n\
+             ex:TestPrefixes {importer_type} owl:imports <http://example.org/ns#> ;\n\
                sh:declare [ sh:prefix \"test\" ; \
                             sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
              ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
@@ -775,19 +778,8 @@ fn the_shacl_prefix_idiom_validates_without_an_import_and_a_labelled_target_is_r
         )
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let declared = write_file(
-        dir.path(),
-        "declared.ttl",
-        &idiom(
-            "sh:declare [ sh:prefix \"imp\" ; \
-             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
-        ),
-    );
-    let labelled = write_file(
-        dir.path(),
-        "labelled.ttl",
-        &idiom("rdfs:label \"a namespace\""),
-    );
+    let declared = write_file(dir.path(), "declared.ttl", &idiom(""));
+    let header = write_file(dir.path(), "header.ttl", &idiom("a owl:Ontology ;"));
     let data = write_file(
         dir.path(),
         "data.nt",
@@ -812,12 +804,12 @@ fn the_shacl_prefix_idiom_validates_without_an_import_and_a_labelled_target_is_r
         "the query ran with both declared prefixes: {report}"
     );
 
-    let out = run(&["validate", "--shapes", &labelled, &data]);
+    let out = run(&["validate", "--shapes", &header, &data]);
     let err = stderr(&out);
     assert_eq!(code(&out), 1, "a runtime refusal: {err}");
     assert!(
         err.contains("unresolved-import") && err.contains("<http://example.org/ns#>"),
-        "the refusal names the labelled target: {err}"
+        "the refusal names the header's import: {err}"
     );
     assert!(stdout(&out).is_empty(), "no report is written");
 }

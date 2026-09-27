@@ -189,6 +189,17 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
 
 /// `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`: the version IRI a query
 /// names is navigated back to its graph, whose imports are followed.
+///
+/// The path is prefix collection over the shapes graph as it stands. `ex:G`, `ex:Q` and
+/// `ex:R` are nodes of the shapes graph, and `ex:G` is neither the shapes graph's IRI nor an
+/// `owl:Ontology`, so its `owl:imports` edges are not document imports: the shapes graph
+/// loads with no table, and `t:` is bound through the path.
+///
+/// The neighbours make `ex:G` an ontology header. Its `owl:imports ex:Q` is then a
+/// document import, and each document it reaches must be in hand: `ex:Q` alone is refused
+/// by name, `ex:Q` declared an ontology moves the refusal to the `ex:R` its header imports
+/// (`ex:R`'s `sh:declare` does not make it a document), and `ex:R` declared too loads —
+/// with the same binding, because the prefix path is unchanged by any of it.
 #[test]
 fn the_prefixes_path_follows_version_iris_and_imports() {
     let graph = |headers: &str| {
@@ -199,21 +210,30 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
             declare_t(TARGET)
         )
     };
-    // `ex:R` is a node this document describes with `sh:declare`, so the import of it is
-    // in hand; `ex:Q` declares no prefix, and is in hand by its ontology header.
+    assert_eq!(violations(&graph("")), target_violation());
+
+    let refused = |headers: &str| {
+        let Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) =
+            parse_shapes(&graph(headers), None)
+        else {
+            panic!("an ontology header's import of a document nothing holds is refused");
+        };
+        iris
+    };
     assert_eq!(
-        violations(&graph("ex:Q a owl:Ontology .\n")),
+        refused("ex:G a owl:Ontology .\n"),
+        ["http://example.org/ns#Q"]
+    );
+    assert_eq!(
+        refused("ex:G a owl:Ontology .\nex:Q a owl:Ontology .\n"),
+        ["http://example.org/ns#R"]
+    );
+    assert_eq!(
+        violations(&graph(
+            "ex:G a owl:Ontology .\nex:Q a owl:Ontology .\nex:R a owl:Ontology .\n"
+        )),
         target_violation()
     );
-    // The neighbour: without `ex:Q`'s header the import of it names an ontology nothing in
-    // hand declares, and the shapes graph is refused rather than read without it. `ex:R` is
-    // not named: its `sh:declare` is what resolves it.
-    let Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) =
-        parse_shapes(&graph(""), None)
-    else {
-        panic!("an import of an ontology the shapes graph does not hold is refused");
-    };
-    assert_eq!(iris, ["http://example.org/ns#Q"]);
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────

@@ -156,19 +156,20 @@ is, and it is separate from `validate --base`, which sets only the DATA
 graph's base. An `@base` inside the shapes document still wins inside it, as
 Turtle specifies.
 
-An import whose document or ontology is **already loaded** needs no pair. It
-is resolved when it names a document that was read: the shapes document's
-own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack
---base`), an in-document `@base`, or an `--import` document's IRI. An import
-is also resolved when the graph holds `<X> a owl:Ontology`, or an ontology
-whose `owl:versionIRI` is `<X>`.
+Not every `owl:imports` triple is an import. OWL 2 reads a document's imports
+off its ontology header (*Mapping to RDF Graphs* §3.1.2, Table 4:
+`x rdf:type owl:Ontology . x owl:imports y`), and SHACL 1.2 Core follows them
+from the shapes graph's own IRI along `^owl:versionIRI?/owl:imports`. So an
+`owl:imports` is an import only when its subject is the shapes document's own
+IRI (its `file://` retrieval IRI, `--shapes-base`, `shacl pack --base` or an
+in-document `@base`; for an imported document, the IRI it was imported by), a
+node the document types `owl:Ontology`, or a node naming either as its
+`owl:versionIRI`. On any other node it is data: it stays in the shapes graph as
+written, and no document is looked for.
 
-An import is also resolved when the shapes graph describes its target with
-`sh:declare`. This is SHACL's prefix-declaration idiom: a SHACL-SPARQL query
-collects its prefixes along `sh:prefixes/owl:imports*/sh:declare` within the
-shapes graph, so the target of such an `owl:imports` is a node the shapes graph
-declares prefixes on, not a document to fetch. The W3C test suite writes
-exactly this, and it validates as written:
+SHACL-SPARQL's prefix path is such data. A query collects its prefixes along
+`sh:prefixes/owl:imports*/sh:declare` within the shapes graph, and the W3C test
+suite writes
 
 ```turtle
 <http://example.com/ns#> sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.com/ns#"^^xsd:anyURI ] .
@@ -176,10 +177,20 @@ ex:TestPrefixes owl:imports <http://example.com/ns#> ;
   sh:declare [ sh:prefix "test" ; sh:namespace "http://test.com/ns#"^^xsd:anyURI ] .
 ```
 
-Only `sh:declare` counts. A target the shapes graph describes some other way —
-only by an `rdfs:label`, say — is still an unresolved import. Every one of
-these rules applies across the whole closure, so a declaration that arrives in
-an imported document counts too. A
+`ex:TestPrefixes` is neither the document's IRI nor an ontology header, so that
+`owl:imports` is a prefix edge, not an import, and the test validates as
+written. So does `sparql/component/validator-001`, whose
+`owl:imports <http://datashapes.org/dash>` sits on a node that is neither.
+
+An import whose document or ontology is **already loaded** needs no pair. It
+is resolved when it names a document that was read: the shapes document's
+own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack
+--base`), an in-document `@base`, or an `--import` document's IRI. An import
+is also resolved when the graph holds `<X> a owl:Ontology`, or an ontology
+whose `owl:versionIRI` is `<X>`.
+
+Every one of these rules applies across the whole closure, so a declaration
+that arrives in an imported document counts too. A
 shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl`
 imports `sh:`, and `shacl.ttl` beside it declares `sh:` — is complete as
 written.

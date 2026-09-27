@@ -673,16 +673,18 @@ it is refused against `--shapes-product` and against a container.
 
 **`owl:imports` in the shapes graph.** PurRDF fetches nothing: `--import
 <IRI>=<FILE>` (repeatable, followed transitively) resolves one imported
-ontology to one local document. An import needs no pair when it names a
-document already read — the shapes document's own `file://` retrieval IRI,
-`--shapes-base` or `@base`, or an `--import` document — or an ontology already
-in the shapes graph: `<X> a owl:Ontology`, or an ontology whose
-`owl:versionIRI` is `<X>`, as when the W3C SHACL 1.2 vocabularies are merged
-into one document — or a node the shapes graph describes with `sh:declare`.
-That last is SHACL's prefix idiom: prefixes are collected along
-`sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so an import
-target that declares prefixes there is present, and the W3C `prefixes-001`
-vector validates as written. Any other unresolved
+ontology to one local document. An `owl:imports` is an import only on the
+shapes document's own IRI (its `file://` retrieval IRI, `--shapes-base` or
+`@base`), on an `owl:Ontology` header, or on a node naming either as its
+`owl:versionIRI` — OWL 2's ontology header and SHACL 1.2's
+`^owl:versionIRI?/owl:imports`. On any other node it is data: SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges are such triples, and the
+W3C `prefixes-001` and `validator-001` vectors validate as written. An import
+needs no pair when it names a document already read — the shapes document's
+own IRI, or an `--import` document — or an ontology already in the shapes
+graph: `<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`,
+as when the W3C SHACL 1.2 vocabularies are merged into one document. Any other
+unresolved
 import is refused (exit `1`), naming each IRI, the `--import` pair that
 resolves it, and — for a document that imports its own published IRI — the
 `--shapes-base` that reads it under that IRI; a pair the closure never reaches

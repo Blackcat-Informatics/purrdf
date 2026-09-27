@@ -120,10 +120,11 @@ use crate::{sink, source};
 /// one implementation of "what does this closure mean", so the two commands — and the
 /// Python, WebAssembly and C hosts — cannot diverge on it.
 ///
-/// An `owl:imports` that names neither the shapes document itself (its `--base`, `file://`
-/// retrieval IRI or `@base`) nor an ontology already in the shapes graph (`<X> a
-/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) nor a node the shapes
-/// graph describes with `sh:declare` (SHACL's prefix idiom), and that no `--import`
+/// An `owl:imports` is an import only on the shapes document's own IRI (its `--base`,
+/// `file://` retrieval IRI or `@base`), on an `owl:Ontology` header, or on a node naming
+/// either as its `owl:versionIRI`; on any other node it is data. An import that names neither
+/// the shapes document itself nor an ontology already in the shapes graph (`<X> a
+/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), and that no `--import`
 /// pair resolves, is refused by name, with the pair that resolves it — the product is never
 /// packed from a shapes graph smaller than the one named. See [`crate::shapes_source`]'s
 /// module documentation for the rule. A pair the closure never reaches is a usage error.

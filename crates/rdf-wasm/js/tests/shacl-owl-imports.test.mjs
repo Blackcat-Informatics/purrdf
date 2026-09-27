@@ -166,18 +166,20 @@ test("wasm_shacl_import_array_lengths: import arrays of different lengths are re
 });
 
 // SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on example.org): the
-// query's prefixes are collected along `sh:prefixes/owl:imports*/sh:declare`, and the
-// `owl:imports` target is a node this shapes graph describes with `description`. `imp:` is
-// declared only on that target and `test:` only on the importing node, neither a Turtle
-// `@prefix`, so a result proves the import was followed to the described node and both
-// declarations reached the query.
-const prefixIdiom = (description) => `@prefix ex: <http://example.org/ns#> .
+// query's prefixes are collected along `sh:prefixes/owl:imports*/sh:declare`. `imp:` is
+// declared only on the `owl:imports` target and `test:` only on the importing node, neither
+// a Turtle `@prefix`, so a result proves the edge was followed to the target and both
+// declarations reached the query. `ex:TestPrefixes` is neither the shapes graph's IRI nor an
+// ontology header, so its `owl:imports` is a prefix edge, not an import — unless
+// `importerType` types it `owl:Ontology`, which makes it an import of a document nothing in
+// hand declares.
+const prefixIdiom = (importerType) => `@prefix ex: <http://example.org/ns#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-<http://example.org/ns#> ${description} .
-ex:TestPrefixes owl:imports <http://example.org/ns#> ;
+<http://example.org/ns#> sh:declare [ sh:prefix "imp" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:TestPrefixes ${importerType} owl:imports <http://example.org/ns#> ;
   sh:declare [ sh:prefix "test" ; sh:namespace "http://example.org/test#"^^xsd:anyURI ] .
 ex:TestSPARQL sh:prefixes ex:TestPrefixes ;
   sh:select "SELECT $this ?value WHERE { $this imp:property ?value . FILTER (?value = test:Value) }" .
@@ -189,15 +191,8 @@ const PREFIX_IDIOM_DATA =
   "<http://example.org/ns#Invalid> <http://example.org/ns#property> <http://example.org/test#Value> .\n" +
   "<http://example.org/ns#Valid> <http://example.org/ns#property> <http://example.org/test#Other> .\n";
 
-test("wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a labelled target does not", () => {
-  const sarif = JSON.parse(
-    shaclValidateToSarif(
-      prefixIdiom(
-        'sh:declare [ sh:prefix "imp" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ]',
-      ),
-      PREFIX_IDIOM_DATA,
-    ),
-  );
+test("wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a header import does not", () => {
+  const sarif = JSON.parse(shaclValidateToSarif(prefixIdiom(""), PREFIX_IDIOM_DATA));
   const results = sarif.runs[0].results;
   assert.equal(results.length, 1, JSON.stringify(results));
   const text = JSON.stringify(results[0]);
@@ -206,7 +201,7 @@ test("wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no tabl
   assert.match(text, /SPARQLConstraintComponent/);
 
   assert.throws(
-    () => shaclValidateToSarif(prefixIdiom('rdfs:label "a namespace"'), PREFIX_IDIOM_DATA),
+    () => shaclValidateToSarif(prefixIdiom("a owl:Ontology ;"), PREFIX_IDIOM_DATA),
     (err) =>
       err instanceof ShaclImportError &&
       err.kind === "unresolved-import" &&

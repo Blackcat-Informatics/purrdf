@@ -76,11 +76,12 @@ purrdf shacl pack \
   --out shapes.purrshp
 ```
 
-An import of the shapes document's own IRI (`--base`, its `file://` retrieval
-IRI, or an in-document `@base`), of an ontology already in the shapes graph
-(`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), or of a
-node the shapes graph describes with `sh:declare` (SHACL's prefix idiom), needs
-no pair.
+Only an `owl:imports` on the shapes document's own IRI, on an `owl:Ontology`
+header, or on a node naming either as its `owl:versionIRI` is an import; on any
+other node it is data. An import of the shapes document's own IRI (`--base`,
+its `file://` retrieval IRI, or an in-document `@base`) or of an ontology
+already in the shapes graph (`<X> a owl:Ontology`, or an ontology whose
+`owl:versionIRI` is `<X>`) needs no pair.
 Every other `owl:imports` no pair resolves is refused by name, exactly as it is
 for `validate --shapes`, and a pair the closure never reaches is refused as
 unused. The product is never packed from a smaller shapes graph than the one

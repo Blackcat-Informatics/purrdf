@@ -716,15 +716,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   new terms and is folded into `contract_hash_with` and `scheduled_contract_hash`.
   The limit cannot bind a guard-free program.
 
-- **core:** `purrdf_core::imports`, the one rule for when an `owl:imports` is resolved
-  and the one merge that folds a resolved closure into a dataset: `ImportMap`
-  (`insert`, `declare_loaded`, `resolve_subjects_of`, `closure`,
-  `unresolved_imports`), `ImportClosure`
+- **core:** `purrdf_core::imports`, the one rule for which `owl:imports` triple is an
+  import, for when an import is resolved, and the one merge that folds a resolved
+  closure into a dataset: `ImportMap` (`insert`, `declare_loaded`, `imported_iris`,
+  `closure`, `unresolved_imports`), `ImportClosure`
   (`documents`, `unresolved`, `unreached`, `merge`), `unresolved_imports` and
-  `imported_iris`. Entailment and SHACL both take their verdict from it;
-  `purrdf-entail` re-exports it from `entails::imports`. `resolve_subjects_of`
-  registers a predicate whose subjects count as import targets in hand; the kernel
-  registers none, and SHACL registers `sh:declare`.
+  `imported_iris(graph, loaded)`. An `owl:imports` triple is an import only when its
+  subject is an anchor of its document — an IRI it was loaded under (for an imported
+  document, the IRI it was imported by), a subject it types `owl:Ontology`, or a subject
+  naming one of those as its `owl:versionIRI` — per OWL 2's ontology header (Mapping to
+  RDF Graphs §3.1.2) and SHACL 1.2's `^owl:versionIRI?/owl:imports`; any other
+  `owl:imports` triple is data. Entailment and SHACL both take their verdict from it;
+  `purrdf-entail` re-exports it from `entails::imports`.
 
 - **shapes:** `purrdf_shapes::imports`: the `ShapesImports` table (`from_turtle`,
   `insert`, `insert_turtle`, `declare_loaded`), the typed `ShapesImportError`
@@ -1686,16 +1689,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   version IRI in the graph, transitively over the closure, and the CLI, the product
   packer and entailment all take their verdict from that one rule.
 
-- **core, shapes:** SHACL's prefix-declaration idiom was refused as an unresolved
-  import. A SHACL-SPARQL query collects its prefixes along
-  `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so the target of such
-  an `owl:imports` is a node the shapes graph describes with `sh:declare`, not a
-  document to fetch. The approved W3C `sparql/node/prefixes-001` tests (SHACL 1.0 and
-  1.2) write exactly that, and every host refused them unless the caller declared the
-  target loaded. For a shapes graph, an import is now also resolved when the closure
-  holds a `sh:declare` triple whose subject is the import target, anywhere in the
-  closure; a target described any other way (only an `rdfs:label`, say) is still
-  refused. Entailment's rule is unchanged.
+- **core, shapes, entail:** every `owl:imports` triple was read as an import, whatever
+  its subject. OWL 2 reads a document's imports off its ontology header (Mapping to RDF
+  Graphs §3.1.2, Table 4) and SHACL 1.2 follows them from the shapes graph's own IRI
+  along `^owl:versionIRI?/owl:imports`, so an `owl:imports` on any other node imports
+  nothing. The approved W3C `sparql/node/prefixes-001` tests (SHACL 1.0 and 1.2) write
+  `ex:TestPrefixes owl:imports <…>` as a `sh:prefixes/owl:imports*/sh:declare` prefix
+  edge, and `sparql/component/validator-001` writes `owl:imports
+  <http://datashapes.org/dash>` on a node that is neither the document's IRI nor an
+  `owl:Ontology`; every host refused both as unresolved imports. An `owl:imports` is now
+  an import only on an IRI its document was loaded under, a subject typed
+  `owl:Ontology`, or a subject naming either as its `owl:versionIRI`; any other is data,
+  kept in the graph as written. Both tests validate as written with no import table, and
+  entailment reads a premise's imports by the same rule.
 
 - **shapes, rdf, python:** prefixes were recovered by scanning text. The SHACL-AF
   document-prefix fallback scanned the shapes document, so a `PREFIX` line inside one

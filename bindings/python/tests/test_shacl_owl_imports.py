@@ -136,14 +136,16 @@ def test_a_relative_key_is_an_invalid_entry_and_an_absolute_one_is_not() -> None
     purrdf.shapes.validate(IMPORTER, PERSON, imports=TABLE)
 
 
-def _prefix_idiom(description: str) -> str:
+def _prefix_idiom(importer_type: str) -> str:
     """SHACL's prefix idiom (the W3C ``sparql/node/prefixes-001`` shape on example.org).
 
-    The query's prefixes are collected along ``sh:prefixes/owl:imports*/sh:declare``, and
-    the ``owl:imports`` target is a node this shapes graph describes -- with
-    ``description``. ``imp:`` is declared only on that target and ``test:`` only on the
-    importing node, neither is a Turtle ``@prefix``, so a result proves the import was
-    followed to the described node and both declarations reached the query.
+    The query's prefixes are collected along ``sh:prefixes/owl:imports*/sh:declare``.
+    ``imp:`` is declared only on the ``owl:imports`` target and ``test:`` only on the
+    importing node, neither is a Turtle ``@prefix``, so a result proves the edge was
+    followed to the target and both declarations reached the query. ``ex:TestPrefixes``
+    is neither the shapes graph's IRI nor an ontology header, so its ``owl:imports`` is a
+    prefix edge and not an import -- unless ``importer_type`` types it ``owl:Ontology``,
+    which makes it an import of a document nothing in hand declares.
     """
     return (
         "@prefix ex: <http://example.org/ns#> .\n"
@@ -151,8 +153,9 @@ def _prefix_idiom(description: str) -> str:
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
-        f"<http://example.org/ns#> {description} .\n"
-        "ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n"
+        '<http://example.org/ns#> sh:declare [ sh:prefix "imp" ; '
+        'sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .\n'
+        f"ex:TestPrefixes {importer_type} owl:imports <http://example.org/ns#> ;\n"
         '  sh:declare [ sh:prefix "test" ; '
         'sh:namespace "http://example.org/test#"^^xsd:anyURI ] .\n'
         "ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n"
@@ -171,10 +174,8 @@ PREFIX_IDIOM_DATA = (
 )
 
 
-def test_the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() -> None:
-    declared = _prefix_idiom(
-        'sh:declare [ sh:prefix "imp" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ]'
-    )
+def test_the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_not() -> None:
+    declared = _prefix_idiom("")
     report = purrdf.shapes.validate(declared, PREFIX_IDIOM_DATA)
     assert report["conforms"] is False
     assert [(r["focus"], r["value"]) for r in report["results"]] == [
@@ -182,6 +183,6 @@ def test_the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_doe
     ]
 
     with pytest.raises(purrdf.shapes.ShapesImportError) as raised:
-        purrdf.shapes.validate(_prefix_idiom('rdfs:label "a namespace"'), PREFIX_IDIOM_DATA)
+        purrdf.shapes.validate(_prefix_idiom("a owl:Ontology ;"), PREFIX_IDIOM_DATA)
     assert raised.value.kind == "unresolved-import"
     assert raised.value.iris == ["http://example.org/ns#"]

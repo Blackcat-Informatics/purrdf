@@ -1335,7 +1335,9 @@ export function entailExplainConclusion(
  * not resolve and the premise does not hold, and on an inconsistent premise.
  *
  * `premiseIris` are the IRIs the premise document was read from — its retrieval IRI or
- * parse base, when the host knows one. An `owl:imports` of one of them names the premise
+ * parse base, when the host knows one. Each is the premise's own IRI: an `owl:imports` on
+ * one of them, like one on the premise's `owl:Ontology` header, is an import, while one on
+ * any other node is a premise triple. An `owl:imports` of one of them names the premise
  * itself and is resolved in place. The empty array is the ordinary case for bare text;
  * like the import arrays it is required, in the same position on every host.
  */
@@ -1406,11 +1408,12 @@ export function entailVerifyEntailment(
  * Every function that takes a Turtle shapes graph takes the caller's `owl:imports` table
  * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
  * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
- * IRI as its base. An `owl:imports` is resolved by a table entry, by `shapesBase` (or the
- * document's own `@base`) naming the imported document, by the closure declaring the
- * ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), or by
- * the closure describing `<X>` with `sh:declare` — SHACL's prefix-declaration idiom.
- * Anything else throws this class rather than validating a smaller shapes graph than the
+ * IRI as its base. An `owl:imports` is an import only on the shapes graph's own IRI
+ * (`shapesBase`, or the document's own `@base`), on an `owl:Ontology` header, or on a node
+ * naming either as its `owl:versionIRI`; on any other node it is data. An import is
+ * resolved by a table entry, by `shapesBase` (or the document's own `@base`) naming the
+ * imported document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+ * ontology whose `owl:versionIRI` is `<X>`). Anything else throws this class rather than validating a smaller shapes graph than the
  * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
  * enforces the rule.
  *

@@ -15,33 +15,43 @@
 //! warn-and-continue path: an import nothing in hand resolves is a
 //! [`ShapesImportError::Unresolved`], naming every such IRI at once.
 //!
+//! # Which `owl:imports` is an import
+//!
+//! SHACL 1.2 Core, on the shapes graph:
+//!
+//! > As a pre-validation step, SHACL processors should extend the originally provided shapes
+//! > graph by transitively following and importing all referenced shapes graphs through the
+//! > owl:imports predicate. When resolving an imported IRI, if the retrieved graph contains a
+//! > triple with the imported IRI as the object of owl:versionIRI, the processor should treat
+//! > the subject of that triple as the shapes graph IRI of the imported graph for the purpose
+//! > of following further owl:imports statements. Formally, processors should use the
+//! > property path ^owl:versionIRI?/owl:imports iteratively
+//!
+//! and OWL 2's mapping to RDF (§3.1.1, §3.1.2, Table 4) reads the imports of a document off
+//! its ontology header, `x rdf:type owl:Ontology . x owl:imports *:y`. PurRDF treats the
+//! SHOULD as a MUST. So an `owl:imports` triple of a shapes graph is an import only when its
+//! subject is the shapes graph's own IRI — the IRI it was read or parsed under
+//! ([`ShapesImports::declare_loaded`], the `loaded` argument of [`resolve_shapes_imports`]),
+//! or for an imported document the IRI it was imported by — a node the document types
+//! `owl:Ontology`, or a node naming one of those as its `owl:versionIRI`. Any other
+//! `owl:imports` triple is data: it stays in the shapes graph as written, and no document is
+//! looked for. The W3C test `sparql/component/validator-001` is that case — its
+//! `owl:imports <http://datashapes.org/dash>` sits on a node that is neither, and its
+//! expected report is computed without DASH.
+//!
+//! SHACL-SPARQL's prefix path `sh:prefixes/owl:imports*/sh:declare` is not an import either.
+//! It walks `owl:imports` edges between prefix-declaring nodes WITHIN the shapes graph (the
+//! W3C test `sparql/node/prefixes-001` writes `ex:TestPrefixes owl:imports
+//! <http://example.com/ns#>` for exactly that), and it is answered by the SPARQL prefix
+//! collection over the graph as it stands, never by fetching a document.
+//!
 //! # One rule, every host
 //!
-//! When an import counts as in hand is [`purrdf_core::imports`] — the same rule entailment
-//! applies, stated once in the kernel both engines sit on. This module adds only what a
-//! SHACL shapes graph needs beyond it: SHACL's own reading of an import target, each
-//! supplied document's own `@prefix` map (a SHACL-SPARQL query in an imported document
-//! resolves prefixed names against ITS declarations), and the refusal of a supplied document
-//! nothing imports.
-//!
-//! # A prefix-declaring node is in hand
-//!
-//! SHACL-SPARQL collects a query's prefix declarations along
-//! `sh:prefixes/owl:imports*/sh:declare` within the shapes graph. The target of such an
-//! `owl:imports` is a node the shapes graph itself describes with `sh:declare` — the W3C
-//! SHACL test suite writes
-//!
-//! ```turtle
-//! <http://example.com/ns#> sh:declare [ sh:prefix "ex" ; sh:namespace "…"^^xsd:anyURI ] .
-//! ex:TestPrefixes owl:imports <http://example.com/ns#> ; sh:declare [ … ] .
-//! ```
-//!
-//! — so that target is present, not missing. Every [`ShapesImports`] therefore registers
-//! `sh:declare` with the kernel rule's extension point
-//! ([`ImportMap::resolve_subjects_of`]): an `owl:imports <X>` is also resolved when the
-//! closure holds a triple `X sh:declare ?d`, in the shapes graph or in any document the
-//! closure imported. Nothing else about `X` counts: a target the shapes graph mentions only
-//! by an `rdfs:label`, say, is still an unresolved import.
+//! The rule, and when an import counts as in hand, is [`purrdf_core::imports`] — the same
+//! rule entailment applies, stated once in the kernel both engines sit on. This module adds
+//! only what a SHACL shapes graph needs beyond it: each supplied document's own `@prefix`
+//! map (a SHACL-SPARQL query in an imported document resolves prefixed names against ITS
+//! declarations), and the refusal of a supplied document nothing imports.
 //!
 //! [`resolve_shapes_imports`] is the one place the two meet. Every constructor of a
 //! [`Shapes`](crate::shapes::Shapes) — and so every validation, rules run, node-expression
@@ -79,7 +89,7 @@ use purrdf_core::imports::ImportMap;
 /// use purrdf_shapes::{ShapesError, engine};
 ///
 /// let shapes = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-///     <http://example.org/shapes> owl:imports <http://example.org/lib> .\n";
+///     <http://example.org/shapes> a owl:Ontology ; owl:imports <http://example.org/lib> .\n";
 ///
 /// // Nothing supplies the imported document: refused, by name.
 /// let Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) =
@@ -102,7 +112,7 @@ use purrdf_core::imports::ImportMap;
 ///     .expect("every import resolves");
 /// assert_eq!(parsed.node_shapes.len(), 1);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ShapesImports {
     /// The kernel's table: ontology IRI → document, plus the loaded IRIs.
     map: ImportMap,
@@ -111,21 +121,8 @@ pub struct ShapesImports {
     prefixes: BTreeMap<String, Vec<(String, String)>>,
 }
 
-impl Default for ShapesImports {
-    fn default() -> Self {
-        let mut map = ImportMap::new();
-        map.resolve_subjects_of(crate::model::sh::DECLARE);
-        Self {
-            map,
-            prefixes: BTreeMap::new(),
-        }
-    }
-}
-
 impl ShapesImports {
-    /// A table that supplies no document and declares no loaded IRI. It applies the
-    /// kernel rule with SHACL's prefix-declaring nodes in hand (see the
-    /// [module documentation](self)).
+    /// A table that supplies no document and declares no loaded IRI.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -209,10 +206,9 @@ impl ShapesImports {
     }
 
     /// Declare that the shapes graph was itself read from the document at `iri` — its
-    /// retrieval IRI, or the base it was parsed under. An `owl:imports <iri>` then names
-    /// a document already in hand. The SHACL idiom this serves is `sh:prefixes`
-    /// collecting `sh:declare`s along `owl:imports*`, which routinely points at the shapes
-    /// document's OWN IRI from a node that is no `owl:Ontology`.
+    /// retrieval IRI, or the base it was parsed under. `iri` is then the shapes graph's own
+    /// IRI: an `owl:imports` whose subject is `iri` is one of its imports, and an
+    /// `owl:imports <iri>` names a document already in hand.
     pub fn declare_loaded(&mut self, iri: impl Into<String>) {
         self.map.declare_loaded(iri);
     }
@@ -255,8 +251,8 @@ fn check_import_iri(iri: &str) -> Result<(), ShapesImportError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesImportError {
     /// The closure imports ontologies that nothing in hand resolves — no table entry, no
-    /// loaded document, no `owl:Ontology`, `owl:versionIRI` or `sh:declare` description of
-    /// the IRI in the closure.
+    /// loaded document, no `owl:Ontology` or `owl:versionIRI` declaration of the IRI in the
+    /// closure.
     /// Every such IRI, in the order the closure walk first met it.
     Unresolved {
         /// The unresolved ontology IRIs.
@@ -424,15 +420,86 @@ pub fn resolve_shapes_imports(
 #[cfg(test)]
 mod tests {
     use super::{ShapesImportError, ShapesImports, resolve_shapes_imports};
+    use crate::ShapesError;
+    use crate::engine::validate_graphs_with_config;
 
     const LIB: &str = "http://example.org/lib";
+    /// The IRI the shapes documents below are read under.
+    const SHAPES_IRI: &str = "http://example.org/shapes";
 
     fn graph(turtle: &str) -> std::sync::Arc<::purrdf::RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(turtle, None).expect("turtle")
     }
 
     const IMPORTER: &str = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-        <http://example.org/shapes> owl:imports <http://example.org/lib> .\n";
+        <http://example.org/shapes> a owl:Ontology ; owl:imports <http://example.org/lib> .\n";
+
+    const PREFIXES: &str = "@prefix ex: <http://example.org/ns#> .\n\
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+        @prefix sh: <http://www.w3.org/ns/shacl#> .\n";
+
+    /// The data every validation below runs over: `ex:Focus`, which has no `ex:p`, and
+    /// `ex:Other owl:imports ex:Target` as plain data.
+    const DATA: &str = "<http://example.org/ns#Focus> <http://example.org/ns#q> \"x\" .\n\
+        <http://example.org/ns#Other> <http://www.w3.org/2002/07/owl#imports> \
+        <http://example.org/ns#Target> .\n";
+
+    /// A shape that fires on [`DATA`]: `ex:Focus` needs an `ex:p`.
+    const LIB_SHAPE: &str = "ex:LibShape a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+        sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n";
+
+    /// The `(focus node, result path)` of every result of validating [`DATA`] against
+    /// `shapes`, read under [`SHAPES_IRI`] with `imports`.
+    fn results(
+        shapes: &str,
+        imports: &ShapesImports,
+    ) -> Result<Vec<(String, String)>, ShapesError> {
+        let report = validate_graphs_with_config(
+            DATA,
+            &format!("{PREFIXES}{shapes}"),
+            Some(SHAPES_IRI),
+            None,
+            imports,
+        )?;
+        Ok(report
+            .results
+            .iter()
+            .map(|r| {
+                (
+                    r.focus_node.to_string(),
+                    r.result_path
+                        .as_ref()
+                        .map_or_else(String::new, ToString::to_string),
+                )
+            })
+            .collect())
+    }
+
+    /// The one result [`LIB_SHAPE`] reports: `ex:Focus` has no `ex:p`.
+    fn lib_shape_fired() -> Vec<(String, String)> {
+        vec![(
+            "<http://example.org/ns#Focus>".to_owned(),
+            "<http://example.org/ns#p>".to_owned(),
+        )]
+    }
+
+    /// An import table supplying `turtle` (after [`PREFIXES`]) for each IRI.
+    fn table(documents: &[(&str, &str)]) -> ShapesImports {
+        let mut imports = ShapesImports::new();
+        for (iri, turtle) in documents {
+            imports
+                .insert_turtle(iri, &format!("{PREFIXES}{turtle}"))
+                .expect("the document parses");
+        }
+        imports
+    }
+
+    fn unresolved(outcome: Result<Vec<(String, String)>, ShapesError>) -> Vec<String> {
+        match outcome {
+            Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) => iris,
+            other => panic!("expected an unresolved-import refusal, got {other:?}"),
+        }
+    }
 
     #[test]
     fn an_unresolved_import_is_refused_and_a_supplied_one_is_merged() {
@@ -454,7 +521,7 @@ mod tests {
         let resolved = resolve_shapes_imports(&shapes, &[], &[], &imports).expect("resolved");
         assert_eq!(
             resolved.dataset.quad_count(),
-            2,
+            3,
             "the import's triple is merged"
         );
         assert_eq!(
@@ -502,7 +569,7 @@ mod tests {
         const SHNEX_TTL: &str = include_str!("../spec/shnex.ttl");
         let merged = graph(&format!("{SHNEX_TTL}\n{SHACL_TTL}"));
         assert!(
-            purrdf_core::imports::imported_iris(&merged)
+            purrdf_core::imports::imported_iris(merged.as_ref(), &[])
                 .iter()
                 .any(|iri| iri == "http://www.w3.org/ns/shacl#"),
             "the merged graph does import `sh:`"
@@ -517,40 +584,159 @@ mod tests {
         assert_eq!(iris, ["http://www.w3.org/ns/shacl#"]);
     }
 
-    /// SHACL's prefix idiom: the `owl:imports` target is a node the shapes graph describes
-    /// with `sh:declare`, so it is in hand with no table. The neighbour describes the same
-    /// node only with `rdfs:label` and is refused by name.
+    /// An `owl:imports` on the shapes graph's own IRI is an import, and unsupplied it is
+    /// refused. The neighbour writes it on `ex:Other`, which is neither the shapes graph's
+    /// IRI nor an `owl:Ontology`: nothing is refused, validation runs, and the triple is
+    /// data — it is still in the shapes graph, and a shape over `owl:imports` sees it.
     #[test]
-    fn a_prefix_declaring_import_target_resolves_and_a_labelled_one_does_not() {
-        let idiom = |description: &str| {
-            graph(&format!(
-                "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-                 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
-                 @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
-                 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
-                 <http://example.org/ns#> {description} .\n\
-                 <http://example.org/ns#P> owl:imports <http://example.org/ns#> .\n"
-            ))
-        };
-        let declared = idiom(
-            "sh:declare [ sh:prefix \"ex\" ; \
-             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
+    fn an_import_on_the_shapes_graph_iri_is_refused_and_one_on_another_node_is_data() {
+        const MAX_ZERO: &str = "ex:NoImports a sh:NodeShape ; sh:targetNode ex:Other ;\n\
+            sh:property [ sh:path owl:imports ; sh:maxCount 0 ] .\n";
+        let refused = results(
+            &format!("<{SHAPES_IRI}> owl:imports ex:Target .\n{MAX_ZERO}"),
+            &ShapesImports::new(),
         );
-        let resolved = resolve_shapes_imports(&declared, &[], &[], &ShapesImports::new())
-            .expect("a prefix-declaring node is in hand");
+        assert_eq!(unresolved(refused), ["http://example.org/ns#Target"]);
+
+        let data = format!("ex:Other owl:imports ex:Target .\n{MAX_ZERO}");
+        assert_eq!(
+            results(&data, &ShapesImports::new()).expect("a non-anchor owl:imports is data"),
+            [(
+                "<http://example.org/ns#Other>".to_owned(),
+                "<http://www.w3.org/2002/07/owl#imports>".to_owned()
+            )],
+            "validation ran, and the shape over owl:imports fired on the data graph's triple"
+        );
+        let shapes = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{data}"),
+            Some(SHAPES_IRI),
+        )
+        .expect("turtle");
+        let resolved = resolve_shapes_imports(&shapes, &[], &[SHAPES_IRI], &ShapesImports::new())
+            .expect("nothing to resolve");
         assert!(
-            std::sync::Arc::ptr_eq(&resolved.dataset, &declared),
+            std::sync::Arc::ptr_eq(&resolved.dataset, &shapes),
             "nothing was merged"
         );
-        let Err(ShapesImportError::Unresolved { iris }) = resolve_shapes_imports(
-            &idiom("rdfs:label \"a namespace\""),
-            &[],
-            &[],
-            &ShapesImports::new(),
-        ) else {
-            panic!("a node described only by a label is not an import in hand");
+        let other = ::purrdf::TermValue::iri("http://example.org/ns#Other");
+        let imports = ::purrdf::TermValue::iri("http://www.w3.org/2002/07/owl#imports");
+        let target = ::purrdf::TermValue::iri("http://example.org/ns#Target");
+        assert!(
+            resolved.dataset.quads().any(|quad| {
+                resolved.dataset.term_value(quad.s) == other
+                    && resolved.dataset.term_value(quad.p) == imports
+                    && resolved.dataset.term_value(quad.o) == target
+            }),
+            "the non-anchor owl:imports stays in the shapes graph as data"
+        );
+    }
+
+    /// An `owl:Ontology` header's import counts: unsupplied it is refused; supplied, the
+    /// imported document's shape fires. The control — the same shapes graph with no header
+    /// and no table — reports nothing, so the result is the imported shape's.
+    #[test]
+    fn an_ontology_header_import_is_refused_unsupplied_and_merged_supplied() {
+        let header = "ex:O a owl:Ontology ; owl:imports <http://example.org/lib> .\n";
+        assert_eq!(unresolved(results(header, &ShapesImports::new())), [LIB]);
+        assert_eq!(
+            results(header, &table(&[(LIB, LIB_SHAPE)])).expect("supplied"),
+            lib_shape_fired()
+        );
+        assert_eq!(
+            results(
+                "ex:O owl:imports <http://example.org/lib> .\n",
+                &ShapesImports::new()
+            )
+            .expect("no header, no import"),
+            []
+        );
+    }
+
+    /// An anonymous ontology header imports too; an untyped blank node does not.
+    #[test]
+    fn a_blank_node_header_imports_and_an_untyped_blank_node_does_not() {
+        assert_eq!(
+            unresolved(results(
+                "[] a owl:Ontology ; owl:imports <http://example.org/lib> .\n",
+                &ShapesImports::new()
+            )),
+            [LIB]
+        );
+        assert_eq!(
+            results(
+                "[] a ex:Thing ; owl:imports <http://example.org/lib> .\n",
+                &ShapesImports::new()
+            )
+            .expect("an untyped blank node imports nothing"),
+            []
+        );
+        assert_eq!(
+            results(
+                "[] a owl:Ontology ; owl:imports <http://example.org/lib> .\n",
+                &table(&[(LIB, LIB_SHAPE)])
+            )
+            .expect("supplied"),
+            lib_shape_fired()
+        );
+    }
+
+    /// `^owl:versionIRI?/owl:imports`: a node whose version IRI is the shapes graph's IRI
+    /// stands for the shapes graph, so its import counts. The neighbour versions another IRI
+    /// and its `owl:imports` is data.
+    #[test]
+    fn a_node_versioning_the_shapes_graph_iri_imports_and_one_versioning_another_does_not() {
+        let versioned = |version: &str| {
+            format!(
+                "ex:Series owl:versionIRI <{version}> ; owl:imports <http://example.org/lib> .\n"
+            )
         };
-        assert_eq!(iris, ["http://example.org/ns#"]);
+        assert_eq!(
+            unresolved(results(&versioned(SHAPES_IRI), &ShapesImports::new())),
+            [LIB]
+        );
+        assert_eq!(
+            results(&versioned(SHAPES_IRI), &table(&[(LIB, LIB_SHAPE)])).expect("supplied"),
+            lib_shape_fired()
+        );
+        assert_eq!(
+            results(
+                &versioned("http://example.org/elsewhere"),
+                &ShapesImports::new()
+            )
+            .expect("not an anchor"),
+            []
+        );
+    }
+
+    /// The closure is followed through an imported document's OWN header: the shape of the
+    /// document it imports fires. The neighbour's imported document writes the same
+    /// `owl:imports` on a node that is no anchor of it, so the walk stops there and a table
+    /// entry for the deeper document is refused as unreached.
+    #[test]
+    fn an_import_through_an_imported_documents_header_is_followed_and_a_non_anchor_one_is_not() {
+        const DEEP: &str = "http://example.org/deep";
+        let root = format!("<{SHAPES_IRI}> owl:imports <{LIB}> .\n");
+        let lib_header = format!("ex:LibHeader a owl:Ontology ; owl:imports <{DEEP}> .\n");
+        assert_eq!(
+            unresolved(results(&root, &table(&[(LIB, &lib_header)]))),
+            [DEEP]
+        );
+        assert_eq!(
+            results(&root, &table(&[(LIB, &lib_header), (DEEP, LIB_SHAPE)])).expect("supplied"),
+            lib_shape_fired()
+        );
+
+        let lib_data = format!("ex:LibNode owl:imports <{DEEP}> .\n");
+        assert_eq!(
+            results(&root, &table(&[(LIB, &lib_data)])).expect("the deeper triple is data"),
+            []
+        );
+        let Err(ShapesError::Imports(ShapesImportError::Unreached { iris })) =
+            results(&root, &table(&[(LIB, &lib_data), (DEEP, LIB_SHAPE)]))
+        else {
+            panic!("a document only a data triple names is never reached");
+        };
+        assert_eq!(iris, [DEEP]);
     }
 
     #[test]

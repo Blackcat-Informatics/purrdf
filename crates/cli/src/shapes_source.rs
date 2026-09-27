@@ -32,17 +32,18 @@
 //! "conform" against no shapes at all. A warning beside that verdict does not undo it, so
 //! there is no warn-and-continue path.
 //!
-//! What keeps this from refusing valid input is the resolution rule, `purrdf_core::imports`:
-//! an import is resolved when it names a document already LOADED — the shapes document's own
-//! retrieval IRI or base (including an in-document `@base`), or an `--import` document's — or
-//! when the closure already HOLDS the ontology it names (`<X> a owl:Ontology`, or an ontology
-//! whose `owl:versionIRI` is `<X>`) — or, for a shapes graph, describes `<X>` with
-//! `sh:declare`. That last case is SHACL's own idiom: `sh:prefixes` collects `sh:declare`s
-//! along `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so the import names a
-//! node the shapes graph declares prefixes on, not a document to fetch — the W3C
-//! `prefixes-001` vector validates as written. A shapes document that merges the W3C
-//! SHACL 1.2 vocabularies — `shnex.ttl` importing `sh:`, beside the `shacl.ttl` that declares
-//! it — is therefore complete as written and needs no `--import`.
+//! What keeps this from refusing valid input is the rule in `purrdf_core::imports`, in two
+//! halves. An `owl:imports` triple is an import only when its subject is the shapes
+//! document's own IRI — a `loaded` IRI below — an `owl:Ontology` header of the document, or a
+//! node naming one of those as its `owl:versionIRI` (SHACL 1.2's `^owl:versionIRI?/owl:imports`,
+//! OWL 2's ontology header); on any other node it is data, and the W3C `validator-001` and
+//! `prefixes-001` vectors validate as written. And an import is resolved when it names a
+//! document already LOADED — the shapes document's own retrieval IRI or base (including an
+//! in-document `@base`), or an `--import` document's — or when the closure already HOLDS the
+//! ontology it names (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+//! A shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl` importing
+//! `sh:`, beside the `shacl.ttl` that declares it — is therefore complete as written and needs
+//! no `--import`.
 //!
 //! Naming a pair also makes it MANDATORY that the pair is used: a pair the closure never
 //! reaches is refused, because it would be read and never used — the engine's
@@ -87,8 +88,9 @@ pub(crate) struct ShapesDocument {
     /// The IRIs this document was read FROM: the base it was parsed under (its `file://`
     /// retrieval IRI, `--base`, or the ontology IRI an `--import` pair named) and the base
     /// the document itself established — a Turtle or TriG `@base`, an RDF/XML root
-    /// `xml:base`, a JSON-LD `@context` `@base`. An `owl:imports` of one of these names a
-    /// document already loaded, so it is resolved in place.
+    /// `xml:base`, a JSON-LD `@context` `@base`. Each is the document's own IRI: an
+    /// `owl:imports` on one of these is an import, and an `owl:imports` of one of these names
+    /// a document already loaded, so it is resolved in place.
     pub(crate) loaded: Vec<String>,
 }
 
@@ -247,7 +249,8 @@ pub(crate) fn shapes_error(
         }
         ShapesImportError::Unreached { iris } => {
             let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
-            if imported_iris(&root.dataset).is_empty() {
+            let loaded: Vec<&str> = root.loaded.iter().map(String::as_str).collect();
+            if imported_iris(root.dataset.as_ref(), &loaded).is_empty() {
                 return CliError::Usage(format!(
                     "unreached-import: --import {named}: the shapes graph has no owl:imports at \
                      all, so {these} would be read and never used. Remove the pair, or import \

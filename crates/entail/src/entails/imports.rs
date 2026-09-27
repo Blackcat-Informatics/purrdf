@@ -25,6 +25,19 @@
 //! than consulted afterwards: an imported axiom has to be able to participate in a rule
 //! body beside an importing one, which it can only do if the chase sees one graph.
 //!
+//! # Which `owl:imports` is an import
+//!
+//! OWL 2 reads a document's imports off its ontology header — *Mapping to RDF Graphs*
+//! §3.1.2: "The set Imp(G) of the IRIs of ontology documents that are directly imported into
+//! G contains exactly all *:z1, ..., *:zk that are matched in the pattern" of Table 4,
+//! `*:x rdf:type owl:Ontology . *:x owl:imports *:z1 ...` (or `_:x` for an anonymous
+//! ontology). So an `owl:imports` on a node of the premise that is not its ontology header,
+//! not an IRI the premise was loaded under ([`ImportMap::declare_loaded`]), and not a node
+//! naming either as its `owl:versionIRI` imports nothing: it is an ordinary premise triple,
+//! reasoned over like any other, and no document is looked for. The rule is
+//! [`purrdf_core::imports`]'s (see there for the full citation), and it is the same rule
+//! the SHACL engine applies to a shapes graph.
+//!
 //! # An ontology already in the graph is not missing
 //!
 //! A premise that ALREADY holds the ontology it imports — its `owl:Ontology` header, or an
@@ -168,15 +181,19 @@ mod tests {
 
     const P: &str = "http://example.org/p";
 
-    /// A one-triple document `_:b p <o>`, plus optional `owl:imports` targets.
+    /// A one-triple document `_:b p <o>`, plus an ontology header `ex:self a owl:Ontology`
+    /// importing each target.
     fn document(label: &str, object: &str, imports: &[&str]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_blank(label, BlankScope::DEFAULT);
         let p = b.intern_iri(P);
         let o = b.intern_iri(object);
         b.push_quad(s, p, o, None);
+        let ontology = b.intern_iri("http://example.org/self");
+        let rdf_type = b.intern_iri(RDF_TYPE);
+        let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
+        b.push_quad(ontology, rdf_type, owl_ontology, None);
         for target in imports {
-            let ontology = b.intern_iri("http://example.org/self");
             let imports = b.intern_iri(OWL_IMPORTS);
             let target = b.intern_iri(target);
             b.push_quad(ontology, imports, target, None);
@@ -326,7 +343,8 @@ mod tests {
         const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
         const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
-        /// `ex:tom a ex:Cat`, plus `ex:o owl:imports ex:schema` when `imports` is set.
+        /// `ex:tom a ex:Cat`, plus `ex:o a owl:Ontology ; owl:imports ex:schema` when
+        /// `imports` is set.
         fn premise_graph(imports: bool) -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let tom = b.intern_iri("http://example.org/tom");
@@ -335,6 +353,8 @@ mod tests {
             b.push_quad(tom, ty, cat, None);
             if imports {
                 let ontology = b.intern_iri("http://example.org/o");
+                let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
+                b.push_quad(ontology, ty, owl_ontology, None);
                 let predicate = b.intern_iri(OWL_IMPORTS);
                 let schema = b.intern_iri("http://example.org/schema");
                 b.push_quad(ontology, predicate, schema, None);
@@ -415,8 +435,8 @@ mod tests {
     /// for the same reason the bug existed: the colliding term is in a side table.
     #[test]
     fn a_premise_blank_node_that_occurs_only_as_a_reifier_is_not_overwritten() {
-        // The premise: two all-IRI quads, `_:r` reifying one of them at `BlankScope(1)`,
-        // and an `owl:imports`.
+        // The premise: all-IRI quads, `_:r` reifying one of them at `BlankScope(1)`, and an
+        // ontology header's `owl:imports`.
         let premise = {
             let mut b = RdfDatasetBuilder::new();
             let s = b.intern_iri("http://example.org/s");
@@ -424,6 +444,9 @@ mod tests {
             let o = b.intern_iri("http://example.org/o");
             b.push_quad(s, p, o, None);
             let ontology = b.intern_iri("http://example.org/self");
+            let rdf_type = b.intern_iri(RDF_TYPE);
+            let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
+            b.push_quad(ontology, rdf_type, owl_ontology, None);
             let imports = b.intern_iri(OWL_IMPORTS);
             let target = b.intern_iri("http://example.org/a");
             b.push_quad(ontology, imports, target, None);
@@ -536,7 +559,11 @@ mod tests {
         let merged = triples(&rows);
         // The oracle observes the import: the graph DOES import `sh:`, so an empty answer
         // is the rule resolving it, not a graph with nothing to resolve.
-        assert!(imported_iris(&merged).iter().any(|iri| iri == SH));
+        assert!(
+            imported_iris(merged.as_ref(), &[])
+                .iter()
+                .any(|iri| iri == SH)
+        );
         assert_eq!(unresolved_imports(&merged, &[]), Vec::<String>::new());
         // …and `entails` takes the same verdict, with no import map at all.
         resolve(&merged, &ImportMap::new()).expect("an in-graph ontology resolves its import");
@@ -554,26 +581,16 @@ mod tests {
         assert_eq!(iri, SH);
     }
 
-    /// A document that imports its OWN IRI — the SHACL `sh:prefixes/owl:imports*` idiom,
-    /// from a node that is no `owl:Ontology` — imports nothing missing once the caller says
-    /// the graph was read from that IRI. The neighbours: the same graph with no loaded IRI,
-    /// or with a different one, still refuses the import by name.
+    /// A document whose header imports the document's OWN retrieval IRI imports nothing
+    /// missing once the caller says the graph was read from that IRI. The neighbours: the
+    /// same graph with no loaded IRI, or with a different one, still refuses the import by
+    /// name.
     #[test]
     fn self_import_is_resolved() {
         const DOC: &str = "http://example.org/shapes/doc.ttl";
-        let graph = triples(&[
-            (
-                DOC,
-                "http://www.w3.org/ns/shacl#declare",
-                "http://example.org/shapes/doc.ttl#ex",
-            ),
-            (
-                "http://example.org/shapes/doc.ttl#Prefixes",
-                OWL_IMPORTS,
-                DOC,
-            ),
-        ]);
-        assert_eq!(imported_iris(&graph), vec![DOC.to_owned()]);
+        const HEADER: &str = "http://example.org/shapes/doc.ttl#ontology";
+        let graph = triples(&[(HEADER, RDF_TYPE, OWL_ONTOLOGY), (HEADER, OWL_IMPORTS, DOC)]);
+        assert_eq!(imported_iris(graph.as_ref(), &[]), vec![DOC.to_owned()]);
         assert_eq!(unresolved_imports(&graph, &[DOC]), Vec::<String>::new());
         assert_eq!(unresolved_imports(&graph, &[]), vec![DOC.to_owned()]);
         assert_eq!(
@@ -641,7 +658,11 @@ mod tests {
         // Through a map: `early` is met first and supplied by no one, but the document the
         // map supplies for `supplied` declares it; that document's own import of `missing`
         // is followed and named.
-        let premise = triples(&[(ROOT, OWL_IMPORTS, EARLY), (ROOT, OWL_IMPORTS, SUPPLIED)]);
+        let premise = triples(&[
+            (ROOT, RDF_TYPE, OWL_ONTOLOGY),
+            (ROOT, OWL_IMPORTS, EARLY),
+            (ROOT, OWL_IMPORTS, SUPPLIED),
+        ]);
         let mut map = ImportMap::new();
         map.insert(
             SUPPLIED,
@@ -670,6 +691,7 @@ mod tests {
 
         const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
         let premise = triples(&[
+            ("http://example.org/o", RDF_TYPE, OWL_ONTOLOGY),
             (
                 "http://example.org/o",
                 OWL_IMPORTS,
@@ -704,5 +726,193 @@ mod tests {
             !constructs.contains(&Construct::UnresolvedOntologyImport),
             "{constructs:?}"
         );
+    }
+
+    // ── Which `owl:imports` is an import ────────────────────────────────────────────
+
+    const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    const TOM: &str = "http://example.org/tom";
+    const CAT: &str = "http://example.org/Cat";
+    const ANIMAL: &str = "http://example.org/Animal";
+    const LIB: &str = "http://example.org/lib";
+    const DOC: &str = "http://example.org/premise.ttl";
+    const OTHER_NODE: &str = "http://example.org/other-node";
+
+    /// `ex:tom a ex:Cat` plus `rows`.
+    fn premise_with(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
+        let mut all = vec![(TOM, RDF_TYPE, CAT)];
+        all.extend_from_slice(rows);
+        triples(&all)
+    }
+
+    /// The map supplying `ex:Cat rdfs:subClassOf ex:Animal` as [`LIB`].
+    fn schema_map() -> ImportMap {
+        let mut map = ImportMap::new();
+        map.insert(LIB, triples(&[(CAT, SUB_CLASS_OF, ANIMAL)]));
+        map
+    }
+
+    /// The outcome of `entails(premise, conclusion)` under OWL 2 RL, and the constructs its
+    /// report names.
+    fn run(
+        premise: &RdfDataset,
+        conclusion: &[(&str, &str, &str)],
+        map: &ImportMap,
+    ) -> Result<(bool, Vec<crate::report::Construct>), EntailError> {
+        let certificate = crate::entails(premise, &triples(conclusion), crate::Regime::OwlRl, map)?;
+        let entailed = matches!(certificate.outcome(), crate::EntailmentOutcome::Entailed(_));
+        let constructs = certificate
+            .report()
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        Ok((entailed, constructs))
+    }
+
+    /// An `owl:imports` on a node that is neither the premise's header nor its loaded IRI is
+    /// a premise triple, not an import: the run is not refused, the triple is itself entailed
+    /// (it is in the premise), and the report names no import boundary. The neighbour types
+    /// the same node `owl:Ontology`, and its unsupplied import is refused by name.
+    #[test]
+    fn a_non_anchor_owl_imports_is_a_premise_triple_and_a_header_one_is_an_import() {
+        use crate::report::Construct;
+
+        let data = premise_with(&[(OTHER_NODE, OWL_IMPORTS, LIB)]);
+        let (entailed, constructs) =
+            run(&data, &[(OTHER_NODE, OWL_IMPORTS, LIB)], &ImportMap::new())
+                .expect("a non-anchor owl:imports is not refused");
+        assert!(entailed, "the triple is still in the premise, as data");
+        assert!(
+            !constructs.contains(&Construct::UnresolvedOntologyImport)
+                && !constructs.contains(&Construct::ResolvedOntologyImport),
+            "no document was imported, so no import boundary: {constructs:?}"
+        );
+
+        let header = premise_with(&[
+            (OTHER_NODE, RDF_TYPE, OWL_ONTOLOGY),
+            (OTHER_NODE, OWL_IMPORTS, LIB),
+        ]);
+        let Err(EntailError::UnresolvedImport(iri)) =
+            run(&header, &[(TOM, RDF_TYPE, CAT)], &ImportMap::new())
+        else {
+            panic!("an ontology header's unsupplied import is refused");
+        };
+        assert_eq!(iri, LIB);
+        let (entailed, constructs) =
+            run(&header, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map()).expect("supplied");
+        assert!(entailed, "the imported schema's axiom took part");
+        assert!(constructs.contains(&Construct::ResolvedOntologyImport));
+    }
+
+    /// An `owl:imports` on the IRI the premise was loaded under is an import: unsupplied it
+    /// is refused; supplied, the conclusion only the imported schema licenses is entailed and
+    /// the report says the closure was resolved. The neighbour declares no loaded IRI, so the
+    /// very same triple is data: nothing is refused, the supplied schema is never merged, and
+    /// the same conclusion is NOT entailed.
+    #[test]
+    fn an_import_on_the_loaded_iri_counts_and_without_it_the_triple_is_data() {
+        use crate::report::Construct;
+
+        let premise = premise_with(&[(DOC, OWL_IMPORTS, LIB)]);
+        let mut loaded = ImportMap::new();
+        loaded.declare_loaded(DOC);
+        let Err(EntailError::UnresolvedImport(iri)) =
+            run(&premise, &[(TOM, RDF_TYPE, CAT)], &loaded)
+        else {
+            panic!("an unsupplied import on the loaded IRI is refused");
+        };
+        assert_eq!(iri, LIB);
+
+        let mut supplied = schema_map();
+        supplied.declare_loaded(DOC);
+        let (entailed, constructs) =
+            run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &supplied).expect("supplied");
+        assert!(entailed);
+        assert!(
+            constructs.contains(&Construct::ResolvedOntologyImport)
+                && !constructs.contains(&Construct::UnresolvedOntologyImport),
+            "{constructs:?}"
+        );
+
+        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
+            .expect("with no loaded IRI the triple is data");
+        assert!(
+            !entailed,
+            "the schema was not imported, so its axiom took no part"
+        );
+        assert!(!constructs.contains(&Construct::ResolvedOntologyImport));
+        let (entailed, _) = run(&premise, &[(DOC, OWL_IMPORTS, LIB)], &schema_map())
+            .expect("with no loaded IRI the triple is data");
+        assert!(entailed, "the triple is still in the premise");
+    }
+
+    /// An anonymous ontology header imports, and so does a node naming the loaded IRI as its
+    /// version IRI. Their neighbours — an untyped blank node, a node versioning another IRI —
+    /// import nothing.
+    #[test]
+    fn a_blank_header_and_a_versioning_node_import_and_their_neighbours_do_not() {
+        let blank = |class: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let header = b.intern_blank("h", BlankScope::DEFAULT);
+            let rdf_type = b.intern_iri(RDF_TYPE);
+            let class = b.intern_iri(class);
+            let imports = b.intern_iri(OWL_IMPORTS);
+            let lib = b.intern_iri(LIB);
+            b.push_quad(header, rdf_type, class, None);
+            b.push_quad(header, imports, lib, None);
+            b.freeze().expect("freeze")
+        };
+        let Err(EntailError::UnresolvedImport(iri)) =
+            resolve(&blank(OWL_ONTOLOGY), &ImportMap::new())
+        else {
+            panic!("an anonymous ontology's import is refused unsupplied");
+        };
+        assert_eq!(iri, LIB);
+        assert!(
+            resolve(&blank("http://example.org/Thing"), &ImportMap::new())
+                .expect("an untyped blank node imports nothing")
+                .is_none()
+        );
+
+        const SERIES: &str = "http://example.org/series";
+        let versioned = |version: &str| {
+            triples(&[
+                (SERIES, OWL_VERSIONIRI, version),
+                (SERIES, OWL_IMPORTS, LIB),
+            ])
+        };
+        let mut map = ImportMap::new();
+        map.declare_loaded(DOC);
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&versioned(DOC), &map) else {
+            panic!("a node versioning the loaded IRI stands for the premise");
+        };
+        assert_eq!(iri, LIB);
+        assert!(
+            resolve(&versioned("http://example.org/elsewhere"), &map)
+                .expect("a node versioning another IRI imports nothing")
+                .is_none()
+        );
+    }
+
+    /// A materialization is handed no loaded IRI, so its import boundary is raised by an
+    /// ontology header's import and by nothing else: a non-anchor `owl:imports` raises none.
+    #[test]
+    fn materialize_raises_the_import_boundary_for_a_header_import_only() {
+        use crate::report::Construct;
+        use crate::{Materialization, materialize};
+
+        let raised = |premise: &RdfDataset| {
+            let (_, report) = materialize(premise, Materialization::OwlRl).expect("a closure");
+            report
+                .boundaries()
+                .iter()
+                .any(|boundary| boundary.construct() == Construct::UnresolvedOntologyImport)
+        };
+        assert!(raised(&premise_with(&[
+            (OTHER_NODE, RDF_TYPE, OWL_ONTOLOGY),
+            (OTHER_NODE, OWL_IMPORTS, LIB),
+        ])));
+        assert!(!raised(&premise_with(&[(OTHER_NODE, OWL_IMPORTS, LIB)])));
     }
 }

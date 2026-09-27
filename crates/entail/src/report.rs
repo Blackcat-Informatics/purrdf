@@ -1060,7 +1060,7 @@ impl RunStats {
 
 /// What the dataset itself contains that bears on a boundary.
 ///
-/// One pass over the quads, so a boundary is emitted because the input actually holds the
+/// Read off the quads, so a boundary is emitted because the input actually holds the
 /// construct rather than because the lane might in principle meet it.
 #[derive(Debug, Clone, Copy, Default)]
 struct DatasetSurvey {
@@ -1068,13 +1068,15 @@ struct DatasetSurvey {
     named_graph: bool,
     /// Whether any quad of ANY graph mentions a triple term.
     triple_term: bool,
-    /// Whether the dataset names another ontology DOCUMENT with `owl:imports`.
+    /// Whether the dataset IMPORTS another ontology document.
     ///
-    /// An IRI OBJECT and nothing else, which is the same test
-    /// [`imports::resolve`](crate::entails::imports) applies: `owl:imports` is defined to
-    /// relate an ontology to an ontology IRI, so a blank-node or literal object names no
-    /// document and cannot make one missing. Flagging on the PREDICATE alone would have the
-    /// boundary say a document's axioms are absent when the triple named no document at all.
+    /// Exactly [`purrdf_core::imports::imported_iris`], the rule
+    /// [`imports::resolve`](crate::entails::imports) applies: an `owl:imports` whose subject
+    /// is an ontology header of the dataset (or names one as its `owl:versionIRI`), with an
+    /// IRI object. A survey is handed no IRI the dataset was loaded under, so its anchors are
+    /// the dataset's own headers. An `owl:imports` on any other subject is data and names no
+    /// document, and a blank-node or literal object names none either; flagging either would
+    /// have the boundary say a document's axioms are absent when no document was imported.
     ontology_import: bool,
 }
 
@@ -1086,19 +1088,16 @@ impl DatasetSurvey {
     /// of itself and the default graph, so a triple term sitting in one is a term this
     /// crate's chase cannot look inside exactly as a default-graph one is.
     ///
-    /// All three questions are answered in one pass, so the three-way break below can
-    /// actually fire: the `owl:imports` id is resolved once before the loop (a dataset that
-    /// never mentions the predicate interns no id for it, so that lookup costs one map
-    /// probe), and each quad's predicate id — read alongside its resolved [`TermRef`] view
-    /// via `ds.quads()`, zipped lock-step with `ds.quad_refs()` — is compared to it directly
-    /// rather than by a second full scan. When no id was interned, the import question is
-    /// already settled as `false`, so the exit guard treats "no id to match" the same as
-    /// "already found"; either way the loop still stops the moment the other two flags are
-    /// set, rather than draining the rest of the dataset.
+    /// The named-graph and triple-term questions are answered in one pass that stops the
+    /// moment both are settled, rather than draining the rest of the dataset. The import
+    /// question is the kernel's rule, which costs one term lookup and no pass at all for a
+    /// dataset that never mentions `owl:imports`.
     fn of<D: DatasetView>(ds: &D) -> Self {
-        let mut survey = Self::default();
-        let imports = ds.term_id_by_value(&TermValue::iri(crate::vocab::OWL_IMPORTS));
-        for (ids, quad) in ds.quads().zip(ds.quad_refs()) {
+        let mut survey = Self {
+            ontology_import: !purrdf_core::imports::imported_iris(ds, &[]).is_empty(),
+            ..Self::default()
+        };
+        for quad in ds.quad_refs() {
             if quad.g.is_some() {
                 survey.named_graph = true;
             }
@@ -1108,13 +1107,7 @@ impl DatasetSurvey {
             {
                 survey.triple_term = true;
             }
-            if imports == Some(ids.p) && matches!(quad.o, TermRef::Iri(_)) {
-                survey.ontology_import = true;
-            }
-            if survey.named_graph
-                && survey.triple_term
-                && (survey.ontology_import || imports.is_none())
-            {
+            if survey.named_graph && survey.triple_term {
                 break;
             }
         }
@@ -1445,9 +1438,11 @@ impl ReasoningReport {
     /// This report, restated for a run whose whole `owl:imports` closure WAS resolved.
     ///
     /// Every [`Construct::UnresolvedOntologyImport`] boundary becomes a
-    /// [`Construct::ResolvedOntologyImport`] one; a report that names neither is returned
-    /// unchanged, which is the common case and costs one scan of a list that is at most
-    /// sixteen long.
+    /// [`Construct::ResolvedOntologyImport`] one, and a report that names neither gains the
+    /// resolved one. The only caller calls this exactly when the premise HAS imports, and the
+    /// survey can miss them: it is handed no IRI the premise was loaded under, so an import
+    /// anchored only on the premise document's own IRI (see [`purrdf_core::imports`]) is
+    /// one the chase never saw and the caller did resolve.
     ///
     /// # Why the swap happens here and not in `boundaries`
     ///
@@ -1465,14 +1460,15 @@ impl ReasoningReport {
     ///
     /// Order is preserved: the two constructs are adjacent in [`Construct`] declaration
     /// order and the boundary list is sorted by it, so swapping one for the other cannot
-    /// move a neighbour and two identical runs still render byte-identically.
+    /// move a neighbour, an added one is sorted into place, and two identical runs still
+    /// render byte-identically.
     pub(crate) fn with_resolved_imports(mut self) -> Self {
         for boundary in &mut self.boundaries {
             if boundary.construct() == Construct::UnresolvedOntologyImport {
                 *boundary = Boundary::of(Construct::ResolvedOntologyImport);
             }
         }
-        self
+        self.with_boundary(Construct::ResolvedOntologyImport)
     }
 
     /// The rules the run's calculus states that NO specification table does — exactly what
@@ -1814,13 +1810,16 @@ mod tests {
         use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
 
         use super::DatasetSurvey;
-        use crate::vocab::OWL_IMPORTS;
+        use crate::vocab::{OWL_IMPORTS, OWL_ONTOLOGY, RDF_TYPE};
 
         const NS: &str = "http://example.org/import-object#";
 
         for (what, object) in [("blank node", None), ("literal", Some("not-an-iri"))] {
             let mut b = RdfDatasetBuilder::new();
             let s = b.intern_iri(&format!("{NS}o"));
+            let rdf_type = b.intern_iri(RDF_TYPE);
+            let ontology = b.intern_iri(OWL_ONTOLOGY);
+            b.push_quad(s, rdf_type, ontology, None);
             let imports = b.intern_iri(OWL_IMPORTS);
             let o = match object {
                 None => b.intern_blank("target", BlankScope::DEFAULT),
@@ -1843,6 +1842,9 @@ mod tests {
         // question rather than answering it `false`.
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri(&format!("{NS}o"));
+        let rdf_type = b.intern_iri(RDF_TYPE);
+        let ontology = b.intern_iri(OWL_ONTOLOGY);
+        b.push_quad(s, rdf_type, ontology, None);
         let imports = b.intern_iri(OWL_IMPORTS);
         let o = b.intern_iri(&format!("{NS}other"));
         b.push_quad(s, imports, o, None);
@@ -1853,11 +1855,11 @@ mod tests {
     /// `DatasetSurvey::of` reports each of its three flags independently of the other two,
     /// across every one of the eight combinations.
     ///
-    /// This pins the survey's single loop: `named_graph`, `triple_term` and
-    /// `ontology_import` are each set from a distinct condition inside one pass over
-    /// `ds.quads().zip(ds.quad_refs())`, and the loop exits the moment all three are
-    /// settled rather than draining the rest of the dataset. Because the three fields are
-    /// monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
+    /// This pins the survey's loop: `named_graph` and `triple_term` are each set from a
+    /// distinct condition inside one pass over `ds.quad_refs()`, and the loop exits the
+    /// moment both are settled rather than draining the rest of the dataset, while
+    /// `ontology_import` is the kernel's import rule (an ontology header's `owl:imports`
+    /// here). Because the loop's fields are monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
     /// early) could only be caught by checking the FINAL flags against every combination of
     /// which conditions the dataset actually holds — a single "does it work at all" case
     /// would pass even with a guard that always breaks after the first quad. Every
@@ -1870,7 +1872,7 @@ mod tests {
         use purrdf_core::RdfDatasetBuilder;
 
         use super::DatasetSurvey;
-        use crate::vocab::OWL_IMPORTS;
+        use crate::vocab::{OWL_IMPORTS, OWL_ONTOLOGY, RDF_TYPE};
 
         const NS: &str = "http://example.org/dataset-survey#";
 
@@ -1902,6 +1904,9 @@ mod tests {
                     }
 
                     if ontology_import {
+                        let rdf_type = b.intern_iri(RDF_TYPE);
+                        let ontology = b.intern_iri(OWL_ONTOLOGY);
+                        b.push_quad(s, rdf_type, ontology, graph);
                         let imports = b.intern_iri(OWL_IMPORTS);
                         let other_doc = b.intern_iri(&format!("{NS}other-ontology"));
                         b.push_quad(s, imports, other_doc, graph);

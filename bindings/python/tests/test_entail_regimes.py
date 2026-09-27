@@ -1089,14 +1089,16 @@ def test_the_import_table_is_required_rather_than_defaulted() -> None:
 def test_py_entail_premise_iris() -> None:
     """`premise_iris` names the document the premise was read from.
 
-    A premise that imports its OWN IRI, with an empty import table, is refused when
-    the caller declares no premise IRI and answered when it names that IRI: the two
-    calls differ in `premise_iris` alone, so an argument that was silently dropped
-    would make both refuse.
+    A premise whose ontology header imports its OWN IRI, with an empty import table, is
+    refused when the caller declares no premise IRI and answered when it names that IRI:
+    the two calls differ in `premise_iris` alone, so an argument that was silently
+    dropped would make both refuse.
     """
     premise_iri = "http://example.org/premise"
     premise = (
-        f"<{premise_iri}> <http://www.w3.org/2002/07/owl#imports> <{premise_iri}> .\n"
+        f"<{premise_iri}#ontology> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+        f"<{premise_iri}#ontology> <http://www.w3.org/2002/07/owl#imports> <{premise_iri}> .\n"
         "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
     )
     conclusion = "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"

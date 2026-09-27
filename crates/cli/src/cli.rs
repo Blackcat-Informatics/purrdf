@@ -908,8 +908,10 @@ pub(crate) enum Command {
         /// import is only ever the document the operator named. An import of the shapes
         /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of an
         /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`), or of a node the shapes graph describes with
-        /// `sh:declare` (SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom), needs no pair. Any other `owl:imports` no pair resolves
+        /// `owl:versionIRI` is `<X>`) needs no pair. Only an `owl:imports` on the shapes
+        /// document's own IRI, on an `owl:Ontology` header, or on a node naming either as
+        /// its `owl:versionIRI` is an import; on any other node it is data (SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges among them). Any import no pair resolves
         /// is refused by name (exit 1) rather than validated as if the shapes graph were
         /// complete, and a pair the closure never reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
@@ -1591,8 +1593,10 @@ pub(crate) enum ShaclCommand {
         /// import is only ever the document the operator named. An import of the shapes
         /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), of an
         /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`), or of a node the shapes graph describes with
-        /// `sh:declare` (SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom), needs no pair. Any other `owl:imports` no pair resolves
+        /// `owl:versionIRI` is `<X>`) needs no pair. Only an `owl:imports` on the shapes
+        /// document's own IRI, on an `owl:Ontology` header, or on a node naming either as
+        /// its `owl:versionIRI` is an import; on any other node it is data (SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges among them). Any import no pair resolves
         /// is refused by name (exit 1) rather than packed as if the shapes graph were
         /// complete, exactly as `validate --shapes` refuses it, and a pair the closure never
         /// reaches is refused as unused (exit 2).

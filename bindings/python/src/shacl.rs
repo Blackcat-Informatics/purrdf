@@ -21,11 +21,13 @@
 //! Every function here that takes a Turtle shapes graph takes an `imports` keyword: the
 //! shapes graph's `owl:imports` table, a sequence of `(ontology IRI, Turtle document)`
 //! pairs — the same shape `purrdf.entail`'s `imports` takes — each document parsed with its
-//! ontology IRI as its base. An `owl:imports` in the shapes graph is resolved by one of
-//! these, by a document the shapes graph was read under (`shapes_base`, or its own
-//! `@base`), by the closure declaring the ontology (`<X> a owl:Ontology`, or an
-//! ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
-//! `sh:declare` — SHACL's prefix-declaration idiom. Anything else — or an entry no import names
+//! ontology IRI as its base. An `owl:imports` in the shapes graph is an import only on the
+//! shapes graph's own IRI (`shapes_base`, or its own `@base`), on an `owl:Ontology` header,
+//! or on a node naming either as its `owl:versionIRI`; on any other node it is data. An
+//! import is resolved by one of these entries, by a document the shapes graph was read under
+//! (`shapes_base`, or its own `@base`), or by the closure declaring the ontology
+//! (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`). Anything else —
+//! or an entry no import names
 //! — raises `ShapesImportError` rather than validating a smaller shapes graph than the one
 //! named, exactly as the Rust API, the command line, WebAssembly and C refuse it. The
 //! default `()` imports nothing and still enforces the rule. PurRDF fetches nothing.

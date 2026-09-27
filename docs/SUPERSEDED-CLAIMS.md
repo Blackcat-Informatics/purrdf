@@ -527,7 +527,7 @@ refuses it with `EntailError::UnresolvedImport`. Pinned by
 `merged_vocabulary_needs_no_import_flag` and `unresolved_import_is_refused` (CLI),
 `merged_vocabulary_packs` and `unresolved_import_refused` (product),
 `import_present_in_graph_is_resolved`, `absent_import_is_unresolved` and
-`self_import_is_resolved` (the rule), `the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused`
+`self_import_is_resolved` (the rule), `the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused`
 (the W3C `prefixes-001` vector), and the cross-host verdict tests
 (`crates/validate/tests/shapes_owl_imports.rs`,
 `every_shapes_lane_gives_the_same_owl_imports_verdict`,
@@ -647,3 +647,42 @@ as a finding in its `inert` section, so the report is not clean. Pinned by
 `validator_declarations_enforce_attachment_kind_and_query_datatype`
 (`tests/component_parameters.rs`) and the `sparql_function_with_*_is_rejected` tests in
 `crates/shapes/src/shapes.rs`.
+
+### Every `owl:imports` triple is an import, and a `sh:declare` description resolves one
+
+**Was stated in** `crates/rdf-core/src/imports.rs`, `crates/shapes/src/imports.rs`, the
+`owl:imports` section of `docs/book/src/validation/shacl.md`, `crates/shapes/README.md`,
+`crates/cli/README.md` and the host documentation of the shapes-graph import table:
+
+> An `owl:imports <X>` is also resolved when the closure holds a triple `X sh:declare ?d`
+> ... SHACL-SPARQL collects a query's prefix declarations along
+> `sh:prefixes/owl:imports*/sh:declare` WITHIN the shapes graph, so the target of such an
+> `owl:imports` is a node the shapes graph describes with `sh:declare`, not a document
+> that has to be fetched.
+
+**Why it was believed.** The imports rule read every `owl:imports` triple of a graph as
+an import, whatever its subject. The W3C `sparql/node/prefixes-001` test writes
+`ex:TestPrefixes owl:imports <http://example.com/ns#>` for its prefix path, so under that
+reading the test needed a special route that counted the `sh:declare` node as present.
+
+**What changed.** Neither specification reads an import off an arbitrary node. OWL 2's
+*Mapping to RDF Graphs* §3.1.2 extracts Imp(G) from the ontology header patterns of Table 4,
+`x rdf:type owl:Ontology . x owl:imports y`, and SHACL 1.2 Core follows imports from the
+shapes graph's own IRI along `^owl:versionIRI?/owl:imports`. `ex:TestPrefixes` is
+neither, so its triple was never an import, and the special route answered a question the
+specification never asks. The same misreading made `sparql/component/validator-001` —
+whose `owl:imports <http://datashapes.org/dash>` sits on a node that is neither the test
+document's IRI nor an `owl:Ontology` — demand a document its approved report is computed
+without.
+
+**The rule now.** An `owl:imports` triple is an import exactly when its subject is an
+anchor of its document: an IRI the document was loaded under (for an imported document,
+the IRI it was imported by), a subject the document types `owl:Ontology`, or a subject
+naming one of those as its `owl:versionIRI`. Any other `owl:imports` triple is data. The
+`sh:declare` route is gone; SHACL-SPARQL's prefix path walks `owl:imports` edges within
+the shapes graph as prefix collection. The rule is `purrdf_core::imports::imported_iris`,
+for entailment and SHACL alike. Pinned by the kernel tests in
+`crates/rdf-core/src/imports.rs`, `crates/shapes/src/imports.rs` and
+`crates/entail/src/entails/imports.rs`,
+`the_prefixes_path_follows_version_iris_and_imports` (`tests/sparql_prefixes.rs`) and
+`the_w3c_validator_001_vectors_validate_with_no_import` (the command line).

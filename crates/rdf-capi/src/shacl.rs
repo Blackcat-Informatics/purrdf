@@ -186,11 +186,13 @@ unsafe fn cstr_array<'a>(
 /// `import_iris` / `import_documents` / `import_count` are the shapes graph's
 /// `owl:imports` table: entry `i` declares that `import_iris[i]` names the Turtle document
 /// `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
-/// arrays may then be NULL) is the empty table. An `owl:imports` is resolved by a table
+/// arrays may then be NULL) is the empty table. An `owl:imports` is an import only on the
+/// shapes graph's own IRI (`shapes_base_iri`, or the document's own `@base`), on an
+/// `owl:Ontology` header, or on a node naming either as its `owl:versionIRI`; on any other
+/// node it is data. An import is resolved by a table
 /// entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
-/// document, by the closure declaring the ontology (`<X> a owl:Ontology`, or an
-/// ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
-/// `sh:declare` — SHACL's prefix-declaration idiom; anything else — or a table entry
+/// document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+/// ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry
 /// nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
 /// smaller shapes graph than the one named. Read its kind and IRIs with
 /// `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
@@ -2883,24 +2885,27 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     }
 
     /// SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on `example.org`): the
-    /// `owl:imports` target is a node the shapes graph describes with `sh:declare`, so the call
-    /// succeeds with an EMPTY import table, and the prefixes `imp:` (declared only on the
-    /// target) and `test:` (only on the importing node) reach the query, which reports
-    /// `ex:Invalid` with `test:Value`. The neighbour describes the target only with
-    /// `rdfs:label` and is refused with the typed import error naming it.
+    /// `owl:imports` sits on `ex:TestPrefixes`, which is neither the shapes graph's IRI nor an
+    /// ontology header, so it is a prefix edge and not an import: the call succeeds with an
+    /// EMPTY import table, and the prefixes `imp:` (declared only on the target) and `test:`
+    /// (only on the importing node) reach the query, which reports `ex:Invalid` with
+    /// `test:Value`. The neighbour types `ex:TestPrefixes` `owl:Ontology`, making its
+    /// `owl:imports` an import of a document nothing in hand declares, and is refused with the
+    /// typed import error naming it.
     #[test]
-    fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() {
+    fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_not() {
         use std::ffi::CString;
 
-        let idiom = |description: &str| {
+        let idiom = |importer_type: &str| {
             CString::new(format!(
                 "@prefix ex: <http://example.org/ns#> .\n\
                  @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
                  @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
                  @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
                  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
-                 <http://example.org/ns#> {description} .\n\
-                 ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+                 <http://example.org/ns#> sh:declare [ sh:prefix \"imp\" ; \
+                   sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ] .\n\
+                 ex:TestPrefixes {importer_type} owl:imports <http://example.org/ns#> ;\n\
                    sh:declare [ sh:prefix \"test\" ; \
                                 sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
                  ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
@@ -2940,10 +2945,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             (status, buffer, error)
         };
 
-        let (status, buffer, _) = validate(&idiom(
-            "sh:declare [ sh:prefix \"imp\" ; \
-             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
-        ));
+        let (status, buffer, _) = validate(&idiom(""));
         assert_eq!(status, PurrdfStatus::Ok as i32);
         // SAFETY: a successful call wrote a live buffer.
         let sarif = unsafe { take_text(buffer) };
@@ -2955,7 +2957,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             "both declared prefixes reached the query: {sarif}"
         );
 
-        let (status, _, error) = validate(&idiom("rdfs:label \"a namespace\""));
+        let (status, _, error) = validate(&idiom("a owl:Ontology ;"));
         // SAFETY: a failed call wrote a live error.
         let refused = unsafe { take_import_error(status, error) };
         assert_eq!(

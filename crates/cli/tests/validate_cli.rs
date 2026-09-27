@@ -1378,10 +1378,11 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
 // and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
-// --import` and `shex --import` give. An import whose ontology is already IN the shapes graph,
-// or whose target the shapes graph describes with `sh:declare`, needs no pair; any other unresolved import is REFUSED, because a shapes graph whose shapes
-// all live in an imported document would otherwise report `conforms true / results 0`
-// against no shapes at all.
+// --import` and `shex --import` give. Only an `owl:imports` on the shapes document's own IRI,
+// on an `owl:Ontology` header, or on a node versioning either is an import; any other is data.
+// An import whose ontology is already IN the shapes graph needs no pair; any other unresolved
+// import is REFUSED, because a shapes graph whose shapes all live in an imported document
+// would otherwise report `conforms true / results 0` against no shapes at all.
 
 /// The W3C SHACL 1.2 core vocabulary, vendored beside the shapes engine.
 const SHACL_TTL: &str = include_str!("../../shapes/spec/shacl.ttl");
@@ -1554,7 +1555,8 @@ fn unresolved_import_is_refused() {
 /// The vendored W3C `sparql/node/prefixes-001` test: `ex:TestPrefixes owl:imports` the IRI
 /// upstream publishes the test under, a node the document describes with `sh:declare` — SHACL's
 /// `sh:prefixes/owl:imports*/sh:declare` path, reaching the `ex:` prefix declared there.
-/// Nothing needs fetching: the import names a node the shapes graph holds.
+/// `ex:TestPrefixes` is neither the document's IRI nor an ontology header, so that triple is
+/// a prefix edge and not a document import: nothing needs fetching.
 const PREFIXES_001: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../vectors/shacl/sparql/node/prefixes-001.ttl"
@@ -1592,16 +1594,18 @@ fn assert_prefixes_001_verdict(out: &Output) {
 }
 
 /// The W3C `prefixes-001` vector validates as written, with no `--import` and no
-/// `--shapes-base`: its `owl:imports` target is the node the document itself describes with
-/// `sh:declare` — SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom — so the import is in
-/// hand, and the run reaches the W3C verdict with the same file as data. `--shapes-base`
-/// changes nothing about that, and `shacl pack` packs it as written too.
+/// `--shapes-base`: its `owl:imports` sits on `ex:TestPrefixes`, which is neither the
+/// document's IRI nor an ontology header, so it is the `sh:prefixes/owl:imports*/sh:declare`
+/// prefix edge and not an import, and the run reaches the W3C verdict with the same file as
+/// data. `--shapes-base` changes nothing about that, and `shacl pack` packs it as written too.
 ///
-/// The neighbour: the same document with the target's `sh:declare` replaced by an
-/// `rdfs:label` describes the target, but not as SHACL reads an import target, so the import
-/// is refused by name — and the refusal names both remedies, `--shapes-base` and `--import`.
+/// The neighbour: the same document with `ex:TestPrefixes` typed `owl:Ontology`. Its
+/// `owl:imports` is then an ontology header's import of a document nothing in hand declares,
+/// so it is refused by name — and the refusal names both remedies, `--shapes-base` and
+/// `--import`. Taking the first remedy reads the document under that IRI, which resolves the
+/// import in place and reaches the W3C verdict again.
 #[test]
-fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused() {
+fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
     assert_prefixes_001_verdict(&run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]));
     assert_prefixes_001_verdict(&run(&[
         "validate",
@@ -1614,21 +1618,21 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused() 
 
     let dir = tempfile::tempdir().expect("tempdir");
     let vector = std::fs::read_to_string(PREFIXES_001).expect("the vendored vector");
-    let target = format!("<{PREFIXES_001_IRI}>\n  sh:declare [");
+    let importer = "ex:TestPrefixes\n  owl:imports";
     assert_eq!(
-        vector.matches(&target).count(),
+        vector.matches(importer).count(),
         1,
-        "the idiom's target, once"
+        "the idiom's importing node, once"
     );
-    let labelled = write_file(
+    let header = write_file(
         dir.path(),
-        "prefixes-001-labelled.ttl",
+        "prefixes-001-header.ttl",
         &vector.replace(
-            &target,
-            &format!("<{PREFIXES_001_IRI}>\n  rdfs:label \"prefixes-001\" .\n[]\n  sh:declare ["),
+            importer,
+            "ex:TestPrefixes\n  rdf:type owl:Ontology ;\n  owl:imports",
         ),
     );
-    let refused = run(&["validate", "--shapes", &labelled, PREFIXES_001]);
+    let refused = run(&["validate", "--shapes", &header, PREFIXES_001]);
     let err = stderr(&refused);
     assert_eq!(code(&refused), 1, "{err}");
     assert!(
@@ -1644,6 +1648,14 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused() 
         "and the pair that resolves it: {err}"
     );
     assert!(stdout(&refused).is_empty(), "no report is written");
+    assert_prefixes_001_verdict(&run(&[
+        "validate",
+        "--shapes",
+        &header,
+        "--shapes-base",
+        PREFIXES_001_IRI,
+        PREFIXES_001,
+    ]));
 
     // `shacl pack` packs the vector as written, and the product it writes reaches the same
     // verdict.
@@ -1788,7 +1800,8 @@ const EXTERNAL_IMPORT_SHAPES: &str = concat!(
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
     "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
     "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
-    "<http://example.org/validator-shapes> owl:imports <http://example.org/validator-vocabulary> .\n",
+    "<http://example.org/validator-shapes> a owl:Ontology ;\n",
+    "    owl:imports <http://example.org/validator-vocabulary> .\n",
     "ex:TestConstraintComponent a ex:ConstraintComponent ;\n",
     "    sh:parameter ex:TestParameter1, ex:TestParameter2 ;\n",
     "    sh:validator [ a ex:SPARQLAskValidator ;\n",
@@ -1838,6 +1851,39 @@ fn an_external_import_is_refused_until_a_document_is_named_for_it() {
         "on the focus node \"Hallo Welt\": {}",
         stdout(&out)
     );
+}
+
+/// The W3C `sparql/component/validator-001` vectors (SHACL 1.0 and SHACL 1.2) validate as
+/// written, with no `--import`: each writes `owl:imports <http://datashapes.org/dash>` on a
+/// node that is neither the document's IRI nor an `owl:Ontology`, so that triple is data and
+/// no document is looked for. The approved report is one violation, on `"Hallo Welt"`. The
+/// refused neighbour is [`an_external_import_is_refused_until_a_document_is_named_for_it`],
+/// whose import sits on an ontology header.
+#[test]
+fn the_w3c_validator_001_vectors_validate_with_no_import() {
+    for vector in [
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl12/tests/sparql/component/validator-001.ttl"
+        ),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/component/validator-001.ttl"
+        ),
+    ] {
+        let out = run(&["validate", "--shapes", vector, vector]);
+        let err = stderr(&out);
+        assert_eq!(code(&out), 0, "{vector}: {err}");
+        assert!(
+            err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+            "{vector}: {err}"
+        );
+        assert!(
+            stdout(&out).contains("<http://www.w3.org/ns/shacl#focusNode> \"Hallo Welt\""),
+            "{vector}: {}",
+            stdout(&out)
+        );
+    }
 }
 
 /// Naming ANY pair makes the closure mandatory: an import no pair resolves is refused by
@@ -1924,7 +1970,8 @@ fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
         "in-place.ttl",
         &format!(
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-             <http://example.org/in-place> owl:imports <http://example.org/present> ,\n\
+             <http://example.org/in-place> a owl:Ontology ;\n\
+                 owl:imports <http://example.org/present> ,\n\
                  <http://example.org/present/1.0> .\n\
              <http://example.org/present> a owl:Ontology ;\n\
                  owl:versionIRI <http://example.org/present/1.0> .\n{IMPORT_B}"
@@ -1942,18 +1989,20 @@ fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
         "the shapes graph's OWN shape still fires: {err}"
     );
 
-    // 1b. A document importing its OWN IRI — by its in-document `@base`, and by its
-    //     `file://` retrieval IRI through `<>` with no `@base` — names a document already
-    //     loaded, from a node that is no `owl:Ontology`.
+    // 1b. A document whose ontology header imports the document's OWN IRI — by its
+    //     in-document `@base`, and by its `file://` retrieval IRI through `<>` with no
+    //     `@base` — names a document already loaded.
     for (name, header) in [
         (
             "self-base.ttl",
             "@base <http://example.org/shapes/self> .\n\
-             <#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+             <#ontology> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <> .\n",
         ),
         (
             "self-retrieval.ttl",
-            "<#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+            "<#ontology> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <> .\n",
         ),
     ] {
         let own = write_file(dir.path(), name, &format!("{header}{IMPORT_B}"));
@@ -1985,7 +2034,8 @@ fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
         "cyc-root.ttl",
         concat!(
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
-            "<http://example.org/cyc-root> owl:imports <http://example.org/cyc-a> .\n",
+            "<http://example.org/cyc-root> a owl:Ontology ;\n",
+            "    owl:imports <http://example.org/cyc-a> .\n",
         ),
     );
     let cyc_a = write_file(
@@ -2040,7 +2090,8 @@ fn an_imported_documents_prefixes_and_message_templates_survive_the_fold() {
         "sp-root.ttl",
         concat!(
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
-            "<http://example.org/sp-root> owl:imports <http://example.org/sparql-a> .\n",
+            "<http://example.org/sp-root> a owl:Ontology ;\n",
+            "    owl:imports <http://example.org/sparql-a> .\n",
         ),
     );
     let imported = write_file(
@@ -2655,13 +2706,13 @@ const PREFIXED_SPARQL_RDF: &str = r#"<?xml version="1.0"?>
 </rdf:RDF>
 "#;
 
-/// A shapes document that `owl:imports` its OWN IRI, which it establishes with an
-/// in-document base, and whose one shape requires `ex:p` on `ex:a`.
+/// A shapes document whose ontology header `owl:imports` the document's OWN IRI, which it
+/// establishes with an in-document base, and whose one shape requires `ex:p` on `ex:a`.
 const SELF_IMPORT_TTL: &str = r"@base <http://example.org/shapes> .
 @prefix ex: <http://example.org/ns#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
-<#doc> owl:imports <> .
+<#doc> a owl:Ontology ; owl:imports <> .
 ex:S a sh:NodeShape ;
   sh:targetNode ex:a ;
   sh:property [ sh:path ex:p ; sh:minCount 1 ] .
@@ -2673,7 +2724,7 @@ const SELF_IMPORT_TRIG: &str = r"@base <http://example.org/shapes> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 {
-  <#doc> owl:imports <> .
+  <#doc> a owl:Ontology ; owl:imports <> .
   ex:S a sh:NodeShape ;
     sh:targetNode ex:a ;
     sh:property [ sh:path ex:p ; sh:minCount 1 ] .
@@ -2686,9 +2737,9 @@ const SELF_IMPORT_RDF: &str = r##"<?xml version="1.0"?>
          xmlns:sh="http://www.w3.org/ns/shacl#"
          xmlns:owl="http://www.w3.org/2002/07/owl#"
          xml:base="http://example.org/shapes">
-  <rdf:Description rdf:about="#doc">
+  <owl:Ontology rdf:about="#doc">
     <owl:imports rdf:resource=""/>
-  </rdf:Description>
+  </owl:Ontology>
   <sh:NodeShape rdf:about="http://example.org/ns#S">
     <sh:targetNode rdf:resource="http://example.org/ns#a"/>
     <sh:property rdf:parseType="Resource">

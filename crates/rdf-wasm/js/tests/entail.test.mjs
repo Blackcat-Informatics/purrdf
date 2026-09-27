@@ -844,13 +844,14 @@ test("a malformed import table is refused by entry", async () => {
   );
 });
 
-// `premiseIris` reaches the boundary: a premise importing its OWN IRI, with an empty
-// import table, throws when no premise IRI is declared and answers when that IRI is —
-// the two calls differ in `premiseIris` alone.
+// `premiseIris` reaches the boundary: a premise whose ontology header imports its OWN IRI,
+// with an empty import table, throws when no premise IRI is declared and answers when that
+// IRI is — the two calls differ in `premiseIris` alone.
 test("wasm_entail_premise_iris: the three services honour premiseIris", () => {
   const iri = "http://example.org/premise";
   const premise =
-    `<${iri}> <http://www.w3.org/2002/07/owl#imports> <${iri}> .\n` +
+    `<${iri}#ontology> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n` +
+    `<${iri}#ontology> <http://www.w3.org/2002/07/owl#imports> <${iri}> .\n` +
     "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
   const conclusion = "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
   const pattern = "<https://example.org/x> <https://example.org/p> ?o .\n";

@@ -198,12 +198,14 @@ the ontology IRI `import_iris[i]` names the Turtle document `import_documents[i]
 parsed with that IRI as its base; `import_count == 0` (the arrays may then be NULL) is
 the empty table. PurRDF fetches nothing.
 
-An `owl:imports <X>` is resolved by a table entry for `<X>`, by `shapes_base_iri` (or the
-document's own `@base`) being `<X>`, or by the closure declaring the ontology
-(`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), or by the
-closure describing `<X>` with `sh:declare` — SHACL's prefix-declaration idiom, where an
-`owl:imports` along `sh:prefixes/owl:imports*` names a node the shapes graph declares
-prefixes on. Anything else —
+An `owl:imports` triple is an import only when its subject is the shapes graph's own IRI
+(`shapes_base_iri`, or the document's own `@base`; for an imported document, the IRI it
+was imported by), a node the document types `owl:Ontology`, or a node naming either as its
+`owl:versionIRI`. On any other node — SHACL's `sh:prefixes/owl:imports*/sh:declare` prefix
+edges among them — it is data. An import `<X>` is resolved by a table entry for `<X>`, by
+`shapes_base_iri` (or the document's own `@base`) being `<X>`, or by the closure declaring
+the ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+Anything else —
 and a table entry no import names — fails the call with
 `PURRDF_STATUS_SHAPES_IMPORT_ERROR`: the same refusal the Rust API, the `purrdf` command
 line, Python and WebAssembly raise for the same shapes graph, rather than a verdict about

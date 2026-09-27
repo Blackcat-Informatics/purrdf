@@ -403,20 +403,22 @@ fn a_prepared_preparation_of_the_closure_matches_a_fresh_parse() {
 // ── SHACL's prefix idiom ──────────────────────────────────────────────────────
 
 /// The W3C SHACL `sparql/node/prefixes-001` idiom on `example.org`: the query's prefixes are
-/// collected along `sh:prefixes/owl:imports*/sh:declare`, and the `owl:imports` target is a
-/// node this shapes graph describes with `sh:declare`. `imp:` is declared ONLY on that
-/// target and `test:` only on the importing node — neither is a Turtle `@prefix` — so a
-/// result proves the import was followed to the described node and both declarations
-/// reached the query. `description` is what the shapes graph says about the target.
-fn prefix_idiom(description: &str) -> String {
+/// collected along `sh:prefixes/owl:imports*/sh:declare`. `imp:` is declared ONLY on the
+/// `owl:imports` target and `test:` only on the importing node — neither is a Turtle
+/// `@prefix` — so a result proves the edge was followed to the target and both declarations
+/// reached the query. `ex:TestPrefixes` is neither the shapes graph's IRI nor an ontology
+/// header, so its `owl:imports` is a prefix edge and not an import — unless `importer_type`
+/// types it `owl:Ontology`, which makes it an import of a document nothing in hand declares.
+fn prefix_idiom(importer_type: &str) -> String {
     format!(
         "@prefix ex: <http://example.org/ns#> .\n\
          @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
          @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
          @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
          @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
-         <http://example.org/ns#> {description} .\n\
-         ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+         <http://example.org/ns#> sh:declare [ sh:prefix \"imp\" ; \
+           sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ] .\n\
+         ex:TestPrefixes {importer_type} owl:imports <http://example.org/ns#> ;\n\
            sh:declare [ sh:prefix \"test\" ; \
                         sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
          ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
@@ -427,12 +429,11 @@ fn prefix_idiom(description: &str) -> String {
     )
 }
 
-/// The import target declares `imp:` — the idiom.
-const PREFIX_DECLARING: &str = "sh:declare [ sh:prefix \"imp\" ; \
-    sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]";
+/// The idiom as the W3C test writes it: the importing node is no ontology header.
+const PREFIX_EDGE: &str = "";
 
-/// The neighbour: the import target is described, but only by a label.
-const LABELLED_ONLY: &str = "rdfs:label \"a namespace\"";
+/// The neighbour: the importing node is an ontology header, so its `owl:imports` is an import.
+const ONTOLOGY_HEADER: &str = "a owl:Ontology ;";
 
 /// `ex:Invalid` holds `test:Value`, the one the query reports; `ex:Valid` holds another.
 const PREFIX_IDIOM_DATA: &str = "<http://example.org/ns#Invalid> \
@@ -441,10 +442,10 @@ const PREFIX_IDIOM_DATA: &str = "<http://example.org/ns#Invalid> \
     <http://example.org/ns#property> <http://example.org/test#Other> .\n";
 
 #[test]
-fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() {
-    let shapes = prefix_idiom(PREFIX_DECLARING);
+fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_not() {
+    let shapes = prefix_idiom(PREFIX_EDGE);
     let report = engine::validate_graphs(PREFIX_IDIOM_DATA, &shapes, None)
-        .expect("a prefix-declaring import target is in hand");
+        .expect("a prefix edge is not an import");
     assert!(!report.conforms);
     let results: Vec<(String, Option<String>)> = report
         .results
@@ -477,11 +478,11 @@ fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not(
     let neighbour = ShapesImportError::Unresolved {
         iris: vec!["http://example.org/ns#".to_owned()],
     };
-    let refused = engine::validate_graphs(PREFIX_IDIOM_DATA, &prefix_idiom(LABELLED_ONLY), None)
-        .expect_err("a target described only by a label is not in hand");
+    let refused = engine::validate_graphs(PREFIX_IDIOM_DATA, &prefix_idiom(ONTOLOGY_HEADER), None)
+        .expect_err("an ontology header's import of a document nothing declares is refused");
     assert_eq!(refused.as_imports(), Some(&neighbour), "{refused}");
     let refused = validate_to_sarif_string(
-        &prefix_idiom(LABELLED_ONLY),
+        &prefix_idiom(ONTOLOGY_HEADER),
         None,
         PREFIX_IDIOM_DATA,
         &SarifOptions::default(),

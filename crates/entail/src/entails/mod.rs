@@ -491,7 +491,7 @@ fn prepare(
     // imports is already IN it — resolved without a merge, so the chase's unresolved-import
     // boundary is restated exactly as it is after a merge.
     let Some(merged) = merged else {
-        let resolved_in_place = !imports::imported_iris(premise).is_empty();
+        let resolved_in_place = !imports.imported_iris(premise).is_empty();
         let (closure, report) = materialize(premise, plan).map_err(|error| {
             if resolved_in_place {
                 resolved_imports_error(error)

@@ -1223,14 +1223,15 @@ mod tests {
         );
     }
 
-    /// A shapes document importing its OWN IRI packs once the host names that IRI — as the
+    /// A shapes document whose ontology header imports the document's OWN IRI packs once the host names that IRI — as the
     /// base it passes, or through the document's own `@base` — and is refused, naming the
     /// IRI, when the host passes no base or a different one.
     #[test]
     fn a_self_import_packs_under_its_own_base() {
         const DOC: &str = "http://example.org/shapes/doc";
         let own = format!(
-            "<http://example.org/shapes/doc#Prefixes> \
+            "<http://example.org/shapes/doc#ontology> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> ;\n\
              <http://www.w3.org/2002/07/owl#imports> <{DOC}> .\n{SHAPES}"
         );
         pack_shapes_product(&own, Some(DOC), &[]).expect("the base names the imported document");
