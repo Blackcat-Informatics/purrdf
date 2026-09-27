@@ -3,7 +3,7 @@
 
 /// Capability flags exposed by an RDF dataset/import boundary.
 // Each capability is an independent yes/no feature probe, not an encoded state
-// machine — a bitflags/enum rewrite would only obscure the public API.
+// machine — a bit-flag set or enum rewrite would only obscure the public API.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfStoreCapabilities {

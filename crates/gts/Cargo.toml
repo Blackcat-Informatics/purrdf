@@ -63,7 +63,6 @@ flate2 = { workspace = true }
 structured-zstd = { workspace = true, features = ["dict_builder"] }
 # Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
 fastrand = { workspace = true }
-filetime = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
 ed25519-dalek = { workspace = true }
 # SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
@@ -78,6 +77,9 @@ aes-gcm = { workspace = true }
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # std-only and dependency-free, so it is wasm32-clean and needs no target gate.
 purrdf-alloc-probe = { workspace = true }
+# Isolated temporary directories under the target directory for the unpack
+# tests. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Authoring hot-path regression watch. Defaults off like sibling crates so the
 # bench lane stays lightweight and report-only.
 criterion = { workspace = true }

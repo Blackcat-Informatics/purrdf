@@ -62,21 +62,18 @@ purrdf = { workspace = true }
 # second renderer described as equivalent; `regime_name` is the same regime
 # vocabulary `--regime`/`--entailment` accept.
 purrdf-validate = { workspace = true }
-# Zero-copy memory-mapped reads of on-disk pack files: a pack source is mmap'd
-# and handed to `PackView::from_bytes` with no materialization. Native-only —
-# this crate is never built for wasm32 (it is absent from the `make wasm`
-# `-p` allowlist), so mmap's absence there is a non-issue.
-memmap2 = { workspace = true }
-# The immutable-input authority's kernel-seal path: `memfd_create` + `fcntl`
-# add/get-seals make a mapped pack un-truncatable, so a disk pack maps
-# memory-safely even under a hostile concurrent pathname writer. Linux-gated in
-# code (`#[cfg(target_os = "linux")]`); other targets take the owned-buffer tier.
-rustix = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 # `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
 # from data this host already has in hand (see `query::build_query_provenance`).
 sha2 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The immutable-input authority's kernel path (`src/mmap.rs`): a read-only
+# `mmap` of a sealed descriptor, and `memfd_create` + `fcntl` add/get-seals, so
+# a disk pack maps memory-safely even under a hostile concurrent pathname
+# writer. Other targets take the owned-buffer tier and need neither.
+libc = { workspace = true }
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `pack_input_alloc` bench

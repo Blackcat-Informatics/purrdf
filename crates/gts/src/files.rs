@@ -1777,18 +1777,69 @@ fn restore_path_metadata(
 ) -> Result<(), String> {
     restore_owner(target, entry, options)?;
 
+    // Symlink entries never reach this point: `materialize_symlink` refuses every
+    // one before metadata is restored, so the only targets here are regular files,
+    // hardlinks (which name a regular file) and directories.
     if let Some(modified) = &entry.modified {
         let (seconds, nanos) = parse_datetime(modified)?;
-        let timestamp = filetime::FileTime::from_unix_time(seconds, nanos);
-        if entry.kind == FileEntryKind::Symlink {
-            filetime::set_symlink_file_times(target, timestamp, timestamp)
-                .map_err(|e| format!("set symlink mtime for {target:?}: {e}"))?;
-        } else {
-            filetime::set_file_mtime(target, timestamp)
-                .map_err(|e| format!("set mtime for {target:?}: {e}"))?;
-        }
+        let instant = system_time_from_unix(seconds, nanos)
+            .ok_or_else(|| format!("mtime {modified} is not representable on this host"))?;
+        set_modified_time(target, instant).map_err(|e| format!("set mtime for {target:?}: {e}"))?;
     }
     Ok(())
+}
+
+/// The instant `seconds` whole seconds (negative: before the epoch) plus
+/// `nanos` nanoseconds after the Unix epoch, or `None` when `nanos` is not a
+/// sub-second part or the host's `SystemTime` cannot hold the instant.
+fn system_time_from_unix(seconds: i64, nanos: u32) -> Option<std::time::SystemTime> {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    if nanos >= 1_000_000_000 {
+        return None;
+    }
+    let whole = Duration::from_secs(seconds.unsigned_abs());
+    let second = if seconds < 0 {
+        UNIX_EPOCH.checked_sub(whole)?
+    } else {
+        UNIX_EPOCH.checked_add(whole)?
+    };
+    second.checked_add(Duration::from_nanos(u64::from(nanos)))
+}
+
+/// Sets `target`'s modification time to `modified`, leaving its access time
+/// as it is. Works for regular files and directories, read-only ones included.
+fn set_modified_time(target: &Path, modified: std::time::SystemTime) -> std::io::Result<()> {
+    open_for_set_times(target)?.set_times(fs::FileTimes::new().set_modified(modified))
+}
+
+/// Opens `target` with exactly the access that setting its times needs.
+///
+/// Setting explicit times requires owning the file, not being able to write
+/// it, so a read-only open serves read-only files and directories alike.
+#[cfg(not(windows))]
+fn open_for_set_times(target: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(target)
+}
+
+/// Opens `target` with exactly the access that setting its times needs.
+///
+/// `SetFileTime` needs a handle with `FILE_WRITE_ATTRIBUTES`, and asking for
+/// that right alone keeps read-only files openable; a directory handle can
+/// only be opened with `FILE_FLAG_BACKUP_SEMANTICS`.
+#[cfg(windows)]
+fn open_for_set_times(target: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    /// `FILE_WRITE_ATTRIBUTES` (WinNT.h, "File Access Rights Constants").
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+    /// `FILE_FLAG_BACKUP_SEMANTICS` (fileapi.h, `CreateFileW` flags).
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(target)
 }
 
 fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> Result<(), String> {

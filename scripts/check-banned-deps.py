@@ -192,6 +192,15 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "sha3": "purrdf_hash::sha3 (FIPS 202)",
     # sha3's permutation crate; nothing else in the graph pulled it in.
     "keccak": "purrdf_hash::sha3::keccak_f1600 (FIPS 202 Keccak-f[1600])",
+    "filetime": "std::fs::File::set_times (purrdf-gts restores file and directory mtimes)",
+    "memmap2": "purrdf_cli::mmap::Mmap (read-only mmap/munmap through libc)",
+    "rustix": "purrdf_cli::mmap (memfd_create and fcntl F_ADD_SEALS/F_GET_SEALS through libc)",
+    # rustix's own closure: its raw-syscall backend and its error and flag
+    # helpers. The committed Cargo.lock listed rustix as the only dependent of
+    # each before it left.
+    "linux-raw-sys": "purrdf_cli::mmap (libc system-call bindings)",
+    "errno": "std::io::Error::last_os_error (in purrdf_cli::mmap)",
+    "bitflags": "plain libc::c_int seal masks (in purrdf_cli::mmap)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

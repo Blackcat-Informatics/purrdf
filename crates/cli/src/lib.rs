@@ -89,6 +89,8 @@ mod governors;
 pub mod immutable;
 mod ingest;
 mod ledger;
+#[cfg(target_os = "linux")]
+pub mod mmap;
 mod pack;
 mod path_relation;
 mod projection;

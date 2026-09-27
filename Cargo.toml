@@ -126,7 +126,6 @@ ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 ed25519-dalek = "2"
-filetime = "0.2"
 flate2 = "1"
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
@@ -145,28 +144,20 @@ hashbrown = { version = "0.17", default-features = false }
 # constructors, which nothing here calls. `Date::now` and `Math::random`
 # compile without either.
 js-sys = { version = "0.3", default-features = false }
+# The C library bindings behind the CLI's immutable-input authority on Linux:
+# `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
+# `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see
+# crates/cli/src/mmap.rs). Already in the graph through getrandom; used solely
+# from `purrdf-cli` (`publish = false`, absent from the `make wasm` allowlist).
+libc = "0.2"
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
 memchr = "2"
-# Memory-mapped file I/O. DEV-ONLY (see G5 in
-# docs/design/purrdf-backend-contract.md): the memory-mapped tier is an
-# external-consumer concern, never a published crate's runtime dependency, so
-# this is used solely from `crates/rdf-core/tests/pack_mmap.rs` as a
-# dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
-# meaning there); `make wasm` builds `--lib` only, so this never reaches it.
-memmap2 = "0.9"
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 regex = "1"
 regex-syntax = "0.8.11"
 roxmltree = "0.20"
-# Safe, pure-Rust syscall wrappers for the CLI's immutable-input authority:
-# `memfd_create` + `fcntl` seals (`F_ADD_SEALS`/`F_GET_SEALS`) make a mapped pack
-# un-truncatable, so a disk pack can be read memory-safely even under a hostile
-# concurrent pathname writer. Native-only — used solely from `purrdf-cli`
-# (`publish = false`, absent from the `make wasm` allowlist), so it reaches no
-# published or wasm crate.
-rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a JSON number that becomes an `f64` becomes the binary64
 # nearest its decimal value. Without it `serde_json` scales a `u64` significand
