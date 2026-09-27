@@ -944,9 +944,18 @@ impl<A: Array> Deref for SmallVec<A> {
 
     #[inline]
     fn deref(&self) -> &[A::Item] {
-        // SAFETY: the pointer is non-null and aligned in both states and the
-        // first `len` slots are initialised.
-        unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
+        // Read the storage tag once. `as_ptr()` followed by `len()` would
+        // independently dispatch on it twice for every slice coercion in a
+        // solution-row compatibility probe.
+        if self.spilled() {
+            // SAFETY: spilled, so the heap pair is active; its first `len`
+            // elements are initialized and the pointer is non-null/aligned.
+            let (ptr, biased_len) = unsafe { self.data.heap };
+            unsafe { slice::from_raw_parts(ptr.as_ptr().cast(), biased_len - 1) }
+        } else {
+            // SAFETY: inline, so the first `word` slots are initialized.
+            unsafe { slice::from_raw_parts(self.inline_ptr(), self.word()) }
+        }
     }
 }
 
@@ -1010,10 +1019,31 @@ impl<A: Array> Clone for SmallVec<A>
 where
     A::Item: Clone,
 {
+    #[inline]
     fn clone(&self) -> Self {
-        let mut v = Self::with_capacity(self.len());
-        v.extend(self.iter().cloned());
-        v
+        let len = self.len();
+        if len > Self::INLINE {
+            // `Vec::extend_from_slice` specializes its clone path for Copy
+            // cells, and `from_vec` adopts this one exactly sized buffer.
+            // Most solution-row clones update existing positions, so spare
+            // capacity would add allocator traffic to that hot path.
+            let mut values = Vec::with_capacity(len);
+            values.extend_from_slice(self.as_slice());
+            return Self::from_vec(values);
+        }
+        let mut out = Self::new();
+        let source = self.as_ptr();
+        let (destination, slot, _) = out.raw_mut();
+        let mut guard = LenOnDrop { slot, len: 0 };
+        for index in 0..len {
+            // SAFETY: the source's first `len` elements are initialized; the
+            // destination is inline with capacity at least `len`. The guard
+            // publishes each clone before the next may panic.
+            unsafe { destination.add(index).write((*source.add(index)).clone()) };
+            guard.len += 1;
+        }
+        drop(guard);
+        out
     }
 
     fn clone_from(&mut self, source: &Self) {

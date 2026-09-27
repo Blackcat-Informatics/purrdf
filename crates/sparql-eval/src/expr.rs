@@ -48,7 +48,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
-use crate::solution::{SolutionSeq, VarSchema};
+use crate::solution::{Solution, SolutionSeq, VarSchema};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
@@ -258,7 +258,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
             || ctx.fork_for_worker(),
             |child, acc, row| {
                 if eval_ebv(expr, row, &schema, child)? == Some(true) {
-                    acc.push(row.clone());
+                    acc.push(Solution::from_slice(row));
                 }
                 Ok(())
             },
@@ -335,7 +335,8 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
             &seq.rows,
             || ctx.fork_for_worker(),
             |child, acc, in_row| {
-                let mut row = in_row.clone();
+                let mut row = Solution::with_capacity(width);
+                row.extend_from_slice(in_row);
                 row.resize(width, None);
                 let value = eval_expr(expr, &row, &schema, child)?;
                 row[col] = value;

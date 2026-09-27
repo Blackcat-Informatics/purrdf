@@ -1168,7 +1168,7 @@ fn bind_row<D: DatasetView>(
         }
     }
 
-    let mut out = row.clone();
+    let mut out = Solution::from_slice(row);
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         if !bind_pos(&mut out, pos, id, dataset) {
             return None;

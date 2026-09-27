@@ -278,7 +278,7 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         for v in r.schema.vars() {
             right_schema.push(v.clone());
         }
-        per_row.push((mu.clone(), r));
+        per_row.push((Solution::from_slice(mu), r));
     }
 
     let out = Arc::new(left_schema.union(&right_schema));
