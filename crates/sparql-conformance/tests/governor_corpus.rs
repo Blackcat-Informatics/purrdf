@@ -2920,3 +2920,310 @@ fn the_corpus_is_reproducible_within_a_run() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The fuel sweep trace
+// ---------------------------------------------------------------------------
+
+/// The every-unit prefix every fuel sweep covers, whatever the query's total.
+const FUEL_SWEEP_DENSE_MAX: u64 = 64;
+
+/// The largest metered fuel swept at every unit; above it the sweep turns geometric.
+const FUEL_SWEEP_EXHAUSTIVE_MAX: u64 = 4096;
+
+fn fuel_sweep_golden_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/evaluator-trace/governors.trace")
+}
+
+/// The fuel ceilings a query whose metered fuel is `total` is swept at: every unit from
+/// zero to the total (and at least to [`FUEL_SWEEP_DENSE_MAX`]), or — above
+/// [`FUEL_SWEEP_EXHAUSTIVE_MAX`] — the dense prefix, every power of two from 128 below the
+/// total, and the total less one and the total itself.
+fn fuel_sweep_points(total: u64) -> Vec<u64> {
+    if total <= FUEL_SWEEP_EXHAUSTIVE_MAX {
+        return (0..=total.max(FUEL_SWEEP_DENSE_MAX)).collect();
+    }
+    let mut points: std::collections::BTreeSet<u64> = (0..=FUEL_SWEEP_DENSE_MAX).collect();
+    let mut geometric = FUEL_SWEEP_DENSE_MAX.saturating_mul(2);
+    while geometric < total {
+        points.insert(geometric);
+        geometric = geometric.saturating_mul(2);
+    }
+    points.insert(total - 1);
+    points.insert(total);
+    points.into_iter().collect()
+}
+
+/// FNV-1a, 64-bit: a fixed, dependency-free digest for a sweep point's rows.
+fn fnv1a(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// The per-node ledger of `case`'s metered explanation, wired to the same seam
+/// [`observe`] wires: every algebra node in pre-order, with the fuel it charged at each
+/// charge point, the rows it committed and the largest bag it held.
+fn node_ledger(
+    case: &Case,
+    spec: Option<TransportSpec>,
+    relation_spec: Option<RelationSpec>,
+) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let engine = NativeSparqlEngine::new();
+    let explanation = match case.source {
+        Source::Http => {
+            let spec = spec.unwrap_or_else(|| {
+                panic!("{} names the http source with no transport row", case.name)
+            });
+            let responses = responses_for(case);
+            let posts = AtomicUsize::new(0);
+            let source = HttpRemoteQuerySource::new(FixtureTransport {
+                responses: &responses,
+                posts: &posts,
+                honours_stop: spec.honours_stop,
+                cancel_on_first_post: None,
+            });
+            engine.explain_query_with_options(
+                &dataset,
+                &query,
+                None,
+                QueryOptions::new().with_remote(Some(&source)),
+            )
+        }
+        Source::Relation => {
+            let spec = relation_spec.unwrap_or_else(|| {
+                panic!(
+                    "{} names the relation source with no relations.tsv row",
+                    case.name
+                )
+            });
+            let mut registry = PropertyFunctionRegistry::new();
+            registry.register(
+                RELATION_IRI,
+                Arc::new(ScriptedRelation::new(spec, None)) as Arc<dyn PropertyFunction>,
+            );
+            engine.explain_query_with_options(
+                &dataset,
+                &query,
+                None,
+                QueryOptions::new().with_env(
+                    &purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
+                        .expect("the harness declarations read cleanly"),
+                ),
+            )
+        }
+        Source::Aggregate => engine.explain_query_with_options(
+            &dataset,
+            &query,
+            None,
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registered_custom_aggregate())
+                    .expect("the harness declarations read cleanly"),
+            ),
+        ),
+        Source::Dataset => engine.explain_query(&dataset, &query, None),
+    }
+    .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    let mut out = String::new();
+    for node in explanation.ledger() {
+        write!(
+            out,
+            "node {} depth={} {} rows={} cells={}",
+            node.ordinal, node.depth, node.label, node.rows, node.cells
+        )
+        .expect("writing to a String cannot fail");
+        for point in ChargePoint::ALL {
+            let fuel = node.fuel_at(point);
+            if fuel > 0 {
+                write!(out, " {point}={fuel}").expect("writing to a String cannot fail");
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// One sweep point's observation, without the ceiling itself, so adjacent points that
+/// observed the same thing render identically.
+fn render_sweep_point(observation: &Observation, fuel: u64) -> String {
+    let answer = observation
+        .answer
+        .replace(&format!("\tlimit={fuel}\t"), "\tlimit=K\t");
+    let mut out = String::new();
+    let (mut rows, mut quads) = (0_usize, 0_usize);
+    for line in answer.lines() {
+        if line.starts_with("tripped\t") || line.starts_with("certificate\t") {
+            out.push_str(&line.replace('\t', " "));
+            out.push(' ');
+        } else if line.starts_with("row\t") {
+            rows += 1;
+        } else if line.ends_with(" .") {
+            quads += 1;
+        }
+    }
+    write!(
+        out,
+        "{} rows={rows} quads={quads} digest={} | {} | posts={} invocations={} pulls={}",
+        observation.outcome,
+        fnv1a(answer_rows(&answer)),
+        observation
+            .spend
+            .trim_end()
+            .replace('\t', "=")
+            .replace('\n', " "),
+        observation.posts,
+        observation.invocations,
+        observation.pulls,
+    )
+    .expect("writing to a String cannot fail");
+    out
+}
+
+/// The whole trace: every distinct `(data, query, seam)` of the corpus, with its metered
+/// spend, its per-node ledger and its fuel sweep.
+///
+/// The corpus's cases share inputs by design — a band trio differs only in its ceiling —
+/// so each input is swept once, under the name of the first case that carries it. The
+/// sweep sets fuel alone: the case's own ceiling and stop signal are the band tests'
+/// business, and a sweep point is a statement about fuel.
+fn fuel_sweep_trace() -> String {
+    let cases = load_manifest();
+    let specs = load_transport();
+    let relations = load_relations();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = String::new();
+    for case in &cases {
+        let spec = specs.get(&case.name).copied();
+        let relation_spec = relations.get(&case.name).copied();
+        let key = format!(
+            "{} {} {} emits={}",
+            case.data,
+            case.query,
+            case.source.label(),
+            relation_spec.map_or(0, |relation| relation.emits)
+        );
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        writeln!(out, "== {} {key}", case.name).expect("writing to a String cannot fail");
+        let metered_run = observe(
+            case,
+            &Configured {
+                governors: QueryGovernors::METERED,
+                flag: None,
+                deadline: None,
+            },
+            spec,
+            relation_spec,
+        );
+        let total = consumed_in(&metered_run.spend, ResourceDimension::Fuel);
+        writeln!(
+            out,
+            "metered {} | {}",
+            metered_run.outcome,
+            metered_run
+                .spend
+                .trim_end()
+                .replace('\t', "=")
+                .replace('\n', " ")
+        )
+        .expect("writing to a String cannot fail");
+        out.push_str(&node_ledger(case, spec, relation_spec));
+
+        let mut run: Option<(u64, u64, usize, String)> = None;
+        let flush = |run: &mut Option<(u64, u64, usize, String)>, out: &mut String| {
+            if let Some((first, last, count, observed)) = run.take() {
+                if count == 1 {
+                    writeln!(out, "fuel {first} {observed}")
+                } else {
+                    writeln!(out, "fuel {first}..={last} x{count} {observed}")
+                }
+                .expect("writing to a String cannot fail");
+            }
+        };
+        for fuel in fuel_sweep_points(total) {
+            let configured = Configured {
+                governors: QueryGovernors::UNBOUNDED.with_fuel(fuel),
+                flag: None,
+                deadline: None,
+            };
+            let observed =
+                render_sweep_point(&observe(case, &configured, spec, relation_spec), fuel);
+            match &mut run {
+                Some((_, last, count, previous)) if *previous == observed => {
+                    *last = fuel;
+                    *count += 1;
+                }
+                _ => {
+                    flush(&mut run, &mut out);
+                    run = Some((fuel, fuel, 1, observed));
+                }
+            }
+        }
+        flush(&mut run, &mut out);
+    }
+    out
+}
+
+/// The corpus's inputs, swept over fuel, reproduce the committed trace: the metered spend,
+/// the per-node ledger, and — at every fuel ceiling of the sweep — the governor that
+/// tripped, the consumption it tripped on, the certificate and the rows that crossed.
+///
+/// The band cases pin three points of each input's fuel line (zero, boundary, one
+/// below). This pins the line: every charge in the order it lands, and the rows each
+/// prefix of the schedule had committed. An evaluator that charged the same total in a
+/// different order, or truncated at a different row, moves it.
+///
+/// Regenerate with `cargo test -p purrdf-sparql-conformance --test governor_corpus --
+/// --ignored regenerate_fuel_sweep_trace`.
+#[test]
+fn the_fuel_sweep_over_the_corpus_matches_its_trace() {
+    if updating() {
+        return;
+    }
+    let actual = fuel_sweep_trace();
+    let golden = std::fs::read_to_string(fuel_sweep_golden_path())
+        .unwrap_or_else(|error| panic!("read {}: {error}", fuel_sweep_golden_path().display()));
+    if actual == golden {
+        return;
+    }
+    let first = actual
+        .lines()
+        .zip(golden.lines())
+        .position(|(a, g)| a != g)
+        .unwrap_or_else(|| actual.lines().count().min(golden.lines().count()));
+    let header = |text: &str| {
+        text.lines()
+            .take(first + 1)
+            .filter(|line| line.starts_with("== "))
+            .last()
+            .unwrap_or("")
+            .to_owned()
+    };
+    panic!(
+        "the fuel sweep trace moved at line {} (in {}):\n    golden: {}\n    actual: {}\nif \
+         the change is intended, regenerate with `cargo test -p purrdf-sparql-conformance \
+         --test governor_corpus -- --ignored regenerate_fuel_sweep_trace` and review the diff",
+        first + 1,
+        header(&golden),
+        golden.lines().nth(first).unwrap_or("<end>"),
+        actual.lines().nth(first).unwrap_or("<end>"),
+    );
+}
+
+/// Regeneration path for [`the_fuel_sweep_over_the_corpus_matches_its_trace`]. Ignored by
+/// default because it WRITES the committed golden.
+#[test]
+#[ignore = "regeneration path: writes the committed golden"]
+fn regenerate_fuel_sweep_trace() {
+    let path = fuel_sweep_golden_path();
+    std::fs::create_dir_all(path.parent().expect("the golden has a parent directory"))
+        .expect("create the golden directory");
+    std::fs::write(&path, fuel_sweep_trace()).expect("write the golden");
+    println!("wrote {}", path.display());
+}
