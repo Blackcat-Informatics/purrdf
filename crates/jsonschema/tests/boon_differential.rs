@@ -7,12 +7,12 @@
 //! evaluated. Only boon's answers were kept, never its code (see
 //! `PROVENANCE.md`).
 //!
-//! Every record must agree, with exactly three named exceptions:
+//! Every record must agree, with exactly two named exceptions: suite cases
+//! where boon's verdict contradicts the official suite, and the suite is the
+//! authority — this crate must give the suite's answer.
 //!
-//! * two suite cases where boon's verdict contradicts the official suite, and
-//!   the suite is the authority — this crate must give the suite's answer;
-//! * one suite case that asks for a draft 2019-09 document to be evaluated,
-//!   which boon did and this crate refuses by design with a typed error.
+//! Every registry holds the vendored meta-schemas, which this crate does not
+//! carry (`purrdf_testkit::jsonschema_metaschemas`).
 //!
 //! An exception that stops being needed (the record now agrees) fails too, so
 //! the list cannot outlive its reason.
@@ -20,13 +20,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use purrdf_jsonschema::{Registry, SchemaError};
+use purrdf_jsonschema::{Dialect, Metaschemas, Registry, SchemaError};
 use purrdf_testkit::vectors::{VectorFile, decode_str};
 use serde_json::Value;
 
 const VECTORS: &str = include_str!("boon_differential_vectors.txt");
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/suite");
-const FOREIGN_REMOTES: &[&str] = &["draft3", "draft4", "draft6", "draft7", "v1"];
+const FOREIGN_REMOTES: &[&str] = &["draft3", "draft4", "draft6", "v1"];
+/// Remote directories of the other supported drafts, read in their dialects.
+const DRAFT_REMOTES: &[(&str, Dialect)] = &[
+    ("draft7", Dialect::Draft07),
+    ("draft2019-09", Dialect::Draft2019_09),
+];
 
 /// Records where boon's verdict contradicts the official suite: `(source,
 /// the suite's verdict)`.
@@ -39,9 +44,6 @@ const BOON_CONTRADICTS_SUITE: &[(&str, &str)] = &[
     // vocabulary; boon treated `format` as an annotation and answered valid.
     ("suite:optional/format-assertion.json/0/1", "invalid"),
 ];
-
-/// Records this crate refuses by design where boon gave a verdict.
-const DIALECT_REFUSALS: &[&str] = &["suite:optional/cross-draft.json/0/0"];
 
 fn json_files(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
@@ -63,9 +65,17 @@ fn json_files(root: &Path) -> Vec<PathBuf> {
     found
 }
 
-fn suite_registry() -> Registry {
+fn metaschemas() -> Metaschemas {
+    Metaschemas::new(
+        purrdf_testkit::jsonschema_metaschemas::all()
+            .map(|(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+    )
+    .expect("the vendored meta-schemas form a set")
+}
+
+fn suite_registry(metaschemas: &Metaschemas) -> Registry {
     let root = Path::new(SUITE).join("remotes");
-    let mut registry = Registry::new();
+    let mut registry = Registry::with_metaschemas(metaschemas);
     for path in json_files(&root) {
         let name = path
             .strip_prefix(&root)
@@ -82,8 +92,12 @@ fn suite_registry() -> Registry {
         }
         let document: Value =
             serde_json::from_str(&fs::read_to_string(&path).expect("remote")).expect("remote JSON");
+        let dialect = DRAFT_REMOTES
+            .iter()
+            .find(|(draft, _)| name.starts_with(&format!("{draft}/")))
+            .map_or(Dialect::Draft2020_12, |&(_, dialect)| dialect);
         registry
-            .add_resource(&format!("http://localhost:1234/{name}"), document)
+            .add_resource_with_dialect(&format!("http://localhost:1234/{name}"), document, dialect)
             .expect("remote registers");
     }
     registry
@@ -108,8 +122,9 @@ fn verdict(
 #[test]
 fn every_boon_verdict_is_reproduced_or_named() {
     let vectors = VectorFile::parse(VECTORS).expect("the vector file is intact");
-    let suite = suite_registry();
-    let plain = Registry::new();
+    let metaschemas = metaschemas();
+    let suite = suite_registry(&metaschemas);
+    let plain = Registry::with_metaschemas(&metaschemas);
     let mut disagreements = Vec::new();
     let mut exceptions_seen = Vec::new();
     for record in vectors.records() {
@@ -139,12 +154,6 @@ fn every_boon_verdict_is_reproduced_or_named() {
                 "{source}: boon now agrees with the suite"
             );
             suite_verdict
-        } else if DIALECT_REFUSALS.contains(&source.as_str()) {
-            exceptions_seen.push(source.clone());
-            match ours {
-                Err(SchemaError::UnsupportedDialect { .. }) => continue,
-                other => panic!("{source}: expected the typed dialect refusal, got {other:?}"),
-            }
         } else {
             boon.as_str()
         };
@@ -159,7 +168,7 @@ fn every_boon_verdict_is_reproduced_or_named() {
     assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
     assert_eq!(
         exceptions_seen.len(),
-        BOON_CONTRADICTS_SUITE.len() + DIALECT_REFUSALS.len(),
+        BOON_CONTRADICTS_SUITE.len(),
         "every named exception must still be recorded: {exceptions_seen:?}"
     );
     assert_eq!(vectors.records().len(), 1599);

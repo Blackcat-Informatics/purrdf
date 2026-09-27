@@ -477,12 +477,34 @@ impl<'s> Evaluator<'s> {
                     .as_ref()
                     .and_then(|name| {
                         self.scope.iter().find_map(|&resource| {
-                            self.schema.resources[resource].get(name).copied()
+                            self.schema.resources[resource]
+                                .dynamic_anchors
+                                .get(name)
+                                .copied()
                         })
                     })
                     .unwrap_or(*target);
                 self.follow(target, instance, track, state, children)
             }
+            Kind::RecursiveRef(target) => {
+                // 2019-09 Core §8.2.4.2.2: when the target's resource has
+                // `$recursiveAnchor: true`, the outermost resource in the
+                // dynamic scope that also has one is the target instead.
+                let resource = self.schema.nodes[*target].resource;
+                let target = if self.schema.resources[resource].recursive_root.is_some() {
+                    self.scope
+                        .iter()
+                        .find_map(|&resource| self.schema.resources[resource].recursive_root)
+                        .unwrap_or(*target)
+                } else {
+                    *target
+                };
+                self.follow(target, instance, track, state, children)
+            }
+            Kind::Content(content) => match instance {
+                Value::String(text) => content.check(text).map(|()| None),
+                _ => Ok(None),
+            },
             Kind::Type(types) => {
                 if types.iter().any(|&wanted| has_type(instance, wanted)) {
                     Ok(None)
@@ -798,7 +820,12 @@ impl<'s> Evaluator<'s> {
                     Ok(None)
                 }
             }
-            Kind::Contains { schema, min, max } => {
+            Kind::Contains {
+                schema,
+                min,
+                max,
+                evaluates,
+            } => {
                 let Value::Array(items) = instance else {
                     return Ok(None);
                 };
@@ -812,7 +839,7 @@ impl<'s> Evaluator<'s> {
                     let outcome = self.apply(*schema, item, false, &[], Some(&token), children);
                     if outcome.valid {
                         matched.push(index);
-                        if let Some(evaluated) = &mut state.items {
+                        if *evaluates && let Some(evaluated) = &mut state.items {
                             evaluated.set(index);
                         }
                     }

@@ -11,7 +11,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -359,7 +358,15 @@ if (manifest.exact.losses.losses.length !== 0) {
 const lossyCodes = new Set(manifest.lossy.losses.losses.map((entry) => entry.code));
 assert.deepEqual(lossyCodes, CLOSED_PROFILE, "lossy fixture no longer covers the closed profile");
 
-const directory = mkdtempSync(path.join(tmpdir(), "purrdf-typescript-oracle-"));
+// The scratch lives beside the build output, as scripts/build-scratch.sh sets
+// out, not under the system temporary directory, which is not guaranteed to
+// keep a directory for the length of the compiler runs below.
+const SCRATCH_ROOT = path.join(
+  process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : path.join(REPO, "target"),
+  "gate-scratch",
+);
+mkdirSync(SCRATCH_ROOT, { recursive: true });
+const directory = mkdtempSync(path.join(SCRATCH_ROOT, "typescript-oracle."));
 try {
   const exactResults = compileFixture("exact", manifest.exact, directory);
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);

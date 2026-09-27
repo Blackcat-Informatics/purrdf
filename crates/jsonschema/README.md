@@ -3,21 +3,35 @@
 
 # purrdf-jsonschema
 
-Native **JSON Schema draft 2020-12** validation for PurRDF: every vocabulary,
-dynamic references, unevaluated keywords, and the standard output formats.
+Native **JSON Schema** validation for PurRDF, drafts **2020-12**, **2019-09**
+and **07**: every schema resource is evaluated in the dialect its `$schema`
+names, with every vocabulary, dynamic and recursive references, unevaluated
+keywords, and the standard output formats.
 
 It depends on `serde_json`, `regex` and `purrdf-iri` only, forbids `unsafe`,
 and builds for `wasm32-unknown-unknown` like every other release crate in the
 workspace, so a schema PurRDF emits from SHACL can be checked in the browser
-by the same code that checks it natively. The 2020-12 meta-schemas are
-vendored and registered in every `Registry`, so nothing is fetched.
+by the same code that checks it natively. Nothing is fetched.
+
+## Meta-schemas are supplied by the caller
+
+The crate compiles in no meta-schema document. Every compiled schema is
+checked against its meta-schema, so the application registers the published
+meta-schemas of the dialects it uses — once, as a shared `Metaschemas` set
+whose parsed documents and compiled validators every registry started from it
+reuses — or registers a custom meta-schema with `Registry::add_resource`. A
+meta-schema that is needed and not registered is
+`SchemaError::MissingMetaschema`, naming its URI.
 
 ```rust
-use purrdf_jsonschema::{OutputFormat, Registry, SchemaError};
-use serde_json::json;
+use purrdf_jsonschema::{Metaschemas, OutputFormat, Registry, SchemaError};
+use serde_json::{Value, json};
 
-fn main() -> Result<(), SchemaError> {
-    let mut registry = Registry::new();
+fn check(draft_2020_12: Vec<(&str, Value)>) -> Result<(), SchemaError> {
+    // The nine published draft 2020-12 meta-schema documents, `(URI, document)`.
+    let metaschemas = Metaschemas::new(draft_2020_12)?;
+
+    let mut registry = Registry::with_metaschemas(&metaschemas);
     registry.add_resource(
         "https://example.org/person.json",
         json!({
@@ -37,29 +51,29 @@ fn main() -> Result<(), SchemaError> {
 }
 ```
 
+`Schema::from_document(&metaschemas, uri, document)` is the one-document
+shorthand.
+
 ## What is implemented
 
-* **Core**: `$id`, `$schema`, `$ref`, `$defs`, `$anchor`, `$dynamicRef` and
-  `$dynamicAnchor` over the dynamic scope, `$vocabulary`, `$comment`; a
-  resource registry (`Registry::add_resource`) for schemas that reference each
-  other.
-* **Applicator**: `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`,
-  `dependentSchemas`, `prefixItems`, `items`, `contains`, `properties`,
-  `patternProperties`, `additionalProperties`, `propertyNames`.
-* **Unevaluated**: `unevaluatedItems` and `unevaluatedProperties`, over the
-  annotations of every in-place applicator.
-* **Validation**: `type`, `const`, `enum`, the numeric bounds and
-  `multipleOf`, code-point string lengths, `pattern`, the array and object
-  bounds, `uniqueItems` (JSON equality, so `1` equals `1.0`), `required`,
-  `dependentRequired`, `minContains`/`maxContains`.
-* **Meta-data, Content, Format-Annotation**: annotations, as the specification
-  defines them. Unknown keywords are annotations too.
-* **Format-Assertion**, when a meta-schema declares it: every 2020-12 format
-  is checked in full except `hostname`, `idn-hostname` and `idn-email`, whose
-  complete check needs the IDNA2008 tables; asserting one of those is a typed
-  refusal, never a silent pass.
+* **2020-12**: `$id`, `$schema`, `$ref`, `$defs`, `$anchor`, `$dynamicRef`
+  and `$dynamicAnchor` over the dynamic scope, `$vocabulary`; the Applicator
+  (`prefixItems`, `items`, `contains`, `dependentSchemas`, …), Unevaluated,
+  Validation, Meta-Data, Format and Content vocabularies.
+* **2019-09**: `$recursiveRef` (`"#"`, the only value the draft defines) and
+  `$recursiveAnchor`, `$anchor`, `$vocabulary`, array-form `items` with
+  `additionalItems`, `unevaluatedItems` and `unevaluatedProperties` in the
+  Applicator vocabulary.
+* **draft-07**: `definitions`, `dependencies`, array-form `items` with
+  `additionalItems`, `$ref` overriding its siblings, plain-name `$id`
+  fragments as location-independent identifiers, and `contentEncoding`
+  (`base64`) / `contentMediaType` (`application/json`) as assertions.
+* A `$ref` from one dialect into another: each side keeps its own rules.
+* **Formats**: an annotation by default; `Registry::set_format_assertion`
+  (or a meta-schema declaring format assertion) checks every format the
+  dialect defines in full — `hostname`, `idn-hostname` and `idn-email` through
+  IDNA2008 in `purrdf_iri::idna`, `ipv4`/`ipv6` through `purrdf_iri::host`.
 * **Output**: `flag`, `basic` and `detailed`.
-* The legacy `dependencies` keyword the 2020-12 meta-schema still describes.
 
 Numbers are compared and divided exactly, in decimal: `0.0075` is a multiple of
 `0.0001`, and `1e308` is a multiple of `0.5`.
@@ -80,23 +94,24 @@ approximated.
 `SchemaError` is a refusal to *process* a schema, never a verdict on an
 instance:
 
-* a `$schema` naming another dialect (draft-04, -06, -07, 2019-09, …),
-  including through a `$ref` into such a document;
+* a `$schema` naming draft-06 or earlier (or an unreleased successor of
+  2020-12), including through a `$ref` into such a document;
+* a needed meta-schema that is not registered;
 * a meta-schema that requires an unknown vocabulary;
-* an unresolvable `$ref`, a malformed `$id` or anchor, a duplicate resource;
+* an unresolvable `$ref`, a malformed `$id` or anchor, a duplicate resource,
+  a 2019-09 `$recursiveRef` other than `"#"`;
 * a schema that fails its own meta-schema;
-* an unrunnable `pattern`, or an asserted format that cannot be checked
-  completely.
+* an unrunnable `pattern`, or, under the 2020-12 Format-Assertion
+  vocabulary, a format no draft defines.
 
 ## Evidence
 
-* The official JSON-Schema-Test-Suite for draft 2020-12, vendored under
-  `tests/suite/` — every required and optional test except `optional/format/`
-  (format is an annotation under the 2020-12 meta-schema) plus the
-  output-format tests — runs as one libtest case per suite test
-  (`cargo test -p purrdf-jsonschema --test suite`). One case is ledgered: it
-  asks for a draft 2019-09 document to be evaluated, and a separate case pins
-  the typed refusal it receives instead.
+* The official JSON-Schema-Test-Suite for drafts 2020-12, 2019-09 and 07,
+  vendored under `tests/suite/` — every required and optional test,
+  `optional/format/` with format assertion on, plus the output-format tests —
+  runs as one libtest case per suite test (`cargo test -p purrdf-jsonschema
+  --test suite`, `--test suite_draft2019_09`, `--test suite_draft7`), with no
+  case ignored.
 * `tests/pattern_differential_vectors.txt`: JavaScript's own `RegExp`
   verdicts over the suite's pattern cases, 5,000 seeded pairs and a syntax
   list, recorded by `tests/pattern_oracle.mjs` and replayed against the
@@ -104,6 +119,7 @@ instance:
 * `tests/boon_differential_vectors.txt`: the verdicts of the validator this
   crate replaced, over the suite and the workspace's former call sites,
   replayed with every disagreement named. See `PROVENANCE.md`.
+* `benches/validate.rs`: compile and validation baselines (report-only).
 
 ## License
 
@@ -113,6 +129,6 @@ Licensed under any one of the following, at your option:
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
 
-The vendored draft 2020-12 meta-schemas under `metaschemas/` are taken under
-BSD-3-Clause, and the vendored JSON-Schema-Test-Suite under `tests/suite/` is
-MIT; see `PROVENANCE.md`.
+The vendored meta-schemas under `tests/metaschemas/` and the vendored
+JSON-Schema-Test-Suite under `tests/suite/` are test data under their own
+licences (see `PROVENANCE.md`) and are not part of the published package.

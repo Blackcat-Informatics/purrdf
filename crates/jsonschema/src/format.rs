@@ -1,23 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The `format` checks the Format-Assertion vocabulary turns on
-//! (2020-12 Validation §7.3).
+//! The `format` checks (2020-12 Validation §7.3, 2019-09 Validation §7.3,
+//! draft-07 Validation §7.3).
 //!
-//! Under the default 2020-12 meta-schema `format` is an annotation and none
-//! of this runs. A meta-schema that declares the Format-Assertion vocabulary
-//! makes it an assertion, and the specification then requires every format it
-//! names to be checked completely or the schema refused. Each check below is
-//! the grammar of the document the specification cites, implemented in full.
-//! `hostname`, `idn-hostname` and `idn-email` are refused as assertions:
-//! 2020-12 defines `hostname` to include the Punycode-produced labels of RFC
-//! 5891, so a complete check decodes every `xn--` label and applies the
-//! IDNA2008 rules to the result, and those need the derived-property, joining
-//! type and bidirectional tables of RFC 5892 and RFC 5893. A format name the
-//! specification does not define is refused the same way — never silently
-//! passed. (The domain of an `email` is RFC 5321's `Domain`, an LDH syntax,
-//! and is checked in full.)
+//! `format` is an annotation unless the caller turns assertion on
+//! ([`crate::Registry::set_format_assertion`]) or the meta-schema declares
+//! the 2020-12 Format-Assertion vocabulary or the 2019-09 Format vocabulary
+//! as required. Each check below is the grammar of the document the
+//! specification cites, implemented in full; host names go through
+//! `purrdf_iri::idna` (RFC 1123 / RFC 5890–5893) and addresses through
+//! `purrdf_iri::host`, the workspace's single implementation of each. A
+//! format a dialect does not define (draft-07 has no `duration` or `uuid`)
+//! is unknown in that dialect.
 
+use purrdf_iri::{host, idna};
+
+use crate::dialect::Dialect;
 use crate::ecma;
 
 /// A format this crate asserts.
@@ -28,6 +27,9 @@ pub(crate) enum Format {
     Time,
     Duration,
     Email,
+    IdnEmail,
+    Hostname,
+    IdnHostname,
     Ipv4,
     Ipv6,
     Uri,
@@ -42,21 +44,24 @@ pub(crate) enum Format {
 }
 
 impl Format {
-    /// The assertable format a name denotes.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    /// The assertable format a name denotes in `dialect`.
+    pub(crate) fn from_name(name: &str, dialect: Dialect) -> Option<Self> {
         Some(match name {
             "date-time" => Self::DateTime,
             "date" => Self::Date,
             "time" => Self::Time,
-            "duration" => Self::Duration,
+            "duration" if dialect != Dialect::Draft07 => Self::Duration,
             "email" => Self::Email,
+            "idn-email" => Self::IdnEmail,
+            "hostname" => Self::Hostname,
+            "idn-hostname" => Self::IdnHostname,
             "ipv4" => Self::Ipv4,
             "ipv6" => Self::Ipv6,
             "uri" => Self::Uri,
             "uri-reference" => Self::UriReference,
             "iri" => Self::Iri,
             "iri-reference" => Self::IriReference,
-            "uuid" => Self::Uuid,
+            "uuid" if dialect != Dialect::Draft07 => Self::Uuid,
             "uri-template" => Self::UriTemplate,
             "json-pointer" => Self::JsonPointer,
             "relative-json-pointer" => Self::RelativeJsonPointer,
@@ -73,8 +78,11 @@ impl Format {
             Self::Time => full_time(text.as_bytes()),
             Self::Duration => duration(text.as_bytes()),
             Self::Email => email(text),
-            Self::Ipv4 => ipv4(text),
-            Self::Ipv6 => ipv6(text),
+            Self::IdnEmail => idn_email(text),
+            Self::Hostname => idna::is_hostname(text),
+            Self::IdnHostname => idna::is_idn_hostname(text),
+            Self::Ipv4 => host::is_ipv4_address(text),
+            Self::Ipv6 => host::is_ipv6_address(text),
             Self::Uri => purrdf_iri::parse_uri(text).is_ok_and(|uri| uri.has_scheme()),
             Self::UriReference => text.is_empty() || purrdf_iri::parse_uri(text).is_ok(),
             Self::Iri => purrdf_iri::parse(text).is_ok_and(|iri| iri.has_scheme()),
@@ -233,79 +241,6 @@ fn designators(mut bytes: &[u8], order: &[u8]) -> bool {
     true
 }
 
-/// RFC 5321 §4.1.2 `Domain`: dot-separated labels of 1..=63 letters, digits
-/// and hyphens, neither starting nor ending with a hyphen, 253 octets at most
-/// (RFC 1123 §2.1 host-name syntax, which `sub-domain` restates).
-fn domain(text: &str) -> bool {
-    !text.is_empty()
-        && text.len() <= 253
-        && text.split('.').all(|label| {
-            let bytes = label.as_bytes();
-            (1..=63).contains(&bytes.len())
-                && bytes
-                    .iter()
-                    .all(|&byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                && bytes.first() != Some(&b'-')
-                && bytes.last() != Some(&b'-')
-        })
-}
-
-/// RFC 2673 §3.2 dotted-quad: four decimal octets, no leading zeros.
-fn ipv4(text: &str) -> bool {
-    let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 4
-        && parts.iter().all(|part| {
-            let bytes = part.as_bytes();
-            !bytes.is_empty()
-                && bytes.len() <= 3
-                && !(bytes.len() > 1 && bytes[0] == b'0')
-                && digits(bytes).is_some_and(|value| value <= 255)
-        })
-}
-
-/// RFC 4291 §2.2 text form: eight 16-bit hex groups, at most one `::`, and an
-/// optional dotted-quad for the last 32 bits. No zone identifier.
-fn ipv6(text: &str) -> bool {
-    let (head, tail, compressed) = match text.split_once("::") {
-        Some((head, tail)) => (head, tail, true),
-        None => (text, "", false),
-    };
-    if compressed && tail.contains("::") {
-        return false;
-    }
-    let groups = |part: &str| -> Option<(usize, bool)> {
-        if part.is_empty() {
-            return Some((0, false));
-        }
-        let pieces: Vec<&str> = part.split(':').collect();
-        let mut count = 0;
-        for (index, piece) in pieces.iter().enumerate() {
-            let last = index + 1 == pieces.len();
-            if last && piece.contains('.') {
-                if !ipv4(piece) {
-                    return None;
-                }
-                return Some((count + 2, true));
-            }
-            if piece.is_empty()
-                || piece.len() > 4
-                || !piece.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return None;
-            }
-            count += 1;
-        }
-        Some((count, false))
-    };
-    if !compressed {
-        return groups(head).is_some_and(|(count, _)| count == 8);
-    }
-    let (Some((head_count, head_v4)), Some((tail_count, _))) = (groups(head), groups(tail)) else {
-        return false;
-    };
-    !head_v4 && head_count + tail_count <= 7
-}
-
 /// RFC 4122 §3 `UUID`: 8-4-4-4-12 hex digits.
 fn uuid(bytes: &[u8]) -> bool {
     bytes.len() == 36
@@ -315,17 +250,28 @@ fn uuid(bytes: &[u8]) -> bool {
         })
 }
 
-/// RFC 5321 §4.1.2 `Mailbox`: `Local-part "@" ( Domain / address-literal )`.
+/// RFC 5321 §4.1.2 `Mailbox`: `Local-part "@" ( Domain / address-literal )`,
+/// the `Domain` an RFC 1123 host name.
 fn email(text: &str) -> bool {
-    let Some(at) = text.rfind('@') else {
+    let Some((local, domain)) = text.rsplit_once('@') else {
         return false;
     };
-    let (local, domain) = (&text[..at], &text[at + 1..]);
-    local_part(local.as_bytes()) && (self::domain(domain) || address_literal(domain))
+    local_part(local.as_bytes(), false) && (idna::is_hostname(domain) || address_literal(domain))
 }
 
-/// `Dot-string / Quoted-string`.
-fn local_part(bytes: &[u8]) -> bool {
+/// RFC 6531 §3.3: `Mailbox` with `UTF8-non-ascii` admitted in the local
+/// part, and a domain that is an internationalized host name.
+fn idn_email(text: &str) -> bool {
+    let Some((local, domain)) = text.rsplit_once('@') else {
+        return false;
+    };
+    local_part(local.as_bytes(), true) && (idna::is_idn_hostname(domain) || address_literal(domain))
+}
+
+/// `Dot-string / Quoted-string`, with RFC 6531's `UTF8-non-ascii` in both
+/// when `utf8`.
+fn local_part(bytes: &[u8], utf8: bool) -> bool {
+    let non_ascii = |byte: u8| utf8 && byte >= 0x80;
     if let [b'"', inner @ .., b'"'] = bytes {
         let mut index = 0;
         while index < inner.len() {
@@ -340,6 +286,7 @@ fn local_part(bytes: &[u8]) -> bool {
                     index += 2;
                 }
                 32..=33 | 35..=91 | 93..=126 => index += 1,
+                byte if non_ascii(byte) => index += 1,
                 _ => return false,
             }
         }
@@ -349,12 +296,17 @@ fn local_part(bytes: &[u8]) -> bool {
         && bytes.split(|&byte| byte == b'.').all(|atom| {
             !atom.is_empty()
                 && atom.iter().all(|&byte| {
-                    byte.is_ascii_alphanumeric() || b"!#$%&'*+-/=?^_`{|}~".contains(&byte)
+                    byte.is_ascii_alphanumeric()
+                        || b"!#$%&'*+-/=?^_`{|}~".contains(&byte)
+                        || non_ascii(byte)
                 })
         })
 }
 
-/// `"[" ( IPv4-address-literal / IPv6-address-literal ) "]"`.
+/// RFC 5321 §4.1.3 `address-literal`:
+/// `"[" ( IPv4-address-literal / IPv6-address-literal ) "]"`. (Its third
+/// form, `General-address-literal`, needs an IANA-registered tag, and the
+/// only one registered is `IPv6`.)
 fn address_literal(text: &str) -> bool {
     let Some(inner) = text
         .strip_prefix('[')
@@ -364,8 +316,69 @@ fn address_literal(text: &str) -> bool {
     };
     // The `IPv6` tag is an ABNF string literal, so it is case-insensitive.
     match inner.get(..5) {
-        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => ipv6(&inner[5..]),
-        _ => ipv4(inner),
+        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => smtp_ipv6(&inner[5..]),
+        _ => smtp_ipv4(inner),
+    }
+}
+
+/// `IPv4-address-literal = Snum 3("."  Snum)`, `Snum = 1*3DIGIT` with a
+/// value 0–255: leading zeros are allowed.
+fn smtp_ipv4(text: &str) -> bool {
+    let mut parts = 0;
+    for part in text.split('.') {
+        parts += 1;
+        let bytes = part.as_bytes();
+        if parts > 4
+            || !(1..=3).contains(&bytes.len())
+            || digits(bytes).is_none_or(|value| value > 255)
+        {
+            return false;
+        }
+    }
+    parts == 4
+}
+
+/// `IPv6-addr = IPv6-full / IPv6-comp / IPv6v4-full / IPv6v4-comp`: eight
+/// (or six, before an IPv4 literal) groups of 1–4 hex digits, where a `::`
+/// stands for at least two groups, so at most six (four) others may appear.
+fn smtp_ipv6(text: &str) -> bool {
+    let (hex, v4) = match text.rsplit_once(':') {
+        Some((head, tail)) if tail.contains('.') => {
+            if !smtp_ipv4(tail) {
+                return false;
+            }
+            // Keep the separating colon when it is half of a `::`.
+            let head = if head.ends_with(':') {
+                &text[..=head.len()]
+            } else {
+                head
+            };
+            (head, true)
+        }
+        _ => (text, false),
+    };
+    let full = if v4 { 6 } else { 8 };
+    let group = |piece: &str| {
+        (1..=4).contains(&piece.len()) && piece.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    let groups = |part: &str| -> Option<usize> {
+        if part.is_empty() {
+            return Some(0);
+        }
+        let pieces: Vec<&str> = part.split(':').collect();
+        pieces
+            .iter()
+            .all(|piece| group(piece))
+            .then_some(pieces.len())
+    };
+    match hex.split_once("::") {
+        None => groups(hex) == Some(full),
+        Some((head, tail)) => {
+            let (Some(head), Some(tail)) = (groups(head), groups(tail)) else {
+                return false;
+            };
+            head + tail <= full - 2
+        }
     }
 }
 
@@ -417,9 +430,10 @@ fn uri_template(text: &str) -> bool {
                 }
                 index += 3;
             }
-            // `literals` (§2.1) excludes CTL, SP, DQUOTE, "'", "<", ">", "\",
-            // "^", "`", "|" and "}"; non-ASCII (ucschar / iprivate) is admitted.
-            0x00..=0x20 | 0x7F | b'"' | b'\'' | b'<' | b'>' | b'\\' | b'^' | b'`' | b'|' | b'}' => {
+            // `literals` (§2.1, as corrected by verified erratum 6937, which
+            // admits "'") excludes CTL, SP, DQUOTE, "<", ">", "\", "^", "`",
+            // "|" and "}"; non-ASCII (ucschar / iprivate) is admitted.
+            0x00..=0x20 | 0x7F | b'"' | b'<' | b'>' | b'\\' | b'^' | b'`' | b'|' | b'}' => {
                 return false;
             }
             _ => index += 1,
@@ -485,7 +499,9 @@ mod tests {
     use super::*;
 
     fn check(name: &str, text: &str) -> bool {
-        Format::from_name(name).expect("known format").check(text)
+        Format::from_name(name, Dialect::Draft2020_12)
+            .expect("known format")
+            .check(text)
     }
 
     #[test]
@@ -517,6 +533,31 @@ mod tests {
             ("email", "joe@[127.0.0.300]", "joe@[IPv6:::1]"),
             ("email", "joe@-a.example", "joe@a-b.example"),
             ("email", "joe@a..example", "joe@[ipv6:::1]"),
+            ("email", "joe@[1:2:3:4:5:6:7::]", "joe@[1.2.3.004]"),
+            (
+                "email",
+                "joe@[IPv6:1:2:3:4:5:6:7::]",
+                "joe@[IPv6:1:2:3:4:5:6::]",
+            ),
+            (
+                "email",
+                "joe@[IPv6:1:2:3:4:5::1.2.3.4]",
+                "joe@[IPv6:1:2:3:4::1.2.3.4]",
+            ),
+            ("email", "j\u{f6}e@example.com", "joe@example.com"),
+            (
+                "idn-email",
+                "\u{c2e4}\u{b840}",
+                "\u{c2e4}\u{b840}@\u{c2e4}\u{b840}.\u{d14c}\u{c2a4}\u{d2b8}",
+            ),
+            (
+                "idn-email",
+                "j\u{f6}e@[IPv6:1::2::3]",
+                "j\u{f6}e@[IPv6:1::2]",
+            ),
+            ("hostname", "-a.example", "xn--bcher-kva.example"),
+            ("hostname", "b\u{fc}cher.example", "a-b.example"),
+            ("idn-hostname", "a\u{b7}l.example", "b\u{fc}cher.example"),
             ("ipv4", "127.0.0.01", "127.0.0.1"),
             ("ipv4", "256.0.0.1", "255.0.0.1"),
             ("ipv6", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8"),
@@ -536,7 +577,7 @@ mod tests {
                 "http://example.com/dictionary/{term:1}/{term",
                 "http://example.com/{term:1}/{term}",
             ),
-            ("uri-template", "a'b", "a%27b"),
+            ("uri-template", "a<b", "a'b"),
             ("json-pointer", "/foo/bar~", "/foo/bar~0"),
             ("relative-json-pointer", "01/a", "0#"),
             ("relative-json-pointer", "0+", "1-1/a"),
@@ -548,11 +589,24 @@ mod tests {
     }
 
     #[test]
-    fn unassertable_formats_have_no_check() {
-        assert_eq!(Format::from_name("idn-hostname"), None);
-        assert_eq!(Format::from_name("idn-email"), None);
-        assert_eq!(Format::from_name("hostname"), None);
-        assert_eq!(Format::from_name("color"), None);
-        assert_eq!(Format::from_name("ipv4"), Some(Format::Ipv4));
+    fn a_format_is_known_only_in_the_dialects_that_define_it() {
+        for dialect in [
+            Dialect::Draft07,
+            Dialect::Draft2019_09,
+            Dialect::Draft2020_12,
+        ] {
+            assert_eq!(Format::from_name("color", dialect), None);
+            assert_eq!(Format::from_name("ipv4", dialect), Some(Format::Ipv4));
+            assert_eq!(
+                Format::from_name("idn-hostname", dialect),
+                Some(Format::IdnHostname)
+            );
+        }
+        assert_eq!(Format::from_name("uuid", Dialect::Draft07), None);
+        assert_eq!(Format::from_name("duration", Dialect::Draft07), None);
+        assert_eq!(
+            Format::from_name("uuid", Dialect::Draft2019_09),
+            Some(Format::Uuid)
+        );
     }
 }

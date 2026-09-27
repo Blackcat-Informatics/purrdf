@@ -6,39 +6,63 @@
 //! Subschemas are compiled on demand from a work queue, each location once:
 //! a `$ref` cycle is an edge back to an index already allocated, never a
 //! recursion. Every schema resource a compiled subschema belongs to has its
-//! `$dynamicAnchor`s compiled too, because the dynamic scope of an evaluation
-//! may reach them from any `$dynamicRef`.
+//! `$dynamicAnchor`s (and 2019-09 recursive anchor) compiled too, because the
+//! dynamic scope of an evaluation may reach them from any `$dynamicRef` or
+//! `$recursiveRef`.
 //!
-//! After the keywords compile, every non-built-in document the schema reaches
-//! is validated against its own meta-schema; a document that fails is
-//! refused, never half-used.
+//! Each subschema compiles under the dialect and vocabularies of the schema
+//! resource that holds it, so a `$ref` from one dialect into another needs
+//! nothing special: the target is read by its own rules.
+//!
+//! After the keywords compile, every document the schema reaches is validated
+//! against its own meta-schema (members of a [`crate::Metaschemas`] set were
+//! checked when the set was built); a document that fails is refused, never
+//! half-used.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::content::Content;
+use crate::dialect::{self, Dialect, Vocabularies, Vocabulary};
 use crate::ecma;
 use crate::error::SchemaError;
 use crate::format::Format;
 use crate::number::Decimal;
 use crate::pointer;
-use crate::registry::{DRAFT_2020_12, Locate, Location, Registry, Vocabularies, Vocabulary};
-use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
+use crate::registry::{Document, Location, Registry};
+use crate::schema::{
+    Body, CompiledResource, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema,
+};
 
 /// Compile the schema at the absolute URI `uri` (a fragment may select a
-/// subschema by JSON Pointer or anchor).
+/// subschema by JSON Pointer or anchor), and check every document it reaches
+/// against its meta-schema.
 pub(crate) fn compile(registry: &Registry, uri: &str) -> Result<Schema, SchemaError> {
-    let (schema, documents) = compile_unchecked(registry, uri)?;
+    compile_checked(registry, uri, registry.format_assertion, &mut Vec::new())
+}
+
+/// `in_progress`: the meta-schemas whose own compilation is underway, so a
+/// self-describing meta-schema registered as an ordinary resource is not
+/// checked against itself without end.
+fn compile_checked(
+    registry: &Registry,
+    uri: &str,
+    format_assertion: bool,
+    in_progress: &mut Vec<String>,
+) -> Result<Schema, SchemaError> {
+    let (schema, documents) = compile_unchecked(registry, uri, format_assertion)?;
     for doc in documents {
-        check_against_metaschema(registry, doc)?;
+        check_document(registry, doc, in_progress)?;
     }
     Ok(schema)
 }
 
-fn compile_unchecked(
+pub(crate) fn compile_unchecked(
     registry: &Registry,
     uri: &str,
+    format_assertion: bool,
 ) -> Result<(Schema, BTreeSet<usize>), SchemaError> {
     let parsed = purrdf_iri::parse(uri).map_err(|error| SchemaError::InvalidUri {
         uri: uri.to_owned(),
@@ -52,9 +76,10 @@ fn compile_unchecked(
     }
     let location = registry
         .locate(uri)
-        .map_err(|failure| located(failure, uri, uri, uri))?;
+        .ok_or_else(|| unresolved(uri, uri, uri))?;
     let mut compiler = Compiler {
         registry,
+        format_assertion,
         nodes: Vec::new(),
         memo: BTreeMap::new(),
         queue: Vec::new(),
@@ -75,48 +100,64 @@ fn compile_unchecked(
     Ok((schema, compiler.documents))
 }
 
-fn located(failure: Locate, at: &str, reference: &str, resolved: &str) -> SchemaError {
-    match failure {
-        Locate::Unknown => SchemaError::UnresolvedReference {
-            location: at.to_owned(),
-            reference: reference.to_owned(),
-            resolved: resolved.to_owned(),
-        },
-        Locate::OtherDialect(dialect) => SchemaError::UnsupportedDialect {
-            resource: resolved.split('#').next().unwrap_or(resolved).to_owned(),
-            dialect,
-        },
+/// Nothing registered has the URI `resolved`: a missing meta-schema when it
+/// is a published meta-schema URI, else an unresolved reference.
+fn unresolved(at: &str, reference: &str, resolved: &str) -> SchemaError {
+    let base = resolved.split('#').next().unwrap_or(resolved);
+    if dialect::is_published_metaschema(base) {
+        return SchemaError::MissingMetaschema {
+            metaschema: base.to_owned(),
+            resource: at.to_owned(),
+        };
+    }
+    SchemaError::UnresolvedReference {
+        location: at.to_owned(),
+        reference: reference.to_owned(),
+        resolved: resolved.to_owned(),
     }
 }
 
-/// The draft 2020-12 meta-schema, compiled once per process.
-fn metaschema() -> &'static Schema {
-    static META: OnceLock<Schema> = OnceLock::new();
-    META.get_or_init(|| {
-        compile_unchecked(&Registry::new(), DRAFT_2020_12).map_or_else(
-            |error| unreachable!("the vendored meta-schema compiles: {error}"),
-            |(schema, _)| schema,
-        )
-    })
-}
-
-fn check_against_metaschema(registry: &Registry, doc: usize) -> Result<(), SchemaError> {
+fn check_document(
+    registry: &Registry,
+    doc: usize,
+    in_progress: &mut Vec<String>,
+) -> Result<(), SchemaError> {
     let document = &registry.docs[doc];
-    if document.builtin {
+    if document.meta {
         return Ok(());
     }
-    let dialect = registry.document_dialect(doc);
-    let custom;
-    let meta = if dialect == DRAFT_2020_12 {
-        metaschema()
-    } else {
-        custom = compile(registry, &dialect)?;
-        &custom
+    let metaschema = registry.resources[document.root_resource]
+        .metaschema
+        .clone();
+    if in_progress.contains(&metaschema) {
+        return Ok(());
+    }
+    let Some(meta) = registry.resource_by_uri(&metaschema) else {
+        return Err(SchemaError::MissingMetaschema {
+            metaschema,
+            resource: document.uri.clone(),
+        });
     };
-    let output = meta.evaluate(&document.value);
-    if output.is_valid() {
+    let shared = registry.docs[registry.resources[meta].doc].meta;
+    let validator = match &registry.metaschemas {
+        Some(set) if shared => set.validator(&metaschema, &document.uri)?,
+        _ => {
+            in_progress.push(metaschema.clone());
+            let compiled = compile_checked(registry, &metaschema, false, in_progress);
+            in_progress.pop();
+            Arc::new(compiled?)
+        }
+    };
+    check(&validator, document)
+}
+
+/// Validate `document` against its compiled meta-schema: the verdict first,
+/// the full report only on refusal.
+pub(crate) fn check(validator: &Schema, document: &Document) -> Result<(), SchemaError> {
+    if validator.is_valid(&document.value) {
         return Ok(());
     }
+    let output = validator.evaluate(&document.value);
     Err(SchemaError::InvalidSchema {
         uri: document.uri.clone(),
         errors: output
@@ -134,12 +175,14 @@ fn check_against_metaschema(registry: &Registry, doc: usize) -> Result<(), Schem
 
 struct Compiler<'r> {
     registry: &'r Registry,
+    /// Whether `format` asserts wherever the dialect defines the format.
+    format_assertion: bool,
     nodes: Vec<Node>,
     memo: BTreeMap<Location, NodeId>,
     queue: Vec<(NodeId, Location)>,
-    resources: Vec<BTreeMap<String, NodeId>>,
+    resources: Vec<CompiledResource>,
     resource_index: BTreeMap<usize, usize>,
-    vocabularies: BTreeMap<usize, Vocabularies>,
+    vocabularies: BTreeMap<usize, (Dialect, Vocabularies)>,
     documents: BTreeSet<usize>,
 }
 
@@ -193,23 +236,31 @@ impl Compiler<'_> {
             return index;
         }
         let index = self.resources.len();
-        self.resources.push(BTreeMap::new());
+        self.resources.push(CompiledResource::default());
         self.resource_index.insert(registry_resource, index);
-        let anchors: Vec<String> = self.registry.resources[registry_resource]
-            .dynamic_anchors
-            .keys()
-            .cloned()
-            .collect();
+        let entry = &self.registry.resources[registry_resource];
+        let anchors: Vec<String> = entry.dynamic_anchors.keys().cloned().collect();
+        let recursive = entry.recursive_anchor.then(|| Location {
+            doc: entry.doc,
+            pointer: entry.pointer.clone(),
+        });
         for name in anchors {
             if let Some(location) = self.registry.dynamic_anchor(registry_resource, &name) {
                 let node = self.node(location);
-                self.resources[index].insert(name, node);
+                self.resources[index].dynamic_anchors.insert(name, node);
             }
+        }
+        if let Some(location) = recursive {
+            let node = self.node(location);
+            self.resources[index].recursive_root = Some(node);
         }
         index
     }
 
-    fn vocabularies(&mut self, registry_resource: usize) -> Result<Vocabularies, SchemaError> {
+    fn vocabularies(
+        &mut self,
+        registry_resource: usize,
+    ) -> Result<(Dialect, Vocabularies), SchemaError> {
         if let Some(&vocabularies) = self.vocabularies.get(&registry_resource) {
             return Ok(vocabularies);
         }
@@ -229,7 +280,7 @@ impl Compiler<'_> {
         let absolute = format!("{}#{}", resource.uri, pointer::fragment_encode(relative));
         let compiled_resource = self.resource(registry_resource);
         self.documents.insert(location.doc);
-        let vocabularies = self.vocabularies(registry_resource)?;
+        let (dialect, vocabularies) = self.vocabularies(registry_resource)?;
         let Some(value) = registry.value(location) else {
             return Err(SchemaError::UnresolvedReference {
                 location: absolute.clone(),
@@ -244,6 +295,7 @@ impl Compiler<'_> {
                     base: &resource.uri,
                     absolute: &absolute,
                     location,
+                    dialect,
                     vocabularies,
                 };
                 self.keywords(&context, map)?
@@ -273,14 +325,10 @@ impl Compiler<'_> {
             return Err(invalid(context.absolute, keyword, "must be a string"));
         };
         let resolved = crate::registry::resolve(context.base, reference)?;
-        let target = self.registry.locate(&resolved).map_err(|failure| {
-            located(
-                failure,
-                &at(context.absolute, keyword),
-                reference,
-                &resolved,
-            )
-        })?;
+        let target = self
+            .registry
+            .locate(&resolved)
+            .ok_or_else(|| unresolved(&at(context.absolute, keyword), reference, &resolved))?;
         Ok((self.node(target), resolved))
     }
 
@@ -334,19 +382,75 @@ impl Compiler<'_> {
             })
     }
 
+    /// `format`: its name, and the check when it asserts here.
+    fn format(&self, context: &Context<'_>, value: &Value) -> Result<Kind, SchemaError> {
+        let Some(format) = value.as_str() else {
+            return Err(invalid(context.absolute, "format", "must be a string"));
+        };
+        let vocabularies = context.vocabularies;
+        let check = if vocabularies.has(Vocabulary::FormatAssertion) {
+            // 2020-12 Validation §7.2.3: a format that cannot be checked is
+            // refused rather than passed.
+            Some(Format::from_name(format, context.dialect).ok_or_else(|| {
+                SchemaError::UnsupportedFormat {
+                    location: at(context.absolute, "format"),
+                    format: format.to_owned(),
+                }
+            })?)
+        } else if self.format_assertion || vocabularies.has(Vocabulary::FormatRequired) {
+            // An unknown format stays an annotation (2019-09 Validation
+            // §7.2.3, draft-07 Validation §7.2).
+            Format::from_name(format, context.dialect)
+        } else {
+            None
+        };
+        Ok(Kind::Format(format.to_owned(), check))
+    }
+
+    /// `$recursiveRef` (2019-09 Core §8.2.4.2): defined only for `"#"`.
+    fn recursive_ref(&mut self, context: &Context<'_>, value: &Value) -> Result<Kind, SchemaError> {
+        if value.as_str() != Some("#") {
+            return Err(invalid(
+                context.absolute,
+                "$recursiveRef",
+                "the only value 2019-09 defines for `$recursiveRef` is \"#\"",
+            ));
+        }
+        let (target, _) = self.reference(context, "$recursiveRef", value)?;
+        Ok(Kind::RecursiveRef(target))
+    }
+
     #[allow(clippy::too_many_lines)]
     fn keywords(
         &mut self,
         context: &Context<'_>,
         map: &Map<String, Value>,
     ) -> Result<Body, SchemaError> {
+        let dialect = context.dialect;
         let vocabularies = context.vocabularies;
+        let draft07 = dialect == Dialect::Draft07;
+        let modern = dialect == Dialect::Draft2020_12;
         let mut references = Vec::new();
         let mut assertions = Vec::new();
         let mut in_place = Vec::new();
         let mut children = Vec::new();
         let mut annotations = Vec::new();
         let mut unevaluated = Vec::new();
+        if draft07 && let Some(value) = map.get("$ref") {
+            // Draft-07 Core §8.3: every other keyword beside `$ref` is ignored.
+            let (target, _) = self.reference(context, "$ref", value)?;
+            let keywords = vec![Keyword {
+                name: "$ref".to_owned(),
+                kind: Kind::Ref(target),
+            }];
+            return Ok(Body::Keywords {
+                keywords,
+                tracks: false,
+            });
+        }
+        let validation = vocabularies.has(Vocabulary::Validation);
+        let applicator = vocabularies.has(Vocabulary::Applicator);
+        let array_items = !modern && map.get("items").is_some_and(Value::is_array);
         for (name, value) in map {
             let keyword = name.as_str();
             let kind = match keyword {
@@ -358,7 +462,7 @@ impl Compiler<'_> {
                     });
                     continue;
                 }
-                "$dynamicRef" => {
+                "$dynamicRef" if modern => {
                     let (target, resolved) = self.reference(context, keyword, value)?;
                     let anchor = resolved.split_once('#').and_then(|(base, fragment)| {
                         let name = pointer::percent_decode(fragment)?;
@@ -374,12 +478,18 @@ impl Compiler<'_> {
                     });
                     continue;
                 }
-                "$id" | "$schema" | "$anchor" | "$dynamicAnchor" | "$vocabulary" | "$comment"
-                | "$defs" | "definitions" => continue,
+                "$recursiveRef" if dialect == Dialect::Draft2019_09 => {
+                    let kind = self.recursive_ref(context, value)?;
+                    references.push(Keyword {
+                        name: name.clone(),
+                        kind,
+                    });
+                    continue;
+                }
+                "$id" | "$schema" | "$anchor" | "$dynamicAnchor" | "$recursiveAnchor"
+                | "$vocabulary" | "$comment" | "$defs" | "definitions" => continue,
                 _ => keyword,
             };
-            let validation = vocabularies.has(Vocabulary::Validation);
-            let applicator = vocabularies.has(Vocabulary::Applicator);
             let bucket_kind: Option<(&mut Vec<Keyword>, Kind)> = match kind {
                 "type" if validation => Some((&mut assertions, Kind::Type(types(context, value)?))),
                 "enum" if validation => {
@@ -454,29 +564,30 @@ impl Compiler<'_> {
                     &mut assertions,
                     Kind::Required(strings(context, keyword, value)?),
                 )),
-                "dependentRequired" if validation => Some((
+                "dependentRequired" if validation && !draft07 => Some((
                     &mut assertions,
                     Kind::DependentRequired(dependent_required(context, keyword, value)?),
                 )),
-                "maxContains" | "minContains" if validation => {
+                "maxContains" | "minContains" if validation && !draft07 => {
                     count(context, keyword, value)?;
                     None
                 }
-                "format" => {
-                    let Some(format) = value.as_str() else {
-                        return Err(invalid(context.absolute, keyword, "must be a string"));
-                    };
-                    let check = if vocabularies.has(Vocabulary::FormatAssertion) {
-                        Some(Format::from_name(format).ok_or_else(|| {
-                            SchemaError::UnsupportedFormat {
-                                location: at(context.absolute, keyword),
-                                format: format.to_owned(),
-                            }
-                        })?)
-                    } else {
-                        None
-                    };
-                    Some((&mut assertions, Kind::Format(format.to_owned(), check)))
+                "format" => Some((&mut assertions, self.format(context, value)?)),
+                "contentEncoding" | "contentMediaType" if draft07 => {
+                    // Draft-07 Validation §8: content keywords may assert; they
+                    // do here, for the encodings and media types this crate
+                    // decodes. `contentMediaType` beside `contentEncoding` is
+                    // checked by the latter.
+                    let content =
+                        if keyword == "contentMediaType" && map.contains_key("contentEncoding") {
+                            None
+                        } else {
+                            Content::from_keywords(map)
+                        };
+                    match content {
+                        Some(content) => Some((&mut assertions, Kind::Content(content))),
+                        None => Some((&mut annotations, Kind::Annotation(value.clone()))),
+                    }
                 }
                 "allOf" if applicator => Some((
                     &mut in_place,
@@ -512,14 +623,14 @@ impl Compiler<'_> {
                     ))
                 }
                 "then" | "else" if applicator => None,
-                "dependentSchemas" if applicator => Some((
+                "dependentSchemas" if applicator && !draft07 => Some((
                     &mut in_place,
                     Kind::DependentSchemas(self.schema_map(context, keyword, value)?),
                 )),
                 "dependencies" => {
-                    // The pre-2019-09 keyword the 2020-12 meta-schema still
-                    // describes: array members are `dependentRequired`, schema
-                    // members `dependentSchemas`.
+                    // Draft-07's keyword, which the 2019-09 and 2020-12
+                    // meta-schemas still describe: array members are
+                    // `dependentRequired`, schema members `dependentSchemas`.
                     let Some(members) = value.as_object() else {
                         return Err(invalid(context.absolute, keyword, "must be an object"));
                     };
@@ -552,15 +663,29 @@ impl Compiler<'_> {
                     }
                     None
                 }
-                "prefixItems" if applicator => Some((
+                "prefixItems" if applicator && modern => Some((
                     &mut children,
                     Kind::PrefixItems(self.schemas(context, keyword, value)?),
                 )),
+                // Draft-07 and 2019-09 array-form `items`: one schema per
+                // position, like 2020-12 `prefixItems`.
+                "items" if applicator && array_items => {
+                    let Some(items) = value.as_array() else {
+                        unreachable!("array_items checked the shape")
+                    };
+                    let schemas = (0..items.len())
+                        .map(|index| self.child(context.location, &[keyword, &index.to_string()]))
+                        .collect();
+                    Some((&mut children, Kind::PrefixItems(schemas)))
+                }
                 "items" if applicator => {
-                    let skip = map
-                        .get("prefixItems")
-                        .and_then(Value::as_array)
-                        .map_or(0, Vec::len);
+                    let skip = if modern {
+                        map.get("prefixItems")
+                            .and_then(Value::as_array)
+                            .map_or(0, Vec::len)
+                    } else {
+                        0
+                    };
                     Some((
                         &mut children,
                         Kind::Items {
@@ -569,9 +694,23 @@ impl Compiler<'_> {
                         },
                     ))
                 }
+                // Applies past the array form of `items`, and is ignored
+                // otherwise (draft-07 Validation §6.4.2, 2019-09 Core
+                // §9.3.1.2).
+                "additionalItems" if applicator && !modern => {
+                    map.get("items").and_then(Value::as_array).map(|items| {
+                        (
+                            &mut children,
+                            Kind::Items {
+                                schema: self.child(context.location, &[keyword]),
+                                skip: items.len(),
+                            },
+                        )
+                    })
+                }
                 "contains" if applicator => {
                     let bound = |name: &str| -> Result<Option<u64>, SchemaError> {
-                        if !validation {
+                        if !validation || draft07 {
                             return Ok(None);
                         }
                         map.get(name)
@@ -586,6 +725,9 @@ impl Compiler<'_> {
                             schema: self.child(context.location, &[keyword]),
                             min,
                             max,
+                            // Only 2020-12 makes `contains` an annotation
+                            // `unevaluatedItems` reads (Core §10.3.1.3).
+                            evaluates: modern,
                         },
                     ))
                 }
@@ -630,17 +772,24 @@ impl Compiler<'_> {
                     &mut children,
                     Kind::PropertyNames(self.child(context.location, &[keyword])),
                 )),
-                "unevaluatedItems" if vocabularies.has(Vocabulary::Unevaluated) => Some((
-                    &mut unevaluated,
-                    Kind::UnevaluatedItems(self.child(context.location, &[keyword])),
-                )),
-                "unevaluatedProperties" if vocabularies.has(Vocabulary::Unevaluated) => Some((
-                    &mut unevaluated,
-                    Kind::UnevaluatedProperties(self.child(context.location, &[keyword])),
-                )),
+                "unevaluatedItems" if !draft07 && vocabularies.has(Vocabulary::Unevaluated) => {
+                    Some((
+                        &mut unevaluated,
+                        Kind::UnevaluatedItems(self.child(context.location, &[keyword])),
+                    ))
+                }
+                "unevaluatedProperties"
+                    if !draft07 && vocabularies.has(Vocabulary::Unevaluated) =>
+                {
+                    Some((
+                        &mut unevaluated,
+                        Kind::UnevaluatedProperties(self.child(context.location, &[keyword])),
+                    ))
+                }
                 // Meta-data and content keywords, keywords of a vocabulary the
-                // meta-schema does not declare, and unknown keywords: each is an
-                // annotation carrying its value (Core §6.5, §7.7.1).
+                // meta-schema does not declare or the dialect does not define,
+                // and unknown keywords: each is an annotation carrying its
+                // value (Core §6.5, §7.7.1).
                 _ => Some((&mut annotations, Kind::Annotation(value.clone()))),
             };
             if let Some((bucket, kind)) = bucket_kind {
@@ -669,6 +818,7 @@ struct Context<'a> {
     base: &'a str,
     absolute: &'a str,
     location: &'a Location,
+    dialect: Dialect,
     vocabularies: Vocabularies,
 }
 

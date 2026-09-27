@@ -1,32 +1,59 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf-jsonschema` — native JSON Schema draft 2020-12 validation.
+//! `purrdf-jsonschema` — native JSON Schema validation for drafts 2020-12,
+//! 2019-09 and 07.
 //!
-//! An implementation of the 2020-12 dialect: every keyword of the Core,
-//! Applicator, Unevaluated, Validation, Meta-Data, Format-Annotation and
-//! Content vocabularies, and the Format-Assertion vocabulary for every format
-//! but the three whose complete check needs IDNA2008 tables (`hostname`,
-//! `idn-hostname`, `idn-email`, refused as assertions); `$ref`, `$dynamicRef` and
-//! `$dynamicAnchor` with the dynamic scope; `unevaluatedItems` and
-//! `unevaluatedProperties` over annotations collected through every in-place
-//! applicator; `$vocabulary` in custom meta-schemas; and the `flag`, `basic`
-//! and `detailed` output formats. It is checked against the official
-//! JSON-Schema-Test-Suite for draft 2020-12, optional tests included, and
-//! passes every case but one: the case that asks for a draft 2019-09 document
-//! to be evaluated, which this crate refuses by design (see below).
+//! Every schema resource is evaluated in the dialect its `$schema` names
+//! ([`Dialect`]), and a `$ref` from one dialect into another reads the
+//! target by its own rules:
 //!
+//! * **2020-12** — every keyword of the Core, Applicator, Unevaluated,
+//!   Validation, Meta-Data, Format and Content vocabularies; `$dynamicRef` and
+//!   `$dynamicAnchor` with the dynamic scope; `$vocabulary` in custom
+//!   meta-schemas.
+//! * **2019-09** — its vocabularies: `$recursiveRef` and `$recursiveAnchor`,
+//!   array-form `items` with `additionalItems`, `unevaluatedItems` and
+//!   `unevaluatedProperties` (which `contains` does not feed), `$anchor`,
+//!   `$vocabulary`.
+//! * **draft-07** — its keyword set: `definitions`, `dependencies`, array-form
+//!   `items` with `additionalItems`, `$ref` overriding its siblings, plain-name
+//!   `$id` fragments, and `contentEncoding` (base64) / `contentMediaType`
+//!   (`application/json`) as assertions.
+//!
+//! Output is available as the `flag`, `basic` and `detailed` formats. The
+//! crate is checked against the official JSON-Schema-Test-Suite for all three
+//! drafts, `optional/` and `optional/format/` included, with no case ignored.
 //! It depends on `serde_json`, `regex` and `purrdf-iri` only, runs on
-//! `wasm32-unknown-unknown`, and needs no network: the 2020-12 meta-schemas
-//! are vendored and registered in every [`Registry`].
+//! `wasm32-unknown-unknown`, and needs no network.
+//!
+//! # Meta-schemas are the caller's
+//!
+//! No meta-schema document is compiled into this crate. Every compiled
+//! document is checked against its meta-schema, so the caller registers the
+//! published meta-schemas of the dialects it uses — once, as a shared
+//! [`Metaschemas`] set — or a custom meta-schema with
+//! [`Registry::add_resource`]. A meta-schema that is needed and not
+//! registered is [`SchemaError::MissingMetaschema`], naming it. The dialects'
+//! identifiers, vocabularies and keyword semantics are code.
 //!
 //! # Example
 //!
 //! ```
-//! use purrdf_jsonschema::{OutputFormat, Registry};
-//! use serde_json::json;
+//! use purrdf_jsonschema::{Metaschemas, OutputFormat, Registry, SchemaError};
+//! use serde_json::{Value, json};
 //!
-//! let mut registry = Registry::new();
+//! # fn draft_2020_12() -> Vec<(&'static str, Value)> {
+//! #     purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+//! #         .iter()
+//! #         .map(|&(uri, text)| (uri, serde_json::from_str(text).unwrap()))
+//! #         .collect()
+//! # }
+//! // The nine published draft 2020-12 meta-schema documents, as
+//! // `(URI, document)` pairs, from wherever the application keeps them.
+//! let metaschemas = Metaschemas::new(draft_2020_12())?;
+//!
+//! let mut registry = Registry::with_metaschemas(&metaschemas);
 //! registry.add_resource(
 //!     "https://example.org/person.json",
 //!     json!({
@@ -46,28 +73,44 @@
 //! let basic = output.to_json(OutputFormat::Basic);
 //! assert_eq!(basic["valid"], false);
 //! assert!(basic["errors"].as_array().is_some_and(|errors| !errors.is_empty()));
-//! # Ok::<(), purrdf_jsonschema::SchemaError>(())
+//!
+//! // Without the meta-schemas, the document cannot be checked:
+//! let mut bare = Registry::new();
+//! bare.add_resource("https://example.org/s.json", json!({"type": "string"}))?;
+//! assert!(matches!(
+//!     bare.compile("https://example.org/s.json"),
+//!     Err(SchemaError::MissingMetaschema { .. })
+//! ));
+//! # Ok::<(), SchemaError>(())
 //! ```
 //!
 //! # Semantics worth knowing
 //!
-//! * **One dialect.** A `$schema` naming any other published dialect
-//!   (draft-04, -06, -07, 2019-09, …) is refused with
+//! * **Three dialects.** A `$schema` naming draft-06 or earlier, or an
+//!   unreleased successor of 2020-12, is refused with
 //!   [`SchemaError::UnsupportedDialect`] — at compile time, including when a
 //!   `$ref` reaches such a document. A custom meta-schema is accepted when it
-//!   is itself a 2020-12 schema, and its `$vocabulary` decides which keywords
-//!   are in force; a *required* vocabulary this crate does not implement is
-//!   [`SchemaError::UnsupportedVocabulary`]. A schema with no `$schema` is
-//!   2020-12.
+//!   is itself written in a supported dialect, and its `$vocabulary` decides
+//!   which keywords are in force; a *required* vocabulary this crate does not
+//!   implement is [`SchemaError::UnsupportedVocabulary`]. A schema with no
+//!   `$schema` is read in the registry's default dialect (2020-12 unless
+//!   [`Registry::set_default_dialect`] says otherwise). A 2019-09
+//!   `$recursiveRef` other than `"#"` is refused.
 //! * **Numbers are exact.** `1` and `1.0` are equal and both integers;
 //!   `multipleOf` divides in decimal, so `0.0075` is a multiple of `0.0001`.
 //! * **Patterns are ECMA-262** with the `u` flag, translated by [`ecma`]; see
 //!   there for the three constructs refused rather than approximated.
-//! * **`format` is an annotation** unless the meta-schema declares the
-//!   Format-Assertion vocabulary; then it asserts, and a format this crate
-//!   cannot check completely is [`SchemaError::UnsupportedFormat`].
+//! * **`format` is an annotation** by default, as every supported draft
+//!   specifies. [`Registry::set_format_assertion`] makes every format the
+//!   dialect defines assert — `hostname`, `idn-hostname` and `idn-email`
+//!   through the IDNA2008 implementation in `purrdf_iri::idna` — and a
+//!   2020-12 meta-schema declaring the Format-Assertion vocabulary, or a
+//!   2019-09 one requiring the Format vocabulary, does the same; under the
+//!   Format-Assertion vocabulary a format name no draft defines is
+//!   [`SchemaError::UnsupportedFormat`].
 //! * **Unknown keywords are annotations** carrying their value, as are the
-//!   keywords of a vocabulary the meta-schema does not declare.
+//!   keywords of a vocabulary the meta-schema does not declare and the
+//!   keywords of other dialects.
 //! * **Schemas are checked against their meta-schema** when compiled; a
 //!   schema that fails is [`SchemaError::InvalidSchema`].
 #![doc(
@@ -79,10 +122,13 @@
 #![forbid(unsafe_code)]
 
 mod compile;
+mod content;
+mod dialect;
 pub mod ecma;
 mod equal;
 mod error;
 mod format;
+mod meta_set;
 mod number;
 mod output;
 mod pointer;
@@ -90,7 +136,9 @@ mod registry;
 mod schema;
 mod validate;
 
+pub use dialect::Dialect;
 pub use error::SchemaError;
+pub use meta_set::Metaschemas;
 pub use output::{Output, OutputFormat, OutputUnit};
 pub use registry::{DRAFT_2020_12, Registry};
 pub use schema::Schema;
@@ -104,11 +152,19 @@ impl Registry {
 }
 
 impl Schema {
-    /// Compile a single document registered under `uri` in a fresh
-    /// [`Registry`] — the shorthand for a schema that references nothing
-    /// outside itself and the 2020-12 meta-schemas.
-    pub fn from_document(uri: &str, document: serde_json::Value) -> Result<Self, SchemaError> {
-        let mut registry = Registry::new();
+    /// Compile a single document registered under `uri` in a registry that
+    /// holds `metaschemas` — the shorthand for a schema that references
+    /// nothing outside itself and the meta-schemas.
+    ///
+    /// The set's documents and compiled meta-validators are shared, so
+    /// calling this repeatedly with one set parses and compiles only
+    /// `document`.
+    pub fn from_document(
+        metaschemas: &Metaschemas,
+        uri: &str,
+        document: serde_json::Value,
+    ) -> Result<Self, SchemaError> {
+        let mut registry = Registry::with_metaschemas(metaschemas);
         registry.add_resource(uri, document)?;
         registry.compile(uri)
     }

@@ -13,37 +13,55 @@ here so its origin is checkable rather than asserted.
 
 - Upstream: <https://github.com/json-schema-org/JSON-Schema-Test-Suite>,
   commit **`5b0ee1613e45fcc2bddac00e07c19cd49b00d8a8`**.
-- Vendored verbatim: `tests/draft2020-12/` (every file, `optional/` included,
-  except `optional/format/`), `remotes/` (every file), and
-  `output-tests/draft2020-12/` (the output meta-schema and the content tests).
-- Not vendored: `tests/draft2020-12/optional/format/`. Under the 2020-12
-  meta-schema `format` is an annotation, which `format.json` (vendored) tests;
-  the `optional/format/` files test format as an assertion.
+- Vendored verbatim: `tests/draft2020-12/`, `tests/draft2019-09/` and
+  `tests/draft7/` (every file, `optional/` and `optional/format/` included),
+  `remotes/` (every file), and `output-tests/draft2020-12/` and
+  `output-tests/draft2019-09/` (the output meta-schemas and the content
+  tests).
 - License: MIT, `Copyright (c) 2012 Julian Berman` — the upstream `LICENSE`
   is `tests/suite/LICENSES/MIT.txt`, and `tests/suite/REUSE.toml` declares it
   for every vendored file.
+- Test data only: excluded from the published package.
 - Frozen: `scripts/check-corpus-frozen.py` holds every file to the digests in
   `scripts/conformance-frozen/jsonschema-suite.sha256`.
-- Run by `tests/suite.rs`: 1,463 validation cases and 4 output cases, with
-  the file, group, case and registered-remote counts pinned by its
-  `suite-inventory` case. One case, `optional/cross-draft.json` group 0, asks
-  for a draft 2019-09 document to be evaluated under 2019-09 rules; this crate
-  implements 2020-12 only and refuses other dialects, so that case is the one
-  ignored case, and `dialect-refusal/optional/cross-draft.json/0` pins the
-  typed refusal it receives instead.
+- Run by `tests/suite.rs` (2020-12), `tests/suite_draft2019_09.rs` and
+  `tests/suite_draft7.rs` through `tests/suite_runner/`: every validation case
+  of each draft, `optional/format/` with format assertion on, and the output
+  cases, with the file, group, case and registered-remote counts pinned by
+  each target's `suite-inventory` case. No case is ignored.
 
-## `metaschemas/draft2020-12/` — the 2020-12 meta-schemas
+## `tests/metaschemas/` — the draft-07, 2019-09 and 2020-12 meta-schemas
 
-- Upstream: <https://github.com/json-schema-org/json-schema-spec>, branch
-  `2020-12`, commit **`601a66c8b0f25246bf0e1fb488c5b5f030a79b72`**: `schema.json`
-  and `meta/{core,applicator,unevaluated,validation,meta-data,
-  format-annotation,format-assertion,content}.json`, verbatim. These are the
-  documents published at `https://json-schema.org/draft/2020-12/…`, compiled
-  into the crate with `include_str!` and registered in every `Registry`.
-- License: the upstream repository offers its material under the AFL or the
-  BSD license; it is taken here under BSD-3-Clause
-  (`metaschemas/LICENSES/BSD-3-Clause.txt`, declared by
-  `metaschemas/REUSE.toml`).
+- Upstream: <https://github.com/json-schema-org/json-schema-spec>.
+  - `draft2020-12/`: branch `2020-12`, commit
+    **`601a66c8b0f25246bf0e1fb488c5b5f030a79b72`**: `schema.json` and
+    `meta/{core,applicator,unevaluated,validation,meta-data,
+    format-annotation,format-assertion,content}.json`, verbatim.
+  - `draft2019-09/` (`schema.json` and
+    `meta/{core,applicator,validation,meta-data,format,content}.json`) and
+    `draft-07/schema.json`: the `2019-09` and `draft-07` branches, verbatim.
+    Their upstream commits were not recorded when they were vendored and are
+    not recorded here. What is pinned is their content: the digests in
+    `scripts/conformance-frozen/jsonschema-metaschemas.sha256`.
+  - These are the documents published at
+    `https://json-schema.org/draft/2020-12/…`,
+    `https://json-schema.org/draft/2019-09/…` and
+    `http://json-schema.org/draft-07/schema`.
+- License: at the vendored commits the upstream repository carried no
+  `LICENSE` file; its README declared only that "the source material in this
+  repository is licensed under the AFL or BSD license". The project later
+  specified those licences in a root `LICENSE` file, added in commit
+  `51326f809003` (2022-07-12): BSD-3-Clause, `Copyright (c) 2022 JSON Schema
+  Specification Authors`, followed by the Academic Free License 3.0. PurRDF
+  takes the meta-schemas under BSD-3-Clause:
+  `tests/metaschemas/LICENSES/BSD-3-Clause.txt` is that file's BSD section
+  verbatim, copyright line included, and `tests/metaschemas/REUSE.toml`
+  declares it with the holder "JSON Schema Specification Authors".
+- Test data only. The crate compiles no meta-schema in: callers register
+  the ones they need (`Metaschemas`, `Registry::with_metaschemas`). The
+  workspace's tests and examples take these copies through
+  `purrdf_testkit::jsonschema_metaschemas`; the directory is excluded from
+  the published package.
 - Frozen: `scripts/check-corpus-frozen.py`, manifest
   `scripts/conformance-frozen/jsonschema-metaschemas.sha256`.
 
@@ -55,8 +73,9 @@ Before this crate existed the workspace validated JSON Schema with `boon`
 TypeScript and GraphQL oracle fixtures in `purrdf-shapes/examples`. While
 `boon` was still a dependency, a recorder ran it over:
 
-- every case of the vendored suite (1,463 records), with the suite's remotes
-  registered at `http://localhost:1234/`; and
+- every case of the vendored draft 2020-12 suite outside `optional/format/`
+  (1,463 records), with the suite's remotes registered at
+  `http://localhost:1234/`; and
 - every distinct (schema, instance) pair those four call sites evaluated,
   captured at the call sites during their own test and example runs (136
   records).
@@ -75,11 +94,9 @@ this crate gives the suite's answer. There are two such records:
 | `suite:optional/float-overflow.json/0/0` | invalid | valid | `1e308` is an integer and so a multiple of `0.5`; dividing in binary floating point overflows. This crate divides in decimal. |
 | `suite:optional/format-assertion.json/0/1` | valid | invalid | A meta-schema declaring the Format-Assertion vocabulary (even as `false`) makes `format` an assertion for an implementation that knows the vocabulary. |
 
-One further record differs by design rather than by error:
-`suite:optional/cross-draft.json/0/0`, where `boon` evaluated the referenced
-draft 2019-09 document (and agreed with the suite) and this crate refuses the
-dialect with `SchemaError::UnsupportedDialect`. The replay requires exactly
-that refusal. Every one of the 136 call-site records agrees with `boon`.
+Every other record, the 136 call-site records included, agrees with `boon`.
+The replay registers the vendored meta-schemas, which this crate does not
+carry.
 
 ## `tests/pattern_differential_vectors.txt` — JavaScript's `RegExp` verdicts
 

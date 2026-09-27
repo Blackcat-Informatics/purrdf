@@ -127,6 +127,17 @@ purrdf-testkit = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
 
+# The two JSON Schema oracle fixtures carry a test of their `validates` entry
+# point (the draft 2020-12 meta-schemas registered, and not), so `cargo test`
+# builds them with the test harness and runs it.
+[[example]]
+name = "graphql_oracle_fixture"
+test = true
+
+[[example]]
+name = "typescript_oracle_fixture"
+test = true
+
 # The one test in this crate that must EXECUTE on wasm32-unknown-unknown rather
 # than merely compile for it. A prepared product is written by a build tool on a
 # host and restored months later in a browser, so "the same bytes on every target"

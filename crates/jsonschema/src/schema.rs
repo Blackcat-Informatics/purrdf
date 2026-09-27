@@ -10,6 +10,7 @@ use std::fmt;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::content::Content;
 use crate::format::Format;
 use crate::number::Decimal;
 
@@ -24,8 +25,8 @@ pub(crate) type NodeId = usize;
 #[derive(Clone)]
 pub struct Schema {
     pub(crate) nodes: Vec<Node>,
-    /// Per compiled resource: its `$dynamicAnchor`s.
-    pub(crate) resources: Vec<BTreeMap<String, NodeId>>,
+    /// Per compiled resource: what the dynamic scope can reach in it.
+    pub(crate) resources: Vec<CompiledResource>,
     pub(crate) root: NodeId,
 }
 
@@ -36,6 +37,16 @@ impl fmt::Debug for Schema {
             .field("subschemas", &self.nodes.len())
             .finish_non_exhaustive()
     }
+}
+
+/// What `$dynamicRef` and `$recursiveRef` can find in one schema resource
+/// when it is in the dynamic scope.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CompiledResource {
+    /// Its `$dynamicAnchor`s (2020-12).
+    pub(crate) dynamic_anchors: BTreeMap<String, NodeId>,
+    /// Its root, when the root declares `$recursiveAnchor: true` (2019-09).
+    pub(crate) recursive_root: Option<NodeId>,
 }
 
 /// One compiled subschema.
@@ -122,6 +133,9 @@ pub(crate) enum Kind {
         target: NodeId,
         anchor: Option<String>,
     },
+    /// `$recursiveRef` (2019-09): the statically resolved target, the root
+    /// of the resource that holds the keyword.
+    RecursiveRef(NodeId),
     Type(Vec<JsonType>),
     Enum(Vec<Value>),
     Const(Value),
@@ -163,7 +177,12 @@ pub(crate) enum Kind {
         schema: NodeId,
         min: u64,
         max: Option<u64>,
+        /// Whether matching items count as evaluated for
+        /// `unevaluatedItems` (2020-12 only).
+        evaluates: bool,
     },
+    /// Draft-07 `contentEncoding` / `contentMediaType` as an assertion.
+    Content(Content),
     Properties(BTreeMap<String, NodeId>),
     PatternProperties(Vec<(Pattern, NodeId)>),
     AdditionalProperties {

@@ -4,50 +4,177 @@
 //! The public surface: every refusal next to the valid neighbour it must not
 //! swallow, and the three output formats.
 
-use purrdf_jsonschema::{OutputFormat, Registry, Schema, SchemaError, ecma::PatternError};
+use std::sync::OnceLock;
+
+use purrdf_jsonschema::{
+    Dialect, Metaschemas, OutputFormat, Registry, Schema, SchemaError, ecma::PatternError,
+};
 use serde_json::{Value, json};
 
 const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
+const DRAFT_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
+const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
+
+/// The vendored meta-schemas of all three drafts, built once for every test.
+fn metaschemas() -> &'static Metaschemas {
+    static SET: OnceLock<Metaschemas> = OnceLock::new();
+    SET.get_or_init(|| {
+        Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::all()
+                .map(|(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+        )
+        .expect("the vendored meta-schemas form a set")
+    })
+}
+
+fn set_of(documents: &[(&'static str, &'static str)]) -> Result<Metaschemas, SchemaError> {
+    Metaschemas::new(
+        documents
+            .iter()
+            .map(|&(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+    )
+}
+
+fn registry() -> Registry {
+    Registry::with_metaschemas(metaschemas())
+}
 
 fn compile(document: Value) -> Result<Schema, SchemaError> {
-    Schema::from_document("https://example.org/schema.json", document)
+    Schema::from_document(metaschemas(), "https://example.org/schema.json", document)
 }
 
 #[test]
-fn draft_07_is_refused_and_2020_12_is_accepted() {
+fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
     for dialect in [
-        "http://json-schema.org/draft-07/schema#",
+        "http://json-schema.org/draft-06/schema#",
+        "http://json-schema.org/draft-06/schema",
         "http://json-schema.org/draft-04/schema#",
-        "https://json-schema.org/draft/2019-09/schema",
+        "http://json-schema.org/draft-03/schema#",
+        "http://json-schema.org/schema#",
+        "https://json-schema.org/draft/next/schema",
     ] {
         match compile(json!({"$schema": dialect, "type": "string"})) {
             Err(SchemaError::UnsupportedDialect { dialect: got, .. }) => assert_eq!(got, dialect),
             other => panic!("{dialect}: expected a dialect refusal, got {other:?}"),
         }
     }
-    let accepted = compile(json!({"$schema": DRAFT, "type": "string"})).expect("2020-12 compiles");
-    assert!(accepted.is_valid(&json!("text")));
-    assert!(!accepted.is_valid(&json!(1)));
-    let with_hash = compile(json!({"$schema": format!("{DRAFT}#"), "type": "string"}))
-        .expect("the empty fragment spelling is the same dialect");
-    assert!(with_hash.is_valid(&json!("text")));
+    for dialect in [
+        DRAFT,
+        "https://json-schema.org/draft/2020-12/schema#",
+        DRAFT_2019_09,
+        "https://json-schema.org/draft/2019-09/schema#",
+        DRAFT_07,
+        "http://json-schema.org/draft-07/schema",
+    ] {
+        let accepted = compile(json!({"$schema": dialect, "type": "string"}))
+            .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+        assert!(accepted.is_valid(&json!("text")), "{dialect}");
+        assert!(!accepted.is_valid(&json!(1)), "{dialect}");
+    }
     let unstated = compile(json!({"type": "string"})).expect("no $schema means 2020-12");
     assert!(!unstated.is_valid(&json!(1)));
 }
 
 #[test]
-fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_followed() {
-    let mut registry = Registry::new();
+fn each_dialect_reads_its_own_keywords() {
+    // Array-form `items` with `additionalItems`: draft-07 and 2019-09 only.
+    for dialect in [DRAFT_07, DRAFT_2019_09] {
+        let schema = compile(json!({
+            "$schema": dialect,
+            "items": [{"type": "integer"}],
+            "additionalItems": false
+        }))
+        .expect("compiles");
+        assert!(schema.is_valid(&json!([1])));
+        assert!(!schema.is_valid(&json!(["a"])));
+        assert!(!schema.is_valid(&json!([1, 2])));
+    }
+    // Draft-07 ignores every sibling of `$ref`; 2019-09 applies them.
+    let siblings = |dialect: &str| {
+        compile(json!({
+            "$schema": dialect,
+            "definitions": {"any": true},
+            "properties": {"a": {"$ref": "#/definitions/any", "type": "string"}}
+        }))
+        .expect("compiles")
+    };
+    assert!(siblings(DRAFT_07).is_valid(&json!({"a": 1})));
+    assert!(!siblings(DRAFT_2019_09).is_valid(&json!({"a": 1})));
+    // Draft-07 content assertions; 2019-09 content annotations.
+    let content = |dialect: &str| {
+        compile(json!({"$schema": dialect, "contentMediaType": "application/json"}))
+            .expect("compiles")
+    };
+    assert!(!content(DRAFT_07).is_valid(&json!("[1,")));
+    assert!(content(DRAFT_07).is_valid(&json!("{}")));
+    assert!(content(DRAFT_2019_09).is_valid(&json!("[1,")));
+    // `unevaluatedItems` does not see `contains` in 2019-09, and does in 2020-12.
+    let contains = |dialect: &str| {
+        compile(json!({
+            "$schema": dialect,
+            "contains": {"type": "string"},
+            "unevaluatedItems": false
+        }))
+        .expect("compiles")
+    };
+    assert!(!contains(DRAFT_2019_09).is_valid(&json!(["a"])));
+    assert!(contains(DRAFT).is_valid(&json!(["a"])));
+}
+
+#[test]
+fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
+    match compile(json!({
+        "$schema": DRAFT_2019_09,
+        "$defs": {"a": true},
+        "$recursiveRef": "#/$defs/a"
+    })) {
+        Err(SchemaError::InvalidKeyword { location, .. }) => {
+            assert!(location.ends_with("/$recursiveRef"), "{location}");
+        }
+        other => panic!("expected a $recursiveRef refusal, got {other:?}"),
+    }
+    let tree = compile(json!({
+        "$schema": DRAFT_2019_09,
+        "type": "array",
+        "items": {"$recursiveRef": "#"}
+    }))
+    .expect("the root compiles");
+    assert!(tree.is_valid(&json!([[], [[]]])));
+    assert!(!tree.is_valid(&json!([[1]])));
+}
+
+#[test]
+fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_anchor() {
+    match compile(json!({
+        "$schema": DRAFT_07,
+        "definitions": {"a": {"$id": "#/definitions/a"}}
+    })) {
+        Err(SchemaError::InvalidIdentifier { .. }) => {}
+        other => panic!("expected an identifier refusal, got {other:?}"),
+    }
+    let schema = compile(json!({
+        "$schema": DRAFT_07,
+        "allOf": [{"$ref": "#name"}],
+        "definitions": {"a": {"$id": "#name", "type": "integer"}}
+    }))
+    .expect("a plain-name $id compiles");
+    assert!(schema.is_valid(&json!(1)));
+    assert!(!schema.is_valid(&json!("a")));
+}
+
+#[test]
+fn a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_dialect_is_refused() {
+    let mut registry = registry();
     registry
         .add_resource(
             "https://example.org/old.json",
-            json!({"$schema": "http://json-schema.org/draft-07/schema#", "type": "string"}),
+            json!({"$schema": "http://json-schema.org/draft-04/schema#", "type": "string"}),
         )
         .expect("registering a foreign document is not using it");
     registry
         .add_resource(
-            "https://example.org/new.json",
-            json!({"$schema": DRAFT, "type": "string"}),
+            "https://example.org/seven.json",
+            json!({"$schema": DRAFT_07, "items": [{"type": "string"}], "additionalItems": false}),
         )
         .expect("register");
     registry
@@ -58,8 +185,8 @@ fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_follow
         .expect("register");
     registry
         .add_resource(
-            "https://example.org/uses-new.json",
-            json!({"$ref": "new.json"}),
+            "https://example.org/uses-seven.json",
+            json!({"$ref": "seven.json"}),
         )
         .expect("register");
     assert!(matches!(
@@ -67,10 +194,92 @@ fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_follow
         Err(SchemaError::UnsupportedDialect { .. })
     ));
     let schema = registry
-        .compile("https://example.org/uses-new.json")
+        .compile("https://example.org/uses-seven.json")
         .expect("compiles");
-    assert!(schema.is_valid(&json!("a")));
+    assert!(schema.is_valid(&json!(["a"])));
+    assert!(
+        !schema.is_valid(&json!(["a", "b"])),
+        "read as draft-07 array-form items"
+    );
+}
+
+#[test]
+fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
+    // No meta-schema registered: compiling needs the 2020-12 one to check the
+    // document against.
+    let mut bare = Registry::new();
+    bare.add_resource("https://example.org/s.json", json!({"type": "string"}))
+        .expect("registering needs no meta-schema");
+    match bare.compile("https://example.org/s.json") {
+        Err(SchemaError::MissingMetaschema {
+            metaschema,
+            resource,
+        }) => {
+            assert_eq!(metaschema, DRAFT);
+            assert_eq!(resource, "https://example.org/s.json");
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    let mut registered = registry();
+    registered
+        .add_resource("https://example.org/s.json", json!({"type": "string"}))
+        .expect("register");
+    assert!(registered.compile("https://example.org/s.json").is_ok());
+
+    // A `$ref` to a published meta-schema that is not registered.
+    let seven_only = set_of(purrdf_testkit::jsonschema_metaschemas::DRAFT_07)
+        .expect("draft-07 alone is a complete set");
+    let reference = json!({"$schema": DRAFT_07, "$ref": DRAFT_2019_09});
+    match Schema::from_document(&seven_only, "https://example.org/r.json", reference.clone()) {
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) => {
+            assert_eq!(metaschema, DRAFT_2019_09);
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    let schema = Schema::from_document(metaschemas(), "https://example.org/r.json", reference)
+        .expect("registered, the reference resolves");
+    assert!(schema.is_valid(&json!({"type": "string"})));
+    assert!(!schema.is_valid(&json!({"type": 1})));
+
+    // A custom meta-schema is registered before the documents declaring it.
+    let uses_meta = json!({"$schema": "https://example.org/meta", "type": "string"});
+    let mut registry = registry();
+    match registry.add_resource("https://example.org/uses-meta.json", uses_meta.clone()) {
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) => {
+            assert_eq!(metaschema, "https://example.org/meta");
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    registry
+        .add_resource(
+            "https://example.org/meta",
+            json!({"$schema": DRAFT, "$dynamicAnchor": "meta"}),
+        )
+        .expect("meta");
+    registry
+        .add_resource("https://example.org/uses-meta.json", uses_meta)
+        .expect("registered after its meta-schema");
+    let schema = registry
+        .compile("https://example.org/uses-meta.json")
+        .expect("compiles");
     assert!(!schema.is_valid(&json!(1)));
+}
+
+#[test]
+fn an_incomplete_metaschema_set_is_refused_and_a_complete_one_is_built() {
+    let core_only: Vec<_> = purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+        .iter()
+        .copied()
+        .filter(|(uri, _)| uri.ends_with("/meta/core"))
+        .collect();
+    assert!(matches!(
+        set_of(&core_only),
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) if metaschema == DRAFT
+    ));
+    let whole = set_of(purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12)
+        .expect("the whole 2020-12 set");
+    assert!(whole.contains(DRAFT));
+    assert!(!whole.contains(DRAFT_2019_09));
 }
 
 #[test]
@@ -87,7 +296,7 @@ fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
         })
     };
     for required in [true, false] {
-        let mut registry = Registry::new();
+        let mut registry = registry();
         registry
             .add_resource("https://example.org/meta.json", meta(required))
             .expect("meta");
@@ -115,8 +324,8 @@ fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
 }
 
 #[test]
-fn asserted_formats_this_crate_cannot_check_are_refused_and_checkable_ones_assert() {
-    let mut registry = Registry::new();
+fn an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_asserts() {
+    let mut registry = registry();
     registry
         .add_resource(
             "https://example.org/assert.json",
@@ -130,36 +339,72 @@ fn asserted_formats_this_crate_cannot_check_are_refused_and_checkable_ones_asser
             }),
         )
         .expect("meta");
-    for (index, format) in ["idn-hostname", "idn-email", "hostname", "no-such-format"]
-        .iter()
-        .enumerate()
+    registry
+        .add_resource(
+            "https://example.org/refused.json",
+            json!({"$schema": "https://example.org/assert.json", "format": "no-such-format"}),
+        )
+        .expect("schema");
+    match registry.compile("https://example.org/refused.json") {
+        Err(SchemaError::UnsupportedFormat { format, .. }) => assert_eq!(format, "no-such-format"),
+        other => panic!("expected a format refusal, got {other:?}"),
+    }
+    for (index, (format, valid, invalid)) in [
+        ("ipv4", "127.0.0.1", "not-an-ipv4"),
+        ("hostname", "xn--bcher-kva.example", "-a.example"),
+        ("idn-hostname", "b\u{fc}cher.example", "a\u{b7}l.example"),
+        ("idn-email", "j\u{f6}e@b\u{fc}cher.example", "j\u{f6}e"),
+    ]
+    .into_iter()
+    .enumerate()
     {
-        let uri = format!("https://example.org/refused/{index}");
+        let uri = format!("https://example.org/asserting/{index}");
         registry
             .add_resource(
                 &uri,
                 json!({"$schema": "https://example.org/assert.json", "format": format}),
             )
             .expect("schema");
-        match registry.compile(&uri) {
-            Err(SchemaError::UnsupportedFormat { format: got, .. }) => assert_eq!(&got, format),
-            other => panic!("{format}: expected a format refusal, got {other:?}"),
-        }
+        let asserting = registry.compile(&uri).expect("a defined format asserts");
+        assert!(asserting.is_valid(&json!(valid)), "{format} {valid}");
+        assert!(!asserting.is_valid(&json!(invalid)), "{format} {invalid}");
     }
-    registry
-        .add_resource(
-            "https://example.org/ipv4.json",
-            json!({"$schema": "https://example.org/assert.json", "format": "ipv4"}),
-        )
-        .expect("schema");
-    let asserting = registry
-        .compile("https://example.org/ipv4.json")
-        .expect("ipv4 asserts");
-    assert!(asserting.is_valid(&json!("127.0.0.1")));
-    assert!(!asserting.is_valid(&json!("not-an-ipv4")));
     let annotating =
         compile(json!({"format": "idn-hostname"})).expect("an annotation needs no check");
     assert!(annotating.is_valid(&json!("anything at all")));
+}
+
+#[test]
+fn format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation() {
+    for dialect in [
+        Dialect::Draft07,
+        Dialect::Draft2019_09,
+        Dialect::Draft2020_12,
+    ] {
+        for assert in [false, true] {
+            let mut registry = registry();
+            registry.set_default_dialect(dialect);
+            registry.set_format_assertion(assert);
+            registry
+                .add_resource(
+                    "https://example.org/f.json",
+                    json!({"properties": {
+                        "a": {"format": "ipv4"},
+                        "b": {"format": "no-such-format"}
+                    }}),
+                )
+                .expect("schema");
+            let schema = registry
+                .compile("https://example.org/f.json")
+                .expect("compiles");
+            assert_eq!(
+                schema.is_valid(&json!({"a": "not-an-ipv4"})),
+                !assert,
+                "{dialect:?} assert={assert}"
+            );
+            assert!(schema.is_valid(&json!({"a": "10.0.0.1", "b": "anything"})));
+        }
+    }
 }
 
 #[test]
@@ -220,7 +465,7 @@ fn a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is
 
 #[test]
 fn identifiers_are_checked_when_registered() {
-    let mut registry = Registry::new();
+    let mut registry = registry();
     assert!(matches!(
         registry.add_resource("relative.json", json!({})),
         Err(SchemaError::InvalidUri { .. })

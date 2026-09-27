@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 
@@ -633,15 +633,54 @@ fn options_decoder_is_versioned_closed_and_mode_explicit() {
     );
 }
 
+/// The draft 2020-12 meta-schemas the published options schema declares,
+/// from the workspace's test data (`purrdf-jsonschema` carries none).
+fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+    static SET: OnceLock<purrdf_jsonschema::Metaschemas> = OnceLock::new();
+    SET.get_or_init(|| {
+        purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                .iter()
+                .map(|&(uri, text)| {
+                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    (uri, document)
+                }),
+        )
+        .expect("the draft 2020-12 meta-schemas")
+    })
+}
+
+/// Compile the published options schema against `metaschemas`.
+fn options_schema(
+    metaschemas: &purrdf_jsonschema::Metaschemas,
+) -> Result<purrdf_jsonschema::Schema, purrdf_jsonschema::SchemaError> {
+    purrdf_jsonschema::Schema::from_document(
+        metaschemas,
+        "mem:///jsonld-options.schema.json",
+        JsonLdSerializeOptions::json_schema(),
+    )
+}
+
+#[test]
+fn options_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
+    let schema = options_schema(metaschemas()).expect("compiles with the 2020-12 meta-schemas");
+    assert!(schema.is_valid(&json!({"mode": "expanded", "version": 1})));
+    let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+        .expect("an empty set is a set");
+    match options_schema(&none) {
+        Err(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
+            assert_eq!(metaschema, "https://json-schema.org/draft/2020-12/schema");
+        }
+        other => panic!("expected the missing meta-schema to be named, got {other:?}"),
+    }
+}
+
 #[test]
 fn options_schema_and_decoder_have_identical_mode_field_constraints() {
     fn schema_accepts(instance: &Value) -> bool {
-        purrdf_jsonschema::Schema::from_document(
-            "mem:///jsonld-options.schema.json",
-            JsonLdSerializeOptions::json_schema(),
-        )
-        .expect("compile options schema")
-        .is_valid(instance)
+        options_schema(metaschemas())
+            .expect("compile options schema")
+            .is_valid(instance)
     }
 
     let cases = [

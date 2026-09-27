@@ -80,6 +80,7 @@ it is why every row this lane reports carries its regime and its dataset.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -88,6 +89,17 @@ from pathlib import Path
 from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else REPO_ROOT / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 # Fetched by digest into the ignored cache by scripts/benchmark-acquire.py. It is
 # read from there and never copied into the tree: it carries no licence grant.
@@ -487,7 +499,7 @@ def offline_self_test() -> int:
         f"the projection keeps both variables in order (got {projected})",
     )
 
-    with tempfile.TemporaryDirectory() as raw:
+    with tempfile.TemporaryDirectory(dir=_scratch_root()) as raw:
         root = Path(raw)
         expect_exit(
             lambda: load(root / "absent.txt", PUBLISHED_NAMESPACE),

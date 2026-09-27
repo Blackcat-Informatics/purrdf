@@ -26,6 +26,9 @@
 //!   strategies, [`prop_test!`], shrinking by replaying edited choice
 //!   sequences, regex-driven string generators, stateful model-based testing,
 //!   and a deterministic seed per property.
+//! * [`jsonschema_metaschemas`] — the published JSON Schema meta-schemas as
+//!   test data, for every test and example that registers them with
+//!   `purrdf-jsonschema` (which carries none).
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
 //!   crate's fixed-seed tests draw from, including [`prop`] itself.
 //!
@@ -44,6 +47,7 @@ pub mod harness;
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
 mod host;
+pub mod jsonschema_metaschemas;
 pub mod prop;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]

@@ -85,6 +85,8 @@ MIT, Apache-2.0, or MulanPSL-2.0.
 | `vectors/shacl/` (`core/`, `sparql/`) | W3C SHACL `data-shapes-test-suite` | W3C Software and Document License |
 | `vectors/shacl/af/` | pySHACL DASH tests | Apache-2.0 |
 | `vectors/shexTest/` | shexTest v2.1.0 | MIT (per upstream `package.json`) |
+| `crates/jsonschema/tests/suite/` | official JSON-Schema-Test-Suite (`json-schema-org/JSON-Schema-Test-Suite`) | MIT (`tests/suite/LICENSES/MIT.txt`) |
+| `crates/jsonschema/tests/metaschemas/` | JSON Schema draft-07, 2019-09 and 2020-12 meta-schemas (`json-schema-org/json-schema-spec`) | BSD-3-Clause, one of the two licences upstream offers (`tests/metaschemas/REUSE.toml`) |
 
 The first-party selectors, harnesses, and reconstructed expected-result files
 that sit *inside* those trees carry the repository's own
@@ -101,7 +103,8 @@ whole repository:
   fails the build if a file beneath one lacks a `.license` SPDX sidecar, an
   inline SPDX header, or a `REUSE.toml` annotation. It also re-verifies the
   committed MulanPSL-2.0 text against its pinned digest. Today that covers
-  the four W3C SPARQL/OWL 2 suites and the OBO Graphs schema closure.
+  the four W3C SPARQL/OWL 2 suites, the OBO Graphs schema closure, and the
+  JSON-Schema-Test-Suite and meta-schemas under `crates/jsonschema/tests/`.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
   `vectors/shexTest`, `crates/shapes/corpus`,
   `crates/sparql-conformance/entailment-suite/w3c-owl2` and
