@@ -357,11 +357,29 @@ impl<'t> SrlParser<'t> {
     /// separates no two meanings; it only refuses documents. The editor's draft
     /// grammar (<https://w3c.github.io/data-shapes/sparql12-rl/sparql-rl-grammar.bnf>)
     /// states production [2] exactly as the Working Draft does.
+    ///
+    /// §7.1: "The version announcement SHOULD be made early in the document." PurRDF
+    /// reads the SHOULD as a MUST: a document that announces a version announces it
+    /// before its first `RULE` or `DATA` block, so no rule is read under a version it
+    /// was not told. A LATER `VERSION` is still a directive ("Multiple VERSION directives
+    /// may appear in a SPARQL-RL Document. Each directive applies to the part of the
+    /// document following the directive"), and a document that announces none is not
+    /// refused: the sentence governs where an announcement is made, not whether.
     fn rule_set(&mut self) -> Parse<Parsed> {
         let mut out = Parsed::default();
+        let mut seen_block = false;
         loop {
             if self.at_rule_or_data() {
                 self.rule_or_data(&mut out)?;
+                seen_block = true;
+            } else if seen_block && out.versions.is_empty() && self.at_kw("VERSION") {
+                return self.error(
+                    "the first VERSION directive follows a RULE or DATA block; SPARQL 1.2 RL \
+                     section 7.1 says \"The version announcement SHOULD be made early in the \
+                     document\", read as a must: announce the version before the first rule \
+                     or data block"
+                        .to_owned(),
+                );
             } else if !self.prologue1(&mut out)? {
                 break;
             }

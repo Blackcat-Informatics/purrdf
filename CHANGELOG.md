@@ -10,6 +10,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes (BREAKING):** a SPARQL 1.2 RL rule set whose first `VERSION` directive follows
+  a `RULE` or `DATA` block is refused at the syntax stage. §7.1: "The version
+  announcement SHOULD be made early in the document", read as a must. A rule set that
+  announces no version still parses, and a later `VERSION` after an early one is still a
+  directive for what follows it. No W3C SPARQL 1.2 RL entry places a `VERSION` late; the
+  counts are unchanged.
+
 - **shapes, validate, cli, python, wasm, capi (BREAKING):** `SERVICE` is refused in every
   SHACL-SPARQL query that runs. SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries
   SHOULD not contain a federated query (SERVICE). Implementations that do not permit

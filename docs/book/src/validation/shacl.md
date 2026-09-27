@@ -1121,6 +1121,13 @@ A positive syntax test is valid "regardless of well-formedness and
 stratification", so it is graded at `syntax`. Fifteen of them fail the full
 check, by a later stage.
 
+The `syntax` stage also holds a rule set to where it announces its version.
+SPARQL 1.2 RL §7.1 says "The version announcement SHOULD be made early in the
+document", and PurRDF reads that as a must. A rule set whose first `VERSION`
+directive follows a `RULE` or `DATA` block is refused at `syntax`, naming the
+sentence. A rule set may announce no version, and a later `VERSION` after an early
+one is still a directive for the part of the document that follows it.
+
 ```sh
 purrdf rules --srl closure.srl --check              # every static check
 purrdf rules --srl closure.srl --check=syntax       # the grammar alone

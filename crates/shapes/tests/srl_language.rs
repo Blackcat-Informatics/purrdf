@@ -187,6 +187,42 @@ fn lang_dir_and_version() {
     assert!(syntax_error("VERSION \"\"\"1.2\"\"\" DATA {}").contains("VERSION"));
 }
 
+/// §7.1: "The version announcement SHOULD be made early in the document", read as a
+/// must: a first `VERSION` after a `RULE` or `DATA` block is refused at the syntax stage.
+/// The neighbours load: the same announcement before the block, a later second
+/// `VERSION` after an early first one (each directive applies to what follows it), and
+/// a document that announces no version at all — and the early one's rule is observed
+/// inferring.
+#[test]
+fn the_version_announcement_is_made_early() {
+    for late in [
+        "DATA { :a :p :o }\nVERSION \"1.2\"",
+        "RULE { ?x :q ?y } WHERE { ?x :p ?y }\nVERSION \"1.2\"\nDATA { :a :p :o }",
+    ] {
+        let message = syntax_error(late);
+        assert!(message.contains("SHOULD be made early"), "{message}");
+    }
+    let early = srl::parse(
+        &rules("VERSION \"1.2\"\nRULE { ?x :q ?y } WHERE { ?x :p ?y }\nDATA { :a :p :o }"),
+        None,
+    )
+    .expect("an early announcement parses");
+    assert_eq!(early.versions(), ["1.2"]);
+    let again = srl::parse(
+        &rules("VERSION \"1.2\"\nDATA { :a :p :o }\nVERSION \"1.2\"\nDATA { :b :p :o }"),
+        None,
+    )
+    .expect("a second announcement after an early one parses");
+    assert_eq!(again.versions(), ["1.2", "1.2"]);
+    srl::parse(&rules("DATA { :a :p :o }"), None).expect("no announcement parses");
+    let inferred = infer(
+        "VERSION \"1.2\"\nRULE { ?x :q ?y } WHERE { ?x :p ?y }",
+        "<http://example.org/a> <http://example.org/p> <http://example.org/o> .",
+    )
+    .expect("the early announcement's rule runs");
+    assert_eq!(inferred.len(), 1, "{inferred:?}");
+}
+
 // ── evaluation semantics ──────────────────────────────────────────────────────────
 
 /// A negation element sees only the variables of the elements BEFORE it: a variable a
