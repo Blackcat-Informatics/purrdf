@@ -103,9 +103,13 @@
 //! A panic or a JavaScript exception that unwinds through a suspended frame bricks the
 //! instance. So nothing on the effect path throws or panics: every [`AsyncJob`] method a
 //! host calls while a job is suspended returns a status, and every condition that is not
-//! an ordinary answer — a malformed delivery, an unknown failure kind, a sequence number
-//! that was never issued, stack exhaustion, a host that returned without delivering — is
-//! *latched* as the job's fault ([`AsyncJob::fault`]). A latched fault makes the job's
+//! an ordinary answer — a malformed delivery, a sequence number that was never issued,
+//! stack exhaustion, a host that returned without delivering — is *latched* as the job's
+//! fault ([`AsyncJob::fault`]). A host handler that fails to answer one effect (it threw,
+//! rejected, returned an unrecognized value or named an unknown failure kind) is not a
+//! job fault: it is that effect's failure, delivered as `FailureKind::Fault`, which the
+//! evaluator treats as the invocation failing — `SERVICE SILENT` and `LOAD SILENT` answer
+//! it as they answer any failed invocation, and a loud clause reports the host's fault. A latched fault makes the job's
 //! stop signal fire, the evaluator winds down through its ordinary governor path, and the
 //! run stores the fault as the job's error — discarding whatever outcome it reached, and
 //! never committing an update. The host's own trap handling (poisoning the instance) is
@@ -392,8 +396,7 @@ pub enum DeliveryStatus {
     /// host promise settling after the job's signal won the race. Ignored; not a fault.
     Stale = 1,
     /// The delivery was malformed (a sequence number never issued, a payload the
-    /// outstanding effect cannot take, an unknown failure kind). The job's fault is
-    /// latched.
+    /// outstanding effect cannot take). The job's fault is latched.
     Fault = 2,
     /// The job (or the shared exchange) has already finished; the delivery changes
     /// nothing.
@@ -629,16 +632,29 @@ enum FailureKind {
     /// The `LOAD` document arrived and could not be parsed. Decided here, never
     /// delivered by name.
     Decode,
+    /// The host's handler failed to answer the effect: it threw, rejected, returned a
+    /// value the protocol does not define, or named a failure kind it does not define.
+    /// The invocation failed through the host's own defect, not the endpoint's.
+    Fault,
 }
 
 impl FailureKind {
-    /// The failure kind a host names: `"transport"` or `"denied"`.
-    fn parse(kind: &str) -> Option<Self> {
-        match kind {
-            "transport" => Some(Self::Transport),
-            "denied" => Some(Self::Denied),
-            _ => None,
-        }
+    /// The delivery for a failure the host named `kind`, with `message`: `"transport"`,
+    /// `"denied"` and `"fault"` are the kinds they name; any other name is itself a fault
+    /// of the handler, delivered as one and naming the unknown kind for `target`.
+    fn delivered(kind: &str, message: String, target: &str) -> Delivered {
+        let kind = match kind {
+            "transport" => Self::Transport,
+            "denied" => Self::Denied,
+            "fault" => Self::Fault,
+            unknown => {
+                return Delivered::Failure {
+                    kind: Self::Fault,
+                    message: unknown_failure_kind(unknown, target),
+                };
+            }
+        };
+        Delivered::Failure { kind, message }
     }
 }
 
@@ -1615,6 +1631,18 @@ fn service_answer(
                 message,
             }),
         ) => Err(RemoteError::Transport(message)),
+        // The host's handler failed to answer this effect: the invocation's failure, with
+        // the host — not the endpoint — as its cause.
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Fault,
+                message,
+            }),
+        ) => Err(RemoteError::HostFault {
+            endpoint: endpoint.to_owned(),
+            message,
+        }),
         // A host resolver's own policy refusal, reached only when no native catalog
         // already denied the request — see `HttpRemoteQuerySource::resolve`, which
         // applies an installed `ServiceCatalog` (and returns `RemoteError::Denied`, a real
@@ -1707,6 +1735,15 @@ fn load_answer(
                 message,
             }),
         ) => return Err(LoadError::HostDenied(message)),
+        // The host's handler failed to answer this fetch: the fetch's failure, not the
+        // job's fault.
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Fault,
+                message,
+            }),
+        ) => return Err(LoadError::Fault(message)),
         // The fault already latched names the cause.
         (SuspendStatus::Fault, _) => {
             return Err(LoadError::Fault(slots.fault().map_or_else(
@@ -2170,20 +2207,6 @@ fn settle_exchange(id: u64, value: &Delivered) -> DeliveryStatus {
         let _ = slots.deliver(seq, value.clone());
     }
     DeliveryStatus::Accepted
-}
-
-/// Latch `message(seq)` as the fault of every job waiting on exchange `id` with effect
-/// `seq`, closing it.
-fn fault_open_exchange(id: u64, message: impl Fn(u32) -> String) -> DeliveryStatus {
-    let Some(waiters) = close_exchange(id) else {
-        return DeliveryStatus::Finished;
-    };
-    for (slots, seq) in waiters {
-        if !slots.finished.load(Ordering::Relaxed) {
-            slots.latch_fault(message(seq));
-        }
-    }
-    DeliveryStatus::Fault
 }
 
 // ---------------------------------------------------------------------------
@@ -3033,21 +3056,17 @@ impl AsyncJob {
         self.inner.watch.slots.take_effect()
     }
 
-    /// Fail `LOAD` effect `seq`: `kind` is `"transport"` (unreachable, or unreadable) or
-    /// `"denied"` (the host's policy refused it). Any other kind is a fault.
+    /// Fail effect `seq`: `kind` is `"transport"` (unreachable, or unreadable), `"denied"`
+    /// (the host's policy refused it) or `"fault"` (the host's handler threw, rejected or
+    /// returned something the protocol does not define). Any other kind is delivered as a
+    /// fault naming it. Each is the effect's own failure, answered by the clause that
+    /// issued it; none is the job's fault.
     #[wasm_bindgen(js_name = deliverFailure)]
     pub fn deliver_failure(&self, seq: u32, kind: &str, message: String) -> DeliveryStatus {
-        let slots = &self.inner.watch.slots;
-        match FailureKind::parse(kind) {
-            Some(kind) => slots.deliver(seq, Delivered::Failure { kind, message }),
-            None => {
-                if slots.finished.load(Ordering::Relaxed) {
-                    return DeliveryStatus::Finished;
-                }
-                slots.latch_fault(unknown_failure_kind(kind, &format!("effect {seq}")));
-                DeliveryStatus::Fault
-            }
-        }
+        self.inner.watch.slots.deliver(
+            seq,
+            FailureKind::delivered(kind, message, &format!("effect {seq}")),
+        )
     }
 
     /// Answer `LOAD` effect `seq` with a document. It is parsed here, by media type (or
@@ -3198,30 +3217,36 @@ impl AsyncJob {
         settle_exchange(id, &Delivered::Bindings(Arc::from(bytes)))
     }
 
-    /// Fail every job waiting on shared exchange `exchange`: `kind` is `"transport"` or
-    /// `"denied"`; any other kind latches a fault on every waiting job. Closes the
-    /// exchange.
+    /// Fail every job waiting on shared exchange `exchange`: `kind` is `"transport"`,
+    /// `"denied"` or `"fault"`; any other kind is delivered as a fault naming it. Each
+    /// waiting job's effect fails as its own invocation's failure. Closes the exchange.
     #[wasm_bindgen(js_name = deliverExchangeFailure)]
     pub fn deliver_exchange_failure(exchange: f64, kind: &str, message: String) -> DeliveryStatus {
         let Some(id) = exchange_id(exchange) else {
             return DeliveryStatus::Finished;
         };
-        match FailureKind::parse(kind) {
-            Some(kind) => settle_exchange(id, &Delivered::Failure { kind, message }),
-            None => fault_open_exchange(id, |seq| {
-                unknown_failure_kind(kind, &format!("effect {seq}"))
-            }),
-        }
+        settle_exchange(
+            id,
+            &FailureKind::delivered(kind, message, &format!("exchange {id}")),
+        )
     }
 
-    /// Latch `message` as the fault of every job waiting on shared exchange `exchange` —
-    /// the host's handler failed — and close the exchange.
+    /// Fail every job waiting on shared exchange `exchange` with the host handler's fault
+    /// `message` — it threw, rejected or returned something the protocol does not define
+    /// — and close the exchange. Each waiter's effect fails as its own invocation's
+    /// failure; no job's fault is latched.
     #[wasm_bindgen(js_name = faultExchange)]
     pub fn fault_exchange(exchange: f64, message: &str) -> DeliveryStatus {
         let Some(id) = exchange_id(exchange) else {
             return DeliveryStatus::Finished;
         };
-        fault_open_exchange(id, |_| message.to_owned())
+        settle_exchange(
+            id,
+            &Delivered::Failure {
+                kind: FailureKind::Fault,
+                message: message.to_owned(),
+            },
+        )
     }
 
     /// Whether shared exchange `exchange` is still open: some job waits on its answer.
@@ -3430,7 +3455,10 @@ fn exchange_id(exchange: f64) -> Option<u64> {
 
 /// The fault for a delivered failure kind the protocol does not define.
 fn unknown_failure_kind(kind: &str, target: &str) -> String {
-    format!("unknown failure kind {kind:?} for {target} (expected \"transport\" or \"denied\")")
+    format!(
+        "unknown failure kind {kind:?} for {target} (expected \"transport\", \"denied\" or \
+         \"fault\")"
+    )
 }
 
 /// Parse a `LOAD` document delivered by the host.
@@ -5603,8 +5631,11 @@ mod tests {
         assert!(!logged.contains("secret"), "{logged}");
     }
 
+    /// A failure kind the protocol does not define fails the effect it answers — as the
+    /// host's fault, naming the kind — and latches nothing on the job; `"fault"` by name
+    /// is the same failure with the host's own message; a denial is an answer.
     #[test]
-    fn an_unknown_failure_kind_is_a_fault_and_denied_is_an_answer() {
+    fn an_unknown_failure_kind_fails_the_effect_and_denied_is_an_answer() {
         let engine = QueryEngine::new();
         let dataset = seed();
         let job = begin(
@@ -5620,16 +5651,46 @@ mod tests {
             .expect("issued");
         assert_eq!(
             job.deliver_failure(seq, "nope", "x".to_owned()),
-            DeliveryStatus::Fault
+            DeliveryStatus::Accepted
         );
-        assert_eq!(
-            slots.fault(),
-            Some(
-                "unknown failure kind \"nope\" for effect 1 (expected \"transport\" or \
-                 \"denied\")"
-            )
-        );
+        assert!(slots.fault().is_none());
+        match slots.resume(seq) {
+            Some(Delivered::Failure {
+                kind: FailureKind::Fault,
+                message,
+            }) => assert_eq!(
+                message,
+                "unknown failure kind \"nope\" for effect 1 (expected \"transport\", \"denied\" \
+                 or \"fault\")"
+            ),
+            other => panic!("the effect fails with the host's fault, got {other:?}"),
+        }
         job.finish();
+
+        let named = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "ASK {}",
+            options(),
+        );
+        let slots = &named.inner.watch.slots;
+        let seq = slots
+            .issue(load_payload("http://example.org/doc"), None)
+            .expect("issued");
+        assert_eq!(
+            named.deliver_failure(seq, "fault", "resolveLoad threw: boom".to_owned()),
+            DeliveryStatus::Accepted
+        );
+        assert!(slots.fault().is_none());
+        match slots.resume(seq) {
+            Some(Delivered::Failure {
+                kind: FailureKind::Fault,
+                message,
+            }) => assert_eq!(message, "resolveLoad threw: boom"),
+            other => panic!("the effect fails with the host's own message, got {other:?}"),
+        }
+        named.finish();
 
         let neighbour = begin(
             &engine,
@@ -5890,10 +5951,11 @@ mod tests {
         );
     }
 
-    /// A host fault in the shared call — or an answer of a kind the protocol does not
-    /// define — is the fault of every job waiting on it; a defined failure is an answer.
+    /// A host fault in the shared call — the handler threw, or answered with a kind the
+    /// protocol does not define — fails the effect of every job waiting on it, as that
+    /// invocation's failure, and latches no job's fault.
     #[test]
-    fn a_fault_in_a_shared_call_is_every_waiting_jobs_fault() {
+    fn a_fault_in_a_shared_call_fails_every_waiting_jobs_effect() {
         let first = Arc::new(JobSlots::new(111, slots().bounds));
         let second = Arc::new(JobSlots::new(112, slots().bounds));
         let first_seq = first.issue(service_payload(), None).expect("issued");
@@ -5903,25 +5965,40 @@ mod tests {
         add_waiter(id, (Arc::clone(&second), second_seq));
         assert_eq!(
             AsyncJob::deliver_exchange_failure(id as f64, "nope", "?".to_owned()),
-            DeliveryStatus::Fault
+            DeliveryStatus::Accepted
         );
-        assert_eq!(
-            first.fault(),
-            Some(
-                "unknown failure kind \"nope\" for effect 1 (expected \"transport\" or \
-                 \"denied\")"
-            )
-        );
-        assert!(second.fault().is_some());
+        for (slots, seq) in [(&first, first_seq), (&second, second_seq)] {
+            assert!(slots.fault().is_none());
+            match slots.resume(seq) {
+                Some(Delivered::Failure {
+                    kind: FailureKind::Fault,
+                    message,
+                }) => assert_eq!(
+                    message,
+                    format!(
+                        "unknown failure kind \"nope\" for exchange {id} (expected \
+                         \"transport\", \"denied\" or \"fault\")"
+                    )
+                ),
+                other => panic!("every waiter's effect fails with the fault, got {other:?}"),
+            }
+        }
         let third = Arc::new(JobSlots::new(113, slots().bounds));
         let seq = third.issue(service_payload(), None).expect("issued");
         let id = next_exchange_id();
         open_exchange(id, key(1, false), None, (Arc::clone(&third), seq));
         assert_eq!(
             AsyncJob::fault_exchange(id as f64, "resolveService threw: boom"),
-            DeliveryStatus::Fault
+            DeliveryStatus::Accepted
         );
-        assert_eq!(third.fault(), Some("resolveService threw: boom"));
+        assert!(third.fault().is_none());
+        match third.resume(seq) {
+            Some(Delivered::Failure {
+                kind: FailureKind::Fault,
+                message,
+            }) => assert_eq!(message, "resolveService threw: boom"),
+            other => panic!("the waiter's effect fails with the handler's fault, got {other:?}"),
+        }
     }
 
     /// Only a request that could not have been shared with another's host call can be

@@ -1915,13 +1915,15 @@ mod tests {
 
     #[test]
     fn roundtrip_nested_service() {
-        assert_roundtrip("SELECT * WHERE { SERVICE <http://ep/sparql> { ?s <http://ex/p> ?o } }");
+        assert_roundtrip(
+            "SELECT * WHERE { SERVICE <https://example.org/sparql> { ?s <http://ex/p> ?o } }",
+        );
     }
 
     #[test]
     fn roundtrip_service_silent() {
         assert_roundtrip(
-            "SELECT * WHERE { SERVICE SILENT <http://ep/sparql> { ?s <http://ex/p> ?o } }",
+            "SELECT * WHERE { SERVICE SILENT <https://example.org/sparql> { ?s <http://ex/p> ?o } }",
         );
     }
 
@@ -2072,7 +2074,7 @@ mod tests {
         // `(?__purrdf_agg_N AS ?c)` reference to a variable nothing in the
         // forwarded query text binds.
         assert_roundtrip(
-            "SELECT * WHERE { SERVICE <http://ep/sparql> { \
+            "SELECT * WHERE { SERVICE <https://example.org/sparql> { \
              SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t } }",
         );
     }
@@ -2644,7 +2646,7 @@ mod tests {
         // laterality is lost on re-parse as a plain `Join`.
         let text = assert_roundtrip(
             "SELECT * WHERE { ?s <http://ex/p> ?o \
-             LATERAL { SERVICE <http://ep/sparql> { ?o <http://ex/q> ?z } } }",
+             LATERAL { SERVICE <https://example.org/sparql> { ?o <http://ex/q> ?z } } }",
         );
         assert!(text.contains("LATERAL"), "got: {text}");
     }

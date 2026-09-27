@@ -149,6 +149,19 @@ pub enum RemoteError {
         /// The host's own denial message, verbatim.
         message: String,
     },
+    /// The host answering the invocation broke the resolver protocol: its handler threw
+    /// or rejected, or answered with something that is not an answer — a value the
+    /// protocol does not define, a failure kind it does not name. The invocation failed,
+    /// so `SILENT` silences it (recorded as [`SilencedKind::Fault`]); without `SILENT` it
+    /// is [`EvalError::ServiceHostFault`]. Its own variant rather than
+    /// [`Self::Transport`], because the endpoint was never shown to be at fault: the
+    /// host's adapter was, and a host reading the evidence is owed that distinction.
+    HostFault {
+        /// The service IRI whose invocation the host faulted on.
+        endpoint: String,
+        /// The host's fault, verbatim.
+        message: String,
+    },
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
     ///
@@ -190,6 +203,12 @@ impl core::fmt::Display for RemoteError {
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied { endpoint, message } => {
                 write!(f, "<{endpoint}>: the host denied the request: {message}")
+            }
+            Self::HostFault { endpoint, message } => {
+                write!(
+                    f,
+                    "<{endpoint}>: the host faulted answering the request: {message}"
+                )
             }
             Self::Governed(governor) => write!(f, "governed: {governor}"),
             Self::GovernedAfterCompletion(governor) => {
@@ -1024,6 +1043,10 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
             SilencedKind::HostDenied,
             EvalError::ServiceHostDenied { endpoint, message },
         ),
+        RemoteError::HostFault { endpoint, message } => (
+            SilencedKind::Fault,
+            EvalError::ServiceHostFault { endpoint, message },
+        ),
         RemoteError::Unconfigured(message) => (
             SilencedKind::Unconfigured,
             EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}")),
@@ -1127,6 +1150,9 @@ fn remote_error_for(error: EvalError) -> RemoteError {
         EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
         EvalError::ServiceHostDenied { endpoint, message } => {
             RemoteError::HostDenied { endpoint, message }
+        }
+        EvalError::ServiceHostFault { endpoint, message } => {
+            RemoteError::HostFault { endpoint, message }
         }
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),

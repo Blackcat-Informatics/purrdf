@@ -1238,7 +1238,7 @@ impl FailureCode {
             Self::NotAcceptable => "native-sparql-not-acceptable",
             Self::UpdateInFlight => "native-sparql-update-in-flight",
             Self::GovernorCeiling => "native-sparql-governor-ceiling",
-            Self::HostFault => "native-sparql-host-fault",
+            Self::HostFault => EvalError::HOST_FAULT_CODE,
             Self::Evaluation => "native-sparql-evaluation",
         }
     }
@@ -1271,6 +1271,7 @@ impl From<&EvalError> for FailureCode {
             EvalError::ServiceUnconfigured(_) => Self::ServiceUnconfigured,
             EvalError::ServiceDenied(_) => Self::ServiceDenied,
             EvalError::ServiceHostDenied { .. } => Self::ServiceHostDenied,
+            EvalError::ServiceHostFault { .. } => Self::HostFault,
             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
             EvalError::Dataset(_)
@@ -1327,6 +1328,7 @@ impl From<&RemoteError> for FailureCode {
             RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
             RemoteError::Denied(_) => Self::ServiceDenied,
             RemoteError::HostDenied { .. } => Self::ServiceHostDenied,
+            RemoteError::HostFault { .. } => Self::HostFault,
             RemoteError::Governed(_) | RemoteError::GovernedAfterCompletion(_) => Self::Cancelled,
             RemoteError::StackExhausted(_) => Self::EvaluationStackExhausted,
             RemoteError::HostStackExhausted(_) => Self::HostStackExhausted,

@@ -196,6 +196,20 @@ pub enum EvalError {
         message: String,
     },
 
+    /// The host answering a `SERVICE` request broke the resolver protocol: its handler
+    /// threw or rejected, or answered with something that is not an answer (a value the
+    /// protocol does not define, a failure kind it does not name). The invocation failed
+    /// — see [`crate::remote::RemoteError::HostFault`], whose fields this carries — so
+    /// `SILENT` silences it as it silences every failed invocation. Without `SILENT` it
+    /// is reported under [`Self::HOST_FAULT_CODE`]; a protocol boundary answers that code
+    /// without the host's words, which describe the host's own defect.
+    ServiceHostFault {
+        /// The service IRI whose invocation the host faulted on.
+        endpoint: String,
+        /// The host's fault, verbatim, for the host's own logs.
+        message: String,
+    },
+
     /// The dataset carries structurally malformed RDF that a builtin cannot
     /// interpret — e.g. a cyclic `rdf:List` (a cell reachable from itself) or a
     /// list cell missing its `rdf:first`/`rdf:rest` edge. Distinct from
@@ -395,6 +409,7 @@ impl EvalError {
             | Self::ServiceUnconfigured(_)
             | Self::ServiceDenied(_)
             | Self::ServiceHostDenied { .. }
+            | Self::ServiceHostFault { .. }
             | Self::Data(_)
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
@@ -423,6 +438,7 @@ impl EvalError {
             Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
             Self::ServiceDenied(_) => Some(Self::SERVICE_DENIED_CODE),
             Self::ServiceHostDenied { .. } => Some(Self::SERVICE_HOST_DENIED_CODE),
+            Self::ServiceHostFault { .. } => Some(Self::HOST_FAULT_CODE),
             Self::Remote(_) => Some(Self::SERVICE_FAILED_CODE),
             Self::ServiceUnconfigured(_) => Some(Self::SERVICE_UNCONFIGURED_CODE),
             other => other.diagnostic_code(),
@@ -439,6 +455,11 @@ impl EvalError {
     /// request by its own policy, with no catalog capability named, so no endpoint was
     /// asked.
     pub const SERVICE_HOST_DENIED_CODE: &'static str = "native-sparql-service-host-denied";
+
+    /// The stable, machine-readable code a host's own fault carries to the `SparqlEngine`
+    /// boundary — [`Self::ServiceHostFault`] here, and every job-level host fault the wasm
+    /// lane reports: the host's adapter, not the request and not an endpoint, failed.
+    pub const HOST_FAULT_CODE: &'static str = "native-sparql-host-fault";
 
     /// The stable, machine-readable code [`Self::Remote`] carries to the `SparqlEngine`
     /// boundary ([`Self::code`]): the endpoint was asked and did not produce a decodable
@@ -556,6 +577,12 @@ impl core::fmt::Display for EvalError {
                 write!(
                     f,
                     "SERVICE <{endpoint}>: the host denied the request: {message}"
+                )
+            }
+            Self::ServiceHostFault { endpoint, message } => {
+                write!(
+                    f,
+                    "SERVICE <{endpoint}>: the host faulted answering the request: {message}"
                 )
             }
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
