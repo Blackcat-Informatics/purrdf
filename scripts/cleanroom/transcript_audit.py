@@ -225,6 +225,44 @@ def self_test() -> int:
             print(f"SELF-TEST FAIL: {label}: exit {status}, expected {expected}; {report}")
             ok = False
 
+    # A Bash `cd` changes the directory later `&&`/`;` segments resolve relative
+    # words against, even when the session's own starting cwd sits elsewhere (here,
+    # inside the forbidden tree itself).
+    cd_cwd = str(scratch / "forbidden")
+    clone = str(scratch / "allowed" / "clone")
+    cd_cases = [
+        (
+            "a `cd` into an allowed clone, then a relative `find`, from a forbidden session cwd",
+            {"command": f"cd {clone} && find ."},
+            0,
+        ),
+        (
+            "a `cd` into an allowed clone, then a `..`-relative `cat` that lands in the forbidden tree",
+            {"command": f"cd {clone} && cat ../../forbidden/x.rs"},
+            1,
+        ),
+        (
+            "a `cd` straight into the forbidden tree",
+            {"command": f"cd {scratch}/forbidden/tree && ls"},
+            1,
+        ),
+        (
+            "a heredoc body assignment after `cd` is not a path-shaped word",
+            {"command": f"cd {clone} && python3 - <<'EOF'\np='crates/a.rs'\nEOF"},
+            0,
+        ),
+    ]
+    for index, (label, tool_input, expected) in enumerate(cd_cases):
+        path = scratch / f"cd-case{index:02d}.jsonl"
+        path.write_text(_assistant(f"toolu_cd{index}", "Bash", tool_input, cd_cwd) + "\n", encoding="utf-8")
+        report, status = audit([path], policy)
+        if status == expected and report["tool_calls_seen"] == 1:
+            verdict = "rejected" if expected else "accepted"
+            print(f"OK: self-test — {label} is {verdict}")
+        else:
+            print(f"SELF-TEST FAIL: {label}: exit {status}, expected {expected}; {report}")
+            ok = False
+
     nested = scratch / "nested.jsonl"
     wrapped = {
         "type": "progress",

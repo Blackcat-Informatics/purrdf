@@ -83,6 +83,34 @@ def self_test() -> int:
         ("Read beside it", {"tool_name": "Read", "tool_input": {"file_path": f"{scratch}/own/lib.rs"}}, 0),
         ("Bash into rustlib/src", {"tool_name": "Bash", "tool_input": {"command": "ls ~/.rustup/toolchains/x/lib/rustlib/src"}}, BLOCK),
         ("Bash into rustlib/bin", {"tool_name": "Bash", "tool_input": {"command": "ls ~/.rustup/toolchains/x/lib/rustlib/bin"}}, 0),
+        (
+            "cd into an allowed clone, then a relative find, from a forbidden session cwd",
+            {"tool_name": "Bash", "tool_input": {"command": f"cd {scratch}/allowed/clone && find ."}, "cwd": f"{scratch}/upstream"},
+            0,
+        ),
+        (
+            "cd into an allowed clone, then a ..-relative cat that lands in the forbidden tree",
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": f"cd {scratch}/allowed/clone && cat ../../upstream/x.rs"},
+                "cwd": f"{scratch}/upstream",
+            },
+            BLOCK,
+        ),
+        (
+            "cd straight into the forbidden tree",
+            {"tool_name": "Bash", "tool_input": {"command": f"cd {scratch}/upstream/tree && ls"}, "cwd": f"{scratch}/upstream"},
+            BLOCK,
+        ),
+        (
+            "a heredoc body assignment after cd is not a path-shaped word",
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": f"cd {scratch}/allowed/clone && python3 - <<'EOF'\np='crates/a.rs'\nEOF"},
+                "cwd": f"{scratch}/upstream",
+            },
+            0,
+        ),
         ("WebSearch", {"tool_name": "WebSearch", "tool_input": {"query": "q"}}, BLOCK),
         ("an unaudited tool", {"tool_name": "TodoWrite", "tool_input": {"todos": []}}, 0),
         ("an unreadable event", None, BLOCK),

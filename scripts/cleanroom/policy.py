@@ -52,6 +52,15 @@ WHAT IS MATCHED, per tool:
 Relative paths are resolved against the session's working directory when it is
 known. A path is checked both lexically normalized and with symlinks resolved, so a
 symlink into a forbidden tree does not launder it.
+
+A Bash command line is walked as ``&&``/``;``-separated segments, left to right. A
+segment that is `cd <dir>` updates the directory later segments resolve relative
+words against (an absolute *dir* is used as-is; a relative one is resolved against
+whatever directory is currently in effect). `cd` with no argument or `cd -` makes the
+effective directory unknown again, and later relative words fall back to the
+session's working directory rather than going unresolved. A word in the same segment
+as a `cd` is not affected by that `cd` -- the directory only changes for segments
+that follow.
 """
 
 from __future__ import annotations
@@ -248,11 +257,25 @@ def search_root_violation(root: str, policy: Policy, cwd: str | None) -> str | N
     return None
 
 
-def _path_words(command: str) -> list[str]:
+SEGMENT_SEPARATORS = ("&&", ";")
+
+
+def _segments(command: str) -> list[list[str]]:
+    """*command* tokenized with ``shlex`` and split into top-level ``&&``/``;`` runs."""
     try:
         words = shlex.split(command, comments=False, posix=True)
     except ValueError:
         words = command.split()
+    segments: list[list[str]] = [[]]
+    for word in words:
+        if word in SEGMENT_SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(word)
+    return segments
+
+
+def _path_words(words: list[str]) -> list[str]:
     found = []
     for word in words:
         # `--file=/x` and `VAR=/x` carry a path after the `=`.
@@ -260,6 +283,28 @@ def _path_words(command: str) -> list[str]:
             if piece.startswith(("/", "~", "./", "../")):
                 found.append(piece)
     return found
+
+
+def _cd_target(words: list[str]) -> str | None:
+    """The directory argument of a leading ``cd``, or ``None`` when it has none."""
+    if not words or words[0] != "cd":
+        return None
+    args = [word for word in words[1:] if not word.startswith("-")]
+    if not args or args[0] == "-":
+        return None
+    return args[0]
+
+
+def _next_cwd(words: list[str], effective: str | None, session_cwd: str | None, policy: Policy) -> str | None:
+    """The directory in effect for segments after *words*, given it currently is *effective*."""
+    if not words or words[0] != "cd":
+        return effective
+    target = _cd_target(words)
+    if target is None:
+        # No argument, or `cd -`: the destination is unknown, not the session cwd.
+        return None
+    resolve_against = effective if effective is not None else session_cwd
+    return path_forms(target, resolve_against, policy.home)[0]
 
 
 def bash_violations(command: str, policy: Policy, cwd: str | None) -> list[str]:
@@ -278,10 +323,17 @@ def bash_violations(command: str, policy: Policy, cwd: str | None) -> list[str]:
         pattern = rf"(?<![\w./-]){re.escape(branch)}(?![\w/-])"
         if re.search(pattern, command):
             rules.append(f"git.deny_branches {branch}")
-    for word in _path_words(expanded):
-        hit = path_violation(word, policy, cwd)
-        if hit is not None:
-            rules.append(hit)
+    effective_cwd = cwd
+    for segment in _segments(expanded):
+        # An unknown effective directory (after `cd` with no argument) resolves
+        # conservatively against the session cwd, same as before this segment tracking
+        # existed, rather than going unresolved.
+        resolve_cwd = effective_cwd if effective_cwd is not None else cwd
+        for word in _path_words(segment):
+            hit = path_violation(word, policy, resolve_cwd)
+            if hit is not None:
+                rules.append(hit)
+        effective_cwd = _next_cwd(segment, effective_cwd, cwd, policy)
     return sorted(set(rules))
 
 
