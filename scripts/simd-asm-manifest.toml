@@ -6215,17 +6215,11 @@ summary = "the encoder's window hashing: one 16-byte load, a byte shuffle into 4
 # purrdf-hash. Floors and mnemonics below are from real `--probe`/`--dump` measurement
 # of this tree (see the summary text of each measure for what was probed and where).
 #
-# `arch::aarch64::*` and every generic `Engine<Aes>` instantiation cannot be measured on
-# `aarch64-neoverse-v1`: `crates/hash/src/arch/aarch64.rs:265` (`pub(crate) struct
-# Block(core::arch::aarch64::uint8x16_t);`, behind `#[cfg(all(target_endian = "little",
-# target_feature = "aes"))]`) fails `-D unused-qualifications` only on a target that
-# compiles that `cfg` arm, which among the seven configurations here is
-# `aarch64-neoverse-v1` alone (the only one with `aes` at the compile-time target level).
-# That is a pre-existing defect in `crates/hash`, out of scope for this change (only
-# `scripts/simd-asm-manifest.toml` and `docs/design/purrdf-simd.md` may be touched), and
-# it fails the whole `cargo build` for that configuration -- every package in `[build]
-# packages`, not only `purrdf-hash` -- so no site's `aarch64-neoverse-v1` column can be
-# measured while it stands. See the task summary for the full report.
+# `aarch64-neoverse-v1` is the one configuration whose target enables `sha2`, `crc` and
+# `aes` at compile time, so it is the only one that compiles the fixed hasher's AES
+# `Block`, and the one on which a `#[target_feature]` Armv8 kernel could be inlined into
+# its wrapper; the SHA-1 and CRC-32 kernels are `#[inline(never)]` so every
+# configuration measures them at the same path.
 [[site]]
 id = "hash.sha1-block"
 summary = "the SHA-1 block compression function, dispatched at run time to the x86 SHA extensions or the Armv8 SHA1 instructions, portable elsewhere"
@@ -6243,7 +6237,7 @@ summary = "the SHA-1 block compression function, dispatched at run time to the x
   forbid_relaxed = true
 
   # Measured v97 on aarch64 (`sha1c`x5, `sha1h`x20, `sha1m`x5, `sha1p`x10, `sha1su0`x16,
-  # `sha1su1`x16); `aarch64-neoverse-v1` cannot be built (see the site-block header).
+  # `sha1su1`x16), and v97 on aarch64-neoverse-v1 with the same mnemonics.
   [[site.measure]]
   label = "armv8-sha1"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -6293,8 +6287,7 @@ summary = "the CRC-32 register update, dispatched at run time to `pclmulqdq` fol
   forbid_relaxed = true
 
   # `Crc32Backend::Aarch64Crc32`: eight bytes per `crc32x`, a scalar hardware
-  # accelerator with no packed lanes. Measured v0 on aarch64; `aarch64-neoverse-v1`
-  # cannot be built (see the site-block header).
+  # accelerator with no packed lanes. Measured v0 on aarch64 and aarch64-neoverse-v1.
   [[site.measure]]
   label = "crc scalar"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -6304,8 +6297,8 @@ summary = "the CRC-32 register update, dispatched at run time to `pclmulqdq` fol
   max_fma = 0
   forbid_relaxed = true
 
-  # `Crc32Backend::Aarch64Pmull`: measured v33 on aarch64 (`pmull`x8, `pmull2`x8);
-  # `aarch64-neoverse-v1` cannot be built (see the site-block header).
+  # `Crc32Backend::Aarch64Pmull`: measured v33 on aarch64 and aarch64-neoverse-v1
+  # (`pmull`x8, `pmull2`x8).
   [[site.measure]]
   label = "pmull fold"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -6356,8 +6349,7 @@ summary = "the base16 encoder behind `hex::Lower`, dispatched at run time to SSS
   forbid_relaxed = true
 
   # LLVM inlines `hex_kernel` into its wrapper on aarch64 too (not unrolled): measured
-  # v6 on aarch64 (`tbl`x2, `zip1`x1, `zip2`x1); `aarch64-neoverse-v1` cannot be built
-  # (see the site-block header).
+  # v6 on aarch64 and aarch64-neoverse-v1 (`tbl`x2, `zip1`x1, `zip2`x1).
   [[site.measure]]
   label = "neon (inlined)"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -6394,9 +6386,8 @@ summary = "the base16 encoder behind `hex::Lower`, dispatched at run time to SSS
 id = "hash.digest-portable"
 summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consumes the result of the one before, so neither has an instruction set or a data-parallel formulation on any target"
 
-  # Measured v0 on x86_64 and wasm32/wasm32-simd128; `aarch64-neoverse-v1` cannot be
-  # built (see the site-block header). Plain `aarch64` is scalar by the same FIPS
-  # 1321/202 chaining argument as every other configuration measured.
+  # Measured v0 on x86_64, aarch64, aarch64-neoverse-v1 and wasm32/wasm32-simd128:
+  # scalar by the FIPS 1321/202 chaining argument on every configuration.
   [[site.measure]]
   label = "md5"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -6419,17 +6410,18 @@ summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consum
 id = "hash.fixed-compress"
 summary = "the fixed-key hasher's compression, `Engine<Selected>::bytes`: `purrdf-core`'s `FastHasher` monomorphizes `Selected` to `Portable` (folded multiplies) on every build measured here except `Aes` (four lanes of AES rounds) on the one build whose target enables AES at compile time. Neither `Engine<P>` nor `fixed::portable`/`fixed::aes` is instantiated by any call inside `purrdf_hash`'s own library; `purrdf-core`'s `FastMap`/`FastSet` (`crates/rdf-core/src/hash.rs`) is the concrete caller that instantiates it, monomorphized into `purrdf-core`'s object code but still attributed to crate `purrdf_hash`, the type's origin, by this tool's demangler"
 
-  # Cannot be measured: `aarch64-neoverse-v1` is the only one of the seven
-  # configurations that compiles `aes` at the target level (SSE2, `x86-64-v3` and
-  # `x86-64-v4` do not carry AES in LLVM's definition of those levels; plain
-  # `aarch64` and both wasm32 builds are not aarch64/x86-64 or not little-endian aarch64
-  # at all), and it cannot be built (see the site-block header).
+  # `aarch64-neoverse-v1` is the only one of the seven configurations that compiles
+  # `aes` at the target level (SSE2, `x86-64-v3` and `x86-64-v4` do not carry AES in
+  # LLVM's definition of those levels; plain `aarch64` and both wasm32 builds do not
+  # enable it). Measured v54 (`aese`x20, `aesmc`x20, `eor`x21) in `purrdf_core`,
+  # `purrdf_datalog`, `purrdf_sparql_eval` and `purrdf_rdf`, every copy agreeing.
   [[site.measure]]
   label = "aes"
   configs = ["aarch64-neoverse-v1"]
   crate = "purrdf_hash"
   symbol = "purrdf_hash::fixed::Engine<purrdf_hash::fixed::Aes>>::bytes"
-  min_vector_ops = 0
+  min_vector_ops = 27
+  require_mnemonics = ["aese", "aesmc"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -6509,9 +6501,8 @@ summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in
   forbid_relaxed = true
 
   # Measured v24 on aarch64 (`cmhi`x6, `add`x68, `and`x25, `orr`x19, `sub`x22, of which
-  # only `cmhi` and the `orr`/`and` logical lanes are packed work); `aarch64-neoverse-v1`
-  # cannot be built (see the `hash.*` site-block header, which this build shares since
-  # `purrdf-hash` is in the same `[build] packages` list).
+  # only `cmhi` and the `orr`/`and` logical lanes are packed work), and v20 on
+  # aarch64-neoverse-v1.
   [[site.measure]]
   label = "aarch64"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -6548,9 +6539,7 @@ summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in
 id = "gts.rfc3339-lexical"
 summary = "RFC 3339 `date-time` parse and format for the files and tar profiles' `modified` stamps: `parse` is a byte-at-a-time scanner with no vector form on any target measured here; `format`'s decimal rendering of the civil-calendar fields is compiled to a packed multiply-and-shift by LLVM on every SIMD-capable target measured here"
 
-  # `parse` measured v0 on x86_64, x86_64-v3, x86_64-v4, aarch64, wasm32 and
-  # wasm32-simd128; `aarch64-neoverse-v1` cannot be built (see the `hash.*` site-block
-  # header, which this build shares).
+  # `parse` measured v0 on all seven configurations.
   [[site.measure]]
   label = "parse"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -6594,15 +6583,28 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   forbid_relaxed = true
 
   # `format` measured v15 on aarch64 (`umull`x9, `umull2`x2, `mul`x11, `mls`x2,
-  # `shrn`x1, `ushr`x1, `uzp2`x2, `xtn`x1); `aarch64-neoverse-v1` cannot be built (see
-  # the `hash.*` site-block header, which this build shares).
+  # `shrn`x1, `ushr`x1, `uzp2`x2, `xtn`x1).
   [[site.measure]]
   label = "format aarch64"
-  configs = ["aarch64", "aarch64-neoverse-v1"]
+  configs = ["aarch64"]
   crate = "purrdf_gts"
   symbol = "purrdf_gts::rfc3339::format"
   min_vector_ops = 7
   require_mnemonics = ["umull"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build the lane division by ten is SVE `umulh z.s` (multiply-high,
+  # not in the vector-work set) instead of NEON `umull`/`umull2` + `uzp2`; its `umull`
+  # are scalar. Measured v8: the SVE `mul z.s` by ten and the NEON `mls .2s` remainder
+  # prove the lane shape.
+  [[site.measure]]
+  label = "format sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 7
+  require_mnemonics = ["mul .s", "mls .2s"]
   max_fma = 0
   forbid_relaxed = true
 

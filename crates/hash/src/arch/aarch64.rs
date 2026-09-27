@@ -60,6 +60,7 @@ fn sha1_blocks(state: &mut [u32; 5], blocks: &[u8]) {
 /// Maj from ABCD, a scalar E and a quad with K already added; the E of the
 /// next four rounds is `sha1h(A)`, A rotated by 30. The schedule for a quad is
 /// `sha1su1(sha1su0(Q[g−4], Q[g−3], Q[g−2]), Q[g−1])`.
+#[inline(never)]
 #[target_feature(enable = "neon,sha2")]
 fn sha1_kernel(state: &mut [u32; 5], blocks: &[u8]) {
     let mut abcd = vsetq_lane_u32::<3>(
@@ -156,6 +157,7 @@ fn crc32_update_pmull(register: u32, data: &[u8]) -> u32 {
 
 /// The CRC32 instructions implement exactly this polynomial, reflected, on a
 /// raw register: eight bytes (little-endian) per `crc32x`.
+#[inline(never)]
 #[target_feature(enable = "crc")]
 fn crc32_crc_kernel(mut register: u32, data: &[u8]) -> u32 {
     let (words, tail) = data.as_chunks::<8>();
@@ -180,6 +182,7 @@ fn fold(acc: uint64x2_t, k: [u64; 2]) -> uint64x2_t {
 /// The same folding as the x86-64 kernel, over `data` of at least 64 bytes.
 /// The 128-bit accumulator F is finished by two `crc32x` from a zero
 /// register, which compute F·x^32 mod P directly.
+#[inline(never)]
 #[target_feature(enable = "neon,aes,crc")]
 fn crc32_pmull_kernel(register: u32, data: &[u8]) -> u32 {
     let (chunks, tail) = data.as_chunks::<16>();

@@ -12,6 +12,12 @@
 //! kernel is the exception to run-time detection: wasm has none, so it is
 //! compiled only when `simd128` is enabled for the whole build.
 //!
+//! The Armv8 SHA-1 and CRC-32 kernels are `#[inline(never)]`: on a build
+//! whose target CPU already has `sha2`, `crc` and `aes` (Neoverse V1, say) a
+//! `#[target_feature]` kernel is otherwise inlined into its safe wrapper, and
+//! the asm audit (`scripts/simd-asm-manifest.toml`) measures each kernel at
+//! its own path on every build.
+//!
 //! The other exception is the fixed hasher's AES `Block`, which exists only
 //! in builds whose target enables `aes` at compile time: such a build has one
 //! hash function, never a run-time choice between two.
