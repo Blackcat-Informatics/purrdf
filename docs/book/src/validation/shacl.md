@@ -488,7 +488,11 @@ value of `sh:validator` an ASK validator (`nodeValidator-class`,
 named `this`, `path`, `PATH` or `value` (`parameter-name-not-in`). A
 `sh:SPARQLFunction` parameter must not have one of those names, nor
 `shapesGraph` or `currentShape`. A `sh:SPARQLFunction` needs exactly one
-`sh:ask` or `sh:select` (`SPARQLFunction-query`). The refusal is
+`sh:ask` or `sh:select` (`SPARQLFunction-query`). A `sh:select` body returns the
+binding of its one result variable, and SHACL Advanced Features says "such SELECT
+queries should only return at most one solution"; PurRDF reads that as a must, so a
+call whose body returns a second solution fails the validation rather than answering
+with whichever row came first. The refusal is
 `ShapesError::IllFormed` and lists every violation in the graph, so a shapes
 graph that imports a library with ill-formed declarations, as DASH has, fails
 with all of them named.

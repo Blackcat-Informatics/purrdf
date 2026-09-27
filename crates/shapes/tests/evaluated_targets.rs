@@ -498,3 +498,36 @@ fn extension_usage_reads_the_sparql_inside_a_target_node_expression() {
     let usage = constant.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
     assert!(!usage.data().contains(relation), "{usage:?}");
 }
+
+/// SHACL Advanced Features, "SPARQL-based Targets": "SHACL Full processors should be
+/// able to derive an equivalent ASK query from the SELECT query, pre-bind the potential
+/// focus node, and check whether the potential focus node needs to be validated against
+/// the shape". PurRDF answers the same question by evaluating the target's SELECT once
+/// per binding and looking the candidate up, which agrees with the derived ASK for every
+/// SELECT that meets the recommended restriction and stays correct for one that does not
+/// — so no `sh:ask` is ever needed. The target here selects only the FIRST subject
+/// (`ORDER BY ?this LIMIT 1`), a SELECT whose derived ASK would also accept `ex:b`;
+/// validating the candidates `ex:a` and `ex:b` checks `ex:a` alone, and the full
+/// validation agrees.
+#[test]
+fn a_candidate_is_checked_against_a_sparql_target_by_its_select() {
+    let shapes_ttl = "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+        sh:target [ a sh:SPARQLTarget ;
+          sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o } ORDER BY ?this LIMIT 1\" ] .";
+    let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 .";
+    let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(shapes_ttl)));
+    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let candidates = ["a", "b"].map(|local| {
+        purrdf_shapes::term::Term::NamedNode(purrdf_shapes::term::NamedNode::from(
+            format!("http://example.org/ns#{local}").as_str(),
+        ))
+    });
+    let bounded = validator
+        .validate_focus_nodes(&candidates)
+        .expect("validates");
+    assert_eq!(focus_nodes(&bounded), vec![ex("a")]);
+    assert_eq!(
+        focus_nodes(&validate(shapes_ttl, data_ttl)),
+        focus_nodes(&bounded)
+    );
+}

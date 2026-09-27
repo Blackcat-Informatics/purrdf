@@ -2472,3 +2472,40 @@ fn select_expressions_and_target_types_answer_to_the_prebinding_restrictions() {
         .collect();
     assert_eq!(focus, ["<http://example.org/ns#a>".to_owned()]);
 }
+
+/// SHACL Advanced Features, "SPARQL-based Functions": "Since all other bindings will be
+/// ignored, such SELECT queries should only return at most one solution" — read as a
+/// must. A call whose SELECT body returns two solutions fails the validation rather than
+/// answering with whichever row came first; the neighbour, the same body narrowed to one
+/// solution, answers, and its answer is observed selecting `ex:a` and not `ex:control`.
+#[test]
+fn a_select_function_body_with_two_solutions_fails_the_call() {
+    let shapes = |body: &str| {
+        format!(
+            "ex:label a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ;
+               sh:select \"SELECT ?l WHERE {{ {body} }}\" .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+               sh:sparql [ sh:select \"SELECT $this WHERE {{ FILTER (<http://example.org/ns#label>($this) != \\\"\\\") }}\" ] ."
+        )
+    };
+    let data = "ex:a ex:label \"A\" , \"Alpha\" . ex:control ex:other \"C\" .";
+    let error = validate_dataset_with_shapes_graph(
+        &self::data(data),
+        &loads(&shapes("$node <http://example.org/ns#label> ?l")),
+        None,
+    )
+    .expect_err("two solutions give the call no single value");
+    assert!(
+        error.to_string().contains("at most one solution"),
+        "{error}"
+    );
+    let report = validate(
+        &shapes("$node <http://example.org/ns#label> ?l FILTER (?l = \\\"A\\\")"),
+        data,
+    );
+    let focus: Vec<String> = results(&report)
+        .into_iter()
+        .map(|(focus, _)| focus)
+        .collect();
+    assert_eq!(focus, ["<http://example.org/ns#a>".to_owned()]);
+}

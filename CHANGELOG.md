@@ -10,6 +10,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **sparql-eval, shapes (BREAKING):** a call to a SHACL-AF `sh:SPARQLFunction` whose
+  `sh:select` body returns more than one solution fails, naming the count, instead of
+  answering with the first row. SHACL Advanced Features: "Since all other bindings will
+  be ignored, such SELECT queries should only return at most one solution", read as a
+  must; the first row of an unordered result is no single value. A body that returns one
+  solution, or none (no value, a SPARQL error as before), is unchanged.
+
 - **shapes (BREAKING):** a SPARQL 1.2 RL rule set whose first `VERSION` directive follows
   a `RULE` or `DATA` block is refused at the syntax stage. §7.1: "The version
   announcement SHOULD be made early in the document", read as a must. A rule set that
