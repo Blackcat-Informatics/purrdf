@@ -1,0 +1,115 @@
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
+# SHOULD audit: SHACL 1.2, SHACL-AF and OWL 2 imports
+
+PurRDF treats every SHOULD, SHOULD NOT and RECOMMENDED in a standard it implements
+as a MUST, and every lowercase "should" in a normative section the same way. This
+record lists each such clause in the specifications the SHACL engine implements,
+with what PurRDF does about it and the test that observes it.
+
+## Scope
+
+| Specification | Sections read |
+|---|---|
+| SHACL 1.2 Core | all |
+| SHACL 1.2 SPARQL Extensions | all |
+| SHACL 1.2 Node Expressions | all |
+| SHACL 1.2 Rules (SPARQL 1.2 RL) | all |
+| SHACL Advanced Features 1.0 | all |
+| OWL 2 Mapping to RDF Graphs | §3.1 (imports) |
+
+Each specification's conformance section makes notes, examples, authoring
+guidelines and sections marked "non-normative" non-normative, and makes the
+RFC 2119 keywords normative "when, and only when, they appear in all capitals".
+Every lowercase "should" is listed below. One in a normative section has a row in
+the main tables, and one elsewhere is listed in the appendix with the reason it
+states no requirement.
+
+Test paths are relative to the repository root. `shapes_graph_wellformedness` is
+`crates/shapes/tests/shapes_graph_wellformedness.rs`.
+
+## SHACL 1.2 Core
+
+| § | Clause (verbatim) | Status | Test |
+|---|---|---|---|
+| 1.3, 6.1 | "Its import closure ... does not contain two shapes graphs where: they are different versions of the same series ... or one contains an owl:incompatibleWith annotation whose value is equal to either the shapes graph IRI or the owl:versionIRI of the other." / "the import closure of a shapes graph SHOULD NOT contain two graphs that are different versions of the same series, or where one declares owl:incompatibleWith the other." | Enforced. The kernel's closure walk reports each pair (`ImportClosure::conflicts`, `crates/rdf-core/src/imports.rs`). SHACL refuses with `ShapesImportError::IncompatibleVersions`, kind `incompatible-import-versions`, naming both graphs (`crates/shapes/src/imports.rs`). Entailment refuses with `EntailError::IncompatibleImports` (OWL 2 §3.4). Implemented in `0cdc17af`. | `imports::tests::two_versions_of_one_series_conflict_and_two_series_do_not`, `imports::tests::the_importing_graph_conflicts_with_a_version_it_imports` (core); `imports::tests::two_versions_of_one_series_are_refused_and_one_version_validates` (shapes); `entails::imports::tests::two_versions_of_one_series_are_refused_and_one_version_merges` (entail) |
+| 3.1.5, App. A `message-datatype` | "A subject should neither have more than one value for sh:message with the same language tag, nor multiple values with datatype xsd:string." | Enforced. Such a subject is ill-formed and the load fails with `ShapesError::IllFormed`, rule `message-datatype` (`Parser::check_message_uniqueness`, `crates/shapes/src/shapes/parser/wellformed.rs`). Language tags compare case-insensitively, and a direction does not make two values of one tag distinct. Implemented in `3840d274`. | `shapes_graph_wellformedness::a_repeated_message_language_is_ill_formed_and_one_per_language_loads` |
+| 6.3 | "SHACL processors SHOULD offer a parameter subClassOfInShapesGraph that, if set to true, should alter the definition of SHACL Type so that the rdfs:subClassOf triples are queried from the shapes graph in addition to the data graph." | Enforced on every host, off by default as the specification's default: `ValidationOptions::subclass_of_in_shapes_graph` (Rust), `purrdf validate --subclass-of-in-shapes-graph` (CLI), `subclass_of_in_shapes_graph=` on `shapes.validate` and `shapes.Shapes` (Python), a trailing `subClassOfInShapesGraph` on `shaclValidateToSarif` (WebAssembly), and `bool subclass_of_in_shapes_graph` on `purrdf_shacl_validate_to_sarif` (C). The shapes graph's edges join the edge set SHACL type is derived from and nothing else (`ClassMembershipView::from_view_with_supplement`, `ShaclData::with_class_supplement`). Implemented in `0cdc17af`. | `crates/shapes/tests/subclass_of_in_shapes_graph.rs` (all four tests); `cli_validate_subclass_of_in_shapes_graph`; `capi_validate_subclass_of_in_shapes_graph`; `wasm_validate_subclass_of_in_shapes_graph` and the `wasm_shacl_subclass_of_in_shapes_graph` JS test; `bindings/python/tests/test_shacl_subclass_of_in_shapes_graph.py` |
+| 6.4 | "Every value of sh:shapesGraph is an IRI representing a graph that SHOULD be included into the shapes graph used to validate the data graph." | Enforced. A data graph's links are resolved through the import table and unioned into the shapes graph, and an unsupplied link is refused by name (`crates/shapes/src/imports.rs`, `ImportMap::closure_with_links`). | `crates/validate/tests/shapes_graph_links.rs`: `a_supplied_link_is_unioned_and_its_shape_fires`, `an_unsupplied_link_is_refused_by_name`, `a_link_on_a_non_anchor_node_is_data`, `a_link_via_version_iri_resolves` |
+| 6.4 | "In the following example, a SHACL processor SHOULD use the union of ex:graph-shapes1 and ex:graph-shapes2 graphs (and their owl:imports) as the shapes graph when validating the given graph." | Enforced, as the row above. | `shapes_graph_links.rs`: `two_links_are_unioned`, `a_linked_graphs_own_imports_are_followed` |
+| 6.5.2 | "If the shapes graph contains ill-formed nodes, then the result of the validation process is undefined. A SHACL processor SHOULD produce a failure in this case." | Enforced. An ill-formed shapes graph fails the load (`ShapesError::IllFormed` and the census checks in `crates/shapes/src/shapes/parser/wellformed.rs`), except for the two Appendix A rules in the last rows of this table. | `shapes_graph_wellformedness::ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them`, `shapes_graph_wellformedness::an_ill_formed_list_is_refused_and_a_well_formed_one_loads` |
+| 6.7.1.4 | "Implementations that do perform such checks ... SHOULD use the property sh:shapesGraphWellFormed to inform the consumer of the validation report about this fact." | Enforced. Every report a validation produces states `sh:shapesGraphWellFormed` (`ValidationReport::shapes_graph_well_formed`, `Shapes::is_well_formed`). It is carried in the RDF report, the SARIF run property `shaclShapesGraphWellFormed` and Python's `shapes_graph_well_formed`. It is `true`, or `false` for a shapes graph with an empty `sh:in` or `sh:xone` list (last rows of this table). Implemented in `3840d274`. | `crates/shapes/tests/shapes_graph_well_formed_report.rs`; `build::tests::sarif_run_properties_carry_shapes_graph_well_formed` (validate); `wasm_shacl_shapes_graph_well_formed` (JS); `bindings/python/tests/test_shacl_shapes_graph_well_formed.py` |
+| 6.7.2.7 | "While sh:resultMessage may have multiple values, there should not be two values with the same language tag." | Enforced by construction. A result's messages come from exactly one source, the first of shape, validator and component that declares any (`crates/shapes/src/shapes/parser/node_expr.rs`, `crates/shapes/src/shapes/parser/annotations.rs`), or from one `?message` binding. A declared source holds one value per tag, because of the `message-datatype` row. | `shapes_graph_wellformedness::a_repeated_message_language_is_ill_formed_and_one_per_language_loads` |
+| 7.7.4, App. A `xone-minListLength` | "Each such list SHOULD have at least one member." | **Not a refusal.** The approved W3C tests `core/node/xone-002` and `core/node/xone-003` require a shapes graph with an empty `sh:xone` list to be validated, and their approved reports grade the results. PurRDF validates it as the suite requires, and the report states `sh:shapesGraphWellFormed false` rather than claiming the graph well-formed. | `w3c12_conformance` (`core/node/xone-002`, `core/node/xone-003`); `crates/shapes/tests/shapes_graph_well_formed_report.rs` |
+| 7.9.3, App. A `in-minListLength` | "Each such list SHOULD have at least one member." | **Not a refusal**, for the same reason: the approved W3C tests `core/node/in-002` and `core/node/in-003` require a shapes graph with an empty `sh:in` list to be validated. The report states `sh:shapesGraphWellFormed false`. | `w3c12_conformance` (`core/node/in-002`, `core/node/in-003`); `crates/shapes/tests/shapes_graph_well_formed_report.rs` |
+
+SHACL 1.2 Core states the list-length rule only for `sh:xone` and `sh:in`. It does
+not state it for `sh:and` or `sh:or`, so an empty `sh:and` or `sh:or` list is
+well-formed.
+
+## SHACL 1.2 SPARQL Extensions
+
+| § | Clause (verbatim) | Status | Test |
+|---|---|---|---|
+| 3.2, App. `SPARQLConstraint-message-datatype` | "There should neither be more than one value for sh:message with the same language tag, nor multiple values with datatype xsd:string." | Enforced by the same check as Core's `message-datatype`, which names the rule `SPARQLConstraint-message-datatype` on a SPARQL-based constraint. Implemented in `3840d274`. | `shapes_graph_wellformedness::a_repeated_message_language_is_ill_formed_and_one_per_language_loads` |
+| 3.3.2 | "These {?varName} and {$varName} blocks SHOULD be replaced with suitable string representations of the values of said variables." | Enforced. Every message is rendered against the solution's bindings, `$this` and the component's parameters (`components::substitute_message_templates`, called from `crates/shapes/src/sparql.rs` and `crates/shapes/src/components.rs`). A literal renders as its lexical form and an IRI as its IRI. A variable with no binding has no value to represent, and its block is kept. | `sparql::tests::eval_sparql_constraint_message_substitutes_path_and_value`, `…_accepts_question_mark_sigil`, `…_substitutes_this_even_when_unprojected`, `…_leaves_unbound_placeholder_verbatim`, `…_is_rendered_per_row` (shapes); W3C `sparql/component/propertyValidator-select-001` (graded `sh:resultMessage`) |
+| 7.3 | "The recommendation is that SPARQL engines SHOULD register a function for any SHACL instance of sh:ListParameterExpressionFunction from any provided shapes graph." | Enforced. Every `sh:ListParameterExpressionFunction` is registered as a callable SPARQL function, custom ones over their body and declared built-ins over their native implementation. An IRI already registered is not redefined (`register_expression_bodied_functions`, `register_native_list_functions`, `crates/shapes/src/shapes/link.rs`). | `crates/shapes/tests/custom_node_expressions.rs`: `a_list_parameter_function_resolves_from_sparql_query_text`, `a_declared_builtin_list_function_is_callable_from_sparql_expr`; `shapes::link::tests::an_unregistered_declaration_registers`, `a_native_registration_is_not_redefined` |
+| App. A (`pre-binding-limitations`) | "Furthermore, SPARQL queries SHOULD not contain a federated query (SERVICE). Implementations that do not permit SERVICE MUST report a failure as mentioned above." | Enforced. PurRDF permits `SERVICE` in no SHACL-SPARQL query that runs: constraints, validators, rules, `sh:SPARQLFunction` bodies with or without parameters, `sh:SPARQLTarget`s, instantiated `sh:SPARQLTargetType`s and reached `sh:select` / `sh:sparqlExpr` node expressions (`crate::prebinding`, `SERVICE_REFUSAL`). The refusal is `ShapesError::Prebinding`, raised where the query runs. A declaration nothing runs is listed by `lint` under `unexecuted`. Implemented in `bdb76424`. | `shapes_graph_wellformedness::a_service_in_any_executed_shacl_sparql_query_is_refused`, `shapes_graph_wellformedness::select_expressions_and_target_types_answer_to_the_prebinding_restrictions`; `prebinding::tests::service_is_rejected` |
+
+## SHACL 1.2 Rules (SPARQL 1.2 RL)
+
+| § | Clause (verbatim) | Status | Test |
+|---|---|---|---|
+| 4.4.2 | "The dependency graph should satisfy the stratification condition." (a comment in the stratification algorithm) | Enforced. A rule set that is not stratifiable is refused at the `stratified` check that every rules run applies first (`crates/shapes/src/srl/depend.rs`). | `rules_engine::a_stratifiable_negation_evaluates_and_a_cycle_through_one_is_refused_by_name`; `w3c12_conformance` (the SPARQL 1.2 RL stratification entries) |
+| 7.1 | "The version announcement SHOULD be made early in the document." | Enforced. A rule set whose first `VERSION` directive follows a `RULE` or `DATA` block is refused at the syntax stage (`SrlParser::rule_set`, `crates/shapes/src/srl/syntax.rs`). A rule set that announces no version, and a later `VERSION` after an early one, still parse. Implemented in `85a9251a`. | `srl_language::the_version_announcement_is_made_early` |
+
+## SHACL Advanced Features 1.0
+
+| § | Clause (verbatim) | Status | Test |
+|---|---|---|---|
+| 3 | "Engines that are aware of this property and cannot handle a given custom target SHOULD at least report a warning." | Enforced by a refusal, which is stronger than a warning. A shape whose `sh:target` is neither a `sh:SPARQLTarget` nor an instance of a declared `sh:SPARQLTargetType` is refused with `ShapesError::UnsupportedTarget`, naming the shape and the target (`crates/shapes/src/shapes.rs`). A SHACL-JS target is refused as `ShapesError::ShaclJs`. Implemented in `bdb76424`. | `shapes_graph_wellformedness::a_custom_target_the_engine_cannot_compute_is_refused_typed` |
+| 3.1 | "Informally, SHACL Full processors should be able to derive an equivalent ASK query from the SELECT query, pre-bind the potential focus node, and check whether the potential focus node needs to be validated against the shape that has the given target." | Enforced by a stronger means. PurRDF decides whether a candidate focus node is in a SPARQL-based target by evaluating the target's SELECT once per binding and looking the node up (`PreparedValidator::validate_focus_nodes`). That gives the derived ASK's answer for every SELECT that meets the recommended restriction, and the correct answer for one that does not, so no `sh:ask` is needed. | `evaluated_targets::a_candidate_is_checked_against_a_sparql_target_by_its_select` |
+| 5.4 | "Since all other bindings will be ignored, such SELECT queries should only return at most one solution." | Enforced. A call whose `sh:select` body returns more than one solution fails, naming the count (`crates/sparql-eval/src/user_fn.rs`). Implemented in `01561036`. | `shapes_graph_wellformedness::a_select_function_body_with_two_solutions_fails_the_call` |
+| 8.4 | "However, in cases where the original data should not be modified, implementations may construct a logical data graph that has the original data as one subgraph and a dedicated inferences graph as another subgraph" | Enforced in the strongest reading. The data graph is a frozen `RdfDataset` and is never modified. A rules run returns the inference graph, the inferred triples only, apart from the data (`purrdf_shapes::apply_rules`). | `rules_engine::data_blocks_join_the_inference_graph`; `host_entry_points::the_inference_graph_and_its_proof_render_deterministically` |
+
+## OWL 2 Mapping to RDF Graphs, §3.1
+
+§3.1, §3.1.1 and §3.1.2 contain no SHOULD, SHOULD NOT, RECOMMENDED or lowercase
+"should". The related SHOULD NOT of OWL 2 Structural Specification §3.4 (import
+closure versions) is the first row of the SHACL 1.2 Core table.
+
+## Appendix: clauses that state no requirement
+
+| Spec | § | Clause (verbatim) | Why no row |
+|---|---|---|---|
+| Core | 1 | "The reader should be familiar with basic RDF concepts [rdf12-concepts] such as triples." | Introduction, addressed to the reader. |
+| Core | 1.2 | "References to the SHACL vocabulary, e.g., via owl:imports should include the #." | A document convention for authors; §1.3 makes authoring guidelines non-normative. An `owl:imports <http://www.w3.org/ns/shacl>` names another IRI and is resolved or refused like any import. |
+| Core | 2 | "You will learn to describe how your data should look, and how a SHACL processor checks whether your data meets that description." | Getting-started prose. |
+| Core | 2 | "Alice: SSN does not match the expected pattern (987-65-432A has a letter where a digit should be)." | An example message. |
+| Core | 3.1.3.3 | "It is therefore recommended (but not required) that graphs that use sh:ShapeClass include an owl:imports sh: statement." | Lowercase "recommended" with "but not required": the sentence says itself it is not a requirement. |
+| Core | 3.2, 3.3 | "It is recommended, but not required, for a node shape to be declared as a SHACL instance of sh:NodeShape." / "... for a property shape to be declared as a SHACL instance of sh:PropertyShape." | Same: "but not required". |
+| Core | 4.2 | "Informal note: the nodes in such a SHACL list should not have values for other properties beside rdf:first and rdf:rest." | Marked an informal note. |
+| Core | 6.1 | "As a pre-validation step, SHACL processors should extend the originally provided shapes graph by transitively following and importing all referenced shapes graphs ...", "the processor should treat the subject of that triple as the shapes graph IRI of the imported graph ...", "Formally, processors should use the property path ^owl:versionIRI?/owl:imports iteratively ..." | In "The remainder of this section is non-normative". PurRDF does all three (`crates/rdf-core/src/imports.rs`, `ImportMap::closure`). |
+| Core | 6.1 | "When using owl:versionIRI to import versioned shapes graphs, care should be taken to avoid importing incompatible versions." | A Note. Its SHOULD NOT restates the normative §1.3 definition, enforced in the first Core row. |
+| Core | 6.2 | "data graph maintainers should remain aware of applications that do rely on owl:imports behavior ..." / "Hence, when using statements of the form X a sh:DataGraph ., X a owl:Ontology . should also be included." | A Note. `purrdf shapes lint` reports it through the W3C `shsh:DataGraphImportsShape` (`lint::tests::a_data_graph_import_without_an_ontology_type_is_an_info_finding`). |
+| Core | 7.7.2, 7.7.3 | "It is recommended to put earlier in the list constraints that are easier to evaluate, or are more likely to fail." (and "... to succeed.") | Authoring guidance on ordering, which no verdict depends on. |
+| Core | 7.4.4 | "The WG is not sure yet where to draw the lines between features that should go into Core versus some other document." | A Working Group issue box. |
+| Core | 7.4.4 | "those values should be edited in a multi-line (text area) input widget." | In an example. |
+| Core | 7.5.1 | "Each member m of a value node v that does not conform to the $memberShape should be reported as a separate sh:detail ..." / "If v is not a valid SHACL list, this should be reported as a top-level validation result and validation of individual members should not be attempted." | In "The remainder of this section is non-normative". PurRDF reports per-member `sh:detail`s, and `w3c12_conformance` grades them for `core/node/memberShape-001` and `core/property/memberShape-001`. |
+| Core | 7.5.4 | "Each duplicate member m of a list v should be reported as a separate sh:detail ... validation of unique membership should not be attempted." | Non-normative, as above; graded for `core/node/uniqueMembers-001` and `core/property/uniqueMembers-001`. |
+| Core | 8 | "Both sh:name and sh:description may have multiple values, but should only have one value per language tag.", "Shapes may have values for sh:intent and those values should be literals ...", "Shapes may have values for sh:agentInstruction and those values should be literals ...", "... but it should use the sh:codeIdentifier if present.", "In the case of complex path expressions an explicit sh:codeIdentifier is strongly recommended.", "The birth date should reflect the legal date of birth ..." | §8 is marked non-normative as a whole, and its properties "are ignored by SHACL processors". |
+| Core | 8.7 | "users should avoid xsd:string in favor of rdf:langString or rdf:dirLangString." | A Note in the non-normative §8. |
+| SPARQL | 1 | "The reader should be familiar with basic RDF concepts ..." | Introduction. |
+| SPARQL | 1.2 | "References to the SHACL vocabulary, e.g. via owl:imports should include the #." | A document convention, as in Core. |
+| SPARQL | 4.1 | "Note that this is only an example implementation and should not be considered normative." | In a non-normative section. |
+| SPARQL | 4.2.2 | "At display time, these {?varName} and {$varName} blocks should be replaced with the actual parameter values. There may be multiple label templates for the same subject, but they should not have the same language tags and there should not be more than one template with datatype xsd:string." | In "The remainder of this section is non-normative". PurRDF renders no label templates. |
+| SPARQL | D | "A SHACL-SPARQL engine should ensure that the SPARQL engine does not provide access to named graphs which the user who has triggered the validation is not permitted to access." | Security considerations, non-normative. A SHACL-SPARQL query runs over the caller's data and, only when the caller names it, the shapes graph; no other graph is in the dataset it runs over. |
+| Node Expressions | 4.5.1, 4.5.2 | "Users of this node expression function should be aware that the list of output nodes may be very large ..." | In "The remainder of this section is non-normative". |
+| Rules | C | "Applications should take care to limit the amount of computation and memory usage that can be caused by applying a SPARQL-RL rule set." | Security considerations, non-normative. Every rules run is bounded by the caller-settable round, term, stored-fact and join-step limits. |
+| AF | 3 | "targets define a mechanism that is used by SHACL engines to determine the focus nodes that should be validated against a given shape", "it is impossible to state that a shape should apply only to a subset of instances of a class ...", "Neither is it possible to state that a shape should apply to all subjects in a graph ..." | Descriptive: they define what a target is and state no obligation. |
+| AF | 3 | "The class sh:Target is the recommended base class for such extensions." | Lowercase "recommended", addressed to extension authors. |
+| AF | 3.1 | "the following semantic restriction is recommended for SELECT queries used in SPARQL-based targets." | Lowercase "recommended", addressed to query authors. The processor side is the AF §3.1 row. |
+| OWL 2 Mapping | 3.2.1 | "(i.e., if a function is not undefined for x, no attempt should be made to change the function's value for x)" | Outside §3.1, and a parenthetical restating the MUST NOT before it. |
