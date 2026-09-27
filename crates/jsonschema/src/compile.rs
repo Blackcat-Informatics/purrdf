@@ -154,10 +154,15 @@ fn check_document(
 /// Validate `document` against its compiled meta-schema: the verdict first,
 /// the full report only on refusal.
 pub(crate) fn check(validator: &Schema, document: &Document) -> Result<(), SchemaError> {
-    if validator.is_valid(&document.value) {
+    if validator
+        .is_valid(&document.value)
+        .map_err(SchemaError::Evaluation)?
+    {
         return Ok(());
     }
-    let output = validator.evaluate(&document.value);
+    let output = validator
+        .evaluate(&document.value)
+        .map_err(SchemaError::Evaluation)?;
     Err(SchemaError::InvalidSchema {
         uri: document.uri.clone(),
         errors: output

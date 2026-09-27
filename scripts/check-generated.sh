@@ -62,6 +62,9 @@ cargo run -p purrdf-text --example gen_unicode_text_tables --locked \
 cargo run -p purrdf-jsonschema --example gen_ecma_property_tables --locked \
   | rustfmt --edition 2024 --emit stdout \
   > "$tmp/property_tables.rs"
+python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/ecma_unicode_ranges.rs"
 
 check_file() {
   local generated="$1"
@@ -89,6 +92,7 @@ sync_file "$tmp/blocks.rs" crates/rdf-core/src/xsd_regex/blocks.rs
 sync_file "$tmp/idna_tables.rs" crates/iri/src/idna_tables.rs
 sync_file "$tmp/unicode_tables.rs" crates/text/src/unicode_tables.rs
 sync_file "$tmp/property_tables.rs" crates/jsonschema/src/ecma/property_tables.rs
+sync_file "$tmp/ecma_unicode_ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
 
 # The inventory above is now known-current. Prose elsewhere RESTATES its numbers
 # (and the conformance matrix's), and prose is not covered by any byte-diff — a

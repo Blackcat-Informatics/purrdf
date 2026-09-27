@@ -91,7 +91,7 @@ impl Format {
             Self::UriTemplate => uri_template(text),
             Self::JsonPointer => json_pointer(text),
             Self::RelativeJsonPointer => relative_json_pointer(text),
-            Self::Regex => ecma::is_valid_syntax(text),
+            Self::Regex => ecma::is_valid_syntax(text).unwrap_or(false),
         }
     }
 }

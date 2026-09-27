@@ -1,203 +1,327 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Exact arithmetic over JSON numbers.
-//!
-//! JSON Schema compares numbers by their mathematical value: `1` and `1.0` are
-//! the same number and both are integers, `0.0075` is a multiple of `0.0001`,
-//! and `1e308` is a multiple of `0.5`. Binary floating point answers none of
-//! those reliably, so every number is read into a [`Decimal`] — a sign, an
-//! integer coefficient and a power of ten — and compared and divided exactly.
-//!
-//! A number that `serde_json` holds as `u64`/`i64` is exact already. One it
-//! holds as `f64` is read through Rust's shortest round-trip rendering, which
-//! is the shortest decimal that parses back to the same binary64; with the
-//! workspace's `float_roundtrip` parse that is the decimal the document spelled
-//! whenever the document spelled at most seventeen significant digits.
-
-use std::cmp::Ordering;
+//! Exact, dependency-free decimal arithmetic for JSON Schema numbers.
+//! Parsed number lexemes are retained by `serde_json/arbitrary_precision`.
 
 use serde_json::Number;
+use std::cmp::Ordering;
 
-/// `(-1)^negative × coefficient × 10^exponent`, normalized so the coefficient
-/// has no trailing zero digit and zero is `+0 × 10^0`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A normalized decimal coefficient and base-ten exponent.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Decimal {
     negative: bool,
-    coefficient: u128,
-    exponent: i32,
+    coefficient: String,
+    exponent: Exponent,
+}
+
+/// Signed base-ten exponent. JSON permits arbitrarily many exponent digits.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Exponent {
+    Small(i64),
+    Large { negative: bool, digits: String },
+}
+
+impl Exponent {
+    fn parse(source: &str) -> Self {
+        if let Ok(value) = source.parse() {
+            return Self::Small(value);
+        }
+        let negative = source.starts_with('-');
+        let digits = source
+            .trim_start_matches(['+', '-'])
+            .trim_start_matches('0');
+        if digits.is_empty() {
+            return Self::Small(0);
+        }
+        let normalized = if negative {
+            format!("-{digits}")
+        } else {
+            digits.to_owned()
+        };
+        if let Ok(value) = normalized.parse() {
+            return Self::Small(value);
+        }
+        Self::Large {
+            negative,
+            digits: digits.to_owned(),
+        }
+    }
+
+    fn offset(self, amount: i64) -> Self {
+        if let Self::Small(value) = self {
+            if let Some(sum) = value.checked_add(amount) {
+                return Self::Small(sum);
+            }
+            return Self::from_parts(
+                value.is_negative(),
+                &BigDec::from_digits(&value.unsigned_abs().to_string()),
+            )
+            .offset_big(amount);
+        }
+        self.offset_big(amount)
+    }
+
+    fn offset_big(self, amount: i64) -> Self {
+        let (negative, mut magnitude) = self.parts();
+        let other_negative = amount.is_negative();
+        let other = BigDec::from_digits(&amount.unsigned_abs().to_string());
+        let (negative, magnitude) = if negative == other_negative {
+            magnitude.add(&other);
+            (negative, magnitude)
+        } else {
+            match magnitude.cmp(&other) {
+                Ordering::Greater | Ordering::Equal => {
+                    magnitude.subtract(&other);
+                    (negative, magnitude)
+                }
+                Ordering::Less => {
+                    let mut other = other;
+                    other.subtract(&magnitude);
+                    (other_negative, other)
+                }
+            }
+        };
+        Self::from_parts(negative, &magnitude)
+    }
+
+    fn from_parts(negative: bool, magnitude: &BigDec) -> Self {
+        let digits = magnitude.to_digits();
+        let signed = if negative {
+            format!("-{digits}")
+        } else {
+            digits.clone()
+        };
+        signed
+            .parse()
+            .map_or(Self::Large { negative, digits }, Self::Small)
+    }
+
+    fn parts(&self) -> (bool, BigDec) {
+        match self {
+            Self::Small(value) => (
+                value.is_negative(),
+                BigDec::from_digits(&value.unsigned_abs().to_string()),
+            ),
+            Self::Large { negative, digits } => (*negative, BigDec::from_digits(digits)),
+        }
+    }
+
+    fn to_i64(&self) -> Option<i64> {
+        match self {
+            Self::Small(value) => Some(*value),
+            Self::Large { .. } => None,
+        }
+    }
+
+    fn is_nonnegative(&self) -> bool {
+        match self {
+            Self::Small(value) => *value >= 0,
+            Self::Large { negative, .. } => !negative,
+        }
+    }
+
+    fn difference(&self, other: &Self) -> Self {
+        let (left_negative, mut left) = self.parts();
+        let (right_negative, right) = other.parts();
+        let (negative, magnitude) = if left_negative != right_negative {
+            left.add(&right);
+            (left_negative, left)
+        } else {
+            match left.cmp(&right) {
+                Ordering::Greater | Ordering::Equal => {
+                    left.subtract(&right);
+                    (left_negative, left)
+                }
+                Ordering::Less => {
+                    let mut right = right;
+                    right.subtract(&left);
+                    (!left_negative, right)
+                }
+            }
+        };
+        Self::from_parts(negative, &magnitude)
+    }
+}
+
+impl Ord for Exponent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Small(left), Self::Small(right)) => left.cmp(right),
+            _ => {
+                let (left_negative, left) = self.parts();
+                let (right_negative, right) = other.parts();
+                match (left_negative, right_negative) {
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
+                    (true, true) => right.cmp(&left),
+                    (false, false) => left.cmp(&right),
+                }
+            }
+        }
+    }
+}
+impl PartialOrd for Exponent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Decimal {
-    const ZERO: Self = Self {
-        negative: false,
-        coefficient: 0,
-        exponent: 0,
-    };
-
-    fn new(negative: bool, mut coefficient: u128, mut exponent: i32) -> Self {
-        if coefficient == 0 {
-            return Self::ZERO;
+    pub(crate) fn from_number(number: &Number) -> Self {
+        let source = number.to_string();
+        let body = source.strip_prefix('-').unwrap_or(&source);
+        let negative = body.len() != source.len();
+        let (mantissa, exponent) = body.split_once(['e', 'E']).unwrap_or((body, "0"));
+        let explicit_exponent = Exponent::parse(exponent);
+        let mut coefficient = String::with_capacity(mantissa.len());
+        let mut fractional = 0_i64;
+        let mut after_dot = false;
+        for ch in mantissa.chars() {
+            if ch == '.' {
+                after_dot = true;
+            } else {
+                coefficient.push(ch);
+                if after_dot {
+                    fractional += 1;
+                }
+            }
         }
-        while coefficient.is_multiple_of(10) {
-            coefficient /= 10;
-            exponent += 1;
+        let first = coefficient
+            .find(|ch| ch != '0')
+            .unwrap_or(coefficient.len());
+        if first == coefficient.len() {
+            return Self {
+                negative: false,
+                coefficient: "0".to_owned(),
+                exponent: Exponent::Small(0),
+            };
         }
+        coefficient.drain(..first);
+        let trailing = coefficient.trim_end_matches('0').len();
+        let removed = coefficient.len() - trailing;
+        coefficient.truncate(trailing);
         Self {
             negative,
             coefficient,
-            exponent,
+            exponent: explicit_exponent
+                .offset(-fractional)
+                .offset(i64::try_from(removed).expect("number length")),
         }
     }
 
-    /// The exact value of a parsed JSON number.
-    pub(crate) fn from_number(number: &Number) -> Self {
-        if let Some(value) = number.as_u64() {
-            return Self::new(false, u128::from(value), 0);
-        }
-        if let Some(value) = number.as_i64() {
-            return Self::new(value < 0, u128::from(value.unsigned_abs()), 0);
-        }
-        // A JSON number is finite, so `serde_json` never holds a NaN or an
-        // infinity here; `as_f64` is `Some` for every remaining number.
-        let value = number.as_f64().unwrap_or(0.0);
-        Self::from_f64(value)
+    pub(crate) fn parts(&self) -> (bool, &str, &Exponent) {
+        (self.negative, &self.coefficient, &self.exponent)
     }
 
-    fn from_f64(value: f64) -> Self {
-        // `{:e}` is the shortest round-trip rendering in scientific form:
-        // `-1.25e-7`, `1e308`, `0e0`.
-        let text = format!("{value:e}");
-        let (mantissa, exponent) = text.split_once('e').unwrap_or((text.as_str(), "0"));
-        let negative = mantissa.starts_with('-');
-        let mantissa = mantissa.trim_start_matches('-');
-        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-        let mut coefficient: u128 = 0;
-        for digit in whole.bytes().chain(fraction.bytes()) {
-            coefficient = coefficient * 10 + u128::from(digit - b'0');
-        }
-        let exponent: i32 = exponent.parse().unwrap_or(0);
-        let fraction_digits = i32::try_from(fraction.len()).unwrap_or(0);
-        Self::new(negative, coefficient, exponent - fraction_digits)
+    pub(crate) fn is_integer(&self) -> bool {
+        self.exponent.is_nonnegative()
+    }
+    pub(crate) fn is_positive(&self) -> bool {
+        !self.negative && self.coefficient != "0"
     }
 
-    /// The normalized sign, coefficient and exponent.
-    pub(crate) const fn parts(self) -> (bool, u128, i32) {
-        (self.negative, self.coefficient, self.exponent)
-    }
-
-    /// Whether the value has no fractional part.
-    pub(crate) const fn is_integer(self) -> bool {
-        self.exponent >= 0
-    }
-
-    /// Whether the value is strictly positive.
-    pub(crate) const fn is_positive(self) -> bool {
-        !self.negative && self.coefficient != 0
-    }
-
-    /// The value as a `u64` when it is a non-negative integer that fits;
-    /// `u64::MAX` for a larger non-negative integer (every bound this crate
-    /// reads is a count, and no count exceeds a `u64`).
-    pub(crate) fn to_u64_saturating(self) -> Option<u64> {
+    pub(crate) fn to_u64_saturating(&self) -> Option<u64> {
         if self.negative || !self.is_integer() {
             return None;
         }
-        let exponent = u32::try_from(self.exponent).ok()?;
-        let scaled = 10_u128
-            .checked_pow(exponent)
-            .and_then(|power| self.coefficient.checked_mul(power));
-        Some(scaled.map_or(u64::MAX, |value| u64::try_from(value).unwrap_or(u64::MAX)))
-    }
-
-    fn digit_count(value: u128) -> i32 {
-        let mut count = 1;
-        let mut rest = value / 10;
-        while rest > 0 {
-            count += 1;
-            rest /= 10;
+        if self.exponent.to_i64().is_none() {
+            return Some(u64::MAX);
         }
-        count
+        let total = i64::try_from(self.coefficient.len())
+            .ok()?
+            .saturating_add(self.exponent.to_i64()?);
+        if total > 20 {
+            return Some(u64::MAX);
+        }
+        let mut result = self.coefficient.parse::<u64>().unwrap_or(u64::MAX);
+        for _ in 0..self.exponent.to_i64()? {
+            result = result.saturating_mul(10);
+        }
+        Some(result)
     }
 
-    fn cmp_magnitude(self, other: Self) -> Ordering {
-        match (self.coefficient == 0, other.coefficient == 0) {
+    fn cmp_magnitude(&self, other: &Self) -> Ordering {
+        match (self.coefficient == "0", other.coefficient == "0") {
             (true, true) => return Ordering::Equal,
             (true, false) => return Ordering::Less,
             (false, true) => return Ordering::Greater,
             (false, false) => {}
         }
-        let self_order = Self::digit_count(self.coefficient) + self.exponent;
-        let other_order = Self::digit_count(other.coefficient) + other.exponent;
-        if self_order != other_order {
-            return self_order.cmp(&other_order);
-        }
-        // Equal orders of magnitude: shifting the coefficient with the larger
-        // exponent left by the difference keeps it within the other one's
-        // digit count, which is at most 39 digits and fits a u128.
-        match self.exponent.cmp(&other.exponent) {
-            Ordering::Equal => self.coefficient.cmp(&other.coefficient),
-            Ordering::Greater => {
-                let shift = (self.exponent - other.exponent).unsigned_abs();
-                (self.coefficient * 10_u128.pow(shift)).cmp(&other.coefficient)
+        let left_order = self
+            .exponent
+            .clone()
+            .offset(i64::try_from(self.coefficient.len()).unwrap_or(i64::MAX));
+        let right_order = other
+            .exponent
+            .clone()
+            .offset(i64::try_from(other.coefficient.len()).unwrap_or(i64::MAX));
+        match left_order.cmp(&right_order) {
+            Ordering::Equal => {
+                let left = self.coefficient.as_bytes();
+                let right = other.coefficient.as_bytes();
+                for index in 0..left.len().max(right.len()) {
+                    match left
+                        .get(index)
+                        .copied()
+                        .unwrap_or(b'0')
+                        .cmp(&right.get(index).copied().unwrap_or(b'0'))
+                    {
+                        Ordering::Equal => {}
+                        order => return order,
+                    }
+                }
+                Ordering::Equal
             }
-            Ordering::Less => {
-                let shift = (other.exponent - self.exponent).unsigned_abs();
-                self.coefficient
-                    .cmp(&(other.coefficient * 10_u128.pow(shift)))
-            }
+            order => order,
         }
     }
 
-    /// Whether `self / divisor` is an integer; `divisor` must be positive.
-    pub(crate) fn is_multiple_of(self, divisor: Self) -> bool {
-        if self.coefficient == 0 {
+    pub(crate) fn is_multiple_of(&self, divisor: &Self) -> bool {
+        if self.coefficient == "0" {
             return true;
         }
-        if divisor.coefficient == 0 {
+        if divisor.coefficient == "0" {
             return false;
         }
-        match self.exponent.cmp(&divisor.exponent) {
-            Ordering::Less => {
-                // self.c / (divisor.c × 10^k) with k > 0.
-                let shift = (divisor.exponent - self.exponent).unsigned_abs();
-                10_u128
-                    .checked_pow(shift)
-                    .and_then(|power| divisor.coefficient.checked_mul(power))
-                    .is_some_and(|denominator| self.coefficient.is_multiple_of(denominator))
-            }
-            _ => {
-                // (self.c × 10^k) mod divisor.c, with k ≥ 0, by modular
-                // exponentiation. Both coefficients come from a u64 or from at
-                // most seventeen f64 digits, so each is below 2^64 and every
-                // product below stays inside a u128.
-                let shift = (self.exponent - divisor.exponent).unsigned_abs();
-                let modulus = divisor.coefficient;
-                let power = pow_mod(10, shift, modulus);
-                mul_mod(self.coefficient % modulus, power, modulus) == 0
-            }
+        if self.cmp_magnitude(divisor) == Ordering::Less {
+            return false;
         }
-    }
-}
-
-fn mul_mod(left: u128, right: u128, modulus: u128) -> u128 {
-    match left.checked_mul(right) {
-        Some(product) => product % modulus,
-        None => {
-            // Only reachable for a modulus above 2^64, which no JSON number
-            // this crate reads produces; double-and-add keeps it exact anyway.
-            let mut result = 0_u128;
-            let mut addend = left % modulus;
-            let mut factor = right;
-            while factor > 0 {
-                if factor & 1 == 1 {
-                    result = add_mod(result, addend, modulus);
-                }
-                addend = add_mod(addend, addend, modulus);
-                factor >>= 1;
-            }
-            result
+        // Divide the scaled coefficients in base ten. The remainder has at
+        // most the divisor's digits, even for arbitrarily long input numbers.
+        let (numerator, denominator, zeros) = if self.exponent >= divisor.exponent {
+            (
+                &self.coefficient,
+                &divisor.coefficient,
+                self.exponent.difference(&divisor.exponent),
+            )
+        } else {
+            // The divisor has at least one extra factor of ten. Its normalized
+            // coefficient has no trailing zero, so it cannot divide ours.
+            return false;
+        };
+        if let (Ok(value), Ok(modulus)) = (numerator.parse::<u128>(), denominator.parse::<u128>()) {
+            return mul_mod(value % modulus, pow_mod(10, &zeros, modulus), modulus) == 0;
         }
+        let modulus = BigDec::from_digits(denominator);
+        let mut remainder = BigDec::zero();
+        for digit in numerator.bytes() {
+            remainder.mul_small(10);
+            remainder.add_small(digit - b'0');
+            remainder.reduce(&modulus);
+        }
+        // Repeated squaring makes large exponents bounded by log(exponent).
+        let mut power = BigDec::from_digits("10");
+        power.reduce(&modulus);
+        let (_, mut exponent) = zeros.parts();
+        while !exponent.is_zero() {
+            if exponent.is_odd() {
+                remainder = remainder.mul(&power).modulo(&modulus);
+            }
+            power = power.mul(&power).modulo(&modulus);
+            exponent.div_two();
+        }
+        remainder.is_zero()
     }
 }
 
@@ -210,17 +334,165 @@ fn add_mod(left: u128, right: u128, modulus: u128) -> u128 {
     }
 }
 
-fn pow_mod(base: u128, mut exponent: u32, modulus: u128) -> u128 {
+fn mul_mod(left: u128, right: u128, modulus: u128) -> u128 {
+    if let Some(product) = left.checked_mul(right) {
+        return product % modulus;
+    }
+    let mut result = 0;
+    let mut addend = left % modulus;
+    let mut factor = right;
+    while factor > 0 {
+        if factor & 1 == 1 {
+            result = add_mod(result, addend, modulus);
+        }
+        addend = add_mod(addend, addend, modulus);
+        factor >>= 1;
+    }
+    result
+}
+
+fn pow_mod(base: u128, exponent: &Exponent, modulus: u128) -> u128 {
     let mut result = 1 % modulus;
     let mut square = base % modulus;
-    while exponent > 0 {
-        if exponent & 1 == 1 {
+    let (_, mut exponent) = exponent.parts();
+    while !exponent.is_zero() {
+        if exponent.is_odd() {
             result = mul_mod(result, square, modulus);
         }
         square = mul_mod(square, square, modulus);
-        exponent >>= 1;
+        exponent.div_two();
     }
     result
+}
+
+/// Little-endian decimal digits. Only divisibility needs arithmetic beyond
+/// comparison, and this avoids a runtime big-integer dependency.
+#[derive(Clone)]
+struct BigDec(Vec<u8>);
+impl BigDec {
+    fn zero() -> Self {
+        Self(vec![0])
+    }
+    fn from_digits(s: &str) -> Self {
+        let mut value = Self(s.bytes().rev().map(|b| b - b'0').collect());
+        value.trim();
+        value
+    }
+    fn to_digits(&self) -> String {
+        self.0
+            .iter()
+            .rev()
+            .map(|digit| char::from(b'0' + digit))
+            .collect()
+    }
+    fn is_zero(&self) -> bool {
+        self.0.len() == 1 && self.0[0] == 0
+    }
+    fn trim(&mut self) {
+        while self.0.len() > 1 && self.0.last() == Some(&0) {
+            self.0.pop();
+        }
+    }
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .len()
+            .cmp(&other.0.len())
+            .then_with(|| self.0.iter().rev().cmp(other.0.iter().rev()))
+    }
+    fn add_small(&mut self, n: u8) {
+        let mut carry = n;
+        for digit in &mut self.0 {
+            let sum = *digit + carry;
+            *digit = sum % 10;
+            carry = sum / 10;
+            if carry == 0 {
+                return;
+            }
+        }
+        if carry != 0 {
+            self.0.push(carry);
+        }
+    }
+    fn add(&mut self, other: &Self) {
+        let mut carry = 0_u8;
+        self.0.resize(self.0.len().max(other.0.len()), 0);
+        for (index, digit) in self.0.iter_mut().enumerate() {
+            let sum = *digit + other.0.get(index).copied().unwrap_or(0) + carry;
+            *digit = sum % 10;
+            carry = sum / 10;
+        }
+        if carry != 0 {
+            self.0.push(carry);
+        }
+    }
+    fn is_odd(&self) -> bool {
+        self.0[0] & 1 != 0
+    }
+    fn div_two(&mut self) {
+        let mut carry = 0_u8;
+        for digit in self.0.iter_mut().rev() {
+            let value = carry * 10 + *digit;
+            *digit = value / 2;
+            carry = value % 2;
+        }
+        self.trim();
+    }
+    fn mul_small(&mut self, n: u8) {
+        let mut carry = 0;
+        for digit in &mut self.0 {
+            let product = *digit * n + carry;
+            *digit = product % 10;
+            carry = product / 10;
+        }
+        while carry != 0 {
+            self.0.push(carry % 10);
+            carry /= 10;
+        }
+        self.trim();
+    }
+    fn subtract(&mut self, other: &Self) {
+        let mut borrow = 0_i8;
+        for (index, digit) in self.0.iter_mut().enumerate() {
+            let diff = *digit as i8 - other.0.get(index).copied().unwrap_or(0) as i8 - borrow;
+            if diff < 0 {
+                *digit = (diff + 10) as u8;
+                borrow = 1;
+            } else {
+                *digit = diff as u8;
+                borrow = 0;
+            }
+        }
+        self.trim();
+    }
+    fn reduce(&mut self, modulus: &Self) {
+        while self.cmp(modulus) != Ordering::Less {
+            self.subtract(modulus);
+        }
+    }
+    fn modulo(mut self, modulus: &Self) -> Self {
+        let mut result = Self::zero();
+        for digit in self.0.drain(..).rev() {
+            result.mul_small(10);
+            result.add_small(digit);
+            result.reduce(modulus);
+        }
+        result
+    }
+    fn mul(&self, other: &Self) -> Self {
+        let mut result = vec![0_u8; self.0.len() + other.0.len()];
+        for (i, &left) in self.0.iter().enumerate() {
+            let mut carry = 0_u8;
+            for (j, &right) in other.0.iter().enumerate() {
+                let value = result[i + j] + left * right + carry;
+                result[i + j] = value % 10;
+                carry = value / 10;
+            }
+            result[i + other.0.len()] += carry;
+        }
+        let mut out = Self(result);
+        out.trim();
+        out
+    }
 }
 
 impl PartialOrd for Decimal {
@@ -228,14 +500,13 @@ impl PartialOrd for Decimal {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for Decimal {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.negative, other.negative) {
             (false, true) => Ordering::Greater,
             (true, false) => Ordering::Less,
-            (false, false) => self.cmp_magnitude(*other),
-            (true, true) => other.cmp_magnitude(*self),
+            (false, false) => self.cmp_magnitude(other),
+            (true, true) => other.cmp_magnitude(self),
         }
     }
 }
@@ -243,55 +514,84 @@ impl Ord for Decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn dec(text: &str) -> Decimal {
         let value: serde_json::Value = serde_json::from_str(text).expect("number");
         Decimal::from_number(value.as_number().expect("number"))
     }
-
     #[test]
-    fn integers_and_their_float_spellings_are_one_value() {
+    fn exact_equality_and_order() {
         assert_eq!(dec("1"), dec("1.0"));
-        assert!(dec("1.0").is_integer());
-        assert!(!dec("1.5").is_integer());
-        assert!(dec("12345678910111213141516171819202122232425262728293031").is_integer());
-        assert_eq!(dec("-0.0"), dec("0"));
-    }
-
-    #[test]
-    fn ordering_is_exact_across_representations() {
+        assert_ne!(dec("1.0"), dec("1.0000000000000001"));
         assert!(dec("18446744073709551600") < dec("18446744073709551615"));
-        // Below i64::MIN both parse to the same binary64, so they are equal.
-        assert!(dec("-18446744073709551600") >= dec("-18446744073709551615"));
-        assert!(dec("-9223372036854775807") > dec("-9223372036854775808"));
-        assert!(dec("1.5") > dec("1"));
+        assert!(dec("-18446744073709551600") > dec("-18446744073709551615"));
         assert!(dec("0.0001") < dec("0.001"));
         assert!(dec("-1e308") < dec("1e-308"));
+        assert!(dec("12345678910111213141516171819202122232425262728293031").is_integer());
         assert_eq!(
-            dec("9.727837981879871e26").cmp(&dec("9.727837981879871e26")),
-            Ordering::Equal
+            dec("1e999999999999999999999"),
+            dec("10e999999999999999999998")
         );
+        assert_eq!(dec("1e0000000000000000000000001"), dec("10"));
+        assert!(dec("1e999999999999999999999") > dec("1e999999999999999999998"));
+        assert!(dec("1e-999999999999999999999") < dec("1e-999999999999999999998"));
     }
-
     #[test]
-    fn multiple_of_is_decimal_not_binary() {
-        assert!(dec("0.0075").is_multiple_of(dec("0.0001")));
-        assert!(!dec("0.00751").is_multiple_of(dec("0.0001")));
-        assert!(dec("1e308").is_multiple_of(dec("0.5")));
-        assert!(dec("4.5").is_multiple_of(dec("1.5")));
-        assert!(!dec("35").is_multiple_of(dec("1.5")));
-        assert!(dec("19.99").is_multiple_of(dec("0.01")));
-        assert!(!dec("7").is_multiple_of(dec("2")));
-        assert!(dec("0").is_multiple_of(dec("0.3")));
-        assert!(dec("18446744073709551615").is_multiple_of(dec("5")));
+    fn exact_divisibility() {
+        for (value, divisor, expected) in [
+            ("0.0075", "0.0001", true),
+            ("0.00751", "0.0001", false),
+            ("1e308", "0.5", true),
+            ("4.5", "1.5", true),
+            ("35", "1.5", false),
+            ("19.99", "0.01", true),
+            ("7", "2", false),
+            ("18446744073709551615", "5", true),
+            ("1.0000000000000001", "0.1", false),
+            ("1e999999999999999999999", "2", true),
+            ("1e-999999999999999999999", "2", false),
+        ] {
+            assert_eq!(
+                dec(value).is_multiple_of(&dec(divisor)),
+                expected,
+                "{value}/{divisor}"
+            );
+        }
     }
-
     #[test]
-    fn counts_saturate_and_refuse_fractions() {
-        assert_eq!(dec("3").to_u64_saturating(), Some(3));
+    fn counts_saturate() {
         assert_eq!(dec("3.0").to_u64_saturating(), Some(3));
         assert_eq!(dec("1e30").to_u64_saturating(), Some(u64::MAX));
         assert_eq!(dec("3.5").to_u64_saturating(), None);
-        assert_eq!(dec("-1").to_u64_saturating(), None);
+    }
+
+    #[test]
+    fn frozen_python_fraction_oracle() {
+        for line in include_str!("../tests/numeric_oracle_vectors.txt").lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            let mut fields = line.split('|');
+            let op = fields.next().expect("operation");
+            let left = fields.next().expect("left");
+            let right = fields.next().expect("right");
+            let expected = fields.next().expect("answer");
+            assert_eq!(fields.next(), None, "{line}");
+            let answer = match op {
+                "cmp" => match dec(left).cmp(&dec(right)) {
+                    Ordering::Less => "<",
+                    Ordering::Equal => "=",
+                    Ordering::Greater => ">",
+                },
+                "mul" => {
+                    if dec(left).is_multiple_of(&dec(right)) {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                }
+                _ => panic!("unknown oracle operation: {op}"),
+            };
+            assert_eq!(answer, expected, "{line}");
+        }
     }
 }

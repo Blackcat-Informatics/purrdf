@@ -112,7 +112,7 @@ fn verdict(
     let mut registry = base.clone();
     registry.add_resource(uri, schema)?;
     let compiled = registry.compile(uri)?;
-    Ok(if compiled.is_valid(instance) {
+    Ok(if compiled.is_valid(instance).expect("evaluation") {
         "valid"
     } else {
         "invalid"

@@ -21,7 +21,10 @@
 
 use serde_json::Value;
 
+use crate::ecma::{self, CompiledPattern, MatchLimits, PatternError};
 use crate::equal;
+use crate::error::EvaluationError;
+use crate::format::Format;
 use crate::number::Decimal;
 use crate::output::{Output, OutputUnit};
 use crate::pointer;
@@ -30,16 +33,38 @@ use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Schema};
 impl Schema {
     /// Whether `instance` is valid — the `flag` output, computed with every
     /// short cut the verdict allows.
-    pub fn is_valid(&self, instance: &Value) -> bool {
-        Evaluator::new(self, false)
-            .node(self.root, instance, false)
-            .valid
+    pub fn is_valid(&self, instance: &Value) -> Result<bool, EvaluationError> {
+        self.is_valid_with_limits(instance, MatchLimits::default())
+    }
+
+    /// Validate with a caller-selected shared regular-expression budget.
+    pub fn is_valid_with_limits(
+        &self,
+        instance: &Value,
+        limits: MatchLimits,
+    ) -> Result<bool, EvaluationError> {
+        let mut evaluator = Evaluator::new(self, false, limits);
+        let valid = evaluator.node(self.root, instance, false).valid;
+        evaluator.error.map_or(Ok(valid), Err)
     }
 
     /// Evaluate `instance` and record the full output unit tree, from which
     /// [`Output::to_json`] writes any of the standard formats.
-    pub fn evaluate(&self, instance: &Value) -> Output {
-        let outcome = Evaluator::new(self, true).node(self.root, instance, false);
+    pub fn evaluate(&self, instance: &Value) -> Result<Output, EvaluationError> {
+        self.evaluate_with_limits(instance, MatchLimits::default())
+    }
+
+    /// Produce output with a caller-selected shared regular-expression budget.
+    pub fn evaluate_with_limits(
+        &self,
+        instance: &Value,
+        limits: MatchLimits,
+    ) -> Result<Output, EvaluationError> {
+        let mut evaluator = Evaluator::new(self, true, limits);
+        let outcome = evaluator.node(self.root, instance, false);
+        if let Some(error) = evaluator.error {
+            return Err(error);
+        }
         let root = outcome.unit.unwrap_or_else(|| OutputUnit {
             valid: outcome.valid,
             keyword_location: String::new(),
@@ -49,7 +74,7 @@ impl Schema {
             annotation: None,
             children: Vec::new(),
         });
-        Output { root }
+        Ok(Output { root })
     }
 }
 
@@ -125,6 +150,9 @@ struct Evaluator<'s> {
     following: Vec<(NodeId, usize)>,
     keyword_path: String,
     instance_path: String,
+    active_keyword: String,
+    limits: MatchLimits,
+    error: Option<EvaluationError>,
 }
 
 fn address(value: &Value) -> usize {
@@ -162,7 +190,7 @@ fn has_type(value: &Value, wanted: JsonType) -> bool {
 }
 
 impl<'s> Evaluator<'s> {
-    const fn new(schema: &'s Schema, output: bool) -> Self {
+    const fn new(schema: &'s Schema, output: bool, limits: MatchLimits) -> Self {
         Self {
             schema,
             output,
@@ -170,6 +198,43 @@ impl<'s> Evaluator<'s> {
             following: Vec::new(),
             keyword_path: String::new(),
             instance_path: String::new(),
+            active_keyword: String::new(),
+            limits,
+            error: None,
+        }
+    }
+
+    fn matches(&mut self, pattern: &CompiledPattern, text: &str) -> bool {
+        match pattern.is_match(text, &mut self.limits) {
+            Ok(verdict) => verdict,
+            Err(cause) => {
+                if self.error.is_none() {
+                    self.error = Some(EvaluationError {
+                        keyword_location: self.active_keyword.clone(),
+                        instance_location: self.instance_path.clone(),
+                        cause,
+                    });
+                }
+                false
+            }
+        }
+    }
+
+    fn format_matches(&mut self, format: Format, text: &str) -> bool {
+        if format != Format::Regex {
+            return format.check(text);
+        }
+        match ecma::parse(text) {
+            Ok(_) => true,
+            Err(PatternError::Resource { offset, message }) => {
+                self.error.get_or_insert_with(|| EvaluationError {
+                    keyword_location: self.active_keyword.clone(),
+                    instance_location: self.instance_path.clone(),
+                    cause: PatternError::Resource { offset, message },
+                });
+                false
+            }
+            Err(_) => false,
         }
     }
 
@@ -284,6 +349,10 @@ impl<'s> Evaluator<'s> {
             return self.conditional(node, *condition, *then, *otherwise, instance, track, state);
         }
         let saved = self.keyword_path.len();
+        let saved_active = std::mem::replace(
+            &mut self.active_keyword,
+            format!("{}/{}", node.location, pointer::escape_token(&keyword.name)),
+        );
         if self.output {
             self.keyword_path.push('/');
             self.keyword_path
@@ -298,6 +367,7 @@ impl<'s> Evaluator<'s> {
                 .push(self.keyword_unit(node, &keyword.name, verdict, children));
         }
         self.keyword_path.truncate(saved);
+        self.active_keyword = saved_active;
         valid
     }
 
@@ -533,7 +603,7 @@ impl<'s> Evaluator<'s> {
             }
             Kind::MultipleOf(divisor, spelled) => number_check(instance, |value| {
                 value
-                    .is_multiple_of(*divisor)
+                    .is_multiple_of(divisor)
                     .then_some(())
                     .ok_or_else(|| format!("the number is not a multiple of {spelled}"))
             }),
@@ -570,7 +640,7 @@ impl<'s> Evaluator<'s> {
                 _ => Ok(None),
             },
             Kind::Pattern(pattern) => match instance {
-                Value::String(text) if !pattern.regex.is_match(text) => Err(format!(
+                Value::String(text) if !self.matches(&pattern.regex, text) => Err(format!(
                     "the string does not match the pattern {:?}",
                     pattern.source
                 )),
@@ -640,7 +710,7 @@ impl<'s> Evaluator<'s> {
                 _ => Ok(None),
             },
             Kind::Format(name, check) => match (instance, check) {
-                (Value::String(text), Some(format)) if !format.check(text) => {
+                (Value::String(text), Some(format)) if !self.format_matches(*format, text) => {
                     Err(format!("the string is not a valid {name}"))
                 }
                 _ => annotate(Value::String(name.clone())),
@@ -902,7 +972,7 @@ impl<'s> Evaluator<'s> {
                 'properties: for (position, (name, value)) in map.iter().enumerate() {
                     let mut matched = false;
                     for (pattern, schema) in patterns {
-                        if !pattern.regex.is_match(name) {
+                        if !self.matches(&pattern.regex, name) {
                             continue;
                         }
                         matched = true;
@@ -950,7 +1020,7 @@ impl<'s> Evaluator<'s> {
                 let mut failed = Vec::new();
                 for (position, (name, value)) in map.iter().enumerate() {
                     if properties.iter().any(|known| known == name)
-                        || patterns.iter().any(|pattern| pattern.is_match(name))
+                        || patterns.iter().any(|pattern| self.matches(pattern, name))
                     {
                         continue;
                     }

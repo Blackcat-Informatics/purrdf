@@ -83,7 +83,9 @@ fmt: ## Auto-format the workspace.
 
 check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo fmt --all --check
+	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
 	python3 scripts/check-toolchain-pin.py
@@ -135,6 +137,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked
+	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
 

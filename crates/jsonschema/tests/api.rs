@@ -7,7 +7,8 @@
 use std::sync::OnceLock;
 
 use purrdf_jsonschema::{
-    Dialect, Metaschemas, OutputFormat, Registry, Schema, SchemaError, ecma::PatternError,
+    Dialect, Metaschemas, OutputFormat, Registry, Schema, SchemaError,
+    ecma::{MatchLimits, PatternError},
 };
 use serde_json::{Value, json};
 
@@ -44,6 +45,31 @@ fn compile(document: Value) -> Result<Schema, SchemaError> {
 }
 
 #[test]
+fn parsed_json_numbers_keep_every_decimal_digit() {
+    let distinct: Value = serde_json::from_str("1.0000000000000001").expect("JSON number");
+    let one: Value = serde_json::from_str("1.0").expect("JSON number");
+    assert_ne!(distinct.to_string(), one.to_string());
+
+    let constant = compile(json!({"const": one})).expect("const schema");
+    assert!(!constant.is_valid(&distinct).expect("evaluation"));
+    let enumeration = compile(json!({"enum": [1.0]})).expect("enum schema");
+    assert!(!enumeration.is_valid(&distinct).expect("evaluation"));
+    let unique = compile(json!({"uniqueItems": true})).expect("unique schema");
+    assert!(
+        unique
+            .is_valid(&Value::Array(vec![json!(1.0), distinct.clone()]))
+            .expect("evaluation")
+    );
+
+    let lower = compile(json!({"exclusiveMinimum": 1.0})).expect("bound schema");
+    assert!(lower.is_valid(&distinct).expect("evaluation"));
+    let integer = compile(json!({"type": "integer"})).expect("type schema");
+    assert!(!integer.is_valid(&distinct).expect("evaluation"));
+    let multiple = compile(json!({"multipleOf": 0.1})).expect("multiple schema");
+    assert!(!multiple.is_valid(&distinct).expect("evaluation"));
+}
+
+#[test]
 fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
     for dialect in [
         "http://json-schema.org/draft-06/schema#",
@@ -68,11 +94,17 @@ fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
     ] {
         let accepted = compile(json!({"$schema": dialect, "type": "string"}))
             .unwrap_or_else(|error| panic!("{dialect}: {error}"));
-        assert!(accepted.is_valid(&json!("text")), "{dialect}");
-        assert!(!accepted.is_valid(&json!(1)), "{dialect}");
+        assert!(
+            accepted.is_valid(&json!("text")).expect("evaluation"),
+            "{dialect}"
+        );
+        assert!(
+            !accepted.is_valid(&json!(1)).expect("evaluation"),
+            "{dialect}"
+        );
     }
     let unstated = compile(json!({"type": "string"})).expect("no $schema means 2020-12");
-    assert!(!unstated.is_valid(&json!(1)));
+    assert!(!unstated.is_valid(&json!(1)).expect("evaluation"));
 }
 
 #[test]
@@ -85,9 +117,9 @@ fn each_dialect_reads_its_own_keywords() {
             "additionalItems": false
         }))
         .expect("compiles");
-        assert!(schema.is_valid(&json!([1])));
-        assert!(!schema.is_valid(&json!(["a"])));
-        assert!(!schema.is_valid(&json!([1, 2])));
+        assert!(schema.is_valid(&json!([1])).expect("evaluation"));
+        assert!(!schema.is_valid(&json!(["a"])).expect("evaluation"));
+        assert!(!schema.is_valid(&json!([1, 2])).expect("evaluation"));
     }
     // Draft-07 ignores every sibling of `$ref`; 2019-09 applies them.
     let siblings = |dialect: &str| {
@@ -98,16 +130,36 @@ fn each_dialect_reads_its_own_keywords() {
         }))
         .expect("compiles")
     };
-    assert!(siblings(DRAFT_07).is_valid(&json!({"a": 1})));
-    assert!(!siblings(DRAFT_2019_09).is_valid(&json!({"a": 1})));
+    assert!(
+        siblings(DRAFT_07)
+            .is_valid(&json!({"a": 1}))
+            .expect("evaluation")
+    );
+    assert!(
+        !siblings(DRAFT_2019_09)
+            .is_valid(&json!({"a": 1}))
+            .expect("evaluation")
+    );
     // Draft-07 content assertions; 2019-09 content annotations.
     let content = |dialect: &str| {
         compile(json!({"$schema": dialect, "contentMediaType": "application/json"}))
             .expect("compiles")
     };
-    assert!(!content(DRAFT_07).is_valid(&json!("[1,")));
-    assert!(content(DRAFT_07).is_valid(&json!("{}")));
-    assert!(content(DRAFT_2019_09).is_valid(&json!("[1,")));
+    assert!(
+        !content(DRAFT_07)
+            .is_valid(&json!("[1,"))
+            .expect("evaluation")
+    );
+    assert!(
+        content(DRAFT_07)
+            .is_valid(&json!("{}"))
+            .expect("evaluation")
+    );
+    assert!(
+        content(DRAFT_2019_09)
+            .is_valid(&json!("[1,"))
+            .expect("evaluation")
+    );
     // `unevaluatedItems` does not see `contains` in 2019-09, and does in 2020-12.
     let contains = |dialect: &str| {
         compile(json!({
@@ -117,8 +169,12 @@ fn each_dialect_reads_its_own_keywords() {
         }))
         .expect("compiles")
     };
-    assert!(!contains(DRAFT_2019_09).is_valid(&json!(["a"])));
-    assert!(contains(DRAFT).is_valid(&json!(["a"])));
+    assert!(
+        !contains(DRAFT_2019_09)
+            .is_valid(&json!(["a"]))
+            .expect("evaluation")
+    );
+    assert!(contains(DRAFT).is_valid(&json!(["a"])).expect("evaluation"));
 }
 
 #[test]
@@ -139,8 +195,8 @@ fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
         "items": {"$recursiveRef": "#"}
     }))
     .expect("the root compiles");
-    assert!(tree.is_valid(&json!([[], [[]]])));
-    assert!(!tree.is_valid(&json!([[1]])));
+    assert!(tree.is_valid(&json!([[], [[]]])).expect("evaluation"));
+    assert!(!tree.is_valid(&json!([[1]])).expect("evaluation"));
 }
 
 #[test]
@@ -158,8 +214,8 @@ fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_ancho
         "definitions": {"a": {"$id": "#name", "type": "integer"}}
     }))
     .expect("a plain-name $id compiles");
-    assert!(schema.is_valid(&json!(1)));
-    assert!(!schema.is_valid(&json!("a")));
+    assert!(schema.is_valid(&json!(1)).expect("evaluation"));
+    assert!(!schema.is_valid(&json!("a")).expect("evaluation"));
 }
 
 #[test]
@@ -196,9 +252,9 @@ fn a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_di
     let schema = registry
         .compile("https://example.org/uses-seven.json")
         .expect("compiles");
-    assert!(schema.is_valid(&json!(["a"])));
+    assert!(schema.is_valid(&json!(["a"])).expect("evaluation"));
     assert!(
-        !schema.is_valid(&json!(["a", "b"])),
+        !schema.is_valid(&json!(["a", "b"])).expect("evaluation"),
         "read as draft-07 array-form items"
     );
 }
@@ -238,8 +294,12 @@ fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
     }
     let schema = Schema::from_document(metaschemas(), "https://example.org/r.json", reference)
         .expect("registered, the reference resolves");
-    assert!(schema.is_valid(&json!({"type": "string"})));
-    assert!(!schema.is_valid(&json!({"type": 1})));
+    assert!(
+        schema
+            .is_valid(&json!({"type": "string"}))
+            .expect("evaluation")
+    );
+    assert!(!schema.is_valid(&json!({"type": 1})).expect("evaluation"));
 
     // A custom meta-schema is registered before the documents declaring it.
     let uses_meta = json!({"$schema": "https://example.org/meta", "type": "string"});
@@ -262,7 +322,7 @@ fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
     let schema = registry
         .compile("https://example.org/uses-meta.json")
         .expect("compiles");
-    assert!(!schema.is_valid(&json!(1)));
+    assert!(!schema.is_valid(&json!(1)).expect("evaluation"));
 }
 
 #[test]
@@ -314,9 +374,12 @@ fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
             ));
         } else {
             let schema = compiled.expect("an optional unknown vocabulary is ignored");
-            assert!(!schema.is_valid(&json!(1)), "validation is in force");
             assert!(
-                schema.is_valid(&json!({"a": 1})),
+                !schema.is_valid(&json!(1)).expect("evaluation"),
+                "validation is in force"
+            );
+            assert!(
+                schema.is_valid(&json!({"a": 1})).expect("evaluation"),
                 "the applicator vocabulary is not declared"
             );
         }
@@ -366,12 +429,22 @@ fn an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_ass
             )
             .expect("schema");
         let asserting = registry.compile(&uri).expect("a defined format asserts");
-        assert!(asserting.is_valid(&json!(valid)), "{format} {valid}");
-        assert!(!asserting.is_valid(&json!(invalid)), "{format} {invalid}");
+        assert!(
+            asserting.is_valid(&json!(valid)).expect("evaluation"),
+            "{format} {valid}"
+        );
+        assert!(
+            !asserting.is_valid(&json!(invalid)).expect("evaluation"),
+            "{format} {invalid}"
+        );
     }
     let annotating =
         compile(json!({"format": "idn-hostname"})).expect("an annotation needs no check");
-    assert!(annotating.is_valid(&json!("anything at all")));
+    assert!(
+        annotating
+            .is_valid(&json!("anything at all"))
+            .expect("evaluation")
+    );
 }
 
 #[test]
@@ -398,31 +471,37 @@ fn format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation() {
                 .compile("https://example.org/f.json")
                 .expect("compiles");
             assert_eq!(
-                schema.is_valid(&json!({"a": "not-an-ipv4"})),
+                schema
+                    .is_valid(&json!({"a": "not-an-ipv4"}))
+                    .expect("evaluation"),
                 !assert,
                 "{dialect:?} assert={assert}"
             );
-            assert!(schema.is_valid(&json!({"a": "10.0.0.1", "b": "anything"})));
+            assert!(
+                schema
+                    .is_valid(&json!({"a": "10.0.0.1", "b": "anything"}))
+                    .expect("evaluation")
+            );
         }
     }
 }
 
 #[test]
-fn an_unrunnable_pattern_is_refused_and_its_runnable_neighbour_compiles() {
-    match compile(json!({"pattern": "^(?=a)b"})) {
-        Err(SchemaError::Pattern {
-            error: PatternError::Unsupported { construct, .. },
-            ..
-        }) => assert_eq!(construct, "lookahead"),
-        other => panic!("expected a lookahead refusal, got {other:?}"),
-    }
-    match compile(json!({"patternProperties": {"(a)\\1": true}})) {
-        Err(SchemaError::Pattern {
-            error: PatternError::Unsupported { construct, .. },
-            ..
-        }) => assert_eq!(construct, "backreference"),
-        other => panic!("expected a backreference refusal, got {other:?}"),
-    }
+fn nonregular_patterns_execute_and_malformed_syntax_is_refused() {
+    let lookahead = compile(json!({"pattern": "^(?=a)b"})).expect("lookahead compiles");
+    assert!(!lookahead.is_valid(&json!("ab")).expect("evaluation"));
+    let backreference =
+        compile(json!({"patternProperties": {"^(a)\\1$": false}})).expect("backreference compiles");
+    assert!(
+        !backreference
+            .is_valid(&json!({"aa": 1}))
+            .expect("evaluation")
+    );
+    assert!(
+        backreference
+            .is_valid(&json!({"ab": 1}))
+            .expect("evaluation")
+    );
     assert!(matches!(
         compile(json!({"pattern": "\\a"})),
         Err(SchemaError::Pattern {
@@ -431,8 +510,39 @@ fn an_unrunnable_pattern_is_refused_and_its_runnable_neighbour_compiles() {
         })
     ));
     let neighbour = compile(json!({"pattern": "^(?:a)b"})).expect("a plain group compiles");
-    assert!(neighbour.is_valid(&json!("ab")));
-    assert!(!neighbour.is_valid(&json!("b")));
+    assert!(neighbour.is_valid(&json!("ab")).expect("evaluation"));
+    assert!(!neighbour.is_valid(&json!("b")).expect("evaluation"));
+}
+
+#[test]
+fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
+    let schema = compile(json!({"pattern": "(?=a)(a+)+b"})).expect("schema");
+    let input = json!("aaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let limits = MatchLimits {
+        steps: 500,
+        states: 500,
+    };
+    let error = schema
+        .is_valid_with_limits(&input, limits)
+        .expect_err("budget exceeded");
+    assert!(error.keyword_location.ends_with("/pattern"));
+    assert!(matches!(error.cause, PatternError::Resource { .. }));
+    assert!(schema.evaluate_with_limits(&input, limits).is_err());
+}
+
+#[test]
+fn overdeep_regex_format_is_a_resource_error() {
+    let mut registry = registry();
+    registry.set_format_assertion(true);
+    registry
+        .add_resource("https://example.org/regex", json!({"format": "regex"}))
+        .expect("resource");
+    let schema = registry
+        .compile("https://example.org/regex")
+        .expect("schema");
+    let pattern = format!("{}x{}", "(".repeat(251), ")".repeat(251));
+    let error = schema.is_valid(&json!(pattern)).expect_err("depth limit");
+    assert!(matches!(error.cause, PatternError::Resource { .. }));
 }
 
 #[test]
@@ -451,8 +561,12 @@ fn a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is
         }
     }
     let neighbour = compile(json!({"required": ["a", "b"]})).expect("distinct names are valid");
-    assert!(!neighbour.is_valid(&json!({"a": 1})));
-    assert!(neighbour.is_valid(&json!({"a": 1, "b": 2})));
+    assert!(!neighbour.is_valid(&json!({"a": 1})).expect("evaluation"));
+    assert!(
+        neighbour
+            .is_valid(&json!({"a": 1, "b": 2}))
+            .expect("evaluation")
+    );
     assert!(matches!(
         compile(json!({"minLength": -1})),
         Err(SchemaError::InvalidKeyword { .. })
@@ -511,15 +625,15 @@ fn an_unresolved_reference_is_refused_and_a_resolved_one_is_followed() {
     ));
     let local =
         compile(json!({"$ref": "#/$defs/s", "$defs": {"s": {"type": "string"}}})).expect("local");
-    assert!(local.is_valid(&json!("s")));
+    assert!(local.is_valid(&json!("s")).expect("evaluation"));
 }
 
 #[test]
 fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
     let schema = compile(json!({"$ref": "#/$defs/a", "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}}}))
         .expect("a cycle compiles");
-    assert!(!schema.is_valid(&json!(1)));
-    let output = schema.evaluate(&json!(1));
+    assert!(!schema.is_valid(&json!(1)).expect("evaluation"));
+    let output = schema.evaluate(&json!(1)).expect("evaluation");
     assert!(output.errors().any(|unit| {
         unit.error
             .as_deref()
@@ -527,8 +641,8 @@ fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
     }));
     let consuming = compile(json!({"$defs": {"tree": {"type": "array", "items": {"$ref": "#/$defs/tree"}}}, "$ref": "#/$defs/tree"}))
         .expect("a consuming cycle compiles");
-    assert!(consuming.is_valid(&json!([[[]], []])));
-    assert!(!consuming.is_valid(&json!([[1]])));
+    assert!(consuming.is_valid(&json!([[[]], []])).expect("evaluation"));
+    assert!(!consuming.is_valid(&json!([[1]])).expect("evaluation"));
 }
 
 #[test]
@@ -545,7 +659,9 @@ fn the_three_output_formats_project_one_evaluation() {
     }))
     .expect("compiles");
 
-    let invalid = schema.evaluate(&json!({"name": 1, "age": -1}));
+    let invalid = schema
+        .evaluate(&json!({"name": 1, "age": -1}))
+        .expect("evaluation");
     assert!(!invalid.is_valid());
     assert_eq!(invalid.to_json(OutputFormat::Flag), json!({"valid": false}));
     let basic = invalid.to_json(OutputFormat::Basic);
@@ -581,7 +697,9 @@ fn the_three_output_formats_project_one_evaluation() {
     let nested = detailed["errors"].as_array().expect("detailed errors");
     assert_eq!(nested.len(), 2, "{detailed}");
 
-    let valid = schema.evaluate(&json!({"name": "Ada", "age": 36}));
+    let valid = schema
+        .evaluate(&json!({"name": "Ada", "age": 36}))
+        .expect("evaluation");
     assert!(valid.is_valid());
     assert_eq!(valid.to_json(OutputFormat::Flag), json!({"valid": true}));
     let basic = valid.to_json(OutputFormat::Basic);
@@ -601,11 +719,37 @@ fn the_three_output_formats_project_one_evaluation() {
 }
 
 #[test]
+fn each_draft_emits_independently_expected_output_locations() {
+    for dialect in [DRAFT, DRAFT_2019_09, DRAFT_07] {
+        let schema = compile(json!({"$schema": dialect, "type": "string"})).expect("schema");
+        let output = schema.evaluate(&json!(2)).expect("evaluation");
+        assert_eq!(output.to_json(OutputFormat::Flag), json!({"valid": false}));
+        let expected_leaf = json!({
+            "valid": false,
+            "keywordLocation": "/type",
+            "absoluteKeywordLocation": "https://example.org/schema.json#/type",
+            "instanceLocation": "",
+            "error": "expected string, found integer"
+        });
+        let basic = output.to_json(OutputFormat::Basic);
+        assert_eq!(basic["valid"], false, "{dialect}");
+        assert_eq!(basic["keywordLocation"], "", "{dialect}");
+        assert_eq!(basic["instanceLocation"], "", "{dialect}");
+        assert_eq!(basic["errors"], json!([expected_leaf]), "{dialect}");
+        assert_eq!(
+            output.to_json(OutputFormat::Detailed),
+            expected_leaf,
+            "{dialect}"
+        );
+    }
+}
+
+#[test]
 fn annotations_of_failed_subschemas_are_dropped() {
     let schema =
         compile(json!({"anyOf": [{"title": "wrong", "type": "string"}, {"title": "right"}]}))
             .expect("compiles");
-    let output = schema.evaluate(&json!(1));
+    let output = schema.evaluate(&json!(1)).expect("evaluation");
     assert!(output.is_valid());
     let titles: Vec<&Value> = output
         .annotations()
@@ -630,18 +774,22 @@ fn unevaluated_properties_see_through_every_in_place_applicator() {
     }))
     .expect("compiles");
     assert!(
-        schema.is_valid(&json!({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1}))
+        schema
+            .is_valid(&json!({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1}))
+            .expect("evaluation")
     );
     assert!(
-        !schema.is_valid(&json!({"z": 1})),
+        !schema.is_valid(&json!({"z": 1})).expect("evaluation"),
         "`not` contributes no annotations"
     );
     assert!(
-        !schema.is_valid(&json!({"d": 2, "e": 1})),
+        !schema
+            .is_valid(&json!({"d": 2, "e": 1}))
+            .expect("evaluation"),
         "`then` did not apply"
     );
     assert!(
-        !schema.is_valid(&json!({"g": 1})),
+        !schema.is_valid(&json!({"g": 1})).expect("evaluation"),
         "`dependentSchemas` did not apply"
     );
 }

@@ -218,8 +218,11 @@ pub(crate) fn run(draft: Draft) -> ExitCode {
                         .as_ref()
                         .as_ref()
                         .map_err(|error| format!("{label}: the schema did not compile: {error}"))?;
-                    let flag = schema.is_valid(&test["data"]);
-                    let evaluated = schema.evaluate(&test["data"]).is_valid();
+                    let flag = schema.is_valid(&test["data"]).expect("evaluation");
+                    let evaluated = schema
+                        .evaluate(&test["data"])
+                        .expect("evaluation")
+                        .is_valid();
                     if flag != evaluated {
                         return Err(Failed::from(format!(
                             "{label}: is_valid says {flag} but evaluate says {evaluated}"
@@ -293,6 +296,7 @@ fn output_trials(base: &Registry, directory: &str, trials: &mut Vec<Trial>) -> u
                         .map_err(|error| format!("schema: {error}"))?;
                     let basic = compiled
                         .evaluate(&test["data"])
+                        .expect("evaluation")
                         .to_json(OutputFormat::Basic);
                     let Some(checker) = test["output"].get("basic") else {
                         return Err(Failed::from("the test has no basic output schema"));
@@ -307,7 +311,7 @@ fn output_trials(base: &Registry, directory: &str, trials: &mut Vec<Trial>) -> u
                     let checker = registry
                         .compile(&checker_uri)
                         .map_err(|error| format!("output schema: {error}"))?;
-                    let verdict = checker.evaluate(&basic);
+                    let verdict = checker.evaluate(&basic).expect("evaluation");
                     if verdict.is_valid() {
                         Ok(())
                     } else {

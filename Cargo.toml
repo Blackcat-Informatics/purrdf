@@ -162,7 +162,7 @@ serde = { version = "1", features = ["derive"] }
 # only where its error bound cannot straddle a midpoint, and otherwise a
 # big-integer comparison against the midpoint over up to 768 digits and a sticky
 # digit. It is one feature for the whole graph, which is the point.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "arbitrary_precision"] }
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }

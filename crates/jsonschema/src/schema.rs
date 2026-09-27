@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use regex::Regex;
 use serde_json::Value;
 
 use crate::content::Content;
@@ -121,7 +120,7 @@ impl JsonType {
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
     pub(crate) source: String,
-    pub(crate) regex: Regex,
+    pub(crate) regex: crate::ecma::CompiledPattern,
 }
 
 #[derive(Debug, Clone)]
@@ -188,7 +187,7 @@ pub(crate) enum Kind {
     AdditionalProperties {
         schema: NodeId,
         properties: Vec<String>,
-        patterns: Vec<Regex>,
+        patterns: Vec<crate::ecma::CompiledPattern>,
     },
     PropertyNames(NodeId),
     UnevaluatedItems(NodeId),

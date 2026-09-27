@@ -66,10 +66,10 @@
 //! )?;
 //! let schema = registry.compile("https://example.org/person.json")?;
 //!
-//! assert!(schema.is_valid(&json!({"name": "Ada"})));
-//! assert!(!schema.is_valid(&json!({"name": "Ada", "age": 36})));
+//! assert!(schema.is_valid(&json!({"name": "Ada"})).expect("evaluation"));
+//! assert!(!schema.is_valid(&json!({"name": "Ada", "age": 36})).expect("evaluation"));
 //!
-//! let output = schema.evaluate(&json!({"age": 36}));
+//! let output = schema.evaluate(&json!({"age": 36})).expect("evaluation");
 //! let basic = output.to_json(OutputFormat::Basic);
 //! assert_eq!(basic["valid"], false);
 //! assert!(basic["errors"].as_array().is_some_and(|errors| !errors.is_empty()));
@@ -98,8 +98,11 @@
 //!   `$recursiveRef` other than `"#"` is refused.
 //! * **Numbers are exact.** `1` and `1.0` are equal and both integers;
 //!   `multipleOf` divides in decimal, so `0.0075` is a multiple of `0.0001`.
-//! * **Patterns are ECMA-262** with the `u` flag, translated by [`ecma`]; see
-//!   there for the three constructs refused rather than approximated.
+//! * **Patterns are ECMA-262** with the `u` flag. [`ecma`] uses `regex` for
+//!   regular patterns and a bounded explicit-stack matcher for lookaround,
+//!   backreferences and scoped modifiers. Unicode properties use vendored
+//!   Unicode 17 ranges. [`Schema::is_valid`] and [`Schema::evaluate`] return
+//!   [`EvaluationError`] if matching exhausts its resource budget.
 //! * **`format` is an annotation** by default, as every supported draft
 //!   specifies. [`Registry::set_format_assertion`] makes every format the
 //!   dialect defines assert — `hostname`, `idn-hostname` and `idn-email`
@@ -137,7 +140,7 @@ mod schema;
 mod validate;
 
 pub use dialect::Dialect;
-pub use error::SchemaError;
+pub use error::{EvaluationError, SchemaError};
 pub use meta_set::Metaschemas;
 pub use output::{Output, OutputFormat, OutputUnit};
 pub use registry::{DRAFT_2020_12, Registry};

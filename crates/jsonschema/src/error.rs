@@ -14,9 +14,33 @@ use std::fmt;
 
 use crate::ecma::PatternError;
 
+/// Evaluation stopped because an expression exhausted its resource budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluationError {
+    /// Absolute keyword location responsible for the expression.
+    pub keyword_location: String,
+    /// Location of the instance being checked.
+    pub instance_location: String,
+    /// The matcher error.
+    pub cause: PatternError,
+}
+
+impl fmt::Display for EvaluationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} at {}: {}",
+            self.keyword_location, self.instance_location, self.cause
+        )
+    }
+}
+impl Error for EvaluationError {}
+
 /// Why a schema, or a set of schemas, could not be registered or compiled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaError {
+    /// A meta-schema evaluation exhausted its resource budget.
+    Evaluation(EvaluationError),
     /// A URI could not be parsed, could not be resolved against its base, or
     /// has a shape the operation does not accept (relative where an absolute
     /// URI is needed, or carrying a fragment where none is allowed).
@@ -114,6 +138,7 @@ impl SchemaError {
     /// the description.
     fn location(&self) -> Option<&str> {
         match self {
+            Self::Evaluation(error) => Some(&error.keyword_location),
             Self::UnresolvedReference { location, .. }
             | Self::InvalidKeyword { location, .. }
             | Self::Pattern { location, .. }
@@ -131,6 +156,7 @@ impl SchemaError {
     /// The problem itself, without the location.
     fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Evaluation(error) => write!(f, "meta-schema evaluation failed: {error}"),
             Self::InvalidUri { uri, reason } => {
                 write!(f, "`{uri}` cannot be used as a URI here: {reason}")
             }

@@ -17,6 +17,8 @@
  *   - a fixed syntax list, including the constructs the translation refuses
  *     (lookaround, backreferences, modifiers), whose only answer is whether
  *     the pattern is ECMA-262 at all.
+ *   - 1,000 seeded pairs for the explicit-stack matcher: lookaround,
+ *     backreferences, scoped modifiers, and repeated captures.
  *
  * The answers are frozen in `pattern_differential_vectors.txt` in the
  * workspace's self-hashing vector format, and `pattern_differential.rs`
@@ -37,6 +39,7 @@ const VECTORS = path.join(HERE, "pattern_differential_vectors.txt");
 const SEED = 0x5eed2020;
 const CORPUS_PAIRS = 5000;
 const STRINGS_PER_PATTERN = 5;
+const VM_PAIRS = 1000;
 
 // ---------------------------------------------------------------- the suite
 
@@ -114,8 +117,8 @@ const random = mulberry32(SEED);
 const below = (n) => Math.floor(random() * n);
 const pick = (items) => items[below(items.length)];
 
-// Every character here is assigned in Unicode 15.0 or earlier, so the
-// answer cannot depend on which Unicode version either engine carries.
+// Includes Unicode 17 Beria Erfe to catch a regex-engine Unicode-version
+// mismatch; this crate executes the vendored Unicode 17 tables.
 const ALPHABET = [
   "a", "b", "c", "x", "Z", "0", "1", "7", "9", "_", "-", ".", " ", "/",
   "\t", "\n", "\r", "\u000b", "\u000c", "\u00a0", "\u1680", "\u180e",
@@ -123,7 +126,7 @@ const ALPHABET = [
   "\u00e9", "\u00df", "\u00b5", "\u00aa", "\u0301", "\u200d", "\u212a",
   "\u017f", "\u0130", "\u03b1", "\u03a9", "\u0436", "\u05d0", "\u0628",
   "\u0663", "\u0915", "\u096f", "\u09ea", "\uff19", "\u4e2d", "\u3042",
-  "\u{1f432}", "\u{1f600}", "\u{10400}",
+  "\u{1f432}", "\u{1f600}", "\u{10400}", "\u{16ea0}",
 ];
 
 const PROPERTIES = [
@@ -133,6 +136,7 @@ const PROPERTIES = [
   "scx=Hira", "Script_Extensions=Cyrillic", "sc=Arab", "White_Space",
   "Alphabetic", "ASCII", "Any", "Assigned", "Emoji", "ID_Start",
   "ID_Continue", "Lowercase", "Uppercase", "Hex_Digit", "Dash",
+  "Script=Beria_Erfe", "Script_Extensions=Beria_Erfe",
 ];
 
 const SYNTAX = new Set(["^", "$", "\\", ".", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|", "/"]);
@@ -298,6 +302,17 @@ function randomString() {
 function corpusPairs() {
   const pairs = [];
   const seen = new Set();
+  for (const pattern of [
+    "^\\p{Script=Beria_Erfe}$", "^\\p{Script_Extensions=Beria_Erfe}$",
+    "^\\p{Letter}$", "^\\p{Uppercase_Letter}$", "^\\p{Lowercase_Letter}$",
+    "^\\p{ID_Start}$", "^\\p{ID_Continue}$", "^\\P{Script=Beria_Erfe}$",
+    "^\\p{Script_Extensions=Latin}$",
+  ]) {
+    for (const input of ["\u{16ea0}", "\u{16ebb}", "\u00b7", "A", "\u00e9"]) {
+      pairs.push([pattern, input]);
+      seen.add(JSON.stringify([pattern, input]));
+    }
+  }
   while (pairs.length < CORPUS_PAIRS) {
     let pattern = disjunction(0);
     if (below(10) === 0) pattern = corrupt(pattern);
@@ -309,6 +324,50 @@ function corpusPairs() {
         pairs.push([pattern, input]);
       }
     }
+  }
+  return pairs;
+}
+
+const VM_PATTERNS = [
+  "(?=a)b", "(?!a)b", "(?<=a)b", "(?<!a)b", "(?<=a{1,3})b",
+  "^(a)?\\1$", "^(a|ab)\\1$", "^(?<n>a)\\k<n>$", "^(a*)\\1$",
+  "^(?i:a)b$", "^(?i:(k)\\1)$", "(?i:\\w)", "(?i:\\b)k",
+  "(?<=(a))b\\1", "^(a?)*b$", "^(a(b)?)+\\2$", "^(?=(a|ab))\\1b$",
+  "(?m:^a)", "(?s:.)", "(?i:(?-i:a)b)", "(?<=a|ab)c",
+  "(?=a(?=b))a", "(?!(a))\\1", "(?<=([ab]+))c\\1",
+  "(?<=(a)(b))c\\2\\1", "(?<=([ab]+)b)c\\1", "(?<=((a)|(b)))c\\1",
+  "(?<=(a|ab))c\\1", "(?<=((a)+))b\\2", "(?<=(?=(a))a)b\\1",
+  "^(?:(?<n>a)|(?<n>b))\\k<n>$",
+  "^(?i:\\p{Uppercase_Letter})$", "^(?i:\\P{Uppercase_Letter})$",
+  "^(?i:[^A])$", "^(?i:\\w)$", "^(?i:\\W)$",
+];
+const VM_ALPHABET = ["a", "b", "c", "k", "K", "\u212a", "\u017f", "\n", "\u00e9", "\u{16ea0}", "\u{16ebb}"];
+function vmPairs() {
+  const pairs = [
+    ["^(a)?\\1$", ""], ["^(a)?\\1$", "a"],
+    ["^(?=(a|ab))\\1b$", "abb"], ["^(?=(a|ab))\\1b$", "ab"],
+    ["^(a(b)?)+\\2$", "aba"], ["^(a(b)?)+\\2$", "abab"],
+    ["(?<=(a))b\\1", "aba"], ["^(?i:(k)\\1)$", "k\u212a"],
+    ["(?<=(a)(b))c\\2\\1", "abcba"],
+    ["(?<=(a)(b))c\\2\\1", "abcab"],
+    ["(?<=([ab]+)b)c\\1", "abbcab"],
+    ["(?<=([ab]+)b)c\\1", "abbcba"],
+    ["(?<=((a)|(b)))c\\1", "aca"],
+    ["(?<=((a)|(b)))c\\1", "bcb"],
+    ["(?<=(a|ab))c\\1", "abcab"],
+    ["(?<=(a|ab))c\\1", "abca"],
+    ["(?<=((a)+))b\\2", "aaba"],
+    ["(?<=(?=(a))a)b\\1", "aba"],
+    ["^(?:(?<n>a)|(?<n>b))\\k<n>$", "bb"],
+    ["^(?i:\\p{Uppercase_Letter})$", "\u{16ebb}"],
+    ["^(?i:\\P{Uppercase_Letter})$", "\u{16ea0}"],
+  ];
+  const seen = new Set(pairs.map((pair) => JSON.stringify(pair)));
+  while (pairs.length < VM_PAIRS) {
+    const pattern = pick(VM_PATTERNS);
+    const input = Array.from({ length: below(7) }, () => pick(VM_ALPHABET)).join("");
+    const key = JSON.stringify([pattern, input]);
+    if (!seen.has(key)) { seen.add(key); pairs.push([pattern, input]); }
   }
   return pairs;
 }
@@ -368,7 +427,7 @@ function encode(text) {
 function render() {
   const records = [];
   const seen = new Set();
-  const counts = { suite: 0, corpus: 0, syntax: 0 };
+  const counts = { suite: 0, corpus: 0, syntax: 0, vm: 0 };
   const add = (fields) => {
     const line = fields.map(encode).join("\t");
     if (!seen.has(line)) {
@@ -379,17 +438,19 @@ function render() {
   };
   for (const [pattern, input] of suitePairs()) add(["suite", pattern, input, answer(pattern, input)]);
   for (const [pattern, input] of corpusPairs()) add(["corpus", pattern, input, answer(pattern, input)]);
+  for (const [pattern, input] of vmPairs()) add(["vm", pattern, input, answer(pattern, input)]);
   for (const pattern of SYNTAX_ONLY) add(["syntax", pattern, "", syntaxAnswer(pattern)]);
   const body = records.map((line) => `${line}\n`).join("");
   const digest = createHash("sha256").update(body, "utf8").digest("hex");
   const header = [
     "# Verdicts of JavaScript's RegExp with the `u` flag, from crates/jsonschema/tests/pattern_oracle.mjs:",
     "# the official suite's pattern cases, a seeded corpus of generated pairs, and a fixed",
-    "# syntax list. Fields: source (suite | corpus | syntax), pattern, input, verdict",
+    "# syntax list and nonregular matcher pairs. Fields: source (suite | corpus | vm | syntax), pattern, input, verdict",
     "# (match | no-match | syntax-error; syntax records: valid | syntax-error).",
     `# seed: ${SEED}`,
     `# suite-pairs: ${counts.suite}`,
     `# corpus-pairs: ${counts.corpus}`,
+    `# vm-pairs: ${counts.vm}`,
     `# syntax-patterns: ${counts.syntax}`,
     `# vector-count: ${records.length}`,
     `# body-sha256: ${digest}`,

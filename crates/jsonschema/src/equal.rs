@@ -35,7 +35,7 @@ pub(crate) fn equal(left: &Value, right: &Value) -> bool {
 
 /// Feed `value` into `state` so that [`equal`] values hash alike: numbers hash
 /// their exact [`Decimal`], and object members hash in key order (the value
-/// model keeps keys sorted, so this is a canonical order).
+/// irrespective of the consumer's `serde_json/preserve_order` feature.
 pub(crate) fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
     match value {
         Value::Null => state.write_u8(0),
@@ -61,7 +61,9 @@ pub(crate) fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
         Value::Object(map) => {
             state.write_u8(5);
             state.write_usize(map.len());
-            for (key, member) in map {
+            let mut members: Vec<_> = map.iter().collect();
+            members.sort_unstable_by_key(|(left, _)| *left);
+            for (key, member) in members {
                 key.hash(state);
                 hash_value(member, state);
             }

@@ -17,7 +17,10 @@ const VECTORS: &str = include_str!("pattern_differential_vectors.txt");
 
 fn test_verdict(pattern: &str, input: &str) -> String {
     match ecma::compile(pattern) {
-        Ok(regex) => if regex.is_match(input) {
+        Ok(regex) => if regex
+            .is_match(input, &mut ecma::MatchLimits::default())
+            .expect("within budget")
+        {
             "match"
         } else {
             "no-match"
@@ -29,7 +32,7 @@ fn test_verdict(pattern: &str, input: &str) -> String {
 }
 
 fn syntax_verdict(pattern: &str) -> &'static str {
-    if ecma::is_valid_syntax(pattern) {
+    if ecma::is_valid_syntax(pattern).expect("oracle pattern within parser budget") {
         "valid"
     } else {
         "syntax-error"
@@ -40,7 +43,7 @@ fn syntax_verdict(pattern: &str) -> &'static str {
 fn every_node_verdict_is_reproduced() {
     let vectors = VectorFile::parse(VECTORS).expect("the vector file is intact");
     let mut disagreements = Vec::new();
-    let mut by_source = [0_usize; 3];
+    let mut by_source = [0_usize; 4];
     for record in vectors.records() {
         let fields: Vec<String> = record
             .fields
@@ -51,8 +54,12 @@ fn every_node_verdict_is_reproduced() {
             panic!("line {}: a record has four fields", record.line);
         };
         let got = match source.as_str() {
-            "suite" | "corpus" => {
-                by_source[usize::from(source == "corpus")] += 1;
+            "suite" | "corpus" | "vm" => {
+                by_source[match source.as_str() {
+                    "suite" => 0,
+                    "corpus" => 1,
+                    _ => 3,
+                }] += 1;
                 test_verdict(pattern, input)
             }
             "syntax" => {
@@ -85,7 +92,8 @@ fn every_node_verdict_is_reproduced() {
         [
             declared("suite-pairs"),
             declared("corpus-pairs"),
-            declared("syntax-patterns")
+            declared("syntax-patterns"),
+            declared("vm-pairs")
         ]
     );
     assert_eq!(declared("corpus-pairs"), 5000);

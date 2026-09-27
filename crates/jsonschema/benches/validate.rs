@@ -114,7 +114,7 @@ fn bench_is_valid(c: &mut Criterion) {
         b.iter(|| {
             instances
                 .iter()
-                .filter(|instance| schema.is_valid(black_box(instance)))
+                .filter(|instance| schema.is_valid(black_box(instance)).expect("evaluation"))
                 .count()
         });
     });

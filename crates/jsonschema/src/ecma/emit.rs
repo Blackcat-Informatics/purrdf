@@ -9,7 +9,7 @@
 
 use std::fmt::Write as _;
 
-use super::{Ast, Class, ClassItem, PatternError, Property};
+use super::{Ast, Class, ClassItem, PatternError, Property, property_ranges};
 
 /// ECMA-262 `LineTerminator` (§12.3): LF, CR, LS, PS.
 const LINE_TERMINATORS: &[(u32, u32)] = &[(0x0A, 0x0A), (0x0D, 0x0D), (0x2028, 0x2029)];
@@ -44,11 +44,17 @@ const EVERYTHING: &str = r"[\x{0}-\x{10FFFF}]";
 
 pub(super) fn emit(ast: &Ast) -> Result<String, PatternError> {
     let mut out = String::new();
-    write_ast(ast, &mut out)?;
+    write_ast(ast, &mut out, 0)?;
     Ok(out)
 }
 
-fn write_ast(ast: &Ast, out: &mut String) -> Result<(), PatternError> {
+fn write_ast(ast: &Ast, out: &mut String, depth: usize) -> Result<(), PatternError> {
+    if depth > 250 {
+        return Err(PatternError::Resource {
+            offset: 0,
+            message: "emission depth exceeds 250".to_owned(),
+        });
+    }
     match ast {
         Ast::Empty => out.push_str("(?:)"),
         Ast::Char(code) => match char::from_u32(*code) {
@@ -66,24 +72,24 @@ fn write_ast(ast: &Ast, out: &mut String) -> Result<(), PatternError> {
         Ast::End => out.push_str(r"\z"),
         Ast::WordBoundary(false) => out.push_str(r"(?-u:\b)"),
         Ast::WordBoundary(true) => out.push_str(r"(?-u:\B)"),
-        Ast::Group(body) => {
+        Ast::Group { body, .. } => {
             out.push_str("(?:");
-            write_ast(body, out)?;
+            write_ast(body, out, depth + 1)?;
             out.push(')');
         }
-        Ast::Look { offset, behind } => {
+        Ast::Look { offset, behind, .. } => {
             return Err(PatternError::Unsupported {
                 offset: *offset,
                 construct: if *behind { "lookbehind" } else { "lookahead" },
             });
         }
-        Ast::Backreference { offset } => {
+        Ast::Backreference { offset, .. } => {
             return Err(PatternError::Unsupported {
                 offset: *offset,
                 construct: "backreference",
             });
         }
-        Ast::Modifiers { offset } => {
+        Ast::Modifiers { offset, .. } => {
             return Err(PatternError::Unsupported {
                 offset: *offset,
                 construct: "modifier group",
@@ -96,7 +102,7 @@ fn write_ast(ast: &Ast, out: &mut String) -> Result<(), PatternError> {
             greedy,
         } => {
             out.push_str("(?:");
-            write_ast(body, out)?;
+            write_ast(body, out, depth + 1)?;
             out.push(')');
             match (min, max) {
                 (0, None) => out.push('*'),
@@ -118,7 +124,7 @@ fn write_ast(ast: &Ast, out: &mut String) -> Result<(), PatternError> {
         }
         Ast::Concat(items) => {
             for item in items {
-                write_ast(item, out)?;
+                write_ast(item, out, depth + 1)?;
             }
         }
         Ast::Alternation(alternatives) => {
@@ -127,7 +133,7 @@ fn write_ast(ast: &Ast, out: &mut String) -> Result<(), PatternError> {
                 if index > 0 {
                     out.push('|');
                 }
-                write_ast(alternative, out)?;
+                write_ast(alternative, out, depth + 1)?;
             }
             out.push(')');
         }
@@ -212,9 +218,21 @@ fn write_property(property: &Property, negated: bool, out: &mut String) {
         } else {
             r"[\x{0}-\x{7F}]"
         }),
-        Property::Assigned => out.push_str(if negated { r"\p{gc=Cn}" } else { r"\P{gc=Cn}" }),
-        Property::Named(name) => {
-            let _ = write!(out, r"\{}{{{name}}}", if negated { 'P' } else { 'p' });
-        }
+        Property::Assigned => write_property_ranges(property_ranges("Assigned"), negated, out),
+        Property::Named(name) => write_property_ranges(property_ranges(name), negated, out),
     }
+}
+
+fn write_property_ranges(ranges: &[(u32, u32)], negated: bool, out: &mut String) {
+    let mut body = String::new();
+    if write_ranges(ranges, &mut body) == 0 {
+        out.push_str(if negated { EVERYTHING } else { NOTHING });
+        return;
+    }
+    out.push('[');
+    if negated {
+        out.push('^');
+    }
+    out.push_str(&body);
+    out.push(']');
 }

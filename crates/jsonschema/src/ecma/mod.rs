@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! ECMA-262 regular expressions, as JSON Schema's `pattern`,
-//! `patternProperties` and `format: "regex"` define them, translated to the
-//! `regex` crate.
+//! `patternProperties` and `format: "regex"` define them. Regular patterns
+//! use `regex`; lookaround, backreferences and scoped modifiers use a
+//! bounded, explicit-stack matcher.
 //!
 //! JSON Schema 2020-12 (Validation §4.3, Core §6.4) says a pattern is an
 //! ECMA-262 regular expression, and the official test suite pins the
 //! `u`-flag reading: patterns match code points, `\p{…}` property escapes are
 //! available, and the Annex B leniencies (`\a` as a literal `a`, a lone `]` or
 //! `{`) are syntax errors. This module is a complete parser for that grammar
-//! (ECMA-262 §22.2.1 with the `[UnicodeMode]` parameter set) and an emitter
-//! that writes the `regex` crate's syntax with the ECMA-262 meaning spelled
-//! out:
+//! (ECMA-262 §22.2.1 with the `[UnicodeMode]` parameter set). Its regular
+//! emitter and explicit-stack matcher share these character sets:
 //!
 //! * `\d`, `\w` and `\s` are the ECMA-262 sets written out code point by code
 //!   point — `[0-9]`, `[0-9A-Za-z_]`, and the WhiteSpace ∪ LineTerminator list
@@ -24,24 +24,25 @@
 //! * `\p{…}` accepts only the exact aliases ECMA-262 lists — every
 //!   `General_Category` and `Script` alias of the Unicode 17.0.0
 //!   `PropertyValueAliases.txt`, and ECMA-262's closed table of binary
-//!   properties — and hands `regex` the canonical property.
+//!   properties — and executes the vendored Unicode 17.0.0 ranges rather than
+//!   the `regex` crate's Unicode version.
 //! * A `\u` escape naming a lone surrogate can never match a Rust string, and
 //!   is emitted as a set that matches nothing; a surrogate-pair escape is the
 //!   one code point it spells.
 //!
-//! Three ECMA-262 constructs have no counterpart in a finite automaton and are
-//! refused with [`PatternError::Unsupported`] rather than approximated:
-//! lookaround assertions, backreferences, and the `(?ims-ims:…)` modifier
-//! groups. Refusal is a typed compile error, so a schema that uses one never
-//! validates anything under a meaning its author did not write. A pattern that
-//! is not ECMA-262 at all is a [`PatternError::Syntax`].
+//! [`translate`] refuses constructs that cannot be represented by `regex`.
+//! [`compile`] executes them through the VM. Invalid grammar is a
+//! [`PatternError::Syntax`]; exhausted resources are a
+//! [`PatternError::Resource`], never a negative match verdict.
 
 mod emit;
 mod property;
 mod property_tables;
+mod unicode_ranges;
+mod vm;
+pub use vm::MatchLimits;
 
 use std::fmt;
-use std::sync::OnceLock;
 
 use regex::Regex;
 
@@ -55,8 +56,9 @@ pub enum PatternError {
         /// What is wrong.
         message: String,
     },
-    /// The pattern is valid ECMA-262 but uses a construct this crate refuses
-    /// to approximate.
+    /// The pattern is valid ECMA-262 but cannot be translated into the
+    /// finite-automaton syntax returned by [`translate`]. [`compile`] uses
+    /// the explicit-stack matcher for this construct.
     Unsupported {
         /// Character offset of the construct.
         offset: usize,
@@ -64,9 +66,15 @@ pub enum PatternError {
         /// or `"modifier group"`.
         construct: &'static str,
     },
-    /// The translation was refused by the `regex` engine (its size limits, or
-    /// a property value its Unicode tables do not carry).
+    /// A compiled character class was refused by the `regex` engine.
     Engine(String),
+    /// A valid pattern exceeds an evaluator resource limit.
+    Resource {
+        /// Character offset where the limit was encountered.
+        offset: usize,
+        /// The exceeded limit.
+        message: String,
+    },
 }
 
 impl fmt::Display for PatternError {
@@ -80,11 +88,12 @@ impl fmt::Display for PatternError {
             }
             Self::Unsupported { offset, construct } => write!(
                 f,
-                "ECMA-262 {construct} at offset {offset} is not supported: it has no \
-                 finite-automaton translation, and approximating it would change what the \
-                 pattern matches"
+                "ECMA-262 {construct} at offset {offset} has no finite-automaton translation"
             ),
             Self::Engine(message) => write!(f, "the translated pattern was refused: {message}"),
+            Self::Resource { offset, message } => {
+                write!(f, "pattern resource limit at offset {offset}: {message}")
+            }
         }
     }
 }
@@ -92,10 +101,14 @@ impl fmt::Display for PatternError {
 impl std::error::Error for PatternError {}
 
 /// Whether `pattern` is a syntactically valid ECMA-262 regular expression
-/// under the `u` flag — the `format: "regex"` assertion. Constructs this crate
-/// cannot *run* (lookaround, backreferences) are still valid syntax.
-pub fn is_valid_syntax(pattern: &str) -> bool {
-    parse(pattern).is_ok()
+/// under the `u` flag — the `format: "regex"` assertion. Exhausted parser
+/// resources remain distinguishable from invalid syntax.
+pub fn is_valid_syntax(pattern: &str) -> Result<bool, PatternError> {
+    match parse(pattern) {
+        Ok(_) => Ok(true),
+        Err(PatternError::Syntax { .. }) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// Translate `pattern` into `regex` crate syntax with the same meaning.
@@ -104,11 +117,50 @@ pub fn translate(pattern: &str) -> Result<String, PatternError> {
     emit::emit(&ast)
 }
 
-/// Translate and compile `pattern`. The regex searches (it is not anchored),
-/// as ECMA-262 `RegExp.prototype.test` does.
-pub fn compile(pattern: &str) -> Result<Regex, PatternError> {
-    let source = translate(pattern)?;
-    Regex::new(&source).map_err(|error| PatternError::Engine(error.to_string()))
+/// Compile `pattern`. Matching searches (it is not anchored), as
+/// ECMA-262 `RegExp.prototype.test` does.
+pub fn compile(pattern: &str) -> Result<CompiledPattern, PatternError> {
+    let ast = parse(pattern)?;
+    let captures = census(&pattern.chars().collect::<Vec<_>>()).groups as usize;
+    match emit::emit(&ast) {
+        Ok(source) => {
+            if let Ok(regex) = Regex::new(&source) {
+                return Ok(CompiledPattern {
+                    backend: Backend::Regex(regex),
+                });
+            }
+            // A valid regular pattern may exceed `regex`'s automaton-size
+            // limit. The VM can execute it under the caller's budget.
+        }
+        Err(PatternError::Unsupported { .. }) => {}
+        Err(error) => return Err(error),
+    }
+    Ok(CompiledPattern {
+        backend: Backend::Vm(ast, captures),
+    })
+}
+
+/// A parsed ECMA-262 expression, using the regular engine when it preserves
+/// meaning and the explicit-stack matcher for the remaining constructs.
+#[derive(Debug, Clone)]
+pub struct CompiledPattern {
+    backend: Backend,
+}
+
+#[derive(Debug, Clone)]
+enum Backend {
+    Regex(Regex),
+    Vm(Ast, usize),
+}
+
+impl CompiledPattern {
+    /// Search `input`, consuming the caller's shared resource budget.
+    pub fn is_match(&self, input: &str, limits: &mut MatchLimits) -> Result<bool, PatternError> {
+        match &self.backend {
+            Backend::Regex(regex) => Ok(regex.is_match(input)),
+            Backend::Vm(ast, captures) => vm::is_match(ast, input, limits, *captures),
+        }
+    }
 }
 
 /// A parsed pattern.
@@ -126,16 +178,25 @@ pub(crate) enum Ast {
     End,
     /// `\b` (`false`) or `\B` (`true`).
     WordBoundary(bool),
-    Group(Box<Self>),
+    Group {
+        body: Box<Self>,
+        capture: Option<u32>,
+    },
     Look {
         offset: usize,
         behind: bool,
+        positive: bool,
+        body: Box<Self>,
     },
     Backreference {
         offset: usize,
+        targets: Vec<u32>,
     },
     Modifiers {
         offset: usize,
+        body: Box<Self>,
+        enable: u8,
+        disable: u8,
     },
     Repeat {
         body: Box<Self>,
@@ -199,9 +260,11 @@ pub(crate) fn parse(pattern: &str) -> Result<Ast, PatternError> {
         pos: 0,
         groups: census.groups,
         names: census.names,
+        next_capture: 0,
         disjunctions: 0,
         path: Vec::new(),
         declared: Vec::new(),
+        depth: 0,
     };
     let ast = parser.disjunction()?;
     if parser.pos < parser.chars.len() {
@@ -216,7 +279,7 @@ pub(crate) fn parse(pattern: &str) -> Result<Ast, PatternError> {
 /// `\N` or `\k<name>` may refer forward (ECMA-262 §22.2.1.1 early errors).
 struct Census {
     groups: u32,
-    names: Vec<String>,
+    names: Vec<(String, u32)>,
 }
 
 fn census(chars: &[char]) -> Census {
@@ -240,7 +303,7 @@ fn census(chars: &[char]) -> Census {
                         .iter()
                         .take_while(|&&ch| ch != '>')
                         .collect();
-                    names.push(name);
+                    names.push((name, groups));
                 }
             }
             _ => {}
@@ -255,12 +318,14 @@ struct Parser {
     pos: usize,
     groups: u32,
     /// Group names as the census spelled them (raw, escapes undecoded).
-    names: Vec<String>,
+    names: Vec<(String, u32)>,
+    next_capture: u32,
     disjunctions: u32,
     /// The (disjunction, alternative) pairs enclosing the current position.
     path: Vec<(u32, u32)>,
     /// Every named group: decoded name and the path it was declared under.
     declared: Vec<(String, Vec<(u32, u32)>)>,
+    depth: usize,
 }
 
 impl Parser {
@@ -361,27 +426,39 @@ impl Parser {
             Some(':') => {
                 self.pos += 1;
                 let body = self.group_body(start)?;
-                Ok((Ast::Group(Box::new(body)), true))
+                Ok((
+                    Ast::Group {
+                        body: Box::new(body),
+                        capture: None,
+                    },
+                    true,
+                ))
             }
             Some('=' | '!') => {
+                let positive = self.peek() == Some('=');
                 self.pos += 1;
-                self.group_body(start)?;
+                let body = self.group_body(start)?;
                 // Lookaheads are not quantifiable under the `u` flag.
                 Ok((
                     Ast::Look {
                         offset: start,
                         behind: false,
+                        positive,
+                        body: Box::new(body),
                     },
                     false,
                 ))
             }
             Some('<') if matches!(self.peek_at(1), Some('=' | '!')) => {
+                let positive = self.peek_at(1) == Some('=');
                 self.pos += 2;
-                self.group_body(start)?;
+                let body = self.group_body(start)?;
                 Ok((
                     Ast::Look {
                         offset: start,
                         behind: true,
+                        positive,
+                        body: Box::new(body),
                     },
                     false,
                 ))
@@ -390,23 +467,39 @@ impl Parser {
                 self.pos += 1;
                 let name = self.group_name()?;
                 self.declared.push((name, self.path.clone()));
+                self.next_capture += 1;
+                let capture = self.next_capture;
                 let body = self.group_body(start)?;
-                Ok((Ast::Group(Box::new(body)), true))
+                Ok((
+                    Ast::Group {
+                        body: Box::new(body),
+                        capture: Some(capture),
+                    },
+                    true,
+                ))
             }
             _ => {
-                self.modifiers(start)?;
-                self.group_body(start)?;
-                Ok((Ast::Modifiers { offset: start }, true))
+                let (enable, disable) = self.modifiers(start)?;
+                let body = self.group_body(start)?;
+                Ok((
+                    Ast::Modifiers {
+                        offset: start,
+                        body: Box::new(body),
+                        enable,
+                        disable,
+                    },
+                    true,
+                ))
             }
         }
     }
 
     /// `(?ims-ims:` (ES2025 `RegularExpressionModifiers`): each flag once
     /// across both sides, at least one flag, and the colon.
-    fn modifiers(&mut self, start: usize) -> Result<(), PatternError> {
+    fn modifiers(&mut self, start: usize) -> Result<(u8, u8), PatternError> {
         let mut seen = Vec::new();
-        let mut adding = 0;
-        let mut removing = 0;
+        let mut adding = 0_u8;
+        let mut removing = 0_u8;
         let mut after_dash = false;
         loop {
             match self.peek() {
@@ -416,9 +509,17 @@ impl Parser {
                     }
                     seen.push(flag);
                     if after_dash {
-                        removing += 1;
+                        removing |= match flag {
+                            'i' => 1,
+                            'm' => 2,
+                            _ => 4,
+                        };
                     } else {
-                        adding += 1;
+                        adding |= match flag {
+                            'i' => 1,
+                            'm' => 2,
+                            _ => 4,
+                        };
                     }
                     self.pos += 1;
                 }
@@ -433,17 +534,26 @@ impl Parser {
                 _ => return syntax(start, "invalid group: `(?` must begin a known group form"),
             }
         }
-        if adding + removing == 0 && after_dash {
+        if adding | removing == 0 && after_dash {
             return syntax(start, "a modifier group must name at least one flag");
         }
-        if adding + removing == 0 {
+        if adding | removing == 0 {
             return syntax(start, "invalid group: `(?` must begin a known group form");
         }
-        Ok(())
+        Ok((adding, removing))
     }
 
     fn group_body(&mut self, start: usize) -> Result<Ast, PatternError> {
-        let body = self.disjunction()?;
+        if self.depth >= 250 {
+            return Err(PatternError::Resource {
+                offset: start,
+                message: "group nesting exceeds 250".to_owned(),
+            });
+        }
+        self.depth += 1;
+        let parsed = self.disjunction();
+        self.depth -= 1;
+        let body = parsed?;
         if !self.eat(')') {
             return syntax(start, "unterminated group");
         }
@@ -462,8 +572,13 @@ impl Parser {
             }
             '(' => {
                 self.pos += 1;
+                self.next_capture += 1;
+                let capture = self.next_capture;
                 let body = self.group_body(start)?;
-                Ok(Ast::Group(Box::new(body)))
+                Ok(Ast::Group {
+                    body: Box::new(body),
+                    capture: Some(capture),
+                })
             }
             '[' => {
                 self.pos += 1;
@@ -508,7 +623,7 @@ impl Parser {
             }
             Some('{') => {
                 self.pos += 1;
-                let Some(min) = self.decimal() else {
+                let Some(min) = self.decimal()? else {
                     return syntax(
                         start,
                         "a `{` must begin a `{n}`, `{n,}` or `{n,m}` quantifier",
@@ -518,7 +633,7 @@ impl Parser {
                     if self.peek() == Some('}') {
                         None
                     } else {
-                        let Some(max) = self.decimal() else {
+                        let Some(max) = self.decimal()? else {
                             return syntax(start, "malformed `{n,m}` quantifier");
                         };
                         Some(max)
@@ -540,16 +655,22 @@ impl Parser {
         Ok(Some((bounds.0, bounds.1, greedy)))
     }
 
-    /// DecimalDigits, saturating (ECMA-262 bounds are unbounded integers; a
-    /// bound past `u32::MAX` is refused by the engine, not misread).
-    fn decimal(&mut self) -> Option<u32> {
+    /// DecimalDigits. This matcher bounds repetitions at `u32::MAX`; a larger
+    /// valid bound is a resource refusal rather than a saturated wrong match.
+    fn decimal(&mut self) -> Result<Option<u32>, PatternError> {
         let start = self.pos;
         let mut value = 0_u32;
         while let Some(digit) = self.peek().and_then(|ch| ch.to_digit(10)) {
-            value = value.saturating_mul(10).saturating_add(digit);
+            value = value
+                .checked_mul(10)
+                .and_then(|n| n.checked_add(digit))
+                .ok_or_else(|| PatternError::Resource {
+                    offset: start,
+                    message: "decimal repetition or backreference exceeds u32".to_owned(),
+                })?;
             self.pos += 1;
         }
-        (self.pos > start).then_some(value)
+        Ok((self.pos > start).then_some(value))
     }
 
     fn atom_escape(&mut self, start: usize) -> Result<Ast, PatternError> {
@@ -558,11 +679,14 @@ impl Parser {
         };
         match ch {
             '1'..='9' => {
-                let value = self.decimal().unwrap_or(0);
+                let value = self.decimal()?.unwrap_or(0);
                 if value > self.groups {
                     return syntax(start, "backreference to a group the pattern does not have");
                 }
-                Ok(Ast::Backreference { offset: start })
+                Ok(Ast::Backreference {
+                    offset: start,
+                    targets: vec![value],
+                })
             }
             'k' => {
                 self.pos += 1;
@@ -570,10 +694,18 @@ impl Parser {
                     return syntax(start, "`\\k` must name a group under the `u` flag");
                 }
                 let name = self.group_name()?;
-                if !self.names_decoded().contains(&name) {
+                let targets: Vec<u32> = self
+                    .names_decoded()
+                    .into_iter()
+                    .filter_map(|(candidate, index)| (candidate == name).then_some(index))
+                    .collect();
+                if targets.is_empty() {
                     return syntax(start, "`\\k<…>` names a group the pattern does not have");
                 }
-                Ok(Ast::Backreference { offset: start })
+                Ok(Ast::Backreference {
+                    offset: start,
+                    targets,
+                })
             }
             _ => match self.class_or_char_escape(start, false)? {
                 Escaped::Char(code) => Ok(Ast::Char(code)),
@@ -585,20 +717,22 @@ impl Parser {
         }
     }
 
-    fn names_decoded(&self) -> Vec<String> {
+    fn names_decoded(&self) -> Vec<(String, u32)> {
         self.names
             .iter()
-            .filter_map(|raw| {
+            .filter_map(|(raw, index)| {
                 let mut sub = Self {
                     chars: raw.chars().chain(std::iter::once('>')).collect(),
                     pos: 0,
                     groups: 0,
                     names: Vec::new(),
+                    next_capture: 0,
                     disjunctions: 0,
                     path: Vec::new(),
                     declared: Vec::new(),
+                    depth: 0,
                 };
-                sub.group_name().ok()
+                sub.group_name().ok().map(|name| (name, *index))
             })
             .collect()
     }
@@ -903,25 +1037,33 @@ enum Escaped {
 /// `ID_Start ∪ {$, _}` — ECMA-262 `IdentifierStartChar`, which names the
 /// Unicode `ID_Start` property.
 fn identifier_start(ch: char) -> bool {
-    static START: OnceLock<Regex> = OnceLock::new();
-    ch == '$' || ch == '_' || {
-        let regex =
-            START.get_or_init(|| Regex::new(r"^\p{ID_Start}$").unwrap_or_else(|_| unreachable!()));
-        let mut buffer = [0_u8; 4];
-        regex.is_match(ch.encode_utf8(&mut buffer))
-    }
+    ch == '$' || ch == '_' || contains_property("ID_Start", u32::from(ch))
 }
 
 /// `ID_Continue ∪ {$, ZWNJ, ZWJ}` — ECMA-262 `IdentifierPartChar`, which names
 /// the Unicode `ID_Continue` property.
 fn identifier_part(ch: char) -> bool {
-    static PART: OnceLock<Regex> = OnceLock::new();
-    matches!(ch, '$' | '\u{200C}' | '\u{200D}') || {
-        let regex = PART
-            .get_or_init(|| Regex::new(r"^\p{ID_Continue}$").unwrap_or_else(|_| unreachable!()));
-        let mut buffer = [0_u8; 4];
-        regex.is_match(ch.encode_utf8(&mut buffer))
-    }
+    matches!(ch, '$' | '\u{200C}' | '\u{200D}') || contains_property("ID_Continue", u32::from(ch))
+}
+
+fn property_ranges(name: &str) -> &'static [(u32, u32)] {
+    let index = unicode_ranges::RANGES
+        .binary_search_by_key(&name, |(key, _)| key)
+        .expect("accepted property has UCD ranges");
+    unicode_ranges::RANGES[index].1
+}
+
+fn contains_property(name: &str, code: u32) -> bool {
+    let ranges = property_ranges(name);
+    let index = ranges.partition_point(|(_, high)| *high < code);
+    ranges.get(index).is_some_and(|(low, _)| *low <= code)
+}
+
+fn canonicalize(code: u32) -> u32 {
+    let table = unicode_ranges::CASE_FOLD;
+    table
+        .binary_search_by_key(&code, |(source, _)| *source)
+        .map_or(code, |index| table[index].1)
 }
 
 #[cfg(test)]

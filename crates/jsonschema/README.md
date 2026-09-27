@@ -43,9 +43,9 @@ fn check(draft_2020_12: Vec<(&str, Value)>) -> Result<(), SchemaError> {
         }),
     )?;
     let schema = registry.compile("https://example.org/person.json")?;
-    assert!(schema.is_valid(&json!({"name": "Ada"})));
+    assert!(schema.is_valid(&json!({"name": "Ada"})).expect("evaluation"));
 
-    let basic = schema.evaluate(&json!({"age": 36})).to_json(OutputFormat::Basic);
+    let basic = schema.evaluate(&json!({"age": 36})).expect("evaluation").to_json(OutputFormat::Basic);
     assert_eq!(basic["valid"], false);
     Ok(())
 }
@@ -81,13 +81,12 @@ Numbers are compared and divided exactly, in decimal: `0.0075` is a multiple of
 ## Patterns
 
 `pattern` and `patternProperties` are ECMA-262 regular expressions read with
-the `u` flag. `purrdf_jsonschema::ecma` parses the full grammar and translates
-it to the `regex` crate, spelling out ECMA-262's `\d`, `\w` and `\s` sets code
-point by code point rather than borrowing `regex`'s larger Unicode classes, and
-checking every `\p{…}` name against the exact aliases ECMA-262 accepts.
-Lookaround, backreferences and modifier groups are valid ECMA-262 with no
-finite-automaton translation; they are refused with a typed error rather than
-approximated.
+the `u` flag. `purrdf_jsonschema::ecma` parses the grammar, uses `regex` for
+regular patterns and a bounded explicit-stack matcher for lookaround,
+backreferences and scoped modifiers. ECMA-262's `\d`, `\w` and `\s` sets are
+spelled out, while `\p{…}` executes generated Unicode 17 ranges from the
+vendored UCD. Both `is_valid` and `evaluate` return an error if matching
+exhausts the caller's resource budget.
 
 ## Refusals
 
@@ -101,7 +100,7 @@ instance:
 * an unresolvable `$ref`, a malformed `$id` or anchor, a duplicate resource,
   a 2019-09 `$recursiveRef` other than `"#"`;
 * a schema that fails its own meta-schema;
-* an unrunnable `pattern`, or, under the 2020-12 Format-Assertion
+* a malformed `pattern`, or, under the 2020-12 Format-Assertion
   vocabulary, a format no draft defines.
 
 ## Evidence
@@ -113,9 +112,13 @@ instance:
   --test suite`, `--test suite_draft2019_09`, `--test suite_draft7`), with no
   case ignored.
 * `tests/pattern_differential_vectors.txt`: JavaScript's own `RegExp`
-  verdicts over the suite's pattern cases, 5,000 seeded pairs and a syntax
-  list, recorded by `tests/pattern_oracle.mjs` and replayed against the
-  translation.
+  verdicts over the suite's pattern cases, 5,000 seeded regular pairs,
+  1,000 nonregular pairs, directed Unicode 17 cases and a syntax list,
+  recorded by `tests/pattern_oracle.mjs` and replayed against the compiled
+  matcher.
+* `tests/numeric_oracle_vectors.txt`: frozen Python `Decimal`/`Fraction`
+  answers for exact comparison and `multipleOf`, including coefficients beyond
+  machine integers and exponent spellings beyond machine exponents.
 * `tests/boon_differential_vectors.txt`: the verdicts of the validator this
   crate replaced, over the suite and the workspace's former call sites,
   replayed with every disagreement named. See `PROVENANCE.md`.
