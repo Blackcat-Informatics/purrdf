@@ -618,7 +618,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
 	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does,
 	@# and runs its base16 tests on the baseline and +simd128 builds, so the
-	@# i8x16.swizzle encoder is executed against the portable one.
+	@# i8x16.swizzle encoder is executed against the portable one. purrdf-core's
+	@# CSV field scanner runs its own kernel differential there too, on the
+	@# baseline and +simd128 builds, through the doc-hidden `csv::backend`
+	@# module (the in-crate differential is a #[cfg(test)] unit test, which does
+	@# not exist on wasm32 at all), so the +simd128 build's `i8x16.eq` kernel is
+	@# executed against the portable one rather than merely built.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -711,7 +716,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test hex; \
+			-p purrdf-hash --test hex \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-core --test csv_scan_wasm \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-core --test csv_scan_wasm; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

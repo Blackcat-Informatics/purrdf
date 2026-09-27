@@ -82,9 +82,11 @@ pub(crate) fn find(set: &StopSet, haystack: &[u8]) -> Option<usize> {
 }
 
 /// Every explicit kernel this process can run, by name, for the differential
-/// tests against the portable kernel.
-#[cfg(test)]
-pub(crate) fn every_kernel_for_tests() -> Vec<(&'static str, super::scan::Kernel)> {
+/// tests against the portable kernel: this crate's own unit tests, and
+/// [`super::backend::kernels`], which this function also backs so an
+/// integration test outside the crate — including on wasm32, where this
+/// crate's `#[cfg(test)]` unit tests do not exist — runs the same comparison.
+pub(crate) fn every_kernel() -> Vec<(&'static str, super::scan::Kernel)> {
     #[cfg_attr(
         not(any(
             target_arch = "x86_64",

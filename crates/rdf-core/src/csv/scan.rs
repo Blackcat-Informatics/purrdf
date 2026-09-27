@@ -122,21 +122,10 @@ impl StopSet {
 /// table-driven tail.
 ///
 /// This is the answer on every target without an explicit kernel, and the
-/// oracle every explicit kernel is tested against.
-#[cfg_attr(
-    all(
-        not(test),
-        any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            all(target_arch = "wasm32", target_feature = "simd128")
-        )
-    ),
-    allow(
-        dead_code,
-        reason = "on a target with an explicit kernel this is only its test oracle"
-    )
-)]
+/// oracle every explicit kernel is tested against — by this crate's own unit
+/// tests, and by [`super::backend::kernels`] for the wasm32 differential
+/// integration test, so it is exercised on every target regardless of which
+/// explicit kernel that target also compiles.
 #[inline(never)]
 pub(crate) fn find_portable(set: &StopSet, haystack: &[u8]) -> Option<usize> {
     if set.count == 0 {
@@ -167,8 +156,9 @@ pub(crate) fn find_portable(set: &StopSet, haystack: &[u8]) -> Option<usize> {
         .map(|offset| chunks.len() * CHUNK + offset)
 }
 
-/// A kernel's signature, for the differential tests.
-#[cfg(test)]
+/// A kernel's signature, for the differential tests: this crate's own unit
+/// tests below, and [`super::backend`], which adapts it to a `StopSet`-free
+/// signature an integration test outside this crate can call.
 pub(crate) type Kernel = fn(&StopSet, &[u8]) -> Option<usize>;
 
 #[cfg(test)]
@@ -187,7 +177,7 @@ mod tests {
             ("portable", find_portable),
             ("dispatch", |set, haystack| set.find(haystack)),
         ];
-        kernels.extend(super::arch::every_kernel_for_tests());
+        kernels.extend(super::arch::every_kernel());
         kernels
     }
 

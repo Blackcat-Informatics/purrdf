@@ -52,6 +52,8 @@
 //! NEON and WebAssembly `simd128`, and portably everywhere else.
 
 mod arch;
+#[doc(hidden)]
+pub mod backend;
 mod error;
 mod read;
 mod scan;
