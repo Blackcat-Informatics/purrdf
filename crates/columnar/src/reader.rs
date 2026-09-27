@@ -3,6 +3,7 @@
 
 //! Strict five-table columnar-to-RDF reconstruction.
 
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 use std::str;
 use std::sync::Arc;
@@ -364,9 +365,9 @@ fn resolve_term_record(
         }
         TermRecord::Blank { label, scope } => TermValue::Blank { label, scope },
         TermRecord::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_term_record(s, records, states, values)?),
-            p: Box::new(resolve_term_record(p, records, states, values)?),
-            o: Box::new(resolve_term_record(o, records, states, values)?),
+            s: TermBox::new(resolve_term_record(s, records, states, values)?),
+            p: TermBox::new(resolve_term_record(p, records, states, values)?),
+            o: TermBox::new(resolve_term_record(o, records, states, values)?),
         },
     };
     states[index] = 2;
@@ -490,9 +491,9 @@ fn reconstruct_dataset(
     }
     for &(reifier, s, p, o, g) in reifiers {
         let triple_value = TermValue::Triple {
-            s: Box::new(dictionary.values[s].clone()),
-            p: Box::new(dictionary.values[p].clone()),
-            o: Box::new(dictionary.values[o].clone()),
+            s: TermBox::new(dictionary.values[s].clone()),
+            p: TermBox::new(dictionary.values[p].clone()),
+            o: TermBox::new(dictionary.values[o].clone()),
         };
         let triple = dictionary.value_ids.get(&triple_value).ok_or_else(|| {
             ColumnarError::malformed(

@@ -15,6 +15,7 @@
 //! `std::io`** — symmetric with the hand-rolled writers and keeping the crate
 //! wasm-clean and oxigraph-free.
 
+use purrdf_core::TermBox;
 use purrdf_core::terminals::find_first_json_string_special;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
@@ -419,9 +420,9 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
                 return Err(fmt("triple-term predicate is not an IRI"));
             }
             Ok(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
         other => Err(fmt(&format!("unknown binding type `{other}`"))),
@@ -1057,6 +1058,7 @@ mod tests {
     use super::*;
     use crate::json::to_json;
     use purrdf_core::SparqlResult;
+    use purrdf_core::TermBox;
 
     fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
         let mut parser = JsonParser::new(input);
@@ -1551,9 +1553,9 @@ mod tests {
         assert_eq!(
             parsed.rows[0][0],
             Some(TermValue::Triple {
-                s: Box::new(TermValue::Iri("http://ex/s".to_owned())),
-                p: Box::new(TermValue::Iri("http://ex/p".to_owned())),
-                o: Box::new(TermValue::Iri("http://ex/o".to_owned())),
+                s: TermBox::new(TermValue::Iri("http://ex/s".to_owned())),
+                p: TermBox::new(TermValue::Iri("http://ex/p".to_owned())),
+                o: TermBox::new(TermValue::Iri("http://ex/o".to_owned())),
             })
         );
     }

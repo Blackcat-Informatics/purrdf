@@ -37,6 +37,7 @@
 //! 4. reinsert-after-removal is consistent with both orders (insert→remove→insert
 //!    and remove→insert→… both return to "present").
 
+use crate::TermBox;
 use std::sync::Arc;
 
 use purrdf_iri::IriError;
@@ -278,9 +279,9 @@ impl MutableDataset {
                 }
             }
             TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(Self::base_value_of(base, s)),
-                p: Box::new(Self::base_value_of(base, p)),
-                o: Box::new(Self::base_value_of(base, o)),
+                s: TermBox::new(Self::base_value_of(base, s)),
+                p: TermBox::new(Self::base_value_of(base, p)),
+                o: TermBox::new(Self::base_value_of(base, o)),
             },
         }
     }

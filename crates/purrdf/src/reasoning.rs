@@ -3,6 +3,7 @@
 
 //! Entailment-aware SPARQL orchestration over the native PurRDF engines.
 
+use purrdf_sparql_algebra::Child;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -978,21 +979,23 @@ fn query_pattern(query: &Query) -> &GraphPattern {
 /// modifiers — `SELECT`'s own root pattern is exactly that, wrapped by
 /// `Slice`/`OrderBy`/`Distinct`/`Reduced`/`Group` and the like. `None` if none is found
 /// (there is no `SELECT` projection to read).
-fn find_projection(pattern: &GraphPattern) -> Option<BTreeSet<String>> {
-    match pattern {
-        GraphPattern::Project { variables, .. } => {
-            Some(variables.iter().map(|v| v.as_str().to_owned()).collect())
+fn find_projection(mut pattern: &GraphPattern) -> Option<BTreeSet<String>> {
+    loop {
+        match pattern {
+            GraphPattern::Project { variables, .. } => {
+                return Some(variables.iter().map(|v| v.as_str().to_owned()).collect());
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => pattern = inner,
+            _ => return None,
         }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Group { inner, .. } => find_projection(inner),
-        _ => None,
     }
 }
 
@@ -1003,82 +1006,78 @@ fn find_projection(pattern: &GraphPattern) -> Option<BTreeSet<String>> {
 /// yields a boolean and no binding of its own escapes, so a witness inside one is invisible
 /// for the same reason an `ASK`'s is.
 fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
-    match pattern {
-        GraphPattern::Extend {
-            inner, expression, ..
-        } => {
-            collect_expression_variables(expression, names);
-            collect_returned_value_variables(inner, names);
-        }
-        // `UNFOLD` READS its operand exactly as `BIND` does — those bindings
-        // become returned VALUES inside a composite element rather than returned
-        // bindings — and it BINDS its own two targets, which are fresh names the
-        // entailed graph never supplied and so are not witnesses of it.
-        GraphPattern::Unfold {
-            inner, expression, ..
-        } => {
-            collect_expression_variables(expression, names);
-            collect_returned_value_variables(inner, names);
-        }
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            names.extend(variables.iter().map(|v| v.as_str().to_owned()));
-            for (_, aggregate) in aggregates {
-                if aggregate.args().is_empty() {
-                    // `COUNT(*)` — the spec's empty exprlist, and (per
-                    // `AggregateExpression::new`'s invariant) the ONLY aggregate that
-                    // can ever have an empty `args`. It names no variable and returns
-                    // row MULTIPLICITY, which every variable of the grouped pattern
-                    // contributes to — so all of them are observable through it.
-                    collect_all_variables(inner, names);
-                } else {
-                    for arg in aggregate.args() {
-                        collect_expression_variables(arg, names);
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Extend {
+                inner, expression, ..
+            } => {
+                collect_expression_variables(expression, names);
+                pending.push(inner);
+            }
+            // `UNFOLD` READS its operand exactly as `BIND` does — those bindings
+            // become returned VALUES inside a composite element rather than returned
+            // bindings — and it BINDS its own two targets, which are fresh names the
+            // entailed graph never supplied and so are not witnesses of it.
+            GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                collect_expression_variables(expression, names);
+                pending.push(inner);
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                names.extend(variables.iter().map(|v| v.as_str().to_owned()));
+                for (_, aggregate) in aggregates {
+                    if aggregate.args().is_empty() {
+                        // `COUNT(*)` — the spec's empty exprlist, and (per
+                        // `AggregateExpression::new`'s invariant) the ONLY aggregate that
+                        // can ever have an empty `args`. It names no variable and returns
+                        // row MULTIPLICITY, which every variable of the grouped pattern
+                        // contributes to — so all of them are observable through it.
+                        collect_all_variables(inner, names);
+                    } else {
+                        for arg in aggregate.args() {
+                            collect_expression_variables(arg, names);
+                        }
+                    }
+                    // Aggregate sort keys determine a returned composite value, so
+                    // their witness bindings must be restricted before aggregation.
+                    for key in aggregate.order_by() {
+                        let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
+                            key;
+                        collect_expression_variables(expression, names);
                     }
                 }
-                // Aggregate sort keys determine a returned composite value, so
-                // their witness bindings must be restricted before aggregation.
-                for key in aggregate.order_by() {
-                    let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
-                        key;
-                    collect_expression_variables(expression, names);
-                }
+                pending.push(inner);
             }
-            collect_returned_value_variables(inner, names);
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => pending.extend([&**left, &**right]),
+            GraphPattern::Union { arms } => pending.extend(arms.iter()),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push(inner),
+            // A relation READS its argument variables and derives its output rows from what
+            // they are bound to. The relation is caller code, so any function of an input
+            // cell may appear in an output cell — a witness reaching an argument can surface
+            // as a returned VALUE exactly the way an `Extend` expression's would. Reporting
+            // both argument sides is therefore the honest answer as well as the conservative
+            // one: which side is input and which is output is decided per relation at
+            // evaluation time and is not visible in the algebra, and the output positions are
+            // returned bindings outright.
+            GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
+            GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
         }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            collect_returned_value_variables(left, names);
-            collect_returned_value_variables(right, names);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_returned_value_variables(arm, names);
-            }
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => collect_returned_value_variables(inner, names),
-        // A relation READS its argument variables and derives its output rows from what
-        // they are bound to. The relation is caller code, so any function of an input
-        // cell may appear in an output cell — a witness reaching an argument can surface
-        // as a returned VALUE exactly the way an `Extend` expression's would. Reporting
-        // both argument sides is therefore the honest answer as well as the conservative
-        // one: which side is input and which is output is decided per relation at
-        // evaluation time and is not visible in the algebra, and the output positions are
-        // returned bindings outright.
-        GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
     }
 }
 
@@ -1097,48 +1096,38 @@ fn collect_call_variables(call: &PropertyFunctionCall, names: &mut BTreeSet<Stri
 /// Every variable an expression reads, `EXISTS` bodies excepted (see
 /// [`collect_returned_value_variables`]).
 fn collect_expression_variables(expression: &Expression, names: &mut BTreeSet<String>) {
-    match expression {
-        Expression::Variable(variable) | Expression::Bound(variable) => {
-            names.insert(variable.as_str().to_owned());
-        }
-        Expression::NamedNode(_) | Expression::Literal(_) | Expression::Exists(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands {
-                collect_expression_variables(operand, names);
+    let mut pending = vec![expression];
+    while let Some(expression) = pending.pop() {
+        match expression {
+            Expression::Variable(variable) | Expression::Bound(variable) => {
+                names.insert(variable.as_str().to_owned());
             }
-        }
-        Expression::Arithmetic(first, steps) => {
-            collect_expression_variables(first, names);
-            for (_, operand) in steps {
-                collect_expression_variables(operand, names);
+            Expression::NamedNode(_) | Expression::Literal(_) | Expression::Exists(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => pending.extend(operands.iter()),
+            Expression::Arithmetic(first, steps) => {
+                pending.push(first);
+                pending.extend(steps.iter().map(|(_, operand)| operand));
             }
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            collect_expression_variables(left, names);
-            collect_expression_variables(right, names);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            collect_expression_variables(inner, names);
-        }
-        Expression::In(inner, list) => {
-            collect_expression_variables(inner, names);
-            for item in list {
-                collect_expression_variables(item, names);
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => pending.extend([&**left, &**right]),
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                pending.push(inner);
             }
-        }
-        Expression::If(condition, then, otherwise) => {
-            collect_expression_variables(condition, names);
-            collect_expression_variables(then, names);
-            collect_expression_variables(otherwise, names);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list {
-                collect_expression_variables(item, names);
+            Expression::In(inner, list) => {
+                pending.push(inner);
+                pending.extend(list.iter());
+            }
+            Expression::If(condition, then, otherwise) => {
+                pending.extend([&**condition, &**then, &**otherwise]);
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                pending.extend(list.iter());
             }
         }
     }
@@ -1147,73 +1136,69 @@ fn collect_expression_variables(expression: &Expression, names: &mut BTreeSet<St
 /// Every variable mentioned anywhere in `pattern` — the conservative answer, used where a
 /// precise one is unavailable (`COUNT(*)`, or a `SELECT` with no projection to read).
 fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            for triple in patterns {
-                collect_triple_pattern_variables(triple, names);
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    collect_triple_pattern_variables(triple, names);
+                }
             }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            collect_term_pattern_variable(subject, names);
-            collect_term_pattern_variable(object, names);
-        }
-        GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
-            names.extend(variables.iter().map(|v| v.as_str().to_owned()));
-            if let GraphPattern::Project { inner, .. } = pattern {
-                collect_all_variables(inner, names);
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                collect_term_pattern_variable(subject, names);
+                collect_term_pattern_variable(object, names);
             }
-        }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            collect_all_variables(left, names);
-            collect_all_variables(right, names);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_all_variables(arm, names);
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                names.extend(variables.iter().map(|v| v.as_str().to_owned()));
+                if let GraphPattern::Project { inner, .. } = pattern {
+                    pending.push(inner);
+                }
             }
-        }
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => {
-            names.insert(variable.as_str().to_owned());
-            collect_all_variables(inner, names);
-        }
-        GraphPattern::Unfold {
-            inner,
-            element,
-            companion,
-            ..
-        } => {
-            names.insert(element.as_str().to_owned());
-            if let Some(companion) = companion {
-                names.insert(companion.as_str().to_owned());
-            }
-            collect_all_variables(inner, names);
-        }
-        GraphPattern::Graph { name, inner } => {
-            if let NamedNodePattern::Variable(variable) = name {
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => pending.extend([&**left, &**right]),
+            GraphPattern::Union { arms } => pending.extend(arms.iter()),
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
                 names.insert(variable.as_str().to_owned());
+                pending.push(inner);
             }
-            collect_all_variables(inner, names);
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                names.insert(element.as_str().to_owned());
+                if let Some(companion) = companion {
+                    names.insert(companion.as_str().to_owned());
+                }
+                pending.push(inner);
+            }
+            GraphPattern::Graph { name, inner } => {
+                if let NamedNodePattern::Variable(variable) = name {
+                    names.insert(variable.as_str().to_owned());
+                }
+                pending.push(inner);
+            }
+            GraphPattern::Group {
+                inner, variables, ..
+            } => {
+                names.extend(variables.iter().map(|v| v.as_str().to_owned()));
+                pending.push(inner);
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push(inner),
+            GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
         }
-        GraphPattern::Group {
-            inner, variables, ..
-        } => {
-            names.extend(variables.iter().map(|v| v.as_str().to_owned()));
-            collect_all_variables(inner, names);
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => collect_all_variables(inner, names),
-        GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
     }
 }
 
@@ -1226,16 +1211,24 @@ fn collect_triple_pattern_variables(triple: &TriplePattern, names: &mut BTreeSet
     collect_term_pattern_variable(&triple.object, names);
 }
 
-/// `term`'s variable name, if it is one — descending into an RDF 1.2 quoted triple,
-/// whose nested variables bind exactly the way a top-level one does and can therefore
-/// carry a witness just as visibly.
+/// `term`'s variable name, if it is one — descending, over a work list, into an RDF 1.2
+/// quoted triple, whose nested variables bind exactly the way a top-level one does and
+/// can therefore carry a witness just as visibly.
 fn collect_term_pattern_variable(term: &TermPattern, names: &mut BTreeSet<String>) {
-    match term {
-        TermPattern::Variable(variable) => {
-            names.insert(variable.as_str().to_owned());
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(variable) => {
+                names.insert(variable.as_str().to_owned());
+            }
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    names.insert(variable.as_str().to_owned());
+                }
+                pending.extend([&triple.subject, &triple.object]);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
-        TermPattern::Triple(triple) => collect_triple_pattern_variables(triple, names),
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
 }
 
@@ -1345,7 +1338,7 @@ fn restrict_pattern(
     observable: &BTreeSet<String>,
     witnesses: &[Vec<Option<GroundTerm>>],
 ) -> GraphPattern {
-    let recurse = |inner: &GraphPattern| Box::new(restrict_pattern(inner, observable, witnesses));
+    let recurse = |inner: &GraphPattern| Child::new(restrict_pattern(inner, observable, witnesses));
     match pattern {
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => {
             let mut bound = BTreeSet::new();
@@ -1376,10 +1369,7 @@ fn restrict_pattern(
             right: recurse(right),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms
-                .iter()
-                .map(|arm| restrict_pattern(arm, observable, witnesses))
-                .collect(),
+            arms: arms.map_ref(|arm| restrict_pattern(arm, observable, witnesses)),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: recurse(left),
@@ -1484,8 +1474,8 @@ fn exclude_witnesses<'a>(
     let mut restricted = pattern;
     for name in variables {
         restricted = GraphPattern::Minus {
-            left: Box::new(restricted),
-            right: Box::new(GraphPattern::Values {
+            left: Child::new(restricted),
+            right: Child::new(GraphPattern::Values {
                 variables: vec![Variable::new(name.clone())],
                 bindings: witnesses.to_vec(),
             }),
@@ -1629,46 +1619,44 @@ fn collect_query_bgp(query: &Query) -> Vec<QTriple> {
 }
 
 fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
-    match pattern {
-        GraphPattern::Bgp { patterns } => output.extend(patterns.iter().filter_map(|pattern| {
-            Some(QTriple {
-                s: term_to_qnode(&pattern.subject)?,
-                p: named_node_pattern_to_qnode(&pattern.predicate),
-                o: term_to_qnode(&pattern.object)?,
-            })
-        })),
-        GraphPattern::Join { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            collect_bgp(left, output);
-            collect_bgp(right, output);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_bgp(arm, output);
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Bgp { patterns } => output.extend(patterns.iter().filter_map(|pattern| {
+                Some(QTriple {
+                    s: term_to_qnode(&pattern.subject)?,
+                    p: named_node_pattern_to_qnode(&pattern.predicate),
+                    o: term_to_qnode(&pattern.object)?,
+                })
+            })),
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([&**right, &**left]);
             }
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` matches no triple in any graph either — it expands a value the
+            // solution already carries — so it is transparent to this walk.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => pending.push(inner),
+            // Leaves that hold no triple pattern. A property-function call matches no triple
+            // in any graph — its rows come from the relation registry — so it contributes
+            // nothing to the pattern that drives OWL Direct's query-directed augmentation,
+            // exactly as a `Path` or an inline `VALUES` contributes nothing.
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_) => {}
         }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        // `UNFOLD` matches no triple in any graph either — it expands a value the
-        // solution already carries — so it is transparent to this walk.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Group { inner, .. } => collect_bgp(inner, output),
-        // Leaves that hold no triple pattern. A property-function call matches no triple
-        // in any graph — its rows come from the relation registry — so it contributes
-        // nothing to the pattern that drives OWL Direct's query-directed augmentation,
-        // exactly as a `Path` or an inline `VALUES` contributes nothing.
-        GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::PropertyFunction(_) => {}
     }
 }
 

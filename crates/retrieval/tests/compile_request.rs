@@ -15,6 +15,7 @@
 //! reached the relation" is asserted against the relation's own view rather than
 //! against the text alone. Fixtures are `example.org` throughout.
 
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -2292,9 +2293,9 @@ fn a_quoted_triple_seed_round_trips_through_the_emitted_query() {
     assert_eq!(
         calls[0].args[1],
         Some(TermValue::Triple {
-            s: Box::new(TermValue::iri(ex("quoted/s"))),
-            p: Box::new(TermValue::iri(ex("quoted/p"))),
-            o: Box::new(TermValue::simple_literal("o")),
+            s: TermBox::new(TermValue::iri(ex("quoted/s"))),
+            p: TermBox::new(TermValue::iri(ex("quoted/p"))),
+            o: TermBox::new(TermValue::simple_literal("o")),
         }),
         "the quoted triple reads back identically"
     );

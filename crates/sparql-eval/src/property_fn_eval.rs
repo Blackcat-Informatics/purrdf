@@ -81,6 +81,8 @@
 //! emission order is part of its contract precisely so the query's answer is
 //! reproducible, and re-ordering it here would throw that away.
 
+use purrdf_core::TermBox;
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -787,9 +789,9 @@ fn arg_value(arg: &Arg, seed: &[Option<TermValue>]) -> Option<TermValue> {
             let p = arg_value(&parts[1], seed)?;
             let o = arg_value(&parts[2], seed)?;
             Some(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
     }
@@ -1668,14 +1670,14 @@ impl CallContext<'_> {
                     && !projected.is_empty()
                 {
                     let around = GraphPattern::Project {
-                        inner: Box::new(around),
+                        inner: Child::new(around),
                         variables: projected.clone(),
                     };
                     pattern = Some(match pattern {
                         None => around,
                         Some(inner) => GraphPattern::Lateral {
-                            left: Box::new(around),
-                            right: Box::new(inner),
+                            left: Child::new(around),
+                            right: Child::new(inner),
                         },
                     });
                     for name in projected {
@@ -1771,13 +1773,13 @@ impl CallContext<'_> {
                     frame,
                     if atom.call {
                         GraphPattern::Lateral {
-                            left: Box::new(left),
-                            right: Box::new(pattern),
+                            left: Child::new(left),
+                            right: Child::new(pattern),
                         }
                     } else {
                         GraphPattern::Join {
-                            left: Box::new(left),
-                            right: Box::new(pattern),
+                            left: Child::new(left),
+                            right: Child::new(pattern),
                         }
                     },
                 ),
@@ -1802,8 +1804,8 @@ fn attach_frame(before: Option<GraphPattern>, frame: GraphPattern) -> GraphPatte
     match before {
         None => frame,
         Some(before) => GraphPattern::Lateral {
-            left: Box::new(before),
-            right: Box::new(frame),
+            left: Child::new(before),
+            right: Child::new(frame),
         },
     }
 }
@@ -1815,7 +1817,7 @@ fn in_graphs(pattern: GraphPattern, graphs: &[NamedNodePattern]) -> GraphPattern
         .rev()
         .fold(pattern, |inner, name| GraphPattern::Graph {
             name: name.clone(),
-            inner: Box::new(inner),
+            inner: Child::new(inner),
         })
 }
 
@@ -2993,6 +2995,7 @@ mod tests {
     use crate::error::EvalError;
     use crate::property_fn::{MemoryRelation, PfCursor, PfRow, PropertyFunctionRegistry};
     use crate::user_fn::Volatility;
+    use purrdf_sparql_algebra::Child;
 
     const EX: &str = "http://example.org/";
     const PF_SPLIT: &str = "http://example.org/pf/split";
@@ -4535,7 +4538,7 @@ mod tests {
         };
         Query::Select {
             pattern: GraphPattern::Project {
-                inner: Box::new(rebind(*inner)),
+                inner: Child::new(rebind(inner.into_inner())),
                 variables,
             },
             dataset,
@@ -4580,7 +4583,7 @@ mod tests {
         assert_eq!(sources(&plain, "c"), Ok(vec![vec!["c".to_owned()]]));
 
         let computed = rebound(&plain, |inner| GraphPattern::Extend {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variable: Variable::new("c"),
             expression: Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(
                 format!("{EX}intruder"),
@@ -4598,7 +4601,7 @@ mod tests {
         );
 
         let renamed = rebound(&plain, |inner| GraphPattern::Extend {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variable: Variable::new("c"),
             expression: Expression::Variable(Variable::new("t")),
         });
@@ -4609,7 +4612,7 @@ mod tests {
         );
 
         let fresh = rebound(&plain, |inner| GraphPattern::Extend {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variable: Variable::new("t2"),
             expression: Expression::Variable(Variable::new("c")),
         });

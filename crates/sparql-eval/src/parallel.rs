@@ -1531,6 +1531,7 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
+    use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::{
         ArithmeticOperator, Literal, NamedNode, PurrdfCall, PurrdfFn, TriplePattern,
     };
@@ -1612,7 +1613,7 @@ mod tests {
     }
 
     fn call(f: Function, args: Vec<Expression>) -> Expression {
-        Expression::FunctionCall(f, args)
+        Expression::FunctionCall(f, args.into())
     }
 
     #[test]
@@ -1687,13 +1688,13 @@ mod tests {
         let safe = Expression::Literal(Literal::new_simple("ok"));
 
         let in_if = Expression::If(
-            Box::new(cond),
-            Box::new(safe.clone()),
-            Box::new(rand.clone()),
+            Child::new(cond),
+            Child::new(safe.clone()),
+            Child::new(rand.clone()),
         );
         assert!(!is_parallel_safe(&in_if, NONE));
 
-        let in_coalesce = Expression::Coalesce(vec![safe.clone(), rand.clone()]);
+        let in_coalesce = Expression::Coalesce(vec![safe.clone(), rand.clone()].into());
         assert!(!is_parallel_safe(&in_coalesce, NONE));
 
         let in_fn_args = call(Function::Concat, vec![safe, rand]);
@@ -1717,9 +1718,9 @@ mod tests {
         };
         let filtered_inner = GraphPattern::Filter {
             expr: call(Function::Rand, vec![]),
-            inner: Box::new(inner_bgp),
+            inner: Child::new(inner_bgp),
         };
-        let exists = Expression::Exists(Box::new(filtered_inner));
+        let exists = Expression::Exists(Child::new(filtered_inner));
         assert!(!is_parallel_safe(&exists, NONE));
 
         // Sanity: the same shape without RAND() is safe.
@@ -1730,7 +1731,7 @@ mod tests {
                 object: vp("o"),
             }],
         };
-        let safe_exists = Expression::Exists(Box::new(inner_bgp2));
+        let safe_exists = Expression::Exists(Child::new(inner_bgp2));
         assert!(is_parallel_safe(&safe_exists, NONE));
     }
 
@@ -1922,7 +1923,7 @@ mod tests {
         );
         assert!(!is_parallel_safe_pattern(&union, relations(&volatile)));
 
-        let exists = Expression::Exists(Box::new(property_function_call()));
+        let exists = Expression::Exists(Child::new(property_function_call()));
         assert!(!is_parallel_safe(&exists, relations(&volatile)));
 
         let stable = registry_with(Volatility::Stable);
@@ -1964,17 +1965,17 @@ mod tests {
         // `BIND(RAND() AS ?r)`, two pattern levels below the EXISTS inner's own top
         // node (behind a `Join`) — the ONLY unsafe construct anywhere in the tree.
         let bind_rand = GraphPattern::Extend {
-            inner: Box::new(GraphPattern::Bgp {
+            inner: Child::new(GraphPattern::Bgp {
                 patterns: Vec::new(),
             }),
             variable: purrdf_sparql_algebra::Variable::new("r"),
             expression: call(Function::Rand, vec![]),
         };
         let buried_builtin = GraphPattern::Join {
-            left: Box::new(safe_bgp.clone()),
-            right: Box::new(bind_rand),
+            left: Child::new(safe_bgp.clone()),
+            right: Child::new(bind_rand),
         };
-        let exists_builtin = Expression::Exists(Box::new(buried_builtin));
+        let exists_builtin = Expression::Exists(Child::new(buried_builtin));
         assert!(
             !is_parallel_safe(&exists_builtin, NONE),
             "RAND() buried two pattern levels below the EXISTS inner (behind a \
@@ -1984,11 +1985,11 @@ mod tests {
         // Same shape, an unsafe PROPERTY FUNCTION instead of a stateful builtin —
         // buried the same two levels down, behind the same kind of `Join`.
         let buried_relation = GraphPattern::Join {
-            left: Box::new(safe_bgp),
-            right: Box::new(property_function_call()),
+            left: Child::new(safe_bgp),
+            right: Child::new(property_function_call()),
         };
         let volatile = registry_with(Volatility::Volatile);
-        let exists_relation = Expression::Exists(Box::new(buried_relation));
+        let exists_relation = Expression::Exists(Child::new(buried_relation));
         assert!(
             !is_parallel_safe(&exists_relation, relations(&volatile)),
             "an unsafe property-function call buried behind a Join inside the \
@@ -2014,7 +2015,7 @@ mod tests {
             }],
         };
         let bind_pure = GraphPattern::Extend {
-            inner: Box::new(GraphPattern::Bgp {
+            inner: Child::new(GraphPattern::Bgp {
                 patterns: Vec::new(),
             }),
             variable: purrdf_sparql_algebra::Variable::new("r"),
@@ -2026,10 +2027,10 @@ mod tests {
             ),
         };
         let pure = GraphPattern::Join {
-            left: Box::new(safe_bgp),
-            right: Box::new(bind_pure),
+            left: Child::new(safe_bgp),
+            right: Child::new(bind_pure),
         };
-        let exists = Expression::Exists(Box::new(pure));
+        let exists = Expression::Exists(Child::new(pure));
         assert!(
             is_parallel_safe(&exists, NONE),
             "a fully-pure EXISTS inner (no stateful builtin, no unsafe relation \

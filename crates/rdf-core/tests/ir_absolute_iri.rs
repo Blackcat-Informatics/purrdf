@@ -13,6 +13,7 @@
 //! Each case asserts the workspace's SHARED diagnostic code
 //! (`purrdf_iri::IriError::diagnostic_code`), not a spelling invented for the IR.
 
+use purrdf_core::TermBox;
 use std::ops::ControlFlow;
 
 use purrdf_core::ir::{
@@ -256,9 +257,9 @@ fn the_overlay_checks_every_iri_position_of_an_inserted_quad() {
                 absolute(),
                 absolute(),
                 TermValue::Triple {
-                    s: Box::new(absolute()),
-                    p: Box::new(TermValue::Iri("relativeQuotedPredicate".to_owned())),
-                    o: Box::new(absolute()),
+                    s: TermBox::new(absolute()),
+                    p: TermBox::new(TermValue::Iri("relativeQuotedPredicate".to_owned())),
+                    o: TermBox::new(absolute()),
                 },
             ),
         ),

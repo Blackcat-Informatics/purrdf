@@ -3,23 +3,15 @@
 
 //! Copies of algebra trees that can refuse when the stack runs low.
 //!
-//! The derived `Clone` of [`GraphPattern`], [`Expression`] and
-//! [`PropertyPathExpression`] recurses once per level of the tree it copies, and the
-//! evaluator copies whole subtrees from wherever it happens to be: an `EXISTS` preparing
-//! its site copies the site's inner pattern, a correlated substitution copies a property
-//! path leaf, a `SERVICE` copies its body before serializing it, a user-defined function
-//! copies its body before rewriting it. The tree the parser admits is as tall as the
-//! stack that parsed it holds, and one level of the derived copy costs a few hundred bytes
-//! of native stack, so a copy made deep in an evaluation can need more stack than the
-//! guard's margin leaves.
-//!
-//! These are the same copies, one level at a time, each level first asking
-//! [`super::walk_is_low`]. They must run inside a [`super::walk`] scope — every caller's
-//! is — which discards the placeholder a refusing level leaves. Outside a scope they never
-//! refuse, and copy exactly what the derived `Clone` copies. The leaves they reach
-//! (terms, triple patterns, `VALUES` cells) are copied with their own `Clone`, at a few
-//! hundred bytes a triple-term level: the stack those copies take past what the margin
-//! holds is reserved when the evaluation starts (see [`super::reserve_terms`]).
+//! The evaluator copies whole subtrees from wherever it happens to be: an `EXISTS`
+//! preparing its site copies the site's inner pattern, a correlated substitution copies a
+//! property path leaf, a `SERVICE` copies its body before serializing it, a user-defined
+//! function copies its body before rewriting it. These copies descend one level at a
+//! time, each level first asking [`super::walk_is_low`]. They must run inside a
+//! [`super::walk`] scope — every caller's is — which discards the placeholder a refusing
+//! level leaves. Outside a scope they never refuse, and copy exactly what `Clone` copies
+//! (which itself walks a work list and needs no stack per level). The leaves they reach
+//! (terms, triple patterns, `VALUES` cells) are copied with their own `Clone`.
 //!
 //! Every `match` here is exhaustive and wildcard-free, so a new algebra variant is a
 //! compile error here rather than a node these copies silently drop.
@@ -27,6 +19,7 @@
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, GraphPattern, OrderExpression, PropertyPathExpression, Query,
 };
+use purrdf_sparql_algebra::{Args, Child};
 
 use super::walk_is_low;
 
@@ -99,7 +92,7 @@ pub(crate) fn pattern(node: &GraphPattern) -> GraphPattern {
     }
     #[cfg(test)]
     crate::op_count::bump(crate::op_count::Op::Cloned);
-    let boxed = |child: &GraphPattern| Box::new(pattern(child));
+    let boxed = |child: &GraphPattern| Child::new(pattern(child));
     match node {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
             patterns: patterns.clone(),
@@ -135,7 +128,7 @@ pub(crate) fn pattern(node: &GraphPattern) -> GraphPattern {
             inner: boxed(inner),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.iter().map(pattern).collect(),
+            arms: arms.map_ref(pattern),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
@@ -228,21 +221,18 @@ pub(crate) fn expression(node: &Expression) -> Expression {
     if walk_is_low("copy of an expression") {
         return Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(""));
     }
-    let boxed = |child: &Expression| Box::new(expression(child));
-    let list = |children: &[Expression]| children.iter().map(expression).collect();
+    let boxed = |child: &Expression| Child::new(expression(child));
+    let list = |children: &[Expression]| children.iter().map(expression).collect::<Args<_>>();
     match node {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_) => node.clone(),
-        Expression::Or(operands) => Expression::Or(list(operands)),
-        Expression::And(operands) => Expression::And(list(operands)),
+        Expression::Or(operands) => Expression::Or(operands.map_ref(expression)),
+        Expression::And(operands) => Expression::And(operands.map_ref(expression)),
         Expression::Arithmetic(first, steps) => Expression::Arithmetic(
             boxed(first),
-            steps
-                .iter()
-                .map(|(op, operand)| (*op, expression(operand)))
-                .collect(),
+            steps.map_ref(|(op, operand)| (*op, expression(operand))),
         ),
         Expression::Equal(a, b) => Expression::Equal(boxed(a), boxed(b)),
         Expression::SameTerm(a, b) => Expression::SameTerm(boxed(a), boxed(b)),
@@ -261,7 +251,7 @@ pub(crate) fn expression(node: &Expression) -> Expression {
         Expression::FunctionCall(function, arguments) => {
             Expression::FunctionCall(function.clone(), list(arguments))
         }
-        Expression::Exists(inner) => Expression::Exists(Box::new(pattern(inner))),
+        Expression::Exists(inner) => Expression::Exists(Child::new(pattern(inner))),
     }
 }
 
@@ -270,17 +260,17 @@ pub(crate) fn path(node: &PropertyPathExpression) -> PropertyPathExpression {
     if walk_is_low("copy of a property path") {
         return PropertyPathExpression::Wildcard { namespace: None };
     }
-    let boxed = |child: &PropertyPathExpression| Box::new(path(child));
+    let boxed = |child: &PropertyPathExpression| Child::new(path(child));
     match node {
         PropertyPathExpression::NamedNode(_)
         | PropertyPathExpression::NegatedPropertySet(_)
         | PropertyPathExpression::Wildcard { .. } => node.clone(),
         PropertyPathExpression::Reverse(inner) => PropertyPathExpression::Reverse(boxed(inner)),
         PropertyPathExpression::Sequence(elements) => {
-            PropertyPathExpression::Sequence(elements.iter().map(path).collect())
+            PropertyPathExpression::Sequence(elements.map_ref(path))
         }
         PropertyPathExpression::Alternative(elements) => {
-            PropertyPathExpression::Alternative(elements.iter().map(path).collect())
+            PropertyPathExpression::Alternative(elements.map_ref(path))
         }
         PropertyPathExpression::ZeroOrMore(inner) => {
             PropertyPathExpression::ZeroOrMore(boxed(inner))

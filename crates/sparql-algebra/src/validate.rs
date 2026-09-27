@@ -5,10 +5,10 @@
 
 use std::collections::BTreeSet;
 
+use crate::walk::NodeRef;
 use crate::{
     AggregateExpression, Expression, Function, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    OrderExpression, ParseError, PropertyPathExpression, Query, Result, TermPattern, TriplePattern,
-    Variable,
+    ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
 };
 
 /// How deeply triple terms may nest on `wasm32`: as deep as [`crate::WASM_HOST_STACK_BUDGET`]
@@ -46,19 +46,20 @@ impl Depth {
         terms: 0,
     };
 
-    /// The depth of `node`'s children.
-    fn below(self, node: &Node<'_>) -> Self {
+    /// The depth of `node`'s children. An `ORDER BY` key and an aggregate are counted
+    /// as part of the node that holds them, not as a level of their own.
+    fn below(self, node: NodeRef<'_>) -> Self {
         Self {
-            structural: self.structural + 1,
-            values: self.values + usize::from(matches!(node, Node::Expr(_) | Node::Path(_))),
-            terms: self.terms
-                + usize::from(matches!(
-                    node,
-                    Node::Term(TermPattern::Triple(_))
-                        | Node::Ground(GroundTerm::Triple(_))
-                        | Node::Expr(Expression::FunctionCall(Function::Triple, _))
-                )),
+            structural: self.structural
+                + usize::from(!matches!(node, NodeRef::Order(_) | NodeRef::Aggregate(_))),
+            values: self.values + usize::from(matches!(node, NodeRef::Expr(_) | NodeRef::Path(_))),
+            terms: self.terms + usize::from(node.is_triple_term()),
         }
+    }
+
+    /// Push `node`'s children onto `stack`, each at `self`.
+    fn push_children<'a>(self, node: NodeRef<'a>, stack: &mut Vec<(NodeRef<'a>, Self)>) {
+        node.for_each_child(|child| stack.push((child, self)));
     }
 
     /// Admit a node this deep, or refuse the tree.
@@ -118,14 +119,14 @@ impl GraphPattern {
     /// per-level charge; on `wasm32`, [`ParseError::HostStackExhausted`] when it is also
     /// past the parser's host-stack counts.
     pub fn validate_height(&self) -> Result<usize> {
-        let mut stack = vec![(Node::Pattern(self), Depth::ROOT)];
+        let mut stack = vec![(NodeRef::Pattern(self), Depth::ROOT)];
         let mut fits = 0;
         let mut terms = 0;
         while let Some((node, depth)) = stack.pop() {
             depth.admit(&mut fits)?;
-            let below = depth.below(&node);
+            let below = depth.below(node);
             terms = terms.max(below.terms);
-            node.children(&mut stack, below);
+            below.push_children(node, &mut stack);
         }
         Ok(terms)
     }
@@ -189,7 +190,7 @@ impl Query {
     ///
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, malformed typed calls or ranges, and empty property-path chains; and,
+    /// collisions, and malformed typed calls or ranges; and,
     /// with [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
     /// the stack the calling thread has left (on `wasm32`, one past the parser's
     /// host-stack counts with [`ParseError::HostStackExhausted`]). How deeply triple terms nest is bounded by that stack alone.
@@ -226,14 +227,14 @@ impl Query {
         if let Some(base) = base {
             purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
         }
-        let mut stack = vec![(Node::Pattern(pattern), Depth::ROOT)];
+        let mut stack = vec![(NodeRef::Pattern(pattern), Depth::ROOT)];
         match self {
             Self::Construct { template, .. } => {
                 for quad in template {
                     if let Some(graph) = &quad.graph {
                         named(graph)?;
                     }
-                    stack.push((Node::Triple(&quad.triple), Depth::ROOT));
+                    stack.push((NodeRef::Triple(&quad.triple), Depth::ROOT));
                 }
             }
             Self::Describe { targets, .. } => {
@@ -249,7 +250,8 @@ impl Query {
         let mut fits = 0;
         while let Some((node, depth)) = stack.pop() {
             depth.admit(&mut fits)?;
-            node.check(&mut stack, depth.below(&node))?;
+            check(node)?;
+            depth.below(node).push_children(node, &mut stack);
         }
         Ok(())
     }
@@ -342,466 +344,181 @@ fn literal(value: &Literal) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum Node<'a> {
-    Pattern(&'a GraphPattern),
-    Expr(&'a Expression),
-    Path(&'a PropertyPathExpression),
-    Triple(&'a TriplePattern),
-    Term(&'a TermPattern),
-    Ground(&'a GroundTerm),
-}
-
-fn order<'a>(values: &'a [OrderExpression], stack: &mut Vec<(Node<'a>, Depth)>, depth: Depth) {
-    for OrderExpression::Asc(expr) | OrderExpression::Desc(expr) in values {
-        stack.push((Node::Expr(expr), depth));
+/// The checks of `node` itself; its children are checked when they are reached.
+fn check(node: NodeRef<'_>) -> Result<()> {
+    match node {
+        NodeRef::Pattern(pattern) => check_pattern(pattern),
+        NodeRef::Expr(expr) => check_expression(expr),
+        NodeRef::Path(path) => check_path(path),
+        NodeRef::Triple(triple) => named(&triple.predicate),
+        NodeRef::Term(term) => match term {
+            TermPattern::NamedNode(n) => iri(n.as_str()),
+            TermPattern::Variable(v) => variable(v),
+            TermPattern::Literal(l) => literal(l),
+            TermPattern::Triple(_) | TermPattern::BlankNode(_) => Ok(()),
+        },
+        NodeRef::Ground(term) => match term {
+            GroundTerm::NamedNode(n) => iri(n.as_str()),
+            GroundTerm::Literal(l) => literal(l),
+            GroundTerm::BlankNode(_) => Ok(()),
+            GroundTerm::Triple(t) => {
+                if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
+                    return Err(invalid(
+                        "a ground triple term requires an IRI or blank subject",
+                    ));
+                }
+                iri(t.predicate.as_str())
+            }
+        },
+        NodeRef::Order(_) => Ok(()),
+        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate),
     }
 }
 
-fn aggregate<'a>(
-    value: &'a AggregateExpression,
-    stack: &mut Vec<(Node<'a>, Depth)>,
-    depth: Depth,
-) -> Result<()> {
+fn check_aggregate(value: &AggregateExpression) -> Result<()> {
     if let crate::AggregateFunction::Custom(name) = value.function() {
         iri(name.as_str())?;
-    }
-    for expr in value.args() {
-        stack.push((Node::Expr(expr), depth));
     }
     for (_, value) in value.scalarvals() {
         literal(value)?;
     }
-    order(value.order_by(), stack, depth);
     Ok(())
 }
 
-impl<'a> Node<'a> {
-    fn check(self, stack: &mut Vec<(Self, Depth)>, depth: Depth) -> Result<()> {
-        match self {
-            Self::Pattern(pattern) => Self::pattern(pattern, stack, depth)?,
-            Self::Expr(expr) => Self::expression(expr, stack, depth)?,
-            Self::Path(path) => Self::path(path, stack, depth)?,
-            Self::Triple(triple) => {
-                named(&triple.predicate)?;
-                stack.push((Self::Term(&triple.subject), depth));
-                stack.push((Self::Term(&triple.object), depth));
+fn check_pattern(pattern: &GraphPattern) -> Result<()> {
+    use GraphPattern as G;
+    match pattern {
+        G::Bgp { .. }
+        | G::Path { .. }
+        | G::Join { .. }
+        | G::Lateral { .. }
+        | G::Minus { .. }
+        | G::Union { .. }
+        | G::LeftJoin { .. }
+        | G::Filter { .. }
+        | G::OrderBy { .. }
+        | G::Distinct { .. }
+        | G::Reduced { .. }
+        | G::Slice { .. } => {}
+        G::Graph { name, .. } | G::Service { name, .. } => named(name)?,
+        G::Extend {
+            variable: target, ..
+        } => variable(target)?,
+        G::Values {
+            variables,
+            bindings,
+        } => {
+            distinct_variables(variables)?;
+            if bindings.iter().any(|row| row.len() != variables.len()) {
+                return Err(invalid("VALUES row width differs from its variables"));
             }
-            Self::Term(term) => match term {
-                TermPattern::NamedNode(n) => iri(n.as_str())?,
-                TermPattern::Variable(v) => variable(v)?,
-                TermPattern::Literal(l) => literal(l)?,
-                TermPattern::Triple(t) => stack.push((Self::Triple(t), depth)),
-                TermPattern::BlankNode(_) => {}
-            },
-            Self::Ground(term) => match term {
-                GroundTerm::NamedNode(n) => iri(n.as_str())?,
-                GroundTerm::Literal(l) => literal(l)?,
-                GroundTerm::BlankNode(_) => {}
-                GroundTerm::Triple(t) => {
-                    if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
-                        return Err(invalid(
-                            "a ground triple term requires an IRI or blank subject",
-                        ));
-                    }
-                    iri(t.predicate.as_str())?;
-                    stack.push((Self::Ground(&t.subject), depth));
-                    stack.push((Self::Ground(&t.object), depth));
-                }
-            },
         }
-        Ok(())
-    }
-
-    fn pattern(
-        pattern: &'a GraphPattern,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-    ) -> Result<()> {
-        use GraphPattern as G;
-        match pattern {
-            G::Bgp { patterns } => {
-                for triple in patterns {
-                    stack.push((Self::Triple(triple), depth));
-                }
+        G::Project { variables, .. } => {
+            // Repeated projection variables are normalized by the result schema.
+            for value in variables {
+                variable(value)?;
             }
-            G::Path {
-                subject,
-                path,
-                object,
-            } => {
-                stack.extend([
-                    (Self::Term(subject), depth),
-                    (Self::Path(path), depth),
-                    (Self::Term(object), depth),
-                ]);
+        }
+        G::Group {
+            variables,
+            aggregates,
+            ..
+        } => {
+            let mut outputs = BTreeSet::new();
+            for value in variables {
+                variable(value)?;
+                outputs.insert(value);
             }
-            G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
-                stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-            }
-            G::Union { arms } => {
-                stack.extend(arms.iter().map(|arm| (Self::Pattern(arm), depth)));
-            }
-            G::LeftJoin {
-                left,
-                right,
-                expression,
-            } => {
-                stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-                if let Some(expr) = expression {
-                    stack.push((Self::Expr(expr), depth));
-                }
-            }
-            G::Filter { expr, inner } => {
-                stack.extend([(Self::Expr(expr), depth), (Self::Pattern(inner), depth)]);
-            }
-            G::Graph { name, inner } | G::Service { name, inner, .. } => {
-                named(name)?;
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Extend {
-                inner,
-                variable: target,
-                expression,
-            } => {
+            for (target, _) in aggregates {
                 variable(target)?;
-                stack.extend([
-                    (Self::Pattern(inner), depth),
-                    (Self::Expr(expression), depth),
-                ]);
-            }
-            G::Values {
-                variables,
-                bindings,
-            } => {
-                distinct_variables(variables)?;
-                for row in bindings {
-                    if row.len() != variables.len() {
-                        return Err(invalid("VALUES row width differs from its variables"));
-                    }
-                    for term in row.iter().flatten() {
-                        stack.push((Self::Ground(term), depth));
-                    }
-                }
-            }
-            G::OrderBy { inner, expression } => {
-                stack.push((Self::Pattern(inner), depth));
-                order(expression, stack, depth);
-            }
-            G::Project { inner, variables } => {
-                // Repeated projection variables are normalized by the result schema.
-                for value in variables {
-                    variable(value)?;
-                }
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Distinct { inner } | G::Reduced { inner } | G::Slice { inner, .. } => {
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Group {
-                inner,
-                variables,
-                aggregates,
-            } => {
-                let mut outputs = BTreeSet::new();
-                for value in variables {
-                    variable(value)?;
-                    outputs.insert(value);
-                }
-                for (target, _) in aggregates {
-                    variable(target)?;
-                    if !outputs.insert(target) {
-                        return Err(invalid(
-                            "aggregate output collides with another group output",
-                        ));
-                    }
-                }
-                stack.push((Self::Pattern(inner), depth));
-                for (_, value) in aggregates {
-                    aggregate(value, stack, depth)?;
-                }
-            }
-            G::PropertyFunction(call) => {
-                iri(&call.iri)?;
-                for term in call.subject_args.iter().chain(&call.object_args) {
-                    stack.push((Self::Term(term), depth));
-                }
-            }
-            G::Unfold {
-                inner,
-                expression,
-                element,
-                companion,
-            } => {
-                distinct_variables(std::iter::once(element).chain(companion))?;
-                stack.extend([
-                    (Self::Pattern(inner), depth),
-                    (Self::Expr(expression), depth),
-                ]);
-            }
-        }
-        Ok(())
-    }
-
-    fn expression(
-        expr: &'a Expression,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-    ) -> Result<()> {
-        use Expression as E;
-        match expr {
-            E::NamedNode(n) => iri(n.as_str())?,
-            E::Literal(l) => literal(l)?,
-            E::Variable(v) | E::Bound(v) => variable(v)?,
-            E::Or(operands) | E::And(operands) => {
-                stack.extend(operands.iter().map(|operand| (Self::Expr(operand), depth)));
-            }
-            E::Arithmetic(first, steps) => {
-                stack.push((Self::Expr(first), depth));
-                stack.extend(
-                    steps
-                        .iter()
-                        .map(|(_, operand)| (Self::Expr(operand), depth)),
-                );
-            }
-            E::Equal(a, b)
-            | E::SameTerm(a, b)
-            | E::Greater(a, b)
-            | E::GreaterOrEqual(a, b)
-            | E::Less(a, b)
-            | E::LessOrEqual(a, b) => {
-                stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]);
-            }
-            E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => stack.push((Self::Expr(x), depth)),
-            E::In(x, args) => {
-                stack.push((Self::Expr(x), depth));
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::If(a, b, c) => stack.extend([
-                (Self::Expr(a), depth),
-                (Self::Expr(b), depth),
-                (Self::Expr(c), depth),
-            ]),
-            E::Coalesce(args) => {
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::FunctionCall(function, args) => {
-                match function {
-                    Function::Custom(n) => iri(n.as_str())?,
-                    Function::Cdt(call) => {
-                        if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
-                            || !call.fn_kind.arity().admits(args.len())
-                        {
-                            return Err(invalid(
-                                "invalid composite datatype function identity or arity",
-                            ));
-                        }
-                    }
-                    Function::Purrdf(call) => {
-                        iri(&call.iri)?;
-                        if !call.iri.ends_with(call.local_name()) {
-                            return Err(invalid("extension function IRI disagrees with its kind"));
-                        }
-                    }
-                    Function::Adjust if args.len() != 2 => {
-                        return Err(invalid("ADJUST requires two arguments"));
-                    }
-                    _ => {}
-                }
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::Exists(pattern) => stack.push((Self::Pattern(pattern), depth)),
-        }
-        Ok(())
-    }
-
-    fn path(
-        path: &'a PropertyPathExpression,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-    ) -> Result<()> {
-        use PropertyPathExpression as P;
-        match path {
-            P::NamedNode(n) => iri(n.as_str())?,
-            P::Reverse(x) | P::ZeroOrMore(x) | P::OneOrMore(x) | P::ZeroOrOne(x) => {
-                stack.push((Self::Path(x), depth));
-            }
-            // The empty chain is the zero-length path or the empty relation, which no
-            // SPARQL text spells: it could be neither displayed nor forwarded.
-            P::Sequence(elements) | P::Alternative(elements) if elements.is_empty() => {
-                return Err(invalid(
-                    "an empty property-path sequence or alternative has no SPARQL form",
-                ));
-            }
-            P::Sequence(elements) | P::Alternative(elements) => {
-                stack.extend(elements.iter().map(|element| (Self::Path(element), depth)));
-            }
-            P::Range { inner, min, max } => {
-                if max.is_some_and(|max| *min > max) {
-                    return Err(invalid("path range lower bound exceeds upper bound"));
-                }
-                stack.push((Self::Path(inner), depth));
-            }
-            P::NegatedPropertySet(values) => {
-                for v in values {
-                    iri(v.predicate.as_str())?;
-                }
-            }
-            P::Wildcard { namespace } => {
-                if let Some(n) = namespace {
-                    iri(n.as_str())?;
+                if !outputs.insert(target) {
+                    return Err(invalid(
+                        "aggregate output collides with another group output",
+                    ));
                 }
             }
         }
-        Ok(())
+        G::PropertyFunction(call) => iri(&call.iri)?,
+        G::Unfold {
+            element, companion, ..
+        } => distinct_variables(std::iter::once(element).chain(companion))?,
     }
+    Ok(())
 }
 
-impl Node<'_> {
-    /// Push this node's children, as [`Self::check`] does, checking nothing.
-    fn children(self, stack: &mut Vec<(Self, Depth)>, depth: Depth) {
-        use Expression as E;
-        use GraphPattern as G;
-        use PropertyPathExpression as P;
-        match self {
-            Self::Pattern(pattern) => match pattern {
-                G::Bgp { patterns } => {
-                    stack.extend(patterns.iter().map(|t| (Self::Triple(t), depth)));
-                }
-                G::Path {
-                    subject,
-                    path,
-                    object,
-                } => stack.extend([
-                    (Self::Term(subject), depth),
-                    (Self::Path(path), depth),
-                    (Self::Term(object), depth),
-                ]),
-                G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
-                    stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-                }
-                G::LeftJoin {
-                    left,
-                    right,
-                    expression,
-                } => {
-                    stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-                    stack.extend(expression.iter().map(|e| (Self::Expr(e), depth)));
-                }
-                G::Union { arms } => stack.extend(arms.iter().map(|a| (Self::Pattern(a), depth))),
-                G::Filter { expr, inner } => {
-                    stack.extend([(Self::Expr(expr), depth), (Self::Pattern(inner), depth)]);
-                }
-                G::Extend {
-                    inner, expression, ..
-                }
-                | G::Unfold {
-                    inner, expression, ..
-                } => stack.extend([
-                    (Self::Pattern(inner), depth),
-                    (Self::Expr(expression), depth),
-                ]),
-                G::Values { bindings, .. } => stack.extend(
-                    bindings
-                        .iter()
-                        .flatten()
-                        .flatten()
-                        .map(|t| (Self::Ground(t), depth)),
-                ),
-                G::OrderBy { inner, expression } => {
-                    stack.push((Self::Pattern(inner), depth));
-                    order(expression, stack, depth);
-                }
-                G::Graph { inner, .. }
-                | G::Service { inner, .. }
-                | G::Project { inner, .. }
-                | G::Distinct { inner }
-                | G::Reduced { inner }
-                | G::Slice { inner, .. } => stack.push((Self::Pattern(inner), depth)),
-                G::Group {
-                    inner, aggregates, ..
-                } => {
-                    stack.push((Self::Pattern(inner), depth));
-                    for (_, value) in aggregates {
-                        stack.extend(value.args().iter().map(|e| (Self::Expr(e), depth)));
-                        order(value.order_by(), stack, depth);
-                    }
-                }
-                G::PropertyFunction(call) => stack.extend(
-                    call.subject_args
-                        .iter()
-                        .chain(&call.object_args)
-                        .map(|t| (Self::Term(t), depth)),
-                ),
-            },
-            Self::Expr(expr) => match expr {
-                E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => {}
-                E::Or(operands) | E::And(operands) | E::Coalesce(operands) => {
-                    stack.extend(operands.iter().map(|e| (Self::Expr(e), depth)));
-                }
-                E::Arithmetic(first, steps) => {
-                    stack.push((Self::Expr(first), depth));
-                    stack.extend(steps.iter().map(|(_, e)| (Self::Expr(e), depth)));
-                }
-                E::Equal(a, b)
-                | E::SameTerm(a, b)
-                | E::Greater(a, b)
-                | E::GreaterOrEqual(a, b)
-                | E::Less(a, b)
-                | E::LessOrEqual(a, b) => {
-                    stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]);
-                }
-                E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => {
-                    stack.push((Self::Expr(x), depth));
-                }
-                E::In(x, args) => {
-                    stack.push((Self::Expr(x), depth));
-                    stack.extend(args.iter().map(|e| (Self::Expr(e), depth)));
-                }
-                E::If(a, b, c) => stack.extend([
-                    (Self::Expr(a), depth),
-                    (Self::Expr(b), depth),
-                    (Self::Expr(c), depth),
-                ]),
-                E::FunctionCall(_, args) => {
-                    stack.extend(args.iter().map(|e| (Self::Expr(e), depth)));
-                }
-                E::Exists(pattern) => stack.push((Self::Pattern(pattern), depth)),
-            },
-            Self::Path(path) => match path {
-                P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
-                P::Reverse(x)
-                | P::ZeroOrMore(x)
-                | P::OneOrMore(x)
-                | P::ZeroOrOne(x)
-                | P::Range { inner: x, .. } => stack.push((Self::Path(x), depth)),
-                P::Sequence(elements) | P::Alternative(elements) => {
-                    stack.extend(elements.iter().map(|e| (Self::Path(e), depth)));
-                }
-            },
-            Self::Triple(triple) => stack.extend([
-                (Self::Term(&triple.subject), depth),
-                (Self::Term(&triple.object), depth),
-            ]),
-            Self::Term(term) => {
-                if let TermPattern::Triple(t) = term {
-                    stack.push((Self::Triple(t), depth));
+fn check_expression(expr: &Expression) -> Result<()> {
+    use Expression as E;
+    match expr {
+        E::NamedNode(n) => iri(n.as_str())?,
+        E::Literal(l) => literal(l)?,
+        E::Variable(v) | E::Bound(v) => variable(v)?,
+        E::FunctionCall(function, args) => match function {
+            Function::Custom(n) => iri(n.as_str())?,
+            Function::Cdt(call) => {
+                if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
+                    || !call.fn_kind.arity().admits(args.len())
+                {
+                    return Err(invalid(
+                        "invalid composite datatype function identity or arity",
+                    ));
                 }
             }
-            Self::Ground(term) => {
-                if let GroundTerm::Triple(t) = term {
-                    stack.extend([
-                        (Self::Ground(&t.subject), depth),
-                        (Self::Ground(&t.object), depth),
-                    ]);
+            Function::Purrdf(call) => {
+                iri(&call.iri)?;
+                if !call.iri.ends_with(call.local_name()) {
+                    return Err(invalid("extension function IRI disagrees with its kind"));
                 }
+            }
+            Function::Adjust if args.len() != 2 => {
+                return Err(invalid("ADJUST requires two arguments"));
+            }
+            _ => {}
+        },
+        E::Or(_)
+        | E::And(_)
+        | E::Arithmetic(..)
+        | E::Equal(..)
+        | E::SameTerm(..)
+        | E::Greater(..)
+        | E::GreaterOrEqual(..)
+        | E::Less(..)
+        | E::LessOrEqual(..)
+        | E::UnaryPlus(_)
+        | E::UnaryMinus(_)
+        | E::Not(_)
+        | E::In(..)
+        | E::If(..)
+        | E::Coalesce(_)
+        | E::Exists(_) => {}
+    }
+    Ok(())
+}
+
+fn check_path(path: &PropertyPathExpression) -> Result<()> {
+    use PropertyPathExpression as P;
+    match path {
+        P::NamedNode(n) => iri(n.as_str())?,
+        P::Reverse(_)
+        | P::ZeroOrMore(_)
+        | P::OneOrMore(_)
+        | P::ZeroOrOne(_)
+        | P::Sequence(_)
+        | P::Alternative(_) => {}
+        P::Range { min, max, .. } => {
+            if max.is_some_and(|max| *min > max) {
+                return Err(invalid("path range lower bound exceeds upper bound"));
+            }
+        }
+        P::NegatedPropertySet(values) => {
+            for v in values {
+                iri(v.predicate.as_str())?;
+            }
+        }
+        P::Wildcard { namespace } => {
+            if let Some(n) = namespace {
+                iri(n.as_str())?;
             }
         }
     }
+    Ok(())
 }

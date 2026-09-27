@@ -3065,6 +3065,8 @@ mod tests {
 
     use super::*;
     use crate::eval::eval;
+    use purrdf_core::TermBox;
+    use purrdf_sparql_algebra::Child;
 
     // ── value-level entry points ────────────────────────────────────────────
 
@@ -3090,9 +3092,9 @@ mod tests {
 
     fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
         TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         }
     }
 
@@ -3219,7 +3221,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::OrderBy {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 expression: exprs.to_vec(),
             },
             ctx,
@@ -3232,7 +3234,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Distinct {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
             },
             ctx,
         )
@@ -3245,7 +3247,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Project {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 variables: variables.to_vec(),
             },
             ctx,
@@ -3260,7 +3262,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Slice {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 start,
                 length,
             },
@@ -3350,7 +3352,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // Project to ?n only → {30, 17, 30}; DISTINCT → {30, 17}.
         let project = GraphPattern::Project {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![Variable::new("n")],
         };
         let seq = eval_distinct(&project, &mut ctx).expect("distinct");
@@ -3362,7 +3364,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let ordered = GraphPattern::OrderBy {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             expression: vec![OrderExpression::Asc(Expression::Variable(Variable::new(
                 "n",
             )))],
@@ -3437,7 +3439,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // GROUP BY ?n COUNT(*) — group by age: {30→2, 17→1}.
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3489,7 +3491,7 @@ mod tests {
         let ds = typed_ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(typed_age_bgp()),
+            inner: Child::new(typed_age_bgp()),
             variables: vec![Variable::new("t")],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3547,7 +3549,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3577,7 +3579,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // MIN(?n) over the whole input → 17.
         let group_min = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -3620,7 +3622,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3665,7 +3667,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3700,7 +3702,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3737,7 +3739,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
@@ -3787,7 +3789,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
@@ -3821,7 +3823,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
@@ -3868,7 +3870,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![Variable::new("who")],
             aggregates: vec![(
                 Variable::new("total"),
@@ -4225,7 +4227,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
@@ -4655,9 +4657,9 @@ mod tests {
             TermValue::typed_literal(lexical, format!("http://www.w3.org/2001/XMLSchema#{local}"))
         };
         let triple = |s: TermValue, p: TermValue, o: TermValue| TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         };
         let samples: Vec<Option<TermValue>> = vec![
             None,
@@ -4830,7 +4832,7 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         let inner = GraphPattern::Join {
-            left: Box::new(GraphPattern::Bgp {
+            left: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
@@ -4839,7 +4841,7 @@ mod tests {
                     object: TermPattern::Variable(Variable::new("cat")),
                 }],
             }),
-            right: Box::new(GraphPattern::Bgp {
+            right: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
@@ -4850,7 +4852,7 @@ mod tests {
             }),
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![Variable::new("cat")],
             aggregates: vec![
                 (
@@ -4949,7 +4951,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![
                 (
@@ -5053,7 +5055,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5102,7 +5104,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -5134,7 +5136,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -5165,7 +5167,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("smp"),
@@ -5196,7 +5198,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("smp"),
@@ -5227,7 +5229,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5259,7 +5261,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5304,7 +5306,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5373,12 +5375,12 @@ mod tests {
             }],
         };
         let inner = GraphPattern::LeftJoin {
-            left: Box::new(required),
-            right: Box::new(optional),
+            left: Child::new(required),
+            right: Child::new(optional),
             expression: None,
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![
                 (
@@ -5622,7 +5624,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5689,7 +5691,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5762,7 +5764,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -6026,7 +6028,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),

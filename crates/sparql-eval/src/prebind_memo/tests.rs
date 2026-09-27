@@ -38,6 +38,7 @@
 //! refuses the memo unless the result equals what the real rewrite produces. A query
 //! shape nobody wrote a case for here still cannot install a memo that disagrees.
 
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     BlankNode, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions, Query,
     SparqlParser, TermPattern,
@@ -88,7 +89,7 @@ fn quoted(local: &str) -> GroundTerm {
     let GroundTerm::NamedNode(predicate) = iri("p") else {
         unreachable!("iri built a NamedNode")
     };
-    GroundTerm::Triple(Box::new(GroundTriple {
+    GroundTerm::Triple(Child::new(GroundTriple {
         subject: iri(local),
         predicate,
         object: iri("o"),

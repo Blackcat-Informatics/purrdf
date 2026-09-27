@@ -81,6 +81,7 @@
 
 use core::fmt;
 use core::fmt::Write as _;
+use purrdf_core::TermBox;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
 use purrdf_entail::{
@@ -3127,9 +3128,9 @@ fn restore_query_vars(
             None => purrdf_entail::QNode::Term(term),
         }),
         TermValue::Triple { s, p, o } => {
-            let s = restore_query_vars(*s, slot, names)?;
-            let p = restore_query_vars(*p, slot, names)?;
-            let o = restore_query_vars(*o, slot, names)?;
+            let s = restore_query_vars(s.into_inner(), slot, names)?;
+            let p = restore_query_vars(p.into_inner(), slot, names)?;
+            let o = restore_query_vars(o.into_inner(), slot, names)?;
             // A triple term with no variable in it is a TERM, not a three-node question:
             // the pattern layer reads a ground `QNode::Term` and a ground `QNode::Triple`
             // the same way, and keeping the term shape keeps an RDF 1.2 pattern's own terms
@@ -3140,9 +3141,9 @@ fn restore_query_vars(
                     purrdf_entail::QNode::Term(p),
                     purrdf_entail::QNode::Term(o),
                 ) => purrdf_entail::QNode::Term(TermValue::Triple {
-                    s: Box::new(s),
-                    p: Box::new(p),
-                    o: Box::new(o),
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
                 }),
                 (s, p, o) => purrdf_entail::QNode::Triple {
                     s: Box::new(s),
@@ -4541,6 +4542,7 @@ pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
 
     /// The backward re-derivation runs on the PRODUCTION surface and says so.
     ///
@@ -7009,16 +7011,16 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             TermValue::blank("b0"),
         ] {
             let nested = TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(bad_predicate.clone()),
-                o: Box::new(TermValue::iri("http://example.org/o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(bad_predicate.clone()),
+                o: TermBox::new(TermValue::iri("http://example.org/o")),
             };
             // Wrap it two deep: the outer triple term's OWN predicate is a well-formed
             // IRI, so only the recursive check on the NESTED term can catch this.
             let outer = TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/subject")),
-                p: Box::new(TermValue::iri("http://example.org/wraps")),
-                o: Box::new(nested),
+                s: TermBox::new(TermValue::iri("http://example.org/subject")),
+                p: TermBox::new(TermValue::iri("http://example.org/wraps")),
+                o: TermBox::new(nested),
             };
             let rendered = emit(&outer);
             // The malformed nested triple renders structurally, carrying its real

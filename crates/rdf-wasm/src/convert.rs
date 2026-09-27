@@ -10,7 +10,7 @@
 //! JS-built quad and an engine-stored quad resolve to the same term ids.
 
 use purrdf::ir::QuadValues;
-use purrdf::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermValue};
+use purrdf::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue};
 
 use crate::term::{Quad, Term, TermInner, canonicalize_literal};
 
@@ -35,9 +35,9 @@ pub(crate) fn rdf_term_to_term_value(term: &RdfTerm) -> TermValue {
             }
         }
         RdfTerm::Triple(triple) => TermValue::Triple {
-            s: Box::new(rdf_term_to_term_value(&triple.subject)),
-            p: Box::new(TermValue::Iri(triple.predicate.clone())),
-            o: Box::new(rdf_term_to_term_value(&triple.object)),
+            s: TermBox::new(rdf_term_to_term_value(&triple.subject)),
+            p: TermBox::new(TermValue::Iri(triple.predicate.clone())),
+            o: TermBox::new(rdf_term_to_term_value(&triple.object)),
         },
     }
 }
@@ -91,13 +91,13 @@ pub(crate) fn term_value_into_rdf_term(value: TermValue) -> Result<RdfTerm, Stri
             direction,
         }),
         TermValue::Triple { s, p, o } => {
-            let TermValue::Iri(predicate) = *p else {
+            let TermValue::Iri(predicate) = p.into_inner() else {
                 return Err("a triple-term predicate must be an IRI".to_owned());
             };
             RdfTerm::Triple(Box::new(RdfTriple::new(
-                term_value_into_rdf_term(*s)?,
+                term_value_into_rdf_term(s.into_inner())?,
                 predicate,
-                term_value_into_rdf_term(*o)?,
+                term_value_into_rdf_term(o.into_inner())?,
             )))
         }
     })
@@ -201,9 +201,9 @@ mod tests {
     #[test]
     fn owned_term_value_conversion_matches_borrowed_conversion() {
         let value = TermValue::Triple {
-            s: Box::new(TermValue::Iri("https://e/s".to_owned())),
-            p: Box::new(TermValue::Iri("https://e/p".to_owned())),
-            o: Box::new(TermValue::Literal {
+            s: TermBox::new(TermValue::Iri("https://e/s".to_owned())),
+            p: TermBox::new(TermValue::Iri("https://e/p".to_owned())),
+            o: TermBox::new(TermValue::Literal {
                 lexical_form: "value".to_owned(),
                 datatype: "https://e/datatype".to_owned(),
                 language: None,

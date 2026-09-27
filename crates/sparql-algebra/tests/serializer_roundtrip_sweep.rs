@@ -99,6 +99,7 @@
 //! cleanly (the gap got fixed and nobody removed the ledger row) fails the
 //! sweep rather than sitting stale.
 
+use purrdf_sparql_algebra::Child;
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
@@ -246,8 +247,8 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
                 .next()
                 .expect("a Join node flattens to at least two leaves");
             normalized.fold(first, |acc, next| GraphPattern::Join {
-                left: Box::new(acc),
-                right: Box::new(next),
+                left: Child::new(acc),
+                right: Child::new(next),
             })
         }
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
@@ -268,31 +269,31 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             right,
             expression,
         } => GraphPattern::LeftJoin {
-            left: Box::new(normalize_join_assoc(left)),
-            right: Box::new(normalize_join_assoc(right)),
+            left: Child::new(normalize_join_assoc(left)),
+            right: Child::new(normalize_join_assoc(right)),
             expression: expression.clone(),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(normalize_join_assoc(left)),
-            right: Box::new(normalize_join_assoc(right)),
+            left: Child::new(normalize_join_assoc(left)),
+            right: Child::new(normalize_join_assoc(right)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
             expr: expr.clone(),
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.iter().map(normalize_join_assoc).collect(),
+            arms: arms.clone().map(|arm| normalize_join_assoc(&arm)),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
         },
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => GraphPattern::Extend {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             variable: variable.clone(),
             expression: expression.clone(),
         },
@@ -302,14 +303,14 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             element,
             companion,
         } => GraphPattern::Unfold {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             expression: expression.clone(),
             element: element.clone(),
             companion: companion.clone(),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(normalize_join_assoc(left)),
-            right: Box::new(normalize_join_assoc(right)),
+            left: Child::new(normalize_join_assoc(left)),
+            right: Child::new(normalize_join_assoc(right)),
         },
         GraphPattern::Service {
             name,
@@ -317,7 +318,7 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             silent,
         } => GraphPattern::Service {
             name: name.clone(),
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             silent: *silent,
         },
         GraphPattern::Values {
@@ -328,25 +329,25 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             bindings: bindings.clone(),
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             expression: expression.clone(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             variables: variables.clone(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             start: *start,
             length: *length,
         },
@@ -355,7 +356,7 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             variables,
             aggregates,
         } => GraphPattern::Group {
-            inner: Box::new(normalize_join_assoc(inner)),
+            inner: Child::new(normalize_join_assoc(inner)),
             variables: variables.clone(),
             aggregates: aggregates.clone(),
         },

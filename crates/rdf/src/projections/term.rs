@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use purrdf_core::TermBox;
 use std::collections::BTreeSet;
 
 use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
@@ -245,9 +246,9 @@ impl ProjectionTerm {
                 predicate,
                 object,
             } => TermValue::Triple {
-                s: Box::new(subject.to_term_value_inner()),
-                p: Box::new(predicate.to_term_value_inner()),
-                o: Box::new(object.to_term_value_inner()),
+                s: TermBox::new(subject.to_term_value_inner()),
+                p: TermBox::new(predicate.to_term_value_inner()),
+                o: TermBox::new(object.to_term_value_inner()),
             },
         }
     }
@@ -425,6 +426,7 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
 
     use super::*;
+    use purrdf_core::TermBox;
 
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(8, 8_192, 32_768, 65_536, 8).expect("limits")
@@ -581,9 +583,9 @@ mod tests {
     #[test]
     fn invalid_kernel_values_and_oversized_json_fail_closed() {
         let invalid_predicate = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::blank("predicate")),
-            o: Box::new(TermValue::iri("http://example.org/o")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::blank("predicate")),
+            o: TermBox::new(TermValue::iri("http://example.org/o")),
         };
         assert!(ProjectionTerm::from_term_value(&invalid_predicate, limits()).is_err());
 

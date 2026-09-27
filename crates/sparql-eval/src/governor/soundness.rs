@@ -2579,6 +2579,7 @@ mod tests {
     };
 
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     // ---- fixtures ---------------------------------------------------------
 
@@ -2608,8 +2609,8 @@ mod tests {
         }
     }
 
-    fn boxed(pattern: GraphPattern) -> Box<GraphPattern> {
-        Box::new(pattern)
+    fn boxed(pattern: GraphPattern) -> Child<GraphPattern> {
+        Child::new(pattern)
     }
 
     /// The context at the node reached by following `path` — a list of child ordinals in
@@ -3008,10 +3009,10 @@ mod tests {
         // The EXISTS pattern is buried under NOT, IF and a function call, so only a walk
         // that descends into expression structure finds it at all.
         let exists = Expression::Exists(boxed(other_bgp()));
-        let buried = Expression::Not(Box::new(Expression::If(
-            Box::new(Expression::Bound(Variable::new("o"))),
-            Box::new(exists),
-            Box::new(Expression::Literal(Literal::new_simple("no"))),
+        let buried = Expression::Not(Child::new(Expression::If(
+            Child::new(Expression::Bound(Variable::new("o"))),
+            Child::new(exists),
+            Child::new(Expression::Literal(Literal::new_simple("no"))),
         )));
         let plan = GraphPattern::Filter {
             expr: buried,
@@ -3098,12 +3099,15 @@ mod tests {
                     vec![],
                     vec![
                         OrderExpression::Asc(Expression::Variable(Variable::new("sort_only"))),
-                        OrderExpression::Desc(Expression::FunctionCall(Function::Rand, vec![])),
+                        OrderExpression::Desc(Expression::FunctionCall(
+                            Function::Rand,
+                            vec![].into(),
+                        )),
                         OrderExpression::Asc(Expression::FunctionCall(
                             Function::Custom(
                                 NamedNode::new("http://example.org/undefined").unwrap(),
                             ),
-                            vec![],
+                            vec![].into(),
                         )),
                         OrderExpression::Desc(Expression::Exists(boxed(other_bgp()))),
                     ],
@@ -3676,11 +3680,14 @@ mod tests {
         assert!(stopped);
         assert_eq!(visited, 1, "the second child must not be visited");
 
-        let expr = Expression::Coalesce(vec![
-            Expression::Bound(Variable::new("a")),
-            Expression::Bound(Variable::new("b")),
-            Expression::Bound(Variable::new("c")),
-        ]);
+        let expr = Expression::Coalesce(
+            vec![
+                Expression::Bound(Variable::new("a")),
+                Expression::Bound(Variable::new("b")),
+                Expression::Bound(Variable::new("c")),
+            ]
+            .into(),
+        );
         let mut parts = 0_usize;
         assert!(visit_expression_parts(&expr, &mut |_part| {
             parts += 1;

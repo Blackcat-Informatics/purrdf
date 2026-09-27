@@ -156,6 +156,7 @@ pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection};
 
     use super::{Interner, intern_into};
@@ -175,9 +176,9 @@ mod tests {
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(TermValue::iri(s)),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(TermValue::iri(o)),
+            s: TermBox::new(TermValue::iri(s)),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(TermValue::iri(o)),
         }
     }
 
@@ -229,9 +230,9 @@ mod tests {
     #[test]
     fn intern_into_round_trips_a_nested_triple_term() {
         let nest = |inner: TermValue| TermValue::Triple {
-            s: Box::new(TermValue::iri(EX_S)),
-            p: Box::new(TermValue::iri(EX_P)),
-            o: Box::new(inner),
+            s: TermBox::new(TermValue::iri(EX_S)),
+            p: TermBox::new(TermValue::iri(EX_P)),
+            o: TermBox::new(inner),
         };
         // Nested in the object slot — the one position RDF 1.2 nests a triple term
         // in, so it is the whole of the nesting the chase can ever re-materialize.

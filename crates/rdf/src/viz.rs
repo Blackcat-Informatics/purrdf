@@ -8,6 +8,7 @@
 //! reifiers, annotations, graph context, and dialect diagnostics. Renderers use
 //! this model; they do not rediscover RDF 1.2 statement structure from flat quads.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
@@ -752,9 +753,9 @@ pub fn project_graph_input(
         builder.add_reifier(
             reifier.reifier.clone(),
             TermValue::Triple {
-                s: Box::new(reifier.statement.subject.clone()),
-                p: Box::new(TermValue::Iri(reifier.statement.predicate.clone())),
-                o: Box::new(reifier.statement.object.clone()),
+                s: TermBox::new(reifier.statement.subject.clone()),
+                p: TermBox::new(TermValue::Iri(reifier.statement.predicate.clone())),
+                o: TermBox::new(reifier.statement.object.clone()),
             },
             reifier.graph_name.clone(),
         )?;
@@ -910,8 +911,8 @@ impl<'a> ProjectionBuilder<'a> {
                 "rdf:reifies object must be a triple term".to_owned(),
             ));
         };
-        let predicate = predicate_iri(*p)?;
-        let statement = self.statement_id(*s, predicate, *o)?;
+        let predicate = predicate_iri(p.into_inner())?;
+        let statement = self.statement_id(s.into_inner(), predicate, o.into_inner())?;
         self.add_statement_role(&statement, VizRole::QuotedStatement);
         let graph = self.graph_id(graph_name)?;
         let relation_key = format!("{}|{}|{}", reifier_id.0, statement.0, graph.0);
@@ -1106,8 +1107,8 @@ impl<'a> ProjectionBuilder<'a> {
     fn value_ref(&mut self, value: TermValue) -> Result<VizValueRef, VizError> {
         match value {
             TermValue::Triple { s, p, o } => {
-                let predicate = predicate_iri(*p)?;
-                let statement = self.statement_id(*s, predicate, *o)?;
+                let predicate = predicate_iri(p.into_inner())?;
+                let statement = self.statement_id(s.into_inner(), predicate, o.into_inner())?;
                 Ok(VizValueRef::Statement { id: statement })
             }
             other => Ok(VizValueRef::Term {
@@ -1797,6 +1798,7 @@ pub fn stable_hash_hex(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_core::TermBox;
 
     const EX: &str = "https://example.org/";
     const KNOWS: &str = "https://example.org/knows";
@@ -1948,9 +1950,9 @@ mod tests {
     #[test]
     fn triple_term_subject_gets_symmetric_dialect_diagnostic() {
         let nested = TermValue::Triple {
-            s: Box::new(iri("alice")),
-            p: Box::new(TermValue::Iri(KNOWS.to_owned())),
-            o: Box::new(iri("bob")),
+            s: TermBox::new(iri("alice")),
+            p: TermBox::new(TermValue::Iri(KNOWS.to_owned())),
+            o: TermBox::new(iri("bob")),
         };
         let input = VizGraphInput {
             quads: vec![VizInputQuad {
@@ -2109,9 +2111,9 @@ mod tests {
     #[test]
     fn references_record_exact_containing_sites() {
         let nested = TermValue::Triple {
-            s: Box::new(iri("alice")),
-            p: Box::new(TermValue::Iri(KNOWS.to_owned())),
-            o: Box::new(iri("bob")),
+            s: TermBox::new(iri("alice")),
+            p: TermBox::new(TermValue::Iri(KNOWS.to_owned())),
+            o: TermBox::new(iri("bob")),
         };
         let input = VizGraphInput {
             quads: vec![

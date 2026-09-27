@@ -75,6 +75,7 @@
 //! of it is interned, so a response arriving from outside the dataset cannot walk past
 //! ceilings that bound everything computed inside it.
 
+use purrdf_sparql_algebra::Child;
 use std::fmt;
 use std::sync::Arc;
 
@@ -596,31 +597,31 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             right,
             expression,
         } => GraphPattern::LeftJoin {
-            left: Box::new(sanitize_forwarded_body(left)),
-            right: Box::new(sanitize_forwarded_body(right)),
+            left: Child::new(sanitize_forwarded_body(left)),
+            right: Child::new(sanitize_forwarded_body(right)),
             expression: expression.as_ref().map(crate::stack::clone::expression),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(sanitize_forwarded_body(left)),
-            right: Box::new(sanitize_forwarded_body(right)),
+            left: Child::new(sanitize_forwarded_body(left)),
+            right: Child::new(sanitize_forwarded_body(right)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
             expr: crate::stack::clone::expression(expr),
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.iter().map(sanitize_forwarded_body).collect(),
+            arms: arms.map_ref(sanitize_forwarded_body),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => GraphPattern::Extend {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             variable: variable.clone(),
             expression: crate::stack::clone::expression(expression),
         },
@@ -630,14 +631,14 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             element,
             companion,
         } => GraphPattern::Unfold {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             expression: crate::stack::clone::expression(expression),
             element: element.clone(),
             companion: companion.clone(),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(sanitize_forwarded_body(left)),
-            right: Box::new(sanitize_forwarded_body(right)),
+            left: Child::new(sanitize_forwarded_body(left)),
+            right: Child::new(sanitize_forwarded_body(right)),
         },
         GraphPattern::Service {
             name,
@@ -645,29 +646,29 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             silent,
         } => GraphPattern::Service {
             name: name.clone(),
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             silent: *silent,
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             expression: expression.iter().map(crate::stack::clone::order).collect(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             variables: variables.clone(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             start: *start,
             length: *length,
         },
@@ -676,7 +677,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             variables,
             aggregates,
         } => GraphPattern::Group {
-            inner: Box::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(sanitize_forwarded_body(inner)),
             variables: variables.clone(),
             aggregates: aggregates
                 .iter()
@@ -765,8 +766,8 @@ fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphP
         sink_values_under_filters(left, right)
     } else {
         GraphPattern::Join {
-            left: Box::new(left),
-            right: Box::new(right),
+            left: Child::new(left),
+            right: Child::new(right),
         }
     }
 }
@@ -800,8 +801,8 @@ fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> Gr
     } = &values
     else {
         return GraphPattern::Join {
-            left: Box::new(filtered),
-            right: Box::new(values),
+            left: Child::new(filtered),
+            right: Child::new(values),
         };
     };
     let mut conditions = Vec::new();
@@ -810,7 +811,7 @@ fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> Gr
         match rest {
             GraphPattern::Filter { expr, inner } if !mentions_any(&expr, block_vars) => {
                 conditions.push(expr);
-                rest = *inner;
+                rest = inner.into_inner();
             }
             other => {
                 rest = other;
@@ -822,14 +823,14 @@ fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> Gr
         rest
     } else {
         GraphPattern::Join {
-            left: Box::new(rest),
-            right: Box::new(values),
+            left: Child::new(rest),
+            right: Child::new(values),
         }
     };
     for expr in conditions.into_iter().rev() {
         pattern = GraphPattern::Filter {
             expr,
-            inner: Box::new(pattern),
+            inner: Child::new(pattern),
         };
     }
     pattern
@@ -1393,6 +1394,7 @@ mod tests {
         BlankScope, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
         SparqlResult, StopCause,
     };
+    use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::{
         BlankNode, GroundTerm, GroundTriple, NamedNode, TermPattern, TriplePattern,
     };
@@ -2028,7 +2030,7 @@ mod tests {
     fn service_pattern(silent: bool) -> GraphPattern {
         GraphPattern::Service {
             name: NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}sparql"))),
-            inner: Box::new(GraphPattern::Bgp {
+            inner: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::Variable(Variable::new("p")),
@@ -2508,17 +2510,17 @@ mod tests {
         // node, but a GROUND TRIPLE whose subject is one, must still be found and its
         // whole column stripped — `GroundTerm::Triple` nests, and the walk must follow it.
         let pattern = GraphPattern::Join {
-            left: Box::new(GraphPattern::Bgp {
+            left: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/p")),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
             }),
-            right: Box::new(GraphPattern::Values {
+            right: Child::new(GraphPattern::Values {
                 variables: vec![Variable::new("t"), Variable::new("k")],
                 bindings: vec![vec![
-                    Some(GroundTerm::Triple(Box::new(GroundTriple {
+                    Some(GroundTerm::Triple(Child::new(GroundTriple {
                         subject: GroundTerm::BlankNode(BlankNode::new("b1")),
                         predicate: NamedNode::new_unchecked("http://ex/embeds"),
                         object: GroundTerm::NamedNode(NamedNode::new_unchecked("http://ex/o")),
@@ -2566,8 +2568,8 @@ mod tests {
             }],
         };
         let pattern = GraphPattern::Join {
-            left: Box::new(leaf.clone()),
-            right: Box::new(GraphPattern::Values {
+            left: Child::new(leaf.clone()),
+            right: Child::new(GraphPattern::Values {
                 variables: vec![Variable::new("bn")],
                 bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new("bn")))]],
             }),
@@ -2585,7 +2587,7 @@ mod tests {
         let iri = |local: &str| NamedNode::new_unchecked(format!("http://ex/{local}"));
         GraphPattern::Values {
             variables: vec![Variable::new("t")],
-            bindings: vec![vec![Some(GroundTerm::Triple(Box::new(GroundTriple {
+            bindings: vec![vec![Some(GroundTerm::Triple(Child::new(GroundTriple {
                 subject: GroundTerm::NamedNode(iri("a")),
                 predicate: iri("knows"),
                 object: GroundTerm::NamedNode(iri("x")),
@@ -2606,33 +2608,33 @@ mod tests {
                         let inner = if inner_reads {
                             GraphPattern::Join {
                                 left: inner,
-                                right: Box::new(block.clone()),
+                                right: Child::new(block.clone()),
                             }
                         } else {
-                            *inner
+                            inner.into_inner()
                         };
                         GraphPattern::Join {
-                            left: Box::new(GraphPattern::Filter {
+                            left: Child::new(GraphPattern::Filter {
                                 expr,
-                                inner: Box::new(inner),
+                                inner: Child::new(inner),
                             }),
-                            right: Box::new(block.clone()),
+                            right: Child::new(block.clone()),
                         }
                     }
                     other => other,
                 };
                 GraphPattern::Filter {
                     expr: expr.clone(),
-                    inner: Box::new(inner),
+                    inner: Child::new(inner),
                 }
             }
             GraphPattern::Graph { name, inner } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: Box::new(inject(inner, block, inner_reads)),
+                inner: Child::new(inject(inner, block, inner_reads)),
             },
             GraphPattern::Join { left, right } => GraphPattern::Join {
-                left: Box::new(inject(left, block, inner_reads)),
-                right: Box::new(inject(right, block, inner_reads)),
+                left: Child::new(inject(left, block, inner_reads)),
+                right: Child::new(inject(right, block, inner_reads)),
             },
             other => other.clone(),
         }
@@ -2663,7 +2665,7 @@ mod tests {
         else {
             panic!("a SELECT with its projection");
         };
-        *inner
+        inner.into_inner()
     }
 
     /// Whether the parser admits `pattern`'s forwarded text.
@@ -2784,7 +2786,7 @@ mod tests {
         // `?t` for a filter that saw it unbound.
         let reader = GraphPattern::Filter {
             expr: purrdf_sparql_algebra::Expression::Bound(Variable::new("t")),
-            inner: Box::new(GraphPattern::Bgp {
+            inner: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
@@ -2795,8 +2797,8 @@ mod tests {
             }),
         };
         let beside = GraphPattern::Join {
-            left: Box::new(reader),
-            right: Box::new(triple_block()),
+            left: Child::new(reader),
+            right: Child::new(triple_block()),
         };
         assert_eq!(sanitize_forwarded_body(&beside), beside);
     }

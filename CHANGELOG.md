@@ -2485,11 +2485,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   construction form is restricted.
 
 - **BREAKING** **sparql-algebra:** an operator chain is one n-ary algebra node.
-  `Expression::Or` and `Expression::And` hold their operands as a `Vec`.
-  `Expression::Add`, `Subtract`, `Multiply` and `Divide` are replaced by
-  `Expression::Arithmetic(first, steps)`, whose steps pair the new
-  `ArithmeticOperator` with an operand. `GraphPattern::Union` holds `arms` in place
-  of `left` and `right`. `Expression::or`, `Expression::and`,
+  `Expression::Or` and `Expression::And` hold their operands as a `Chain` of two or
+  more. `Expression::Add`, `Subtract`, `Multiply` and `Divide` are replaced by
+  `Expression::Arithmetic(first, steps)`, whose steps — a `NonEmpty` list — pair the
+  new `ArithmeticOperator` with an operand. `GraphPattern::Union` holds `arms`, a
+  `Chain`, in place of `left` and `right`. `Expression::or`, `Expression::and`,
   `Expression::arithmetic` and `GraphPattern::union` extend a chain the way the
   parser does. Each node is the left fold of the binary operator it replaces:
   every operand is evaluated left to right, `||` and `&&` keep SPARQL's
@@ -2504,7 +2504,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   chain: `(a + b) * c` is one node. A `UNION` of three or more arms is one plan
   node, so the `EXPLAIN` ledger lists fewer nodes for it.
   `PropertyPathExpression::Sequence` and `PropertyPathExpression::Alternative`
-  hold their elements as a `Vec` in place of two boxed operands, and
+  hold their elements as a `Chain` in place of two boxed operands, and
   `PropertyPathExpression::sequence` and `PropertyPathExpression::alternative`
   extend a path chain the way the parser does. A sequence is the left-nested chain
   of `/` it replaces: the same pairs, and on a path with no repetition operator the
@@ -2513,8 +2513,45 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   generated 512-step `p1/p2/…` path or a 512-way `p1|p2|…` alternative was refused
   as nesting; a path chain of any length now parses and answers, and a `SERVICE`
   body holding one is forwarded flat. A bracketed left element of the same operator
-  extends the chain: `(a/b)/c` is one node. A chain with no element has no SPARQL
-  spelling, and `Query::validate` refuses one built through the API.
+  extends the chain: `(a/b)/c` is one node. A chain of fewer than two nodes, or an
+  arithmetic chain with no step, is not representable: `Chain::new` takes the first
+  two nodes, `NonEmpty::new` the first step, and `try_from(Vec)` hands a shorter list
+  back.
+
+- **BREAKING** **sparql-algebra, core:** every whole-tree operation over the query
+  algebra and over `TermValue` runs without recursion, so the machine stack it needs
+  is the same however deep the tree is: a tree a million levels deep is copied,
+  compared, hashed, formatted, serialized and dropped on a thread with a 128 KiB
+  stack. The algebra's owning edges are new types in `purrdf_sparql_algebra::tree`,
+  re-exported at the crate root:
+  - `Child<T>` replaces `Box<T>` for every boxed operand, inner pattern, `EXISTS`
+    body and quoted triple (`TermPattern::Triple`, `GroundTerm::Triple`). It
+    dereferences like a `Box`, is built with `Child::new` or `.into()` (from a value
+    or a `Box`) and is unboxed with `into_inner()`;
+  - `Chain<T>` holds two or more nodes (the operands of `Or`/`And`, the arms of
+    `Union`, the elements of a path `Sequence`/`Alternative`), `NonEmpty<T>` one or
+    more (the steps of `Arithmetic`), and `Args<T>` any number (the lists of
+    `FunctionCall`, `Coalesce` and `In`, which may be empty). `Chain` and `NonEmpty`
+    dereference to a slice and are rebuilt with `map`, `try_map`, `map_ref` and
+    `try_map_ref`; `Args` dereferences to its `Vec` and converts from one.
+
+  The edges own the drop, which takes a subtree apart over a work list, so the node
+  enums implement no `Drop` and still destructure by value. `Clone`, `==`, `Hash` and
+  `Debug` on `GraphPattern`, `Expression`, `PropertyPathExpression`, `TermPattern` and
+  `GroundTerm` are hand-written over work lists: `Debug` writes exactly what the
+  derive wrote, in both `{:?}` and `{:#?}`, while `Hash` feeds a different — still
+  injective — sequence than the derive did. `purrdf_sparql_algebra::walk` (`NodeRef`,
+  `walk_pre_post`, `fold_post_order`) is the one enumeration of a node's children
+  these walks, validation and the retained-size count share. The serializer and
+  `PropertyPathExpression`'s `Display` are one loop over a work list with unchanged
+  output, and no longer consult `purrdf_stack::walk_is_low` or truncate.
+  `Query::retained_size_bytes` charges a tree of any height in full, where it
+  answered `usize::MAX` past 256 nested containers. In `purrdf-core`,
+  `TermValue::Triple`'s components are the new `TermBox` in place of `Box<TermValue>`
+  (re-exported by `purrdf-rdf` and `purrdf`), and `TermValue`'s `Clone`, `==`, `Ord`,
+  `Hash` (feeding the same sequence as before), `Debug`, `canonical_bytes` and drop
+  walk a work list. A shallow tree's walk keeps its work list in the walk's own frame,
+  so it allocates nothing beyond what the derived traits allocated.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as

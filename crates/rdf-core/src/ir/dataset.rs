@@ -23,6 +23,7 @@
 //!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
 //!   quad index without collecting matching rows.
 //!
+use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -844,9 +845,9 @@ impl RdfDataset {
                 }
             }
             TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.term_value(s)),
-                p: Box::new(self.term_value(p)),
-                o: Box::new(self.term_value(o)),
+                s: TermBox::new(self.term_value(s)),
+                p: TermBox::new(self.term_value(p)),
+                o: TermBox::new(self.term_value(o)),
             },
         }
     }
@@ -2125,6 +2126,7 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::RdfLiteral;
+    use crate::TermBox;
     use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
@@ -2191,9 +2193,9 @@ mod tests {
         );
         // A triple term resolves recursively by value.
         let triple_val = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(ds.term_id_by_value(&triple_val), Some(tr));
         assert_eq!(ds.term_id_by_iri("http://example.org/s"), Some(s));

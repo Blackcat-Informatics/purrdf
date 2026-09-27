@@ -115,6 +115,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use purrdf_core::BlankScope;
+    use purrdf_core::TermBox;
 
     /// Test-only helper: unwrap the `Result` for the common well-formed case
     /// so existing assertions stay terse.
@@ -191,9 +192,9 @@ mod tests {
     #[test]
     fn triple_term_token() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(
             token(&v),
@@ -221,14 +222,14 @@ mod tests {
     #[test]
     fn literal_predicate_is_malformed_term_error() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Literal {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Literal {
                 lexical_form: "not-a-predicate".to_string(),
                 datatype: XSD_STRING.to_string(),
                 language: None,
                 direction: None,
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let err = ntriples_token(&v).expect_err("literal predicate must be rejected");
         assert!(
@@ -240,12 +241,12 @@ mod tests {
     #[test]
     fn blank_predicate_is_malformed_term_error() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let err = ntriples_token(&v).expect_err("blank-node predicate must be rejected");
         assert!(
@@ -260,17 +261,17 @@ mod tests {
         // non-IRI predicate; the outer triple term's own predicate is fine.
         // The recursive bridge must still reject this.
         let inner = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let outer = TermValue::Triple {
-            s: Box::new(inner),
-            p: Box::new(TermValue::Iri("http://example.org/concludes".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o2".to_string())),
+            s: TermBox::new(inner),
+            p: TermBox::new(TermValue::Iri("http://example.org/concludes".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o2".to_string())),
         };
         let err = ntriples_token(&outer).expect_err("nested malformed predicate must be rejected");
         assert!(

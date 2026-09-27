@@ -113,6 +113,7 @@ pub(crate) fn show(term: &TermValue) -> String {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfTextDirection, TermValue};
 
     use super::show;
@@ -180,9 +181,9 @@ mod tests {
     #[test]
     fn a_triple_term_renders_its_object_by_the_same_rule() {
         let term = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(typed("1", "http://www.w3.org/2001/XMLSchema#integer")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(typed("1", "http://www.w3.org/2001/XMLSchema#integer")),
         };
         assert_eq!(
             show(&term),

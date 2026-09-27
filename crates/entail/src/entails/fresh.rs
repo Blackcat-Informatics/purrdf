@@ -160,6 +160,7 @@ pub(crate) fn mentions_any(term: &TermValue, labels: &BTreeSet<String>) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use std::collections::BTreeSet;
 
     use purrdf_core::{BlankScope, RdfDatasetBuilder, TermValue};
@@ -298,9 +299,9 @@ mod tests {
         let mut labels = BTreeSet::new();
         labels.insert("c".to_owned());
         let nested = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(TermValue::blank("c")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::blank("c")),
         };
         assert!(mentions_any(&nested, &labels));
         assert!(!mentions_any(&TermValue::blank("d"), &labels));

@@ -30,6 +30,7 @@
 //! substituted request was admitted: the admission is keyed by what the request
 //! binds.
 
+use purrdf_core::TermBox;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -99,9 +100,9 @@ impl Kind {
             scope: BlankScope::DEFAULT,
         };
         let quoted = |object: TermValue| TermValue::Triple {
-            s: Box::new(TermValue::iri(format!("{EX}a"))),
-            p: Box::new(TermValue::iri(format!("{EX}r"))),
-            o: Box::new(object),
+            s: TermBox::new(TermValue::iri(format!("{EX}a"))),
+            p: TermBox::new(TermValue::iri(format!("{EX}r"))),
+            o: TermBox::new(object),
         };
         match self {
             Self::Iri => TermValue::iri(format!("{EX}{name}")),

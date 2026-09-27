@@ -16,6 +16,7 @@
 //! 3. **Cross-page cost model (F1)** — `cardinality_estimate` on a skewed page
 //!    distribution equals the independently-computed per-page sum.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -107,9 +108,9 @@ fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
+            s: TermBox::new(to_value(v, s)),
+            p: TermBox::new(to_value(v, p)),
+            o: TermBox::new(to_value(v, o)),
         },
     }
 }
@@ -618,9 +619,9 @@ fn reifier_and_annotation_views_compose_across_pages() {
     assert_eq!(
         to_value(&paged, reifier_quads[0].o),
         TermValue::Triple {
-            s: Box::new(iri("s")),
-            p: Box::new(iri("p")),
-            o: Box::new(iri("o")),
+            s: TermBox::new(iri("s")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(iri("o")),
         },
     );
 
@@ -759,9 +760,9 @@ fn freeze_refuses_non_disjoint_side_tables() {
             assert_eq!(
                 o.object,
                 TermValue::Triple {
-                    s: Box::new(iri("a")),
-                    p: Box::new(iri("b")),
-                    o: Box::new(iri("c")),
+                    s: TermBox::new(iri("a")),
+                    p: TermBox::new(iri("b")),
+                    o: TermBox::new(iri("c")),
                 },
                 "the reified triple term is the shared object"
             );
@@ -1850,9 +1851,9 @@ fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owni
     assert_eq!(
         to_value(&paged, rows[0].o),
         TermValue::Triple {
-            s: Box::new(iri("a")),
-            p: Box::new(iri("b")),
-            o: Box::new(iri("c")),
+            s: TermBox::new(iri("a")),
+            p: TermBox::new(iri("b")),
+            o: TermBox::new(iri("c")),
         },
         "the yielded row is the owning page's reifier binding"
     );

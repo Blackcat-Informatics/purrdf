@@ -20,6 +20,7 @@
 //! layer, so blank-node labels and quad ordering here need not match oxigraph's —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
+use purrdf_core::TermBox;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -866,13 +867,13 @@ fn track_minted(pattern: &TermPattern, value: TermValue, tracker: &mut MintTrack
             TermValue::Blank { label, scope }
         }
         (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => {
-            let s = track_minted(&tp.subject, *s, tracker);
-            let p = track_minted_predicate(&tp.predicate, *p, tracker);
-            let o = track_minted(&tp.object, *o, tracker);
+            let s = track_minted(&tp.subject, s.into_inner(), tracker);
+            let p = track_minted_predicate(&tp.predicate, p.into_inner(), tracker);
+            let o = track_minted(&tp.object, o.into_inner(), tracker);
             TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             }
         }
         (_, value) => {
@@ -1275,6 +1276,7 @@ fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     /// The ungoverned triple-producing `CONSTRUCT`: an UNSCOPED template (every
     /// statement in the default graph), which is complete by construction —
@@ -2035,7 +2037,7 @@ mod tests {
             TriplePattern {
                 subject: var("s"),
                 predicate: pred(RELATED),
-                object: TermPattern::Triple(Box::new(TriplePattern {
+                object: TermPattern::Triple(Child::new(TriplePattern {
                     subject: var("o"),
                     predicate: pred("http://ex/p"),
                     object: var("s"),
@@ -2094,7 +2096,7 @@ mod tests {
             TriplePattern {
                 subject: var("r"),
                 predicate: pred(RELATED),
-                object: TermPattern::Triple(Box::new(TriplePattern {
+                object: TermPattern::Triple(Child::new(TriplePattern {
                     subject: var("t"),
                     predicate: pred(RELATED),
                     object: var("r"),
@@ -2187,7 +2189,7 @@ mod tests {
             patterns: vec![TriplePattern {
                 subject: var("r"),
                 predicate: pred(REIFIES),
-                object: TermPattern::Triple(Box::new(TriplePattern {
+                object: TermPattern::Triple(Child::new(TriplePattern {
                     subject: var("s"),
                     predicate: NamedNodePattern::Variable(Variable::new("p")),
                     object: var("o"),
@@ -2261,7 +2263,7 @@ mod tests {
                 TriplePattern {
                     subject: var("r"),
                     predicate: pred(REIFIES),
-                    object: TermPattern::Triple(Box::new(TriplePattern {
+                    object: TermPattern::Triple(Child::new(TriplePattern {
                         subject: var("s"),
                         predicate: NamedNodePattern::Variable(Variable::new("p")),
                         object: var("o"),
@@ -2306,7 +2308,7 @@ mod tests {
                 TriplePattern {
                     subject: var("r"),
                     predicate: pred(REIFIES),
-                    object: TermPattern::Triple(Box::new(TriplePattern {
+                    object: TermPattern::Triple(Child::new(TriplePattern {
                         subject: var("s"),
                         predicate: NamedNodePattern::Variable(Variable::new("p")),
                         object: var("o"),
@@ -2344,7 +2346,7 @@ mod tests {
         let template = vec![TriplePattern {
             subject: var("r"),
             predicate: pred(REIFIES),
-            object: TermPattern::Triple(Box::new(TriplePattern {
+            object: TermPattern::Triple(Child::new(TriplePattern {
                 subject: var("s"),
                 predicate: NamedNodePattern::Variable(Variable::new("p")),
                 object: var("o"),
@@ -2403,7 +2405,7 @@ mod tests {
         let template = vec![TriplePattern {
             subject: var("r"),
             predicate: pred(REIFIES),
-            object: TermPattern::Triple(Box::new(TriplePattern {
+            object: TermPattern::Triple(Child::new(TriplePattern {
                 subject: var("s"),
                 predicate: NamedNodePattern::Variable(Variable::new("p")),
                 object: var("o"),
@@ -2433,7 +2435,7 @@ mod tests {
         TriplePattern {
             subject: var("r"),
             predicate: pred(REIFIES),
-            object: TermPattern::Triple(Box::new(TriplePattern {
+            object: TermPattern::Triple(Child::new(TriplePattern {
                 subject: var("s"),
                 predicate: NamedNodePattern::Variable(Variable::new("p")),
                 object: var("o"),
@@ -2593,7 +2595,7 @@ mod tests {
         let template = vec![TriplePattern {
             subject: var("r"),
             predicate: pred(REIFIES),
-            object: TermPattern::Triple(Box::new(TriplePattern {
+            object: TermPattern::Triple(Child::new(TriplePattern {
                 subject: var("s"),
                 predicate: NamedNodePattern::Variable(Variable::new("p")),
                 object: var("o"),

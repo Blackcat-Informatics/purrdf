@@ -246,6 +246,7 @@
 //! distinct site per evaluation, before any row of that site is tested, never
 //! recomputed per row.
 
+use purrdf_sparql_algebra::{Chain, Child};
 use purrdf_sparql_algebra::{GraphPattern, OrderExpression};
 
 use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
@@ -361,7 +362,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         GraphPattern::Project { inner, variables } => match normalize(inner) {
             Enf::FoldedEmpty => Enf::FoldedEmpty,
             Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 variables: variables.clone(),
             }),
         },
@@ -370,17 +371,16 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         // Union entirely (Union(∅, R) ≡ R for emptiness purposes), and a union left
         // with one arm is that arm.
         GraphPattern::Union { arms } => {
-            let mut kept: Vec<GraphPattern> = arms
+            let kept: Vec<GraphPattern> = arms
                 .iter()
                 .filter_map(|arm| match normalize(arm) {
                     Enf::FoldedEmpty => None,
                     Enf::Pattern(p) => Some(p),
                 })
                 .collect();
-            match kept.len() {
-                0 => Enf::FoldedEmpty,
-                1 => Enf::Pattern(kept.remove(0)),
-                _ => Enf::Pattern(GraphPattern::Union { arms: kept }),
+            match Chain::try_from(kept) {
+                Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
+                Err(mut kept) => kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern),
             }
         }
         // Every other variant consumes a row SET, not merely emptiness (Join/Filter/
@@ -547,6 +547,7 @@ mod tests {
     };
 
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     fn var(name: &str) -> Variable {
         Variable::new(name)
@@ -583,8 +584,8 @@ mod tests {
         let left = GraphPattern::Bgp { patterns: vec![] };
         let right = bgp("x", "q", "y");
         let inner = GraphPattern::LeftJoin {
-            left: Box::new(left.clone()),
-            right: Box::new(right),
+            left: Child::new(left.clone()),
+            right: Child::new(right),
             expression: None,
         };
         let normalized = assert_pattern(normalize(&inner));
@@ -597,7 +598,7 @@ mod tests {
     fn enf_order_by_erases() {
         let p = bgp("x", "q", "y");
         let inner = GraphPattern::OrderBy {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
             expression: vec![OrderExpression::Asc(Expression::Variable(var("y")))],
         };
         let normalized = assert_pattern(normalize(&inner));
@@ -610,12 +611,12 @@ mod tests {
     fn enf_distinct_erases_without_offset_above() {
         let p = bgp("x", "q", "y");
         let distinct = GraphPattern::Distinct {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
         };
         assert_eq!(assert_pattern(normalize(&distinct)), p);
 
         let reduced = GraphPattern::Reduced {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
         };
         assert_eq!(assert_pattern(normalize(&reduced)), p);
     }
@@ -626,7 +627,7 @@ mod tests {
     fn enf_limit_one_erases() {
         let p = bgp("x", "q", "y");
         let inner = GraphPattern::Slice {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
             start: 0,
             length: Some(1),
         };
@@ -634,7 +635,7 @@ mod tests {
 
         // Also true for length None (no LIMIT at all — an identity slice).
         let identity = GraphPattern::Slice {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
             start: 0,
             length: None,
         };
@@ -647,7 +648,7 @@ mod tests {
     fn enf_limit_zero_folds_false() {
         let p = bgp("x", "q", "y");
         let inner = GraphPattern::Slice {
-            inner: Box::new(p),
+            inner: Child::new(p),
             start: 0,
             length: Some(0),
         };
@@ -655,7 +656,7 @@ mod tests {
 
         // Also true with a nonzero offset alongside the zero length.
         let inner_offset = GraphPattern::Slice {
-            inner: Box::new(bgp("x", "q", "y")),
+            inner: Child::new(bgp("x", "q", "y")),
             start: 3,
             length: Some(0),
         };
@@ -669,13 +670,13 @@ mod tests {
     #[test]
     fn enf_laws_do_not_fire_off_spine() {
         let left_join = GraphPattern::LeftJoin {
-            left: Box::new(bgp("a", "p", "b")),
-            right: Box::new(bgp("x", "q", "y")),
+            left: Child::new(bgp("a", "p", "b")),
+            right: Child::new(bgp("x", "q", "y")),
             expression: None,
         };
         let inner = GraphPattern::Join {
-            left: Box::new(bgp("s", "r", "t")),
-            right: Box::new(left_join.clone()),
+            left: Child::new(bgp("s", "r", "t")),
+            right: Child::new(left_join.clone()),
         };
         let normalized = assert_pattern(normalize(&inner));
         assert_eq!(
@@ -689,13 +690,13 @@ mod tests {
                 "true",
                 NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
             )),
-            inner: Box::new(left_join.clone()),
+            inner: Child::new(left_join.clone()),
         };
         assert_eq!(assert_pattern(normalize(&under_filter)), under_filter);
 
         let under_minus = GraphPattern::Minus {
-            left: Box::new(bgp("s", "r", "t")),
-            right: Box::new(left_join),
+            left: Child::new(bgp("s", "r", "t")),
+            right: Child::new(left_join),
         };
         assert_eq!(assert_pattern(normalize(&under_minus)), under_minus);
     }
@@ -714,8 +715,8 @@ mod tests {
         let left = GraphPattern::Bgp { patterns: vec![] };
         let right = bgp("x", "q", "y");
         let inner = GraphPattern::LeftJoin {
-            left: Box::new(left.clone()),
-            right: Box::new(right),
+            left: Child::new(left.clone()),
+            right: Child::new(right),
             expression: Some(Expression::Literal(
                 purrdf_sparql_algebra::Literal::new_typed(
                     "true",
@@ -732,7 +733,7 @@ mod tests {
         // Law 2: clean sort keys still erase entirely.
         let p = bgp("x", "q", "y");
         let order_by = GraphPattern::OrderBy {
-            inner: Box::new(p.clone()),
+            inner: Child::new(p.clone()),
             expression: vec![OrderExpression::Asc(Expression::Variable(var("y")))],
         };
         assert_eq!(
@@ -743,7 +744,7 @@ mod tests {
 
         // Law 4b: a clean inner still folds to constant false.
         let slice = GraphPattern::Slice {
-            inner: Box::new(bgp("x", "q", "y")),
+            inner: Child::new(bgp("x", "q", "y")),
             start: 0,
             length: Some(0),
         };
@@ -757,10 +758,10 @@ mod tests {
     #[test]
     fn enf_normalize_is_idempotent() {
         let inner = GraphPattern::OrderBy {
-            inner: Box::new(GraphPattern::Distinct {
-                inner: Box::new(GraphPattern::LeftJoin {
-                    left: Box::new(bgp("a", "p", "b")),
-                    right: Box::new(bgp("x", "q", "y")),
+            inner: Child::new(GraphPattern::Distinct {
+                inner: Child::new(GraphPattern::LeftJoin {
+                    left: Child::new(bgp("a", "p", "b")),
+                    right: Child::new(bgp("x", "q", "y")),
                     expression: None,
                 }),
             }),
@@ -787,6 +788,7 @@ mod tests {
 /// inside case error somehow.
 #[cfg(test)]
 mod effect_free_gate_tests {
+    use purrdf_sparql_algebra::Child;
     use std::sync::Arc;
 
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
@@ -833,8 +835,8 @@ mod effect_free_gate_tests {
                   threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
                   targets, where the same box is still the field's type"
     )]
-    fn bx(p: GraphPattern) -> Box<GraphPattern> {
-        Box::new(p)
+    fn bx(p: GraphPattern) -> Child<GraphPattern> {
+        Child::new(p)
     }
 
     /// An unresolved `Function::Custom` call over `?w`, which hard-errors
@@ -843,7 +845,7 @@ mod effect_free_gate_tests {
     fn undefined_fn_call() -> Expression {
         Expression::FunctionCall(
             Function::Custom(nn(&format!("{EX}undefined-fn"))),
-            vec![Expression::Variable(var("w"))],
+            vec![Expression::Variable(var("w"))].into(),
         )
     }
 
@@ -912,7 +914,7 @@ mod effect_free_gate_tests {
             1,
             "the shared fixture drives exactly one outer row"
         );
-        let exists_expr = Expression::Exists(Box::new(inner.clone()));
+        let exists_expr = Expression::Exists(Child::new(inner.clone()));
         seq.rows
             .iter()
             .map(|row| {
@@ -1097,7 +1099,11 @@ mod effect_free_gate_tests {
         let right = GraphPattern::Path {
             subject: tvar("o"),
             path: PropertyPathExpression::NamedNode(nn(&format!("{EX}p"))),
-            object: TermPattern::Triple(Box::new(triple(tvar("x"), &format!("{EX}q"), tvar("y")))),
+            object: TermPattern::Triple(Child::new(triple(
+                tvar("x"),
+                &format!("{EX}q"),
+                tvar("y"),
+            ))),
         };
         let inner = GraphPattern::LeftJoin {
             left: bx(GraphPattern::Bgp { patterns: vec![] }),

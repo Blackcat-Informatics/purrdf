@@ -195,18 +195,18 @@ pub fn construct_template_mints_blank(query: &Query) -> bool {
 }
 
 /// Whether a CONSTRUCT template triple pattern carries a blank node in either
-/// term position (recursing through RDF 1.2 quoted triple patterns).
+/// term position, descending through RDF 1.2 quoted triple patterns over a work
+/// list.
 fn triple_pattern_mints_blank(pattern: &TriplePattern) -> bool {
-    term_pattern_mints_blank(&pattern.subject) || term_pattern_mints_blank(&pattern.object)
-}
-
-/// Whether a CONSTRUCT template term position is (or nests) a blank node.
-fn term_pattern_mints_blank(pattern: &TermPattern) -> bool {
-    match pattern {
-        TermPattern::BlankNode(_) => true,
-        TermPattern::Triple(inner) => triple_pattern_mints_blank(inner),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
+    let mut pending = vec![&pattern.subject, &pattern.object];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return true,
+            TermPattern::Triple(inner) => pending.extend([&inner.subject, &inner.object]),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
     }
+    false
 }
 
 /// Whether a `sh:TripleRule` head node expression can put a blank node into the

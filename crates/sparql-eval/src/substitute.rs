@@ -27,6 +27,7 @@
 //! rather than an inconsistency.
 
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
     GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
@@ -385,11 +386,11 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
             row.push(Some(ground));
         }
         purrdf_sparql_algebra::substitute::take_and_replace(core, |core| GraphPattern::Join {
-            left: Box::new(GraphPattern::Values {
+            left: Child::new(GraphPattern::Values {
                 variables,
                 bindings: vec![row],
             }),
-            right: Box::new(core),
+            right: Child::new(core),
         });
     });
     query
@@ -931,8 +932,8 @@ fn call_driver(
 /// A stand-alone call, driven: `Lateral(seed, call)`.
 fn plant_stand_alone_driver(call: &mut GraphPattern, seed: GraphPattern) {
     purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Lateral {
-        left: Box::new(seed),
-        right: Box::new(call),
+        left: Child::new(seed),
+        right: Child::new(call),
     });
 }
 
@@ -940,8 +941,8 @@ fn plant_stand_alone_driver(call: &mut GraphPattern, seed: GraphPattern) {
 /// `Join(seed, left)` — the shape [`drives`] recognizes.
 fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
     purrdf_sparql_algebra::substitute::take_and_replace(left, |left| GraphPattern::Join {
-        left: Box::new(seed),
-        right: Box::new(left),
+        left: Child::new(seed),
+        right: Child::new(left),
     });
 }
 
@@ -1009,9 +1010,9 @@ impl WalkScope {
 /// call binds for the rest of the body, and what it correlates with, is unchanged.
 fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Variable>) {
     purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Project {
-        inner: Box::new(GraphPattern::Lateral {
-            left: Box::new(seed),
-            right: Box::new(call),
+        inner: Child::new(GraphPattern::Lateral {
+            left: Child::new(seed),
+            right: Child::new(call),
         }),
         variables: kept,
     });
@@ -1103,8 +1104,8 @@ fn restore_probed_bindings(
     let variables = probed.iter().map(|&i| probes[i].0.clone()).collect();
     let row = probed.iter().map(|&i| Some(probes[i].1.clone())).collect();
     purrdf_sparql_algebra::substitute::take_and_replace(leaf, |leaf| GraphPattern::Join {
-        left: Box::new(leaf),
-        right: Box::new(GraphPattern::Values {
+        left: Child::new(leaf),
+        right: Child::new(GraphPattern::Values {
             variables,
             bindings: vec![row],
         }),
@@ -1256,7 +1257,7 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
     match Pushability::of(ground) {
         Pushability::Iri(node) => Some(TermPattern::NamedNode(node.clone())),
         Pushability::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
-        Pushability::QuotedTriple(triple) => Some(TermPattern::Triple(Box::new(TriplePattern {
+        Pushability::QuotedTriple(triple) => Some(TermPattern::Triple(Child::new(TriplePattern {
             subject: term_pattern_from_ground(&triple.subject)?,
             predicate: NamedNodePattern::NamedNode(triple.predicate.clone()),
             object: term_pattern_from_ground(&triple.object)?,
@@ -1769,7 +1770,7 @@ fn drive_expression_reads(
     }
     if let Some(variables) = carried {
         purrdf_sparql_algebra::substitute::take_and_replace(node, |node| GraphPattern::Project {
-            inner: Box::new(node),
+            inner: Child::new(node),
             variables,
         });
     }
@@ -2277,7 +2278,7 @@ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic
                 ));
             };
             let object = ground_term_from_value(o)?;
-            Ok(GroundTerm::Triple(Box::new(GroundTriple {
+            Ok(GroundTerm::Triple(Child::new(GroundTriple {
                 subject,
                 predicate,
                 object,
@@ -2350,7 +2351,7 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
                 ));
             };
             let object = ground_term_from_id(dataset, o)?;
-            Ok(GroundTerm::Triple(Box::new(GroundTriple {
+            Ok(GroundTerm::Triple(Child::new(GroundTriple {
                 subject,
                 predicate,
                 object,
@@ -2425,6 +2426,7 @@ fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     /// `http://www.w3.org/2001/XMLSchema#string`, for a plain literal fixture.
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -2445,7 +2447,7 @@ mod tests {
             ("literal", GroundTerm::Literal(literal())),
             (
                 "quoted-triple",
-                GroundTerm::Triple(Box::new(GroundTriple {
+                GroundTerm::Triple(Child::new(GroundTriple {
                     subject: GroundTerm::NamedNode(iri()),
                     predicate: iri(),
                     object: GroundTerm::Literal(literal()),
@@ -2453,7 +2455,7 @@ mod tests {
             ),
             (
                 "quoted-triple-with-nested-blank",
-                GroundTerm::Triple(Box::new(GroundTriple {
+                GroundTerm::Triple(Child::new(GroundTriple {
                     subject: GroundTerm::BlankNode(BlankNode::new("nested")),
                     predicate: iri(),
                     object: GroundTerm::Literal(literal()),
@@ -2656,7 +2658,7 @@ mod tests {
         let r = NamedNode::new_unchecked("http://example.org/r");
         let i = NamedNode::new_unchecked("http://example.org/i");
         let quoted = |object: TermPattern| {
-            TermPattern::Triple(Box::new(TriplePattern {
+            TermPattern::Triple(Child::new(TriplePattern {
                 subject: TermPattern::NamedNode(a.clone()),
                 predicate: NamedNodePattern::NamedNode(r.clone()),
                 object,
@@ -2723,7 +2725,7 @@ mod tests {
         let out = Variable::new("out");
         let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
             iri: "http://example.org/rel".to_owned(),
-            subject_args: vec![TermPattern::Triple(Box::new(TriplePattern {
+            subject_args: vec![TermPattern::Triple(Child::new(TriplePattern {
                 subject: TermPattern::Variable(this.clone()),
                 predicate: NamedNodePattern::Variable(p.clone()),
                 object: TermPattern::Variable(o.clone()),
@@ -2732,17 +2734,17 @@ mod tests {
         });
         let blank = GroundTerm::BlankNode(BlankNode::new("b"));
         let driver = || GraphPattern::Lateral {
-            left: Box::new(GraphPattern::Values {
+            left: Child::new(GraphPattern::Values {
                 variables: vec![this.clone()],
                 bindings: vec![vec![Some(blank.clone())]],
             }),
-            right: Box::new(call.clone()),
+            right: Child::new(call.clone()),
         };
         let mut pattern = GraphPattern::Join {
-            left: Box::new(call.clone()),
-            right: Box::new(GraphPattern::Filter {
-                expr: Expression::Exists(Box::new(call.clone())),
-                inner: Box::new(GraphPattern::Bgp {
+            left: Child::new(call.clone()),
+            right: Child::new(GraphPattern::Filter {
+                expr: Expression::Exists(Child::new(call.clone())),
+                inner: Child::new(GraphPattern::Bgp {
                     patterns: Vec::new(),
                 }),
             }),
@@ -2752,19 +2754,19 @@ mod tests {
         assert_eq!(
             pattern,
             GraphPattern::Join {
-                left: Box::new(driver()),
-                right: Box::new(GraphPattern::Project {
-                    inner: Box::new(GraphPattern::Filter {
-                        expr: Expression::Exists(Box::new(GraphPattern::Project {
-                            inner: Box::new(driver()),
+                left: Child::new(driver()),
+                right: Child::new(GraphPattern::Project {
+                    inner: Child::new(GraphPattern::Filter {
+                        expr: Expression::Exists(Child::new(GraphPattern::Project {
+                            inner: Child::new(driver()),
                             variables: vec![p, o, out],
                         })),
-                        inner: Box::new(GraphPattern::Join {
-                            left: Box::new(GraphPattern::Values {
+                        inner: Child::new(GraphPattern::Join {
+                            left: Child::new(GraphPattern::Values {
                                 variables: vec![this.clone()],
                                 bindings: vec![vec![Some(blank.clone())]],
                             }),
-                            right: Box::new(GraphPattern::Bgp {
+                            right: Child::new(GraphPattern::Bgp {
                                 patterns: Vec::new(),
                             }),
                         }),

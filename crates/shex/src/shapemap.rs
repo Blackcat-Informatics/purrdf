@@ -102,6 +102,7 @@
 //! where a token STOPS, either direction re-tokenizes silently rather than
 //! erroring; see [`terminals`] for the worked counterexample.
 
+use purrdf_core::TermBox;
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
@@ -549,9 +550,9 @@ impl MapParser {
         }
         self.pos += 2;
         Ok(TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         })
     }
 

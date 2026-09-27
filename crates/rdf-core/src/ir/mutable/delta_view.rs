@@ -888,6 +888,7 @@ impl crate::FallibleDatasetView for DeltaDatasetView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TermBox;
     use crate::dataset_view::DatasetMut;
     use crate::ir::mutable::QuadValues;
     use crate::ir::pack::dataset_from_view;
@@ -1051,9 +1052,9 @@ mod tests {
             s: iri("r"),
             p: TermValue::Iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".into()),
             o: TermValue::Triple {
-                s: Box::new(iri("s")),
-                p: Box::new(iri("p")),
-                o: Box::new(iri("o")),
+                s: TermBox::new(iri("s")),
+                p: TermBox::new(iri("p")),
+                o: TermBox::new(iri("o")),
             },
             g: None,
         }

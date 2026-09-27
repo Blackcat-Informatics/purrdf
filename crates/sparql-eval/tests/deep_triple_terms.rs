@@ -16,6 +16,7 @@
 //!   answer is the typed stack refusal, never an abort — however deep the evaluation
 //!   stands when it walks the term.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -51,9 +52,9 @@ fn chain_value(levels: usize, core: TermValue) -> TermValue {
     let mut term = core;
     for _ in 0..levels {
         term = TermValue::Triple {
-            s: Box::new(TermValue::iri(format!("{EX}s"))),
-            p: Box::new(TermValue::iri(format!("{EX}p"))),
-            o: Box::new(term),
+            s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+            p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+            o: TermBox::new(term),
         };
     }
     term
@@ -74,7 +75,7 @@ fn nesting(value: &TermValue) -> usize {
 fn drop_flat(value: TermValue) {
     let mut term = value;
     while let TermValue::Triple { o, .. } = term {
-        term = *o;
+        term = o.into_inner();
     }
 }
 

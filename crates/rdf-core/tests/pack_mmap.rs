@@ -22,6 +22,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use purrdf_core::TermBox;
 use std::io::Write as _;
 use std::sync::Arc;
 
@@ -67,9 +68,9 @@ fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
+            s: TermBox::new(to_value(v, s)),
+            p: TermBox::new(to_value(v, p)),
+            o: TermBox::new(to_value(v, o)),
         },
     }
 }

@@ -37,6 +37,7 @@
 use purrdf_cdt::CdtFn;
 use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal,
     NamedNodePattern, OrderExpression, PropertyFunctionCall, PurrdfFn, Query, TermPattern,
@@ -651,13 +652,13 @@ fn order_chain(
             Some(left) => {
                 if call {
                     GraphPattern::Lateral {
-                        left: Box::new(left),
-                        right: Box::new(planned),
+                        left: Child::new(left),
+                        right: Child::new(planned),
                     }
                 } else {
                     GraphPattern::Join {
-                        left: Box::new(left),
-                        right: Box::new(planned),
+                        left: Child::new(left),
+                        right: Child::new(planned),
                     }
                 }
             }
@@ -832,7 +833,7 @@ fn map_children(
     promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
     let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>, promise: Promise<'_>| {
-        plan_pattern(child, relations, agg_registry, outer, promise).map(Box::new)
+        plan_pattern(child, relations, agg_registry, outer, promise).map(Child::new)
     };
     // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
     // the core, only the wrappers the pushdown descends pass on what it writes. See
@@ -911,10 +912,7 @@ fn map_children(
         },
         // A `UNION` branch cannot rely on its sibling.
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms
-                .iter()
-                .map(|arm| recurse(arm, outer, here).map(|planned| *planned))
-                .collect::<Result<Vec<_>, PlanError>>()?,
+            arms: arms.try_map_ref(|arm| recurse(arm, outer, here).map(Child::into_inner))?,
         },
         // A `FILTER`'s expression is evaluated over the rows its inner pattern
         // produced, so an `EXISTS` inside it sees everything that pattern certainly
@@ -1168,63 +1166,59 @@ fn plan_expression(
         // pushdown never writes into an `EXISTS` body, so nothing more is promised —
         // unless the SHACL pre-binding rewrite runs, which binds them in every call
         // everywhere (see [`Promise::Everywhere`]).
-        Expression::Exists(pattern) => Expression::Exists(Box::new(plan_pattern(
+        Expression::Exists(pattern) => Expression::Exists(Child::new(plan_pattern(
             pattern,
             relations,
             agg_registry,
             outer,
             promise.beyond_pushdown(),
         )?)),
-        Expression::Or(operands) => Expression::Or(
-            operands
-                .iter()
-                .map(|operand| plan_expression(operand, relations, agg_registry, outer, promise))
-                .collect::<Result<Vec<_>, PlanError>>()?,
-        ),
-        Expression::And(operands) => Expression::And(
-            operands
-                .iter()
-                .map(|operand| plan_expression(operand, relations, agg_registry, outer, promise))
-                .collect::<Result<Vec<_>, PlanError>>()?,
-        ),
+        Expression::Or(operands) => Expression::Or(operands.try_map_ref(|operand| {
+            plan_expression(operand, relations, agg_registry, outer, promise)
+        })?),
+        Expression::And(operands) => Expression::And(operands.try_map_ref(|operand| {
+            plan_expression(operand, relations, agg_registry, outer, promise)
+        })?),
         Expression::Arithmetic(first, steps) => Expression::Arithmetic(
-            sub(first)?,
-            steps
-                .iter()
-                .map(|(op, operand)| {
-                    plan_expression(operand, relations, agg_registry, outer, promise)
-                        .map(|planned| (*op, planned))
-                })
-                .collect::<Result<Vec<_>, PlanError>>()?,
+            sub(first)?.into(),
+            steps.try_map_ref(|(op, operand)| {
+                plan_expression(operand, relations, agg_registry, outer, promise)
+                    .map(|planned| (*op, planned))
+            })?,
         ),
-        Expression::Equal(a, b) => Expression::Equal(sub(a)?, sub(b)?),
-        Expression::SameTerm(a, b) => Expression::SameTerm(sub(a)?, sub(b)?),
-        Expression::Greater(a, b) => Expression::Greater(sub(a)?, sub(b)?),
-        Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(sub(a)?, sub(b)?),
-        Expression::Less(a, b) => Expression::Less(sub(a)?, sub(b)?),
-        Expression::LessOrEqual(a, b) => Expression::LessOrEqual(sub(a)?, sub(b)?),
-        Expression::UnaryPlus(a) => Expression::UnaryPlus(sub(a)?),
-        Expression::UnaryMinus(a) => Expression::UnaryMinus(sub(a)?),
-        Expression::Not(a) => Expression::Not(sub(a)?),
-        Expression::If(c, t, e) => Expression::If(sub(c)?, sub(t)?, sub(e)?),
+        Expression::Equal(a, b) => Expression::Equal(sub(a)?.into(), sub(b)?.into()),
+        Expression::SameTerm(a, b) => Expression::SameTerm(sub(a)?.into(), sub(b)?.into()),
+        Expression::Greater(a, b) => Expression::Greater(sub(a)?.into(), sub(b)?.into()),
+        Expression::GreaterOrEqual(a, b) => {
+            Expression::GreaterOrEqual(sub(a)?.into(), sub(b)?.into())
+        }
+        Expression::Less(a, b) => Expression::Less(sub(a)?.into(), sub(b)?.into()),
+        Expression::LessOrEqual(a, b) => Expression::LessOrEqual(sub(a)?.into(), sub(b)?.into()),
+        Expression::UnaryPlus(a) => Expression::UnaryPlus(sub(a)?.into()),
+        Expression::UnaryMinus(a) => Expression::UnaryMinus(sub(a)?.into()),
+        Expression::Not(a) => Expression::Not(sub(a)?.into()),
+        Expression::If(c, t, e) => Expression::If(sub(c)?.into(), sub(t)?.into(), sub(e)?.into()),
         Expression::In(needle, haystack) => Expression::In(
-            sub(needle)?,
+            sub(needle)?.into(),
             haystack
                 .iter()
                 .map(|item| plan_expression(item, relations, agg_registry, outer, promise))
-                .collect::<Result<Vec<_>, PlanError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?
+                .into(),
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
                 .map(|item| plan_expression(item, relations, agg_registry, outer, promise))
-                .collect::<Result<Vec<_>, PlanError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?
+                .into(),
         ),
         Expression::FunctionCall(function, args) => Expression::FunctionCall(
             function.clone(),
             args.iter()
                 .map(|arg| plan_expression(arg, relations, agg_registry, outer, promise))
-                .collect::<Result<Vec<_>, PlanError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?
+                .into(),
         ),
         Expression::NamedNode(_)
         | Expression::Literal(_)

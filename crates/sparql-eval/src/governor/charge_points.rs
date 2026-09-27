@@ -10,6 +10,7 @@
 //! are not simple counters — the cell peak, the scratch arena, the recursion guard —
 //! measure what they claim to.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -330,9 +331,9 @@ fn intermediate_cells_use_the_maximum_operator_instance_not_a_sum() {
     let dataset = builder.freeze().expect("fixture is positionally valid");
 
     let pattern = GraphPattern::Project {
-        inner: Box::new(GraphPattern::Filter {
+        inner: Child::new(GraphPattern::Filter {
             expr: Expression::Bound(Variable::new("s")),
-            inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+            inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         }),
         variables: vec![Variable::new("s")],
     };
@@ -367,7 +368,7 @@ fn intermediate_cells_use_the_maximum_operator_instance_not_a_sum() {
     // Cell-denominated, not row-denominated: the same ten rows over one column are half
     // the allocation and are admitted by a ceiling the two-column bag exceeds.
     let narrow = GraphPattern::Project {
-        inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         variables: vec![Variable::new("s")],
     };
     assert_eq!(
@@ -408,14 +409,15 @@ fn scratch_growth_is_charged_so_a_satisfied_row_count_cannot_hide_an_oom() {
 
     let padding = "x".repeat(1024);
     let pattern = GraphPattern::Extend {
-        inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         variable: Variable::new("big"),
         expression: Expression::FunctionCall(
             Function::Concat,
             vec![
                 Expression::Variable(Variable::new("o")),
                 Expression::Literal(Literal::new_simple(&padding)),
-            ],
+            ]
+            .into(),
         ),
     };
 
@@ -922,8 +924,8 @@ fn pf_registry(
 /// feasibility-ordering pass rebuilds a chain into.
 fn pf_pattern() -> GraphPattern {
     GraphPattern::Lateral {
-        left: Box::new(bgp(vec![triple(var("s"), "p", var("m"))])),
-        right: Box::new(GraphPattern::PropertyFunction(
+        left: Child::new(bgp(vec![triple(var("s"), "p", var("m"))])),
+        right: Child::new(GraphPattern::PropertyFunction(
             purrdf_sparql_algebra::PropertyFunctionCall {
                 iri: PF.to_owned(),
                 subject_args: vec![],
@@ -1343,8 +1345,8 @@ fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
 /// `?s ex:cat ?cat . ?s ex:val ?val` — [`agg_group_dataset`]'s driving join.
 fn agg_join_inner() -> GraphPattern {
     GraphPattern::Join {
-        left: Box::new(bgp(vec![triple(var("s"), "cat", var("cat"))])),
-        right: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        left: Child::new(bgp(vec![triple(var("s"), "cat", var("cat"))])),
+        right: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
     }
 }
 
@@ -1352,7 +1354,7 @@ fn agg_join_inner() -> GraphPattern {
 /// [`agg_join_inner`] — one built-in aggregate expression per group.
 fn sum_group_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(agg_join_inner()),
+        inner: Child::new(agg_join_inner()),
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
@@ -1373,7 +1375,7 @@ fn sum_group_pattern() -> GraphPattern {
 /// variable, so the two patterns' fuel is comparable value for value.
 fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(agg_join_inner()),
+        inner: Child::new(agg_join_inner()),
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
@@ -1394,7 +1396,7 @@ fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
 /// [`duplicate_value_dataset`]) so `DISTINCT` discards all but the first.
 fn count_distinct_group_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("n"),
@@ -1830,7 +1832,7 @@ const PARTIAL_COUNTER_IRI: &str = "http://example.org/agg/partialCounter";
 /// chunked fold is the only fold this pattern can ever exercise.
 fn partial_counter_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("partials"),
@@ -2036,7 +2038,7 @@ fn order_dependent_custom_aggregate_is_byte_identical_under_worker_count() {
     registry.register_statistical_aggregates(NS);
 
     let pattern = GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("first"),

@@ -3,6 +3,7 @@
 
 //! Aggregate sort keys participate in admission, effects and execution contracts.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDatasetBuilder, ResourceDimension, SparqlEngine, SparqlRequest};
@@ -28,7 +29,7 @@ fn ask(pattern: GraphPattern) -> Query {
 
 fn fold(key: Expression) -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(GraphPattern::Values {
+        inner: Child::new(GraphPattern::Values {
             variables: vec![Variable::new("v")],
             bindings: vec![vec![Some(GroundTerm::Literal(Literal::new_simple(
                 "value",
@@ -65,7 +66,7 @@ fn calls_reachable_only_through_aggregate_sort_keys_require_admission() {
         object_args: vec![TermPattern::Variable(Variable::new("o"))],
     });
     let custom = GraphPattern::Group {
-        inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+        inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
         variables: vec![],
         aggregates: vec![(
             Variable::new("custom"),
@@ -87,7 +88,7 @@ fn calls_reachable_only_through_aggregate_sort_keys_require_admission() {
         (call, "native-sparql-property-function"),
         (custom, "native-sparql-aggregate-function"),
     ] {
-        let query = ask(fold(Expression::Exists(Box::new(inner))));
+        let query = ask(fold(Expression::Exists(Child::new(inner))));
         assert_eq!(
             engine
                 .prepare_algebra(query.clone(), QueryOptions::EMPTY)
@@ -140,7 +141,7 @@ fn aggregate_output_collisions_keep_their_error_when_the_child_would_truncate() 
         ),
     ] {
         let pattern = GraphPattern::Group {
-            inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+            inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
             variables,
             aggregates,
         };

@@ -3,6 +3,7 @@
 
 //! Generate deterministic RDF 1.2 visualization acceptance artifacts.
 
+use purrdf_core::TermBox;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -250,9 +251,9 @@ fn quoted_only() -> VizGraphInput {
 fn nested_dialect() -> VizGraphInput {
     let alice_knows_bob = triple("alice", "knows", iri("bob"));
     let nested_report = TermValue::Triple {
-        s: Box::new(alice_knows_bob.clone()),
-        p: Box::new(TermValue::Iri(format!("{EX}reportedBy"))),
-        o: Box::new(iri("carol")),
+        s: TermBox::new(alice_knows_bob.clone()),
+        p: TermBox::new(TermValue::Iri(format!("{EX}reportedBy"))),
+        o: TermBox::new(iri("carol")),
     };
     VizGraphInput {
         quads: vec![
@@ -369,9 +370,9 @@ fn annotation(
 
 fn triple(subject: &str, predicate: &str, object: TermValue) -> TermValue {
     TermValue::Triple {
-        s: Box::new(iri(subject)),
-        p: Box::new(TermValue::Iri(format!("{EX}{predicate}"))),
-        o: Box::new(object),
+        s: TermBox::new(iri(subject)),
+        p: TermBox::new(TermValue::Iri(format!("{EX}{predicate}"))),
+        o: TermBox::new(object),
     }
 }
 

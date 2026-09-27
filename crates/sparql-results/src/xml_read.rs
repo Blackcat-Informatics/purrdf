@@ -14,6 +14,7 @@
 //! external XML crate, no `std::io`** — keeping the crate wasm-clean and
 //! oxigraph-free. The SRX grammar is shallow and fixed, so a tree-walk is enough.
 
+use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
@@ -266,9 +267,9 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
                 return Err(fmt("triple-term predicate is not an IRI"));
             }
             Ok(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
         other => Err(fmt(&format!("unexpected term element <{other}>"))),
@@ -738,6 +739,7 @@ mod tests {
     use super::*;
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
+    use purrdf_core::TermBox;
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits
@@ -891,9 +893,9 @@ mod tests {
         assert_eq!(
             parsed.rows[0][0],
             Some(TermValue::Triple {
-                s: Box::new(TermValue::Iri("http://ex/s".to_owned())),
-                p: Box::new(TermValue::Iri("http://ex/p".to_owned())),
-                o: Box::new(TermValue::Literal {
+                s: TermBox::new(TermValue::Iri("http://ex/s".to_owned())),
+                p: TermBox::new(TermValue::Iri("http://ex/p".to_owned())),
+                o: TermBox::new(TermValue::Literal {
                     lexical_form: "o".to_owned(),
                     datatype: XSD_STRING.to_owned(),
                     language: None,

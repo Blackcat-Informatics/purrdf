@@ -17,6 +17,7 @@
 //!   the data, and against the full substitution itself over shapes that exercise every
 //!   arm of the substitution a nested body can meet.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -573,8 +574,8 @@ fn triple(s: &str, p: &str, o: &str) -> GraphPattern {
 
 fn filter_exists(inner: GraphPattern, body: GraphPattern) -> GraphPattern {
     GraphPattern::Filter {
-        expr: Expression::Exists(Box::new(body)),
-        inner: Box::new(inner),
+        expr: Expression::Exists(Child::new(body)),
+        inner: Child::new(inner),
     }
 }
 
@@ -617,7 +618,7 @@ fn disagreeing_layers_answer_as_the_full_substitution_does() {
     let third = triple("v", "r", "z");
     let second = filter_exists(
         GraphPattern::Extend {
-            inner: Box::new(GraphPattern::Bgp {
+            inner: Child::new(GraphPattern::Bgp {
                 patterns: Vec::new(),
             }),
             variable: var("v"),
@@ -628,17 +629,17 @@ fn disagreeing_layers_answer_as_the_full_substitution_does() {
     let first = filter_exists(
         GraphPattern::Filter {
             expr: Expression::Equal(
-                Box::new(Expression::Variable(var("y"))),
-                Box::new(Expression::Variable(var("x"))),
+                Child::new(Expression::Variable(var("y"))),
+                Child::new(Expression::Variable(var("x"))),
             ),
-            inner: Box::new(triple("y", "q", "v")),
+            inner: Child::new(triple("y", "q", "v")),
         },
         second,
     );
     let outer = filter_exists(triple("x", "tag", "w"), first);
     let query = Query::Select {
         pattern: GraphPattern::Project {
-            inner: Box::new(outer),
+            inner: Child::new(outer),
             variables: vec![var("x")],
         },
         dataset: QueryDataset::default(),

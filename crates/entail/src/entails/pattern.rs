@@ -87,9 +87,9 @@ pub(crate) fn conclusion_node(term: TermValue) -> Pat {
     match term {
         TermValue::Blank { label, scope } => Pat::Var(VarKey::Blank { label, scope }),
         TermValue::Triple { s, p, o } => Pat::Triple(Box::new([
-            conclusion_node(*s),
-            conclusion_node(*p),
-            conclusion_node(*o),
+            conclusion_node(s.into_inner()),
+            conclusion_node(p.into_inner()),
+            conclusion_node(o.into_inner()),
         ])),
         ground => Pat::Ground(ground),
     }

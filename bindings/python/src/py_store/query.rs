@@ -1186,9 +1186,9 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
             direction,
         }),
         TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            term_value_to_rdf(*s),
-            term_value_predicate(*p),
-            term_value_to_rdf(*o),
+            term_value_to_rdf(s.into_inner()),
+            term_value_predicate(p.into_inner()),
+            term_value_to_rdf(o.into_inner()),
         )),
     }
 }

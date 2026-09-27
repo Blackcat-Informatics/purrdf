@@ -120,9 +120,48 @@ pub(crate) fn check_ask(query: &Query, prebound: &[&str]) -> Result<(), String> 
     }
 }
 
+/// One entry of the pre-binding check's work list.
+#[derive(Clone, Copy)]
+enum Pending<'a> {
+    Pattern(&'a GraphPattern),
+    Expr(&'a Expression),
+}
+
 /// Walk a graph pattern, rejecting every construct the pre-binding
 /// restrictions forbid.
 fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String> {
+    check(Pending::Pattern(pattern), prebound)
+}
+
+/// Walk an expression tree; `EXISTS { … }` bodies are graph patterns and are
+/// checked too.
+fn check_expression(expr: &Expression, prebound: &[&str]) -> Result<(), String> {
+    check(Pending::Expr(expr), prebound)
+}
+
+/// Check `root` and everything under it the restrictions reach, depth first over a
+/// work list: each node's own restrictions before its operands', its operands in
+/// written order, so the first construct refused is the first one written.
+fn check(root: Pending<'_>, prebound: &[&str]) -> Result<(), String> {
+    let mut pending = vec![root];
+    while let Some(next) = pending.pop() {
+        let first = pending.len();
+        match next {
+            Pending::Pattern(pattern) => check_pattern_node(pattern, prebound, &mut pending)?,
+            Pending::Expr(expr) => check_expression_node(expr, &mut pending),
+        }
+        pending[first..].reverse();
+    }
+    Ok(())
+}
+
+/// A pattern node's own restrictions; its operands are queued, in written order, on
+/// `pending`.
+fn check_pattern_node<'a>(
+    pattern: &'a GraphPattern,
+    prebound: &[&str],
+    pending: &mut Vec<Pending<'a>>,
+) -> Result<(), String> {
     match pattern {
         // A property-function call's argument vectors are term positions, exactly like
         // a BGP triple's or a property path's endpoints: a pre-bound variable there is
@@ -132,18 +171,22 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
         // that would ASSIGN a pre-bound variable; a call does neither.
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
-        | GraphPattern::PropertyFunction(_) => Ok(()),
-        GraphPattern::Minus { .. } => Err(
-            "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+        | GraphPattern::PropertyFunction(_) => {}
+        GraphPattern::Minus { .. } => {
+            return Err(
+                "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
              Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries)"
-                .to_owned(),
-        ),
-        GraphPattern::Service { .. } => Err(
-            "federated queries (SERVICE) are not allowed in a query with pre-bound variables \
+                    .to_owned(),
+            );
+        }
+        GraphPattern::Service { .. } => {
+            return Err(
+                "federated queries (SERVICE) are not allowed in a query with pre-bound variables \
              (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL \
              Queries)"
-                .to_owned(),
-        ),
+                    .to_owned(),
+            );
+        }
         // The DIVERGENCE recorded in this module's docs lives here: the Working
         // Draft forbids only a `VALUES` that mentions a potentially pre-bound
         // variable, while this arm refuses every `VALUES`. The frozen W3C case
@@ -152,37 +195,32 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
         // Appendix it diverges from, so an operator who hits it can find the exact
         // text — including the specification's own at-risk marker, quoted in the
         // module docs.
-        GraphPattern::Values { .. } => Err(
-            "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+        GraphPattern::Values { .. } => {
+            return Err(
+                "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
              Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
              refuses every VALUES, which is stricter than the Working Draft's \
              mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
              requires the stricter reading)"
-                .to_owned(),
-        ),
+                    .to_owned(),
+            );
+        }
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            check_pattern(left, prebound)?;
-            check_pattern(right, prebound)
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
         }
-        GraphPattern::Union { arms } => {
-            arms.iter().try_for_each(|arm| check_pattern(arm, prebound))
-        }
+        GraphPattern::Union { arms } => pending.extend(arms.iter().map(Pending::Pattern)),
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => {
-            check_pattern(left, prebound)?;
-            check_pattern(right, prebound)?;
-            expression
-                .as_ref()
-                .map_or(Ok(()), |e| check_expression(e, prebound))
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
+            pending.extend(expression.iter().map(Pending::Expr));
         }
         GraphPattern::Filter { expr, inner } => {
-            check_expression(expr, prebound)?;
-            check_pattern(inner, prebound)
+            pending.extend([Pending::Expr(expr), Pending::Pattern(inner)]);
         }
-        GraphPattern::Graph { inner, .. } => check_pattern(inner, prebound),
+        GraphPattern::Graph { inner, .. } => pending.push(Pending::Pattern(inner)),
         GraphPattern::Extend {
             inner,
             variable,
@@ -196,8 +234,7 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                     variable.as_str()
                 ));
             }
-            check_expression(expression, prebound)?;
-            check_pattern(inner, prebound)
+            pending.extend([Pending::Expr(expression), Pending::Pattern(inner)]);
         }
         // `UNFOLD` ASSIGNS its one or two targets exactly as `BIND` assigns its
         // one, so §5.2.1s "must not assign a potentially pre-bound variable" rule
@@ -217,15 +254,14 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                     ));
                 }
             }
-            check_expression(expression, prebound)?;
-            check_pattern(inner, prebound)
+            pending.extend([Pending::Expr(expression), Pending::Pattern(inner)]);
         }
         GraphPattern::OrderBy { inner, expression } => {
             for order in expression {
                 let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = order;
-                check_expression(e, prebound)?;
+                pending.push(Pending::Expr(e));
             }
-            check_pattern(inner, prebound)
+            pending.push(Pending::Pattern(inner));
         }
         // A nested SELECT (subquery): its projection must expose every
         // potentially pre-bound variable. A `SELECT *` expands (in the
@@ -242,11 +278,11 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                     ));
                 }
             }
-            check_pattern(inner, prebound)
+            pending.push(Pending::Pattern(inner));
         }
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => check_pattern(inner, prebound),
+        | GraphPattern::Slice { inner, .. } => pending.push(Pending::Pattern(inner)),
         GraphPattern::Group {
             inner,
             variables: _,
@@ -262,65 +298,47 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                     ));
                 }
             }
-            check_pattern(inner, prebound)
+            pending.push(Pending::Pattern(inner));
         }
     }
+    Ok(())
 }
 
-/// Walk an expression tree; `EXISTS { … }` bodies are graph patterns and are
-/// checked recursively.
-fn check_expression(expr: &Expression, prebound: &[&str]) -> Result<(), String> {
+/// Queue an expression node's operands, in written order, on `pending`; an
+/// `EXISTS { … }` body is a graph pattern and is checked as one.
+fn check_expression_node<'a>(expr: &'a Expression, pending: &mut Vec<Pending<'a>>) {
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
-        | Expression::Bound(_) => Ok(()),
-        Expression::Or(operands) | Expression::And(operands) => operands
-            .iter()
-            .try_for_each(|operand| check_expression(operand, prebound)),
+        | Expression::Bound(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            pending.extend(operands.iter().map(Pending::Expr));
+        }
         Expression::Arithmetic(first, steps) => {
-            check_expression(first, prebound)?;
-            steps
-                .iter()
-                .try_for_each(|(_, operand)| check_expression(operand, prebound))
+            pending.push(Pending::Expr(first));
+            pending.extend(steps.iter().map(|(_, operand)| Pending::Expr(operand)));
         }
         Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b) => {
-            check_expression(a, prebound)?;
-            check_expression(b, prebound)
-        }
+        | Expression::LessOrEqual(a, b) => pending.extend([Pending::Expr(a), Pending::Expr(b)]),
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            check_expression(inner, prebound)
+            pending.push(Pending::Expr(inner));
         }
         Expression::In(head, rest) => {
-            check_expression(head, prebound)?;
-            for e in rest {
-                check_expression(e, prebound)?;
-            }
-            Ok(())
+            pending.push(Pending::Expr(head));
+            pending.extend(rest.iter().map(Pending::Expr));
         }
         Expression::If(c, t, e) => {
-            check_expression(c, prebound)?;
-            check_expression(t, prebound)?;
-            check_expression(e, prebound)
+            pending.extend([Pending::Expr(c), Pending::Expr(t), Pending::Expr(e)]);
         }
-        Expression::Coalesce(items) => {
-            for e in items {
-                check_expression(e, prebound)?;
-            }
-            Ok(())
+        Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+            pending.extend(items.iter().map(Pending::Expr));
         }
-        Expression::FunctionCall(_, args) => {
-            for e in args {
-                check_expression(e, prebound)?;
-            }
-            Ok(())
-        }
-        Expression::Exists(pattern) => check_pattern(pattern, prebound),
+        Expression::Exists(pattern) => pending.push(Pending::Pattern(pattern)),
     }
 }
 

@@ -8,6 +8,7 @@
 //! brute-force scan over the source `RdfDataset` would — before AND after a
 //! `to_bytes`/`from_bytes` round trip.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeSet, HashSet};
 
 use purrdf_core::ir::pack::bits::{IntVector, IntVectorRef, RankSelectRef};
@@ -135,14 +136,14 @@ fn build_fixture() -> Fixture {
     };
     let only_subject_v = iri("only_subject");
     let inner_triple_v = TermValue::Triple {
-        s: Box::new(s1v.clone()),
-        p: Box::new(p1v.clone()),
-        o: Box::new(o1v.clone()),
+        s: TermBox::new(s1v.clone()),
+        p: TermBox::new(p1v.clone()),
+        o: TermBox::new(o1v.clone()),
     };
     let outer_triple_v = TermValue::Triple {
-        s: Box::new(s3v.clone()),
-        p: Box::new(p2v.clone()),
-        o: Box::new(inner_triple_v.clone()),
+        s: TermBox::new(s3v.clone()),
+        p: TermBox::new(p2v.clone()),
+        o: TermBox::new(inner_triple_v.clone()),
     };
 
     let mk = |v: TermValue, pack_id: PackTermId| Probe {

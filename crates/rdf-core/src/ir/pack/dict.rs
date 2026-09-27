@@ -63,6 +63,7 @@
 //! type alias here). The `PackView`/`ViewTermId` newtype wraps these
 //! `u64`s.
 
+use crate::TermBox;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -1082,9 +1083,9 @@ impl PackDict {
                 }
             }
             DictEntry::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.term_value(*s)),
-                p: Box::new(self.term_value(*p)),
-                o: Box::new(self.term_value(*o)),
+                s: TermBox::new(self.term_value(*s)),
+                p: TermBox::new(self.term_value(*p)),
+                o: TermBox::new(self.term_value(*o)),
             },
         }
     }
@@ -1356,6 +1357,7 @@ impl PackDict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TermBox;
     use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
     use proptest::prelude::*;
     use proptest::strategy::BoxedStrategy;
@@ -1574,9 +1576,9 @@ mod tests {
             direction: Some(direction),
         };
         let triple = |s, p, o| TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         };
         let objects = [
             TermValue::typed_literal("z", "http://example.org/a"),
@@ -1642,19 +1644,19 @@ mod tests {
     #[test]
     fn decoding_accepts_canonical_nested_forward_references() {
         let inner = TermValue::Triple {
-            s: Box::new(iri("z")),
-            p: Box::new(iri("p")),
-            o: Box::new(TermValue::lang_literal("x", "en")),
+            s: TermBox::new(iri("z")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(TermValue::lang_literal("x", "en")),
         };
         let middle = TermValue::Triple {
-            s: Box::new(iri("m")),
-            p: Box::new(iri("p")),
-            o: Box::new(inner.clone()),
+            s: TermBox::new(iri("m")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(inner.clone()),
         };
         let outer = TermValue::Triple {
-            s: Box::new(iri("a")),
-            p: Box::new(iri("p")),
-            o: Box::new(middle.clone()),
+            s: TermBox::new(iri("a")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(middle.clone()),
         };
         let dataset = build_dataset(&[(iri("s"), iri("p"), outer.clone())]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("canonical");
@@ -1696,16 +1698,16 @@ mod tests {
     #[test]
     fn triple_term_round_trips_recursively() {
         let inner = TermValue::Triple {
-            s: Box::new(iri("a")),
-            p: Box::new(iri("b")),
-            o: Box::new(TermValue::simple_literal("leaf")),
+            s: TermBox::new(iri("a")),
+            p: TermBox::new(iri("b")),
+            o: TermBox::new(TermValue::simple_literal("leaf")),
         };
         // RDF 1.2 nests a triple term in exactly one position — the OBJECT of
         // another triple term — so that is where the recursion is measured.
         let outer = TermValue::Triple {
-            s: Box::new(iri("target")),
-            p: Box::new(iri("meta")),
-            o: Box::new(inner),
+            s: TermBox::new(iri("target")),
+            p: TermBox::new(iri("meta")),
+            o: TermBox::new(inner),
         };
         let dataset = build_dataset(&[(iri("subj"), iri("about"), outer.clone())]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
@@ -1868,9 +1870,9 @@ mod tests {
         let reifier_id = dict.id_by_value(&iri("r")).expect("reifier term present");
         assert_eq!(dict.term_value(reifier_id), iri("r"));
         let triple_value = TermValue::Triple {
-            s: Box::new(iri("s")),
-            p: Box::new(iri("p")),
-            o: Box::new(iri("o")),
+            s: TermBox::new(iri("s")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(iri("o")),
         };
         let triple_id = dict
             .id_by_value(&triple_value)
@@ -2021,9 +2023,9 @@ mod tests {
                 inner,
             )
                 .prop_map(|(s, p, o)| TermValue::Triple {
-                    s: Box::new(s),
-                    p: Box::new(p),
-                    o: Box::new(o),
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
                 })
         })
         .boxed()

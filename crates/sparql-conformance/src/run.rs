@@ -878,43 +878,41 @@ fn collect_query_bgp(base: &str, query_text: &str) -> Vec<QTriple> {
         .collect()
 }
 
-/// Recursively gather every [`TriplePattern`] out of `p` (from `Bgp` nodes, descending
+/// Gather every [`TriplePattern`] out of `p`, in written order over a work list (from `Bgp` nodes, descending
 /// through every join / filter / graph / optional / union / modifier wrapper).
 fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
-    match p {
-        GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
-        GraphPattern::Join { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            collect_bgp(left, out);
-            collect_bgp(right, out);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_bgp(arm, out);
+    let mut pending = vec![p];
+    while let Some(p) = pending.pop() {
+        match p {
+            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([&**right, &**left]);
             }
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` expands a composite value the solution already carries and
+            // matches no triple in any graph, so it is transparent to this walk.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => pending.push(inner),
+            // Leaves that hold no triple pattern. A property-function call matches no
+            // triple in any graph — its rows come from the injected relation table — so
+            // it scaffolds no class expression for the OWL-Direct augmentation, exactly
+            // as a path or an inline `VALUES` scaffolds none.
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_) => {}
         }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        // `UNFOLD` expands a composite value the solution already carries and
-        // matches no triple in any graph, so it is transparent to this walk.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Group { inner, .. } => collect_bgp(inner, out),
-        // Leaves that hold no triple pattern. A property-function call matches no
-        // triple in any graph — its rows come from the injected relation table — so
-        // it scaffolds no class expression for the OWL-Direct augmentation, exactly
-        // as a path or an inline `VALUES` scaffolds none.
-        GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::PropertyFunction(_) => {}
     }
 }
 

@@ -386,97 +386,107 @@ impl NonReproducibleCause {
 }
 
 fn triple_pattern_contains_blank(pattern: &TriplePattern) -> bool {
-    term_pattern_contains_blank(&pattern.subject) || term_pattern_contains_blank(&pattern.object)
-}
-
-fn term_pattern_contains_blank(term: &TermPattern) -> bool {
-    match term {
-        TermPattern::BlankNode(_) => true,
-        TermPattern::Triple(triple) => triple_pattern_contains_blank(triple),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
+    let mut pending = vec![&pattern.subject, &pattern.object];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return true,
+            TermPattern::Triple(triple) => pending.extend([&triple.subject, &triple.object]),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
     }
+    false
 }
 
+/// One entry of the reproducibility search's work list.
+#[derive(Clone, Copy)]
+enum Reach<'a> {
+    Pattern(&'a GraphPattern),
+    Expr(&'a Expression),
+    Aggregate(&'a purrdf_sparql_algebra::AggregateExpression),
+}
+
+/// The first non-reproducible cause `pattern` reaches, searching depth first over a
+/// work list: each node's own cause before its operands', its operands in the order
+/// listed per variant.
 fn pattern_reaches_non_reproducible_builtin(
     pattern: &GraphPattern,
 ) -> Option<NonReproducibleCause> {
+    first_cause(Reach::Pattern(pattern))
+}
+
+fn first_cause(root: Reach<'_>) -> Option<NonReproducibleCause> {
+    let mut pending = vec![root];
+    while let Some(next) = pending.pop() {
+        let first = pending.len();
+        let cause = match next {
+            Reach::Pattern(pattern) => pattern_cause(pattern, &mut pending),
+            Reach::Expr(expression) => expression_cause(expression, &mut pending),
+            Reach::Aggregate(aggregate) => aggregate_cause(aggregate, &mut pending),
+        };
+        if cause.is_some() {
+            return cause;
+        }
+        pending[first..].reverse();
+    }
+    None
+}
+
+/// A pattern node's own cause; its operands are queued, in search order, on `pending`.
+fn pattern_cause<'a>(
+    pattern: &'a GraphPattern,
+    pending: &mut Vec<Reach<'a>>,
+) -> Option<NonReproducibleCause> {
     match pattern {
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => None,
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right } => pattern_reaches_non_reproducible_builtin(left)
-            .or_else(|| pattern_reaches_non_reproducible_builtin(right)),
-        GraphPattern::Union { arms } => arms
-            .iter()
-            .find_map(pattern_reaches_non_reproducible_builtin),
+        | GraphPattern::Minus { left, right } => {
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
+        }
+        GraphPattern::Union { arms } => pending.extend(arms.iter().map(Reach::Pattern)),
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Project { inner, .. } => pattern_reaches_non_reproducible_builtin(inner),
-        GraphPattern::Filter { expr, inner } => expression_reaches_non_reproducible_builtin(expr)
-            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
+        | GraphPattern::Project { inner, .. } => pending.push(Reach::Pattern(inner)),
+        GraphPattern::Filter { expr, inner } => {
+            pending.extend([Reach::Expr(expr), Reach::Pattern(inner)]);
+        }
         GraphPattern::Extend {
             inner, expression, ..
-        } => expression_reaches_non_reproducible_builtin(expression)
-            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
+        } => pending.extend([Reach::Expr(expression), Reach::Pattern(inner)]),
         // `UNFOLD` expands a value the solution already carries — a pure,
         // deterministic function of that value — so it contributes no cause of its
         // own and is transparent, exactly like `BIND`.
         GraphPattern::Unfold {
             inner, expression, ..
-        } => expression_reaches_non_reproducible_builtin(expression)
-            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
+        } => pending.extend([Reach::Expr(expression), Reach::Pattern(inner)]),
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
-        } => pattern_reaches_non_reproducible_builtin(left)
-            .or_else(|| pattern_reaches_non_reproducible_builtin(right))
-            .or_else(|| {
-                expression
-                    .as_ref()
-                    .and_then(expression_reaches_non_reproducible_builtin)
-            }),
+        } => {
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
+            pending.extend(expression.iter().map(Reach::Expr));
+        }
         GraphPattern::OrderBy { inner, expression } => {
-            pattern_reaches_non_reproducible_builtin(inner).or_else(|| {
-                expression.iter().find_map(|order| match order {
-                    OrderExpression::Asc(expression) | OrderExpression::Desc(expression) => {
-                        expression_reaches_non_reproducible_builtin(expression)
-                    }
-                })
-            })
+            pending.push(Reach::Pattern(inner));
+            pending.extend(expression.iter().map(|order| match order {
+                OrderExpression::Asc(expression) | OrderExpression::Desc(expression) => {
+                    Reach::Expr(expression)
+                }
+            }));
         }
         GraphPattern::Group {
             inner, aggregates, ..
-        } => pattern_reaches_non_reproducible_builtin(inner).or_else(|| {
-            aggregates.iter().find_map(|(_, aggregate)| {
-                // A `Custom` aggregate invokes a HOST-supplied reduction, and whether
-                // that reduction is reproducible is a property of the registry the
-                // *evaluation* carries — the exact unknowable-at-shape-validation-time
-                // situation the `PropertyFunction` arm below documents. Unlike a
-                // property-function call, `AGG(<iri>, …)` needs no `ParserOptions` seam
-                // to parse (`parser.rs`'s `parse_agg_call` recognizes it unconditionally),
-                // so this check cannot lean on a caller-configured gate the way the
-                // `PropertyFunction` arm's doc explains its own dead-under-default case —
-                // a `Custom` aggregate is reachable under `ParserOptions::default`, always.
-                if matches!(aggregate.function(), AggregateFunction::Custom(_)) {
-                    Some(NonReproducibleCause::CustomAggregate)
-                } else {
-                    // A `FOLD`s own `ORDER BY` sort keys are per-row expressions
-                    // evaluated exactly as its arguments are, so a `RAND()` reachable
-                    // through one is the same non-reproducibility and is searched too.
-                    aggregate
-                        .args()
-                        .iter()
-                        .chain(aggregate.order_by().iter().map(|order| match order {
-                            OrderExpression::Asc(expression)
-                            | OrderExpression::Desc(expression) => expression,
-                        }))
-                        .find_map(expression_reaches_non_reproducible_builtin)
-                }
-            })
-        }),
+        } => {
+            pending.push(Reach::Pattern(inner));
+            pending.extend(
+                aggregates
+                    .iter()
+                    .map(|(_, aggregate)| Reach::Aggregate(aggregate)),
+            );
+        }
         // A property-function call invokes a HOST-supplied relation, and whether that
         // relation is reproducible is a property of the registry the *evaluation*
         // carries — which is not available here, at shape-validation time, and cannot
@@ -490,7 +500,7 @@ fn pattern_reaches_non_reproducible_builtin(
         // `property_fn_iris` produces `GraphPattern::PropertyFunction` rather than an
         // ordinary triple pattern. Under [`ParserOptions::default`] (what
         // [`ConstructViewConfig::new`] uses) this arm never fires.
-        GraphPattern::PropertyFunction(_) => Some(NonReproducibleCause::PropertyFunction),
+        GraphPattern::PropertyFunction(_) => return Some(NonReproducibleCause::PropertyFunction),
         // `SERVICE` forwards `inner` to a remote endpoint resolved through a
         // `ServiceResolver` the *evaluation* carries (`purrdf-sparql-eval`'s
         // `EvalCtx::remote`) — not visible here, at shape-validation time, and not
@@ -500,78 +510,106 @@ fn pattern_reaches_non_reproducible_builtin(
         // one-for-one, so `SERVICE` gets the same unconditional refusal regardless of
         // `inner`'s own content or of `silent` — a swallowed remote failure is still a
         // remote dependency, just one that fails quietly instead of loudly.
-        GraphPattern::Service { .. } => Some(NonReproducibleCause::Service),
+        GraphPattern::Service { .. } => return Some(NonReproducibleCause::Service),
     }
+    None
 }
 
-fn expression_reaches_non_reproducible_builtin(
-    expression: &Expression,
+/// An aggregate's own cause; its arguments and sort keys are queued, in search order,
+/// on `pending`.
+fn aggregate_cause<'a>(
+    aggregate: &'a purrdf_sparql_algebra::AggregateExpression,
+    pending: &mut Vec<Reach<'a>>,
+) -> Option<NonReproducibleCause> {
+    // A `Custom` aggregate invokes a HOST-supplied reduction, and whether
+    // that reduction is reproducible is a property of the registry the
+    // *evaluation* carries — the exact unknowable-at-shape-validation-time
+    // situation the `PropertyFunction` arm below documents. Unlike a
+    // property-function call, `AGG(<iri>, …)` needs no `ParserOptions` seam
+    // to parse (`parser.rs`'s `parse_agg_call` recognizes it unconditionally),
+    // so this check cannot lean on a caller-configured gate the way the
+    // `PropertyFunction` arm's doc explains its own dead-under-default case —
+    // a `Custom` aggregate is reachable under `ParserOptions::default`, always.
+    if matches!(aggregate.function(), AggregateFunction::Custom(_)) {
+        return Some(NonReproducibleCause::CustomAggregate);
+    }
+    // A `FOLD`s own `ORDER BY` sort keys are per-row expressions evaluated exactly as
+    // its arguments are, so a `RAND()` reachable through one is the same
+    // non-reproducibility and is searched too.
+    pending.extend(aggregate.args().iter().map(Reach::Expr));
+    pending.extend(aggregate.order_by().iter().map(|order| match order {
+        OrderExpression::Asc(expression) | OrderExpression::Desc(expression) => {
+            Reach::Expr(expression)
+        }
+    }));
+    None
+}
+
+/// An expression node's own cause; its operands are queued, in search order, on
+/// `pending`.
+fn expression_cause<'a>(
+    expression: &'a Expression,
+    pending: &mut Vec<Reach<'a>>,
 ) -> Option<NonReproducibleCause> {
     match expression {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
-        | Expression::Bound(_) => None,
-        Expression::Or(operands) | Expression::And(operands) => operands
-            .iter()
-            .find_map(expression_reaches_non_reproducible_builtin),
-        Expression::Arithmetic(first, steps) => expression_reaches_non_reproducible_builtin(first)
-            .or_else(|| {
-                steps
-                    .iter()
-                    .find_map(|(_, operand)| expression_reaches_non_reproducible_builtin(operand))
-            }),
+        | Expression::Bound(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            pending.extend(operands.iter().map(Reach::Expr));
+        }
+        Expression::Arithmetic(first, steps) => {
+            pending.push(Reach::Expr(first));
+            pending.extend(steps.iter().map(|(_, operand)| Reach::Expr(operand)));
+        }
         Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
         | Expression::Greater(left, right)
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => expression_reaches_non_reproducible_builtin(left)
-            .or_else(|| expression_reaches_non_reproducible_builtin(right)),
+        | Expression::LessOrEqual(left, right) => {
+            pending.extend([Reach::Expr(left), Reach::Expr(right)]);
+        }
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            expression_reaches_non_reproducible_builtin(inner)
+            pending.push(Reach::Expr(inner));
         }
         Expression::In(head, list) => {
-            expression_reaches_non_reproducible_builtin(head).or_else(|| {
-                list.iter()
-                    .find_map(expression_reaches_non_reproducible_builtin)
-            })
+            pending.push(Reach::Expr(head));
+            pending.extend(list.iter().map(Reach::Expr));
         }
-        Expression::If(condition, then_value, else_value) => {
-            expression_reaches_non_reproducible_builtin(condition)
-                .or_else(|| expression_reaches_non_reproducible_builtin(then_value))
-                .or_else(|| expression_reaches_non_reproducible_builtin(else_value))
-        }
-        Expression::Coalesce(list) => list
-            .iter()
-            .find_map(expression_reaches_non_reproducible_builtin),
+        Expression::If(condition, then_value, else_value) => pending.extend([
+            Reach::Expr(condition),
+            Reach::Expr(then_value),
+            Reach::Expr(else_value),
+        ]),
+        Expression::Coalesce(list) => pending.extend(list.iter().map(Reach::Expr)),
         Expression::FunctionCall(function, arguments) => match function {
-            Function::Now => Some(NonReproducibleCause::Now),
-            Function::Rand => Some(NonReproducibleCause::Rand),
-            Function::Uuid => Some(NonReproducibleCause::Uuid),
-            Function::StrUuid => Some(NonReproducibleCause::StrUuid),
-            Function::BNode => Some(NonReproducibleCause::BNode),
+            Function::Now => return Some(NonReproducibleCause::Now),
+            Function::Rand => return Some(NonReproducibleCause::Rand),
+            Function::Uuid => return Some(NonReproducibleCause::Uuid),
+            Function::StrUuid => return Some(NonReproducibleCause::StrUuid),
+            Function::BNode => return Some(NonReproducibleCause::BNode),
             Function::Purrdf(call)
                 if matches!(call.fn_kind, PurrdfFn::ListSlice | PurrdfFn::ListConcat) =>
             {
-                Some(NonReproducibleCause::ListFunction(call.fn_kind))
+                return Some(NonReproducibleCause::ListFunction(call.fn_kind));
             }
             // A `Custom` scalar call invokes a HOST-supplied function, and whether
             // that function is reproducible is a property of the registry the
             // *evaluation* carries — the same unknowable-at-shape-validation-time
-            // situation `pattern_reaches_non_reproducible_builtin`'s `PropertyFunction`
-            // arm documents. `<iri>(args…)` needs no `ParserOptions` seam either: any
-            // call-position IRI outside every *configured* extension-function
-            // namespace falls through to `Function::Custom` unconditionally (see
-            // `parser.rs`'s `parse_iri_or_function`), so this is reachable under
+            // situation `pattern_cause`'s `PropertyFunction` arm documents.
+            // `<iri>(args…)` needs no `ParserOptions` seam either: any call-position
+            // IRI outside every *configured* extension-function namespace falls
+            // through to `Function::Custom` unconditionally (see `parser.rs`'s
+            // `parse_iri_or_function`), so this is reachable under
             // `ParserOptions::default`, always.
-            Function::Custom(_) => Some(NonReproducibleCause::CustomFunction),
-            _ => arguments
-                .iter()
-                .find_map(expression_reaches_non_reproducible_builtin),
+            Function::Custom(_) => return Some(NonReproducibleCause::CustomFunction),
+            _ => pending.extend(arguments.iter().map(Reach::Expr)),
         },
-        Expression::Exists(pattern) => pattern_reaches_non_reproducible_builtin(pattern),
+        Expression::Exists(pattern) => pending.push(Reach::Pattern(pattern)),
     }
+    None
 }
 
 fn validate_portable_bound(value: usize, field: &str) -> Result<(), ProjectionError> {

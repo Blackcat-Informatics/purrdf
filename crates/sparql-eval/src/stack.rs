@@ -31,12 +31,12 @@
 //!   placeholder, and the scope discards whatever the walk built and returns the error.
 //!   These are an `EXISTS` site's preparation (normalization, its source map, its
 //!   structural analysis) and its scope-collision check, a correlated evaluation's
-//!   per-row substitution copy, a property path's traversal, a `SERVICE` body's analysis,
-//!   copy and serialization (the serializer's own levels ask too), an in-process
+//!   per-row substitution copy, a property path's traversal, a `SERVICE` body's analysis
+//!   and copy, an in-process
 //!   `SERVICE`'s blank-node rewrite, a function body's copy and pre-binding rewrite, and
 //!   template instantiation (`CONSTRUCT`, and an update's `DELETE`/`INSERT` and `DATA`
-//!   templates). Their copies of algebra trees go through the `clone` submodule rather
-//!   than the derived `Clone`, so they can refuse too.
+//!   templates). Their copies of algebra trees go through the `clone` submodule, whose
+//!   levels ask too.
 //! * **Walks whose answer has a safe side** answer it when the stack is low, with no
 //!   scope: the parallel-safety classification answers "unsafe" (the loop runs
 //!   sequentially), `EXISTS` probe admissibility answers "not admissible" (the per-row
@@ -47,16 +47,16 @@
 //! What remains unchecked is bounded otherwise:
 //!
 //! * The infallible walks that run once over the whole plan before its first operator
-//!   (planning, blank-node scoping, the endpoint, parallel and admission analyses), and
-//!   the derived copy and drop of the whole plan, start from the top of the stack the
-//!   evaluation starts on. Every evaluation first measures the whole plan's height
+//!   (planning, blank-node scoping, the endpoint, parallel and admission analyses)
+//!   start from the top of the stack the evaluation starts on. Every evaluation first measures the whole plan's height
 //!   against that stack at the parser's per-level charge
 //!   (`governor::soundness::validate_graph_pattern_depth`), which holds the costliest of
 //!   those walks with room to spare, and refuses the plan, typed, where it does not fit.
-//! * The drop of a per-row copy runs where the copy was made, by a guarded walk whose
-//!   levels cost more than the drop's.
-//! * The derived copy, comparison, hashing and matching of terms recurse once per
-//!   triple-term level, wherever an evaluation stands. The margin holds those walks for
+//! * The algebra's own copy, comparison, hashing, formatting, serialization and drop,
+//!   and a term's copy, comparison, order, hashing, formatting and drop, walk over work
+//!   lists and need no stack per level.
+//! * The dataset lookups and interning of a triple term, and its matching, recurse once
+//!   per triple-term level, wherever an evaluation stands. The margin holds those walks for
 //!   terms up to [`MARGIN_TERM_LEVELS`] deep — every term a dataset holds (a frozen
 //!   dataset at most 16, a PACK at most 128). A request whose own triple terms nest
 //!   deeper — in a pattern, a `VALUES` block, a template, or a chain of `TRIPLE` calls —
@@ -217,7 +217,7 @@ pub(crate) fn drop_term(value: purrdf_core::TermValue) {
     let mut pending = vec![value];
     while let Some(term) = pending.pop() {
         if let TermValue::Triple { s, p, o } = term {
-            pending.extend([*s, *p, *o]);
+            pending.extend([s.into_inner(), p.into_inner(), o.into_inner()]);
         }
     }
 }

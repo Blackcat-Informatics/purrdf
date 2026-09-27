@@ -10,6 +10,7 @@
 //! requires at the lookup boundary: a language tag is lowercased so a query literal
 //! matches the dataset's interned (already-lowercased) form.
 
+use purrdf_core::TermBox;
 use purrdf_core::{RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::{
     BaseDirection, GroundTerm, GroundTriple, Literal, NamedNode, TermPattern, TriplePattern,
@@ -126,9 +127,9 @@ pub(crate) fn ground_triple_pattern_to_value(
     };
     let o = ground_term_pattern_to_value(&pattern.object, site)?;
     Ok(TermValue::Triple {
-        s: Box::new(s),
-        p: Box::new(p),
-        o: Box::new(o),
+        s: TermBox::new(s),
+        p: TermBox::new(p),
+        o: TermBox::new(o),
     })
 }
 
@@ -192,8 +193,8 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
 /// Convert a [`GroundTriple`] to a [`TermValue::Triple`].
 pub(crate) fn ground_triple_to_value(triple: &GroundTriple) -> TermValue {
     TermValue::Triple {
-        s: Box::new(ground_term_to_value(&triple.subject)),
-        p: Box::new(named_node_to_value(&triple.predicate)),
-        o: Box::new(ground_term_to_value(&triple.object)),
+        s: TermBox::new(ground_term_to_value(&triple.subject)),
+        p: TermBox::new(named_node_to_value(&triple.predicate)),
+        o: TermBox::new(ground_term_to_value(&triple.object)),
     }
 }
