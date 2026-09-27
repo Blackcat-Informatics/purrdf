@@ -51,11 +51,12 @@
 //! same value set. A memo that fails that check is discarded and the run takes the
 //! ordinary path.
 
-use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, GroundTerm, GroundTriple,
-    Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern, Variable,
+    Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern, TriplePattern,
+    Variable,
 };
+use purrdf_sparql_algebra::{Args, Child};
 
 use crate::engine::ShaclPrebinding;
 use crate::substitute::{
@@ -187,10 +188,10 @@ impl CellValue {
     /// replacement, rather than only ever recursing through it to reach positions
     /// further in.
     ///
-    /// Wildcard-free, and it has to mirror [`walk_term`]'s and
-    /// [`walk_expression`]'s own recursion conditions exactly: a position this
-    /// says is a leaf is exactly a position those functions do not descend past,
-    /// and a position this says is not is exactly one they do.
+    /// Wildcard-free, and it has to mirror exactly where [`walk_term`] descends and
+    /// which expressions [`for_each_child_slot`] gives children: a position this
+    /// says is a leaf is exactly a position the walk does not descend past, and a
+    /// position this says is not is exactly one it does.
     ///
     /// This exists because [`Cell::snapshot`] clones a position's WHOLE subtree,
     /// not just its own immediate content — so when a leaf changes, every
@@ -275,8 +276,9 @@ pub(crate) fn rewrite(
 /// **This is the only enumeration of those positions.** Recording a target and
 /// replaying into it both go through here, so the two cannot disagree about which
 /// position ordinal `n` is: they are literally the same traversal. A `GraphPattern`
-/// or `Expression` variant added later fails to compile here — both matches below are
-/// wildcard-free — rather than silently shifting every ordinal after it.
+/// or `Expression` variant added later fails to compile here — the matches of
+/// [`visit_own_cells`] and [`for_each_child_slot`] are wildcard-free — rather than
+/// silently shifting every ordinal after it.
 ///
 /// # What makes the ordinals stable across runs
 ///
@@ -297,13 +299,204 @@ fn walk_query(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
     index
 }
 
-/// [`walk_query`]'s graph-pattern recursion.
+/// [`walk_query`]'s graph-pattern walk.
 ///
-/// The arms mirror `crate::substitute::substitute_in_graph_pattern`'s arms one for
-/// one, plus the term positions of the three leaves that walk does not enter because
-/// the PUSHDOWN half of the rewrite owns them (`Bgp`, `Path`) and the cells of a
-/// `VALUES` block, which is where the seed's row lives.
-fn walk_pattern(pattern: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
+/// The arms of [`visit_own_cells`] and [`for_each_child_slot`] together mirror
+/// `crate::substitute::substitute_in_graph_pattern`'s arms one for one, plus the term
+/// positions of the three leaves that walk does not enter because the PUSHDOWN half of
+/// the rewrite owns them (`Bgp`, `Path`) and the cells of a `VALUES` block, which is
+/// where the seed's row lives.
+///
+/// # How the walk moves through the tree
+///
+/// The walk keeps its own work list and needs no more machine stack for a deeper
+/// tree. Each node is **moved out** of its slot — a placeholder that allocates nothing
+/// stands in the slot meanwhile — and entered: its own cells are visited in place, then
+/// every child slot is emptied the same way onto the work list, in numbering order,
+/// below an exit step for the node. When the node's exit step is reached every child has
+/// come back through the value stack, in the same order, and is written back into the
+/// slot it came from; the node itself then joins the value stack for ITS parent. The
+/// root is written back last. A tree walked this way is the same tree afterwards, cell
+/// for cell, apart from what the visitor wrote.
+///
+/// Moving is what lets an aggregate be walked at all: an [`AggregateExpression`]'s
+/// expressions are reachable only through its consuming `into_parts`, so the walk holds
+/// the parts it took apart while their expressions are out, and rebuilds the aggregate
+/// through the checked constructor when they return. The placeholder is a `COUNT(*)`,
+/// whose empty argument list allocates nothing.
+fn walk_pattern(root: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
+    let mut steps: smallvec::SmallVec<[Step; 16]> = smallvec::smallvec![Step::Enter(
+        Node::Pattern(std::mem::replace(root, pattern_placeholder()))
+    )];
+    let mut returned: smallvec::SmallVec<[Node; 16]> = smallvec::SmallVec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(node) => {
+                let mut shell = match node {
+                    Node::Pattern(mut pattern) => {
+                        visit_own_cells(&mut pattern, index, visit);
+                        Shell::Pattern(pattern)
+                    }
+                    // The node itself is numbered BEFORE its children, because the SHACL
+                    // lane replaces a whole `Expression::Variable` or `Expression::Bound`
+                    // node rather than editing one.
+                    Node::Expression(mut expression) => {
+                        let here = *index;
+                        *index += 1;
+                        visit(here, Cell::Expr(&mut expression));
+                        Shell::Expression(expression)
+                    }
+                    Node::Aggregate(aggregate) => {
+                        let (function, args, scalarvals, order_by, distinct) =
+                            aggregate.into_parts();
+                        Shell::Aggregate {
+                            function,
+                            args,
+                            scalarvals,
+                            order_by,
+                            distinct,
+                        }
+                    }
+                };
+                // The children go on the work list in numbering order, first child on
+                // top, and the node's exit step beneath them all.
+                let first = steps.len();
+                for_each_child_slot(&mut shell, &mut |slot| steps.push(Step::Enter(take(slot))));
+                let children = steps.len() - first;
+                steps[first..].reverse();
+                steps.insert(first, Step::Exit { shell, children });
+            }
+            Step::Exit {
+                mut shell,
+                children,
+            } => {
+                let first = returned.len() - children;
+                {
+                    let mut back = returned.drain(first..);
+                    for_each_child_slot(&mut shell, &mut |slot| {
+                        put(
+                            slot,
+                            back.next()
+                                .expect("every child taken out of a node comes back to it"),
+                        );
+                    });
+                    let extra = back.next();
+                    assert!(
+                        extra.is_none(),
+                        "a node takes back exactly the children it gave out"
+                    );
+                }
+                returned.push(match shell {
+                    Shell::Pattern(pattern) => Node::Pattern(pattern),
+                    Shell::Expression(expression) => Node::Expression(expression),
+                    Shell::Aggregate {
+                        function,
+                        args,
+                        scalarvals,
+                        order_by,
+                        distinct,
+                    } => Node::Aggregate(
+                        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
+                            .expect(
+                                "visiting an argument changes no argument count, so arity stays \
+                                 valid",
+                            ),
+                    ),
+                });
+            }
+        }
+    }
+    match returned.pop() {
+        Some(Node::Pattern(pattern)) => *root = pattern,
+        _ => unreachable!("the root pattern is the last node handed back"),
+    }
+}
+
+/// One step of [`walk_pattern`]'s work list.
+enum Step {
+    /// Enter a node taken out of its slot.
+    Enter(Node),
+    /// Write a node's `children` back into it from the value stack, and hand the node
+    /// back to its own parent.
+    Exit { shell: Shell, children: usize },
+}
+
+/// A node moved out of its slot: on its way into the walk, or back to its slot.
+enum Node {
+    Pattern(GraphPattern),
+    Expression(Expression),
+    Aggregate(AggregateExpression),
+}
+
+/// A node whose children are out being walked.
+enum Shell {
+    Pattern(GraphPattern),
+    Expression(Expression),
+    /// An aggregate taken apart with `into_parts`, its expressions out being walked.
+    Aggregate {
+        function: AggregateFunction,
+        args: Vec<Expression>,
+        scalarvals: Vec<(String, Literal)>,
+        order_by: Vec<OrderExpression>,
+        distinct: bool,
+    },
+}
+
+/// One child slot of a node.
+enum Slot<'a> {
+    Pattern(&'a mut GraphPattern),
+    Expression(&'a mut Expression),
+    Aggregate(&'a mut AggregateExpression),
+}
+
+/// A pattern with no cells and no children, left in a slot whose node is out being
+/// walked. Allocates nothing.
+fn pattern_placeholder() -> GraphPattern {
+    GraphPattern::Bgp {
+        patterns: Vec::new(),
+    }
+}
+
+/// An expression with no children, left in a slot whose node is out being walked.
+/// Allocates nothing.
+fn expression_placeholder() -> Expression {
+    Expression::Coalesce(Args::new())
+}
+
+/// Take the node out of `slot`, leaving a placeholder.
+fn take(slot: Slot<'_>) -> Node {
+    match slot {
+        Slot::Pattern(pattern) => Node::Pattern(std::mem::replace(pattern, pattern_placeholder())),
+        Slot::Expression(expression) => {
+            Node::Expression(std::mem::replace(expression, expression_placeholder()))
+        }
+        Slot::Aggregate(aggregate) => Node::Aggregate(std::mem::replace(aggregate, count_star())),
+    }
+}
+
+/// Put `node` back into `slot`, the slot it was taken from.
+fn put(slot: Slot<'_>, node: Node) {
+    match (slot, node) {
+        (Slot::Pattern(slot), Node::Pattern(pattern)) => *slot = pattern,
+        (Slot::Expression(slot), Node::Expression(expression)) => *slot = expression,
+        (Slot::Aggregate(slot), Node::Aggregate(aggregate)) => *slot = aggregate,
+        (Slot::Pattern(_) | Slot::Expression(_) | Slot::Aggregate(_), _) => {
+            unreachable!("children come back in the order their slots are enumerated")
+        }
+    }
+}
+
+/// Visit the cells a pattern node holds ITSELF, before any child: a `Bgp`'s, a `Path`'s
+/// and a property-function call's term positions, a `VALUES` block's cells, and a
+/// `GRAPH`/`SERVICE` name. Every other variant holds only children.
+///
+/// Wildcard-free: a `GraphPattern` variant added later fails to compile here rather
+/// than silently shifting every ordinal after it.
+fn visit_own_cells(
+    pattern: &mut GraphPattern,
+    index: &mut u32,
+    visit: &mut dyn FnMut(u32, Cell<'_>),
+) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
             for triple in patterns.iter_mut() {
@@ -329,57 +522,11 @@ fn walk_pattern(pattern: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnM
                 }
             }
         }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right } => {
-            walk_pattern(left, index, visit);
-            walk_pattern(right, index, visit);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                walk_pattern(arm, index, visit);
-            }
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            walk_pattern(left, index, visit);
-            walk_pattern(right, index, visit);
-            if let Some(expression) = expression {
-                walk_expression(expression, index, visit);
-            }
-        }
-        GraphPattern::Filter { expr, inner } => {
-            walk_expression(expr, index, visit);
-            walk_pattern(inner, index, visit);
-        }
-        GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+        GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
             let here = *index;
             *index += 1;
             visit(here, Cell::GraphName(name));
-            walk_pattern(inner, index, visit);
         }
-        GraphPattern::Extend {
-            inner, expression, ..
-        }
-        | GraphPattern::Unfold {
-            inner, expression, ..
-        } => {
-            walk_pattern(inner, index, visit);
-            walk_expression(expression, index, visit);
-        }
-        GraphPattern::OrderBy { inner, expression } => {
-            walk_pattern(inner, index, visit);
-            for order in expression.iter_mut() {
-                walk_order(order, index, visit);
-            }
-        }
-        GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => walk_pattern(inner, index, visit),
         GraphPattern::PropertyFunction(call) => {
             for term in call
                 .subject_args
@@ -389,47 +536,164 @@ fn walk_pattern(pattern: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnM
                 walk_term(term, index, visit);
             }
         }
-        GraphPattern::Group {
-            inner, aggregates, ..
-        } => {
-            walk_pattern(inner, index, visit);
-            walk_aggregates(aggregates, index, visit);
+        GraphPattern::Join { .. }
+        | GraphPattern::Lateral { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Union { .. }
+        | GraphPattern::LeftJoin { .. }
+        | GraphPattern::Filter { .. }
+        | GraphPattern::Extend { .. }
+        | GraphPattern::Unfold { .. }
+        | GraphPattern::OrderBy { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Group { .. } => {}
+    }
+}
+
+/// Call `f` with every child slot of `shell`, in numbering order.
+///
+/// A pattern's children are its sub-patterns and the expressions it evaluates, in the
+/// order the rewrite reads them; a `GROUP BY`'s aggregates are children of their own,
+/// each holding its arguments and then its own `ORDER BY` keys. An expression's
+/// children are its operands, left to right, and the pattern inside an `EXISTS`.
+///
+/// Wildcard-free, both matches: a variant added later fails to compile here.
+fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
+    match shell {
+        Shell::Pattern(pattern) => match pattern {
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right } => {
+                f(Slot::Pattern(left));
+                f(Slot::Pattern(right));
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms.iter_mut() {
+                    f(Slot::Pattern(arm));
+                }
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                f(Slot::Pattern(left));
+                f(Slot::Pattern(right));
+                if let Some(expression) = expression {
+                    f(Slot::Expression(expression));
+                }
+            }
+            GraphPattern::Filter { expr, inner } => {
+                f(Slot::Expression(expr));
+                f(Slot::Pattern(inner));
+            }
+            GraphPattern::Graph { inner, .. } | GraphPattern::Service { inner, .. } => {
+                f(Slot::Pattern(inner));
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            }
+            | GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                f(Slot::Pattern(inner));
+                f(Slot::Expression(expression));
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                f(Slot::Pattern(inner));
+                for order in expression.iter_mut() {
+                    f(Slot::Expression(order_key(order)));
+                }
+            }
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => f(Slot::Pattern(inner)),
+            GraphPattern::Group {
+                inner, aggregates, ..
+            } => {
+                f(Slot::Pattern(inner));
+                for (_, aggregate) in aggregates.iter_mut() {
+                    f(Slot::Aggregate(aggregate));
+                }
+            }
+        },
+        Shell::Expression(expression) => match expression {
+            Expression::Variable(_)
+            | Expression::Bound(_)
+            | Expression::NamedNode(_)
+            | Expression::Literal(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands.iter_mut() {
+                    f(Slot::Expression(operand));
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                f(Slot::Expression(first));
+                for (_, operand) in steps.iter_mut() {
+                    f(Slot::Expression(operand));
+                }
+            }
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => {
+                f(Slot::Expression(left));
+                f(Slot::Expression(right));
+            }
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                f(Slot::Expression(inner));
+            }
+            Expression::In(target, list) => {
+                f(Slot::Expression(target));
+                for item in list.iter_mut() {
+                    f(Slot::Expression(item));
+                }
+            }
+            Expression::If(cond, then_expr, else_expr) => {
+                f(Slot::Expression(cond));
+                f(Slot::Expression(then_expr));
+                f(Slot::Expression(else_expr));
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                for item in list.iter_mut() {
+                    f(Slot::Expression(item));
+                }
+            }
+            Expression::Exists(inner) => f(Slot::Pattern(inner)),
+        },
+        Shell::Aggregate { args, order_by, .. } => {
+            for arg in args.iter_mut() {
+                f(Slot::Expression(arg));
+            }
+            for order in order_by.iter_mut() {
+                f(Slot::Expression(order_key(order)));
+            }
         }
     }
 }
 
-/// Visit the expressions inside a `GROUP BY`'s aggregates.
-///
-/// [`AggregateExpression`]'s parts are reachable only through its consuming
-/// `into_parts`, because the checked constructor is the only way one comes into
-/// existence — so each entry is taken out, walked and rebuilt. Taking the vector and
-/// putting it back moves it rather than copying it, and the placeholder is a
-/// `COUNT(*)`, whose empty argument list allocates nothing; the whole function is
-/// allocation-free.
-fn walk_aggregates(
-    aggregates: &mut Vec<(Variable, AggregateExpression)>,
-    index: &mut u32,
-    visit: &mut dyn FnMut(u32, Cell<'_>),
-) {
-    let mut taken = std::mem::take(aggregates);
-    for entry in &mut taken {
-        let placeholder = count_star();
-        let (function, mut args, scalarvals, mut order_by, distinct) =
-            std::mem::replace(&mut entry.1, placeholder).into_parts();
-        for arg in &mut args {
-            walk_expression(arg, index, visit);
-        }
-        for order in &mut order_by {
-            walk_order(order, index, visit);
-        }
-        entry.1 = AggregateExpression::new(function, args, scalarvals, order_by, distinct)
-            .expect("visiting an argument changes no argument count, so arity stays valid");
+/// The expression a sort key orders by.
+fn order_key(order: &mut OrderExpression) -> &mut Expression {
+    match order {
+        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
     }
-    *aggregates = taken;
 }
 
 /// `COUNT(*)`: the one aggregate whose argument list may be empty, so the one that
-/// can stand in a slot for the length of a `mem::replace` without allocating.
+/// can stand in a slot while the aggregate that was there is taken apart and walked,
+/// without allocating.
 fn count_star() -> AggregateExpression {
     AggregateExpression::new(
         AggregateFunction::Count,
@@ -441,83 +705,27 @@ fn count_star() -> AggregateExpression {
     .expect("COUNT(*) is the spec's one empty-exprlist aggregate")
 }
 
-/// [`walk_query`]'s sort-key recursion.
-fn walk_order(order: &mut OrderExpression, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
-            walk_expression(expr, index, visit);
-        }
-    }
-}
-
-/// [`walk_query`]'s term-position recursion.
+/// [`walk_query`]'s term-position walk.
 ///
-/// A quoted triple's own subject and object are positions too — the pushdown recurses
-/// into them — so they are numbered as well. Its predicate is not: neither half of the
-/// rewrite writes there.
+/// A quoted triple's own subject and object are positions too — the pushdown descends
+/// into them — so they are numbered as well, subject first, each with everything
+/// nested in it before the other. Its predicate is not: neither half of the rewrite
+/// writes there. The term is visited BEFORE its nesting is read, so what is descended
+/// into is the term as the visitor left it. The walk keeps its own work list, so a
+/// deeper nesting needs no more machine stack.
 fn walk_term(term: &mut TermPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    let here = *index;
-    *index += 1;
-    visit(here, Cell::Term(term));
-    if let TermPattern::Triple(triple) = term {
-        walk_term(&mut triple.subject, index, visit);
-        walk_term(&mut triple.object, index, visit);
-    }
-}
-
-/// [`walk_query`]'s expression recursion.
-///
-/// The node itself is numbered BEFORE its children, because the SHACL lane replaces a
-/// whole `Expression::Variable` or `Expression::Bound` node rather than editing one.
-fn walk_expression(expr: &mut Expression, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    let here = *index;
-    *index += 1;
-    visit(here, Cell::Expr(expr));
-    match expr {
-        Expression::Variable(_)
-        | Expression::Bound(_)
-        | Expression::NamedNode(_)
-        | Expression::Literal(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands.iter_mut() {
-                walk_expression(operand, index, visit);
-            }
+    let mut pending: smallvec::SmallVec<[&mut TermPattern; 8]> = smallvec::smallvec![term];
+    while let Some(term) = pending.pop() {
+        let here = *index;
+        *index += 1;
+        visit(here, Cell::Term(&mut *term));
+        if let TermPattern::Triple(triple) = term {
+            let TriplePattern {
+                subject, object, ..
+            } = &mut **triple;
+            pending.push(object);
+            pending.push(subject);
         }
-        Expression::Arithmetic(first, steps) => {
-            walk_expression(first, index, visit);
-            for (_, operand) in steps.iter_mut() {
-                walk_expression(operand, index, visit);
-            }
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            walk_expression(left, index, visit);
-            walk_expression(right, index, visit);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            walk_expression(inner, index, visit);
-        }
-        Expression::In(target, list) => {
-            walk_expression(target, index, visit);
-            for item in list.iter_mut() {
-                walk_expression(item, index, visit);
-            }
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            walk_expression(cond, index, visit);
-            walk_expression(then_expr, index, visit);
-            walk_expression(else_expr, index, visit);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list.iter_mut() {
-                walk_expression(item, index, visit);
-            }
-        }
-        Expression::Exists(inner) => walk_pattern(inner, index, visit),
     }
 }
 
@@ -569,27 +777,59 @@ fn write_values(query: &mut Query, targets: &[Target], probes: &Probes) -> u32 {
 /// It never escapes: the trees it appears in are read for their cell positions and
 /// dropped inside `build`.
 fn moved(ground: &GroundTerm) -> GroundTerm {
-    match ground {
-        GroundTerm::NamedNode(node) => GroundTerm::NamedNode(moved_node(node)),
-        GroundTerm::Literal(literal) => GroundTerm::Literal(match literal.language() {
-            Some(language) => Literal::new_lang(
-                format!("{}a", literal.value()),
-                language,
-                literal.direction(),
-            ),
-            None => Literal::new_typed(format!("{}a", literal.value()), literal.datatype().clone()),
-        }),
-        GroundTerm::BlankNode(blank) => GroundTerm::BlankNode(
-            purrdf_sparql_algebra::BlankNode::new(format!("{}a", blank.as_str())),
-        ),
-        // Every position moves, so a quoted triple whose writability came from a
-        // nested blank keeps it and a fully-writable one stays fully writable.
-        GroundTerm::Triple(triple) => GroundTerm::Triple(Child::new(GroundTriple {
-            subject: moved(&triple.subject),
-            predicate: moved_node(&triple.predicate),
-            object: moved(&triple.object),
-        })),
+    /// One step of the walk: move a term, or assemble a quoted triple from the two
+    /// moved components on top of the value stack, under this predicate.
+    enum Step<'a> {
+        Move(&'a GroundTerm),
+        Assemble(&'a NamedNode),
     }
+    let mut steps: Vec<Step<'_>> = vec![Step::Move(ground)];
+    let mut built: Vec<GroundTerm> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Move(GroundTerm::NamedNode(node)) => {
+                built.push(GroundTerm::NamedNode(moved_node(node)));
+            }
+            Step::Move(GroundTerm::Literal(literal)) => {
+                built.push(GroundTerm::Literal(match literal.language() {
+                    Some(language) => Literal::new_lang(
+                        format!("{}a", literal.value()),
+                        language,
+                        literal.direction(),
+                    ),
+                    None => Literal::new_typed(
+                        format!("{}a", literal.value()),
+                        literal.datatype().clone(),
+                    ),
+                }));
+            }
+            Step::Move(GroundTerm::BlankNode(blank)) => {
+                built.push(GroundTerm::BlankNode(
+                    purrdf_sparql_algebra::BlankNode::new(format!("{}a", blank.as_str())),
+                ));
+            }
+            // Every position moves, so a quoted triple whose writability came from a
+            // nested blank keeps it and a fully-writable one stays fully writable. The
+            // subject is moved first, then the object.
+            Step::Move(GroundTerm::Triple(triple)) => {
+                steps.push(Step::Assemble(&triple.predicate));
+                steps.push(Step::Move(&triple.object));
+                steps.push(Step::Move(&triple.subject));
+            }
+            Step::Assemble(predicate) => {
+                let object = built.pop().expect("a quoted triple's object is moved");
+                let subject = built.pop().expect("a quoted triple's subject is moved");
+                built.push(GroundTerm::Triple(Child::new(GroundTriple {
+                    subject,
+                    predicate: moved_node(predicate),
+                    object,
+                })));
+            }
+        }
+    }
+    built
+        .pop()
+        .expect("the root's moved term is the last one built")
 }
 
 /// [`moved`], for an IRI.
@@ -765,3 +1005,738 @@ impl PrebindMemo {
 
 #[cfg(test)]
 mod tests;
+
+/// The loop-based walks checked against their recursive forms: [`walk_query`]'s cell
+/// numbering and its write-back over generated queries — every pattern and expression
+/// variant, nested `EXISTS`, quoted triples, aggregates with their own sort keys — and
+/// [`moved`] over generated ground terms; and one query whose `FILTER` nests a hundred
+/// thousand `!` operators, walked on a thread with a 128 KiB stack.
+#[cfg(test)]
+mod iterative_walk_tests {
+    use purrdf_sparql_algebra::{
+        AggregateExpression, AggregateFunction, Args, ArithmeticOperator, BlankNode, Chain, Child,
+        Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode,
+        NamedNodePattern, NonEmpty, OrderExpression, PropertyFunctionCall, PropertyPathExpression,
+        Query, QueryDataset, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{Cell, CellValue, count_star, moved, moved_node, walk_query};
+    use crate::test_rng::splitmix64_next;
+
+    const EX: &str = "http://example.org/";
+
+    /// The stack the deep case runs on.
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// How many `!` operators the deep case nests.
+    const DEPTH: usize = 100_000;
+
+    // ── The recursive references ────────────────────────────────────────────────────
+
+    /// [`walk_query`], written as the recursion it replaces.
+    fn walk_query_ref(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
+        let mut index = 0;
+        match query {
+            Query::Select { pattern, .. }
+            | Query::Construct { pattern, .. }
+            | Query::Describe { pattern, .. }
+            | Query::Ask { pattern, .. } => walk_pattern_ref(pattern, &mut index, visit),
+        }
+        index
+    }
+
+    fn walk_pattern_ref(
+        pattern: &mut GraphPattern,
+        index: &mut u32,
+        visit: &mut dyn FnMut(u32, Cell<'_>),
+    ) {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns.iter_mut() {
+                    walk_term_ref(&mut triple.subject, index, visit);
+                    walk_term_ref(&mut triple.object, index, visit);
+                }
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                walk_term_ref(subject, index, visit);
+                walk_term_ref(object, index, visit);
+            }
+            GraphPattern::Values { bindings, .. } => {
+                for row in bindings.iter_mut() {
+                    for slot in row.iter_mut() {
+                        let here = *index;
+                        *index += 1;
+                        visit(here, Cell::Ground(slot));
+                    }
+                }
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right } => {
+                walk_pattern_ref(left, index, visit);
+                walk_pattern_ref(right, index, visit);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms.iter_mut() {
+                    walk_pattern_ref(arm, index, visit);
+                }
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                walk_pattern_ref(left, index, visit);
+                walk_pattern_ref(right, index, visit);
+                if let Some(expression) = expression {
+                    walk_expression_ref(expression, index, visit);
+                }
+            }
+            GraphPattern::Filter { expr, inner } => {
+                walk_expression_ref(expr, index, visit);
+                walk_pattern_ref(inner, index, visit);
+            }
+            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+                let here = *index;
+                *index += 1;
+                visit(here, Cell::GraphName(name));
+                walk_pattern_ref(inner, index, visit);
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            }
+            | GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                walk_pattern_ref(inner, index, visit);
+                walk_expression_ref(expression, index, visit);
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                walk_pattern_ref(inner, index, visit);
+                for order in expression.iter_mut() {
+                    walk_order_ref(order, index, visit);
+                }
+            }
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => walk_pattern_ref(inner, index, visit),
+            GraphPattern::PropertyFunction(call) => {
+                for term in call
+                    .subject_args
+                    .iter_mut()
+                    .chain(call.object_args.iter_mut())
+                {
+                    walk_term_ref(term, index, visit);
+                }
+            }
+            GraphPattern::Group {
+                inner, aggregates, ..
+            } => {
+                walk_pattern_ref(inner, index, visit);
+                walk_aggregates_ref(aggregates, index, visit);
+            }
+        }
+    }
+
+    fn walk_aggregates_ref(
+        aggregates: &mut Vec<(Variable, AggregateExpression)>,
+        index: &mut u32,
+        visit: &mut dyn FnMut(u32, Cell<'_>),
+    ) {
+        let mut taken = std::mem::take(aggregates);
+        for entry in &mut taken {
+            let (function, mut args, scalarvals, mut order_by, distinct) =
+                std::mem::replace(&mut entry.1, count_star()).into_parts();
+            for arg in &mut args {
+                walk_expression_ref(arg, index, visit);
+            }
+            for order in &mut order_by {
+                walk_order_ref(order, index, visit);
+            }
+            entry.1 = AggregateExpression::new(function, args, scalarvals, order_by, distinct)
+                .expect("visiting an argument changes no argument count");
+        }
+        *aggregates = taken;
+    }
+
+    fn walk_order_ref(
+        order: &mut OrderExpression,
+        index: &mut u32,
+        visit: &mut dyn FnMut(u32, Cell<'_>),
+    ) {
+        match order {
+            OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
+                walk_expression_ref(expr, index, visit);
+            }
+        }
+    }
+
+    fn walk_term_ref(
+        term: &mut TermPattern,
+        index: &mut u32,
+        visit: &mut dyn FnMut(u32, Cell<'_>),
+    ) {
+        let here = *index;
+        *index += 1;
+        visit(here, Cell::Term(term));
+        if let TermPattern::Triple(triple) = term {
+            walk_term_ref(&mut triple.subject, index, visit);
+            walk_term_ref(&mut triple.object, index, visit);
+        }
+    }
+
+    fn walk_expression_ref(
+        expr: &mut Expression,
+        index: &mut u32,
+        visit: &mut dyn FnMut(u32, Cell<'_>),
+    ) {
+        let here = *index;
+        *index += 1;
+        visit(here, Cell::Expr(expr));
+        match expr {
+            Expression::Variable(_)
+            | Expression::Bound(_)
+            | Expression::NamedNode(_)
+            | Expression::Literal(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands.iter_mut() {
+                    walk_expression_ref(operand, index, visit);
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                walk_expression_ref(first, index, visit);
+                for (_, operand) in steps.iter_mut() {
+                    walk_expression_ref(operand, index, visit);
+                }
+            }
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => {
+                walk_expression_ref(left, index, visit);
+                walk_expression_ref(right, index, visit);
+            }
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                walk_expression_ref(inner, index, visit);
+            }
+            Expression::In(target, list) => {
+                walk_expression_ref(target, index, visit);
+                for item in list.iter_mut() {
+                    walk_expression_ref(item, index, visit);
+                }
+            }
+            Expression::If(cond, then_expr, else_expr) => {
+                walk_expression_ref(cond, index, visit);
+                walk_expression_ref(then_expr, index, visit);
+                walk_expression_ref(else_expr, index, visit);
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                for item in list.iter_mut() {
+                    walk_expression_ref(item, index, visit);
+                }
+            }
+            Expression::Exists(inner) => walk_pattern_ref(inner, index, visit),
+        }
+    }
+
+    /// [`moved`], written as the recursion it replaces.
+    fn moved_ref(ground: &GroundTerm) -> GroundTerm {
+        match ground {
+            GroundTerm::NamedNode(node) => GroundTerm::NamedNode(moved_node(node)),
+            GroundTerm::Literal(literal) => GroundTerm::Literal(match literal.language() {
+                Some(language) => Literal::new_lang(
+                    format!("{}a", literal.value()),
+                    language,
+                    literal.direction(),
+                ),
+                None => {
+                    Literal::new_typed(format!("{}a", literal.value()), literal.datatype().clone())
+                }
+            }),
+            GroundTerm::BlankNode(blank) => {
+                GroundTerm::BlankNode(BlankNode::new(format!("{}a", blank.as_str())))
+            }
+            GroundTerm::Triple(triple) => GroundTerm::Triple(Child::new(GroundTriple {
+                subject: moved_ref(&triple.subject),
+                predicate: moved_node(&triple.predicate),
+                object: moved_ref(&triple.object),
+            })),
+        }
+    }
+
+    // ── A deterministic choice sequence ────────────────────────────────────────────
+
+    /// The choices one generated shape is built from: a SplitMix64 counter stream, so
+    /// a seed names a shape.
+    struct Choices(u64);
+
+    impl Choices {
+        /// One choice in `0..bound`.
+        fn pick(&mut self, bound: u64) -> u64 {
+            splitmix64_next(&mut self.0) % bound
+        }
+
+        /// One even choice.
+        fn coin(&mut self) -> bool {
+            self.pick(2) == 1
+        }
+    }
+
+    fn nn(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    fn var(name: &str) -> Variable {
+        Variable::new(name)
+    }
+
+    /// One ground term, nesting quoted triples while `depth` allows.
+    fn gen_ground(choices: &mut Choices, depth: usize) -> GroundTerm {
+        match choices.pick(if depth == 0 { 4 } else { 5 }) {
+            0 => GroundTerm::NamedNode(nn(&format!("g{}", choices.pick(3)))),
+            1 => GroundTerm::Literal(Literal::new_simple(format!("l{}", choices.pick(3)))),
+            2 => GroundTerm::Literal(Literal::new_lang(
+                format!("t{}", choices.pick(3)),
+                "en",
+                None,
+            )),
+            3 => GroundTerm::BlankNode(BlankNode::new(format!("b{}", choices.pick(3)))),
+            _ => GroundTerm::Triple(Child::new(GroundTriple {
+                subject: gen_ground(choices, depth - 1),
+                predicate: nn("gp"),
+                object: gen_ground(choices, depth - 1),
+            })),
+        }
+    }
+
+    /// One term position, nesting quoted triples while `depth` allows.
+    fn gen_term(choices: &mut Choices, depth: usize) -> TermPattern {
+        match choices.pick(if depth == 0 { 4 } else { 5 }) {
+            0 => TermPattern::Variable(var(&format!("v{}", choices.pick(4)))),
+            1 => TermPattern::NamedNode(nn(&format!("n{}", choices.pick(3)))),
+            2 => TermPattern::Literal(Literal::new_simple(format!("l{}", choices.pick(3)))),
+            3 => TermPattern::BlankNode(BlankNode::new(format!("b{}", choices.pick(3)))),
+            _ => TermPattern::Triple(Child::new(TriplePattern {
+                subject: gen_term(choices, depth - 1),
+                predicate: gen_predicate(choices),
+                object: gen_term(choices, depth - 1),
+            })),
+        }
+    }
+
+    fn gen_predicate(choices: &mut Choices) -> NamedNodePattern {
+        if choices.coin() {
+            NamedNodePattern::Variable(var("p"))
+        } else {
+            NamedNodePattern::NamedNode(nn("p"))
+        }
+    }
+
+    /// One expression, at most `budget` operators over its leaves.
+    fn gen_expression(choices: &mut Choices, budget: &mut usize) -> Expression {
+        if *budget == 0 {
+            return match choices.pick(4) {
+                0 => Expression::Variable(var(&format!("v{}", choices.pick(4)))),
+                1 => Expression::Bound(var(&format!("v{}", choices.pick(4)))),
+                2 => Expression::NamedNode(nn("c")),
+                _ => Expression::Literal(Literal::new_simple("k")),
+            };
+        }
+        *budget -= 1;
+        match choices.pick(11) {
+            0 => Expression::Or(Chain::new(
+                gen_expression(choices, budget),
+                gen_expression(choices, budget),
+                [],
+            )),
+            1 => Expression::And(Chain::new(
+                gen_expression(choices, budget),
+                gen_expression(choices, budget),
+                [gen_expression(choices, budget)],
+            )),
+            2 => Expression::Arithmetic(
+                Child::new(gen_expression(choices, budget)),
+                NonEmpty::from_parts(
+                    (ArithmeticOperator::Add, gen_expression(choices, budget)),
+                    [(
+                        ArithmeticOperator::Multiply,
+                        gen_expression(choices, budget),
+                    )],
+                ),
+            ),
+            3 => Expression::Equal(
+                Child::new(gen_expression(choices, budget)),
+                Child::new(gen_expression(choices, budget)),
+            ),
+            4 => Expression::Not(Child::new(gen_expression(choices, budget))),
+            5 => Expression::In(
+                Child::new(gen_expression(choices, budget)),
+                Args::from(vec![
+                    gen_expression(choices, budget),
+                    gen_expression(choices, budget),
+                ]),
+            ),
+            6 => Expression::If(
+                Child::new(gen_expression(choices, budget)),
+                Child::new(gen_expression(choices, budget)),
+                Child::new(gen_expression(choices, budget)),
+            ),
+            7 => Expression::Coalesce(Args::from(vec![gen_expression(choices, budget)])),
+            8 => Expression::FunctionCall(
+                Function::Str,
+                Args::from(vec![gen_expression(choices, budget)]),
+            ),
+            9 => Expression::Exists(Child::new(gen_pattern(choices, budget))),
+            _ => Expression::UnaryMinus(Child::new(gen_expression(choices, budget))),
+        }
+    }
+
+    /// One aggregate over generated expressions: a `COUNT(*)`, a `SUM`, or a `FOLD`
+    /// with its own sort key.
+    fn gen_aggregate(choices: &mut Choices, budget: &mut usize) -> AggregateExpression {
+        match choices.pick(3) {
+            0 => count_star(),
+            1 => AggregateExpression::new(
+                AggregateFunction::Sum,
+                vec![gen_expression(choices, budget)],
+                Vec::new(),
+                Vec::new(),
+                choices.coin(),
+            )
+            .expect("SUM takes one argument"),
+            _ => AggregateExpression::new(
+                AggregateFunction::Fold,
+                vec![gen_expression(choices, budget)],
+                Vec::new(),
+                vec![
+                    OrderExpression::Desc(gen_expression(choices, budget)),
+                    OrderExpression::Asc(gen_expression(choices, budget)),
+                ],
+                false,
+            )
+            .expect("FOLD takes one argument and its own sort keys"),
+        }
+    }
+
+    /// A leaf pattern: a basic graph pattern, a path, a `VALUES` block, or a call.
+    fn gen_leaf(choices: &mut Choices) -> GraphPattern {
+        match choices.pick(4) {
+            0 => GraphPattern::Bgp {
+                patterns: (0..choices.pick(3))
+                    .map(|_| TriplePattern {
+                        subject: gen_term(choices, 2),
+                        predicate: gen_predicate(choices),
+                        object: gen_term(choices, 2),
+                    })
+                    .collect(),
+            },
+            1 => GraphPattern::Path {
+                subject: gen_term(choices, 1),
+                path: PropertyPathExpression::NamedNode(nn("q")),
+                object: gen_term(choices, 1),
+            },
+            2 => GraphPattern::Values {
+                variables: vec![var("v0"), var("v1")],
+                bindings: (0..choices.pick(3))
+                    .map(|_| {
+                        vec![
+                            choices.coin().then(|| gen_ground(choices, 1)),
+                            choices.coin().then(|| gen_ground(choices, 1)),
+                        ]
+                    })
+                    .collect(),
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![gen_term(choices, 1)],
+                object_args: vec![gen_term(choices, 1), gen_term(choices, 1)],
+            }),
+        }
+    }
+
+    /// One generated pattern, at most `budget` operators over its leaves.
+    fn gen_pattern(choices: &mut Choices, budget: &mut usize) -> GraphPattern {
+        if *budget == 0 {
+            return gen_leaf(choices);
+        }
+        *budget -= 1;
+        match choices.pick(17) {
+            0 => GraphPattern::Join {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+            },
+            1 => GraphPattern::Lateral {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+            },
+            2 => GraphPattern::Minus {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+            },
+            3 => GraphPattern::Union {
+                arms: Chain::new(
+                    gen_pattern(choices, budget),
+                    gen_pattern(choices, budget),
+                    [],
+                ),
+            },
+            4 => GraphPattern::LeftJoin {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+                expression: choices.coin().then(|| gen_expression(choices, budget)),
+            },
+            5 => GraphPattern::Filter {
+                expr: gen_expression(choices, budget),
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            6 => GraphPattern::Graph {
+                name: gen_predicate(choices),
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            7 => GraphPattern::Service {
+                name: gen_predicate(choices),
+                inner: Child::new(gen_pattern(choices, budget)),
+                silent: choices.coin(),
+            },
+            8 => GraphPattern::Extend {
+                inner: Child::new(gen_pattern(choices, budget)),
+                variable: var("x"),
+                expression: gen_expression(choices, budget),
+            },
+            9 => GraphPattern::Unfold {
+                inner: Child::new(gen_pattern(choices, budget)),
+                expression: gen_expression(choices, budget),
+                element: var("e"),
+                companion: choices.coin().then(|| var("i")),
+            },
+            10 => GraphPattern::OrderBy {
+                inner: Child::new(gen_pattern(choices, budget)),
+                expression: (0..choices.pick(3))
+                    .map(|_| {
+                        if choices.coin() {
+                            OrderExpression::Asc(gen_expression(choices, budget))
+                        } else {
+                            OrderExpression::Desc(gen_expression(choices, budget))
+                        }
+                    })
+                    .collect(),
+            },
+            11 => GraphPattern::Project {
+                inner: Child::new(gen_pattern(choices, budget)),
+                variables: vec![var("v0")],
+            },
+            12 => GraphPattern::Distinct {
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            13 => GraphPattern::Reduced {
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            14 => GraphPattern::Slice {
+                inner: Child::new(gen_pattern(choices, budget)),
+                start: 1,
+                length: Some(2),
+            },
+            15 => GraphPattern::Group {
+                inner: Child::new(gen_pattern(choices, budget)),
+                variables: vec![var("v0")],
+                aggregates: (0..choices.pick(3))
+                    .map(|n| (var(&format!("a{n}")), gen_aggregate(choices, budget)))
+                    .collect(),
+            },
+            _ => gen_leaf(choices),
+        }
+    }
+
+    /// One generated `SELECT` query.
+    fn gen_query(seed: u64) -> Query {
+        let mut choices = Choices(seed);
+        let mut budget = 2 + choices.pick(9) as usize;
+        Query::Select {
+            pattern: gen_pattern(&mut choices, &mut budget),
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        }
+    }
+
+    /// A whole-query walk: the loop, or the recursion it is checked against.
+    type Walk = fn(&mut Query, &mut dyn FnMut(u32, Cell<'_>)) -> u32;
+
+    /// Every cell of `query` in numbering order, as `(ordinal, contents)`, by `walk`.
+    fn numbered(query: &mut Query, walk: Walk) -> (u32, Vec<(u32, CellValue)>) {
+        let mut cells = Vec::new();
+        let count = walk(query, &mut |index, cell| {
+            cells.push((index, cell.snapshot()));
+        });
+        (count, cells)
+    }
+
+    /// A visitor that writes into every kind of cell a rewrite writes: a term variable
+    /// becomes an IRI, an `UNDEF` cell a value, a variable expression a literal, a
+    /// variable graph name an IRI.
+    fn write_every_cell(_: u32, cell: Cell<'_>) {
+        match cell {
+            Cell::Term(term) => {
+                if matches!(term, TermPattern::Variable(_)) {
+                    *term = TermPattern::NamedNode(nn("written"));
+                }
+            }
+            Cell::Ground(slot) => {
+                if slot.is_none() {
+                    *slot = Some(GroundTerm::NamedNode(nn("written")));
+                }
+            }
+            Cell::Expr(expr) => {
+                if matches!(expr, Expression::Variable(_) | Expression::Bound(_)) {
+                    *expr = Expression::Literal(Literal::new_simple("written"));
+                }
+            }
+            Cell::GraphName(name) => {
+                if matches!(name, NamedNodePattern::Variable(_)) {
+                    *name = NamedNodePattern::NamedNode(nn("written"));
+                }
+            }
+        }
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The checks ─────────────────────────────────────────────────────────────────
+
+    /// Over two hundred generated queries, the loop numbers the same cells in the same
+    /// order as the recursion, reports the same count, and hands the tree back
+    /// unchanged.
+    #[test]
+    fn the_loop_numbers_the_cells_the_recursion_numbers() {
+        for seed in 0..200_u64 {
+            let original = gen_query(seed);
+            let mut looped = original.clone();
+            let mut recursed = original.clone();
+            let by_loop = numbered(&mut looped, walk_query);
+            let by_recursion = numbered(&mut recursed, walk_query_ref);
+            assert_eq!(by_loop, by_recursion, "seed {seed}: {original:?}");
+            assert_eq!(
+                by_loop.0 as usize,
+                by_loop.1.len(),
+                "seed {seed}: one ordinal per cell"
+            );
+            assert_eq!(
+                looped, original,
+                "seed {seed}: a reading walk changes nothing"
+            );
+            assert_eq!(recursed, original, "seed {seed}");
+        }
+    }
+
+    /// Over the same queries, a visitor that writes into every cell leaves the loop's
+    /// tree equal to the recursion's, node for node.
+    #[test]
+    fn the_loop_writes_back_what_the_recursion_writes() {
+        for seed in 0..200_u64 {
+            let original = gen_query(seed);
+            let mut looped = original.clone();
+            let mut recursed = original.clone();
+            let looped_count = walk_query(&mut looped, &mut write_every_cell);
+            let recursed_count = walk_query_ref(&mut recursed, &mut write_every_cell);
+            assert_eq!(looped_count, recursed_count, "seed {seed}");
+            assert_eq!(looped, recursed, "seed {seed}: {original:?}");
+        }
+    }
+
+    /// Over generated ground terms, quoted triples nested inside, the loop moves what
+    /// the recursion moves.
+    #[test]
+    fn the_loop_moves_what_the_recursion_moves() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices(seed);
+            let ground = gen_ground(&mut choices, 4);
+            assert_eq!(
+                moved(&ground),
+                moved_ref(&ground),
+                "seed {seed}: {ground:?}"
+            );
+        }
+    }
+
+    /// A `FILTER` nesting a hundred thousand `!` operators over `?v` is numbered on a
+    /// thread whose stack holds a few hundred frames of any recursion: one cell per
+    /// operator, one for the variable under them, then the two term positions of the
+    /// one triple pattern the filter reads — and a writing walk over the same query
+    /// leaves the variable under the operators written and the operators in place.
+    #[test]
+    fn a_hundred_thousand_nested_operators_are_numbered_on_a_128_kib_thread() {
+        on_small_stack(|| {
+            let mut expression = Expression::Variable(var("v"));
+            for _ in 0..DEPTH {
+                expression = Expression::Not(Child::new(expression));
+            }
+            let mut query = Query::Select {
+                pattern: GraphPattern::Filter {
+                    expr: expression,
+                    inner: Child::new(GraphPattern::Bgp {
+                        patterns: vec![TriplePattern {
+                            subject: TermPattern::Variable(var("s")),
+                            predicate: NamedNodePattern::NamedNode(nn("p")),
+                            object: TermPattern::Variable(var("o")),
+                        }],
+                    }),
+                },
+                dataset: QueryDataset::default(),
+                base_iri: None,
+                version: None,
+            };
+            let expected = u32::try_from(DEPTH + 1 + 2).expect("fits");
+
+            let mut seen = 0_u32;
+            let counted = walk_query(&mut query, &mut |index, _| {
+                assert_eq!(index, seen, "ordinals run in order");
+                seen += 1;
+            });
+            assert_eq!(counted, expected);
+            assert_eq!(seen, expected);
+
+            let written = walk_query(&mut query, &mut write_every_cell);
+            assert_eq!(written, expected);
+            let Query::Select {
+                pattern: GraphPattern::Filter { expr, inner },
+                ..
+            } = &query
+            else {
+                unreachable!("the query keeps its shape");
+            };
+            let mut levels = 0_usize;
+            let mut at = expr;
+            while let Expression::Not(inner) = at {
+                levels += 1;
+                at = inner;
+            }
+            assert_eq!(levels, DEPTH);
+            assert_eq!(at, &Expression::Literal(Literal::new_simple("written")));
+            assert_eq!(
+                &**inner,
+                &GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::NamedNode(nn("written")),
+                        predicate: NamedNodePattern::NamedNode(nn("p")),
+                        object: TermPattern::NamedNode(nn("written")),
+                    }],
+                }
+            );
+        });
+    }
+}

@@ -579,7 +579,7 @@ fn ebv_of<D: DatasetView + Sync>(
 
 /// The effective boolean value a constant `literal` evaluates to (`None` = type error)
 /// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
-/// planner (`crate::property_fn_plan`'s `truth_requires`). A language-tagged string has
+/// planner (`crate::property_fn_plan`'s `requires`). A language-tagged string has
 /// none; every other literal has its XSD value's.
 pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<bool> {
     if literal.language().is_some() {
@@ -1566,7 +1566,7 @@ fn exists<D: DatasetView + Sync>(
              left it",
         ));
     }
-    let prepared = ctx.prepared_exists(pattern)?;
+    let prepared = ctx.prepared_exists(pattern);
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
         return Ok(false);
     };
@@ -1688,12 +1688,11 @@ fn exists_prepared<D: DatasetView + Sync>(
                 }
             })
             .collect();
-        // A walk over the whole inner pattern, from an `EXISTS` that may be deep: inside
-        // a `crate::stack::walk` scope, so a level that runs out of stack refuses rather
-        // than answering "no collision" for a pattern it never finished reading.
-        if let Some((var, intro)) = crate::stack::walk(|| {
+        // A walk over the whole inner pattern, over a work list, so an `EXISTS` of any
+        // depth is read to the end before "no collision" is answered.
+        if let Some((var, intro)) =
             crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
-        })? {
+        {
             return Err(EvalError::exists_scope_collision(
                 var.as_str().to_owned(),
                 intro.as_str(),
@@ -2042,7 +2041,7 @@ fn exists_layered<D: DatasetView + Sync>(
         copy = Some(substitute_pattern(from, layer)?);
     }
     let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
-    let prepared = crate::eval::PreparedExists::build_guarded(body)?;
+    let prepared = crate::eval::PreparedExists::build(body);
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
         return Ok(false);
     };
@@ -10434,7 +10433,7 @@ mod tests {
     }
 
     /// **A constant's truth, as the planner reads it, is the evaluator's.**
-    /// `crate::property_fn_plan`'s `truth_requires` calls a constant never true unless
+    /// `crate::property_fn_plan`'s `requires` calls a constant never true unless
     /// [`constant_ebv`] answers `true`; each literal here is evaluated for its
     /// effective boolean value and compared.
     #[test]

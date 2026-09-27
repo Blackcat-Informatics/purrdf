@@ -84,7 +84,7 @@ use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
-use crate::governor::soundness::ExpressionPart;
+use crate::governor::soundness::{ExpressionPart, PatternPart};
 use crate::remote::Invocation;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -179,6 +179,7 @@ pub(crate) struct EndpointFrame<I> {
 
 /// How a `SERVICE ?v` inside an operand is reached from the operand's root.
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 struct EndpointUse {
     /// The endpoint variable.
     variable: Variable,
@@ -208,7 +209,7 @@ fn served_endpoint_variables(
     placeholders: Option<&crate::deferred_exists::DeferredMap>,
 ) -> Vec<Variable> {
     let mut uses = Vec::new();
-    classify(right, true, &mut Vec::new(), &mut uses, placeholders);
+    classify(right, true, &mut uses, placeholders);
     uses.into_iter()
         .filter(|u| u.direct && !u.conflict)
         .map(|u| u.variable)
@@ -242,206 +243,240 @@ fn record(variable: &Variable, direct: bool, scopes: &[Scope<'_>], uses: &mut Ve
     }
 }
 
+/// One step of [`classify`]'s walk.
+enum ClassifyStep<'a> {
+    /// A pattern, and whether it stands in a direct position.
+    Pattern(&'a GraphPattern, bool),
+    /// An expression whose `EXISTS` patterns are classified.
+    Expression(&'a Expression),
+    /// An `EXISTS` body reached through an expression: a deferred placeholder answers
+    /// from its site, any other body is classified as written, never direct.
+    Exists(&'a GraphPattern),
+    /// The `SELECT` or `GROUP BY` list entered last is left: the pattern under it is
+    /// classified.
+    LeaveScope,
+}
+
 /// Classify every `SERVICE ?v` reachable from `pattern`. `direct` says whether `pattern`
 /// itself is in a direct position.
 ///
+/// A loop over an explicit work list, so an operand of any depth costs heap and never
+/// stack. The list pops each node's parts in the order the node evaluates them — an
+/// operator's inner pattern before its expressions, both operands left to right, a
+/// `SELECT` or `GROUP BY` list entered before its inner pattern and left after it — so
+/// `uses` fills in that order.
+///
 /// The match is wildcard-free so a new algebra variant is a compile error here rather
 /// than a position silently classified.
-fn classify<'a>(
-    pattern: &'a GraphPattern,
+fn classify(
+    pattern: &GraphPattern,
     direct: bool,
-    scopes: &mut Vec<Scope<'a>>,
     uses: &mut Vec<EndpointUse>,
     placeholders: Option<&crate::deferred_exists::DeferredMap>,
 ) {
-    // A walk over an operand that may be deep; run inside a `crate::stack::walk` scope,
-    // which discards the partial answer when a level refuses.
-    if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-        return;
-    }
-    match pattern {
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::PropertyFunction(_) => {}
-        // The body is forwarded as text, never evaluated here, so a `SERVICE` nested in
-        // it is the remote endpoint's to resolve.
-        GraphPattern::Service { name, .. } => {
-            if let NamedNodePattern::Variable(variable) = name {
-                record(variable, direct, scopes, uses);
-            }
-        }
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            classify(left, direct, scopes, uses, placeholders);
-            classify(right, direct, scopes, uses, placeholders);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                classify(arm, direct, scopes, uses, placeholders);
-            }
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            classify(left, direct, scopes, uses, placeholders);
-            classify(right, false, scopes, uses, placeholders);
-            if let Some(expression) = expression {
-                classify_expression(expression, scopes, uses, placeholders);
-            }
-        }
-        GraphPattern::Minus { left, right } => {
-            classify(left, direct, scopes, uses, placeholders);
-            classify(right, false, scopes, uses, placeholders);
-        }
-        GraphPattern::Filter { expr, inner } => {
-            classify(inner, direct, scopes, uses, placeholders);
-            classify_expression(expr, scopes, uses, placeholders);
-        }
-        GraphPattern::Extend {
-            inner, expression, ..
-        }
-        | GraphPattern::Unfold {
-            inner, expression, ..
-        } => {
-            classify(inner, direct, scopes, uses, placeholders);
-            classify_expression(expression, scopes, uses, placeholders);
-        }
-        GraphPattern::Graph { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner } => classify(inner, direct, scopes, uses, placeholders),
-        GraphPattern::OrderBy { inner, expression } => {
-            classify(inner, direct, scopes, uses, placeholders);
-            for key in expression {
-                match key {
-                    purrdf_sparql_algebra::OrderExpression::Asc(e)
-                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                        classify_expression(e, scopes, uses, placeholders);
+    let mut scopes: Vec<Scope<'_>> = Vec::new();
+    let mut pending = vec![ClassifyStep::Pattern(pattern, direct)];
+    while let Some(step) = pending.pop() {
+        match step {
+            ClassifyStep::Pattern(pattern, direct) => {
+                match pattern {
+                    GraphPattern::Bgp { .. }
+                    | GraphPattern::Path { .. }
+                    | GraphPattern::Values { .. }
+                    | GraphPattern::PropertyFunction(_) => {}
+                    // The body is forwarded as text, never evaluated here, so a `SERVICE`
+                    // nested in it is the remote endpoint's to resolve.
+                    GraphPattern::Service { name, .. } => {
+                        if let NamedNodePattern::Variable(variable) = name {
+                            record(variable, direct, &scopes, uses);
+                        }
+                    }
+                    GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                        pending.push(ClassifyStep::Pattern(right, direct));
+                        pending.push(ClassifyStep::Pattern(left, direct));
+                    }
+                    GraphPattern::Union { arms } => {
+                        pending.extend(
+                            arms.iter()
+                                .rev()
+                                .map(|arm| ClassifyStep::Pattern(arm, direct)),
+                        );
+                    }
+                    GraphPattern::LeftJoin {
+                        left,
+                        right,
+                        expression,
+                    } => {
+                        if let Some(expression) = expression {
+                            pending.push(ClassifyStep::Expression(expression));
+                        }
+                        pending.push(ClassifyStep::Pattern(right, false));
+                        pending.push(ClassifyStep::Pattern(left, direct));
+                    }
+                    GraphPattern::Minus { left, right } => {
+                        pending.push(ClassifyStep::Pattern(right, false));
+                        pending.push(ClassifyStep::Pattern(left, direct));
+                    }
+                    GraphPattern::Filter { expr, inner } => {
+                        pending.push(ClassifyStep::Expression(expr));
+                        pending.push(ClassifyStep::Pattern(inner, direct));
+                    }
+                    GraphPattern::Extend {
+                        inner, expression, ..
+                    }
+                    | GraphPattern::Unfold {
+                        inner, expression, ..
+                    } => {
+                        pending.push(ClassifyStep::Expression(expression));
+                        pending.push(ClassifyStep::Pattern(inner, direct));
+                    }
+                    GraphPattern::Graph { inner, .. }
+                    | GraphPattern::Distinct { inner }
+                    | GraphPattern::Reduced { inner } => {
+                        pending.push(ClassifyStep::Pattern(inner, direct));
+                    }
+                    GraphPattern::OrderBy { inner, expression } => {
+                        pending.extend(expression.iter().rev().map(|key| {
+                            ClassifyStep::Expression(crate::modifier::order_sort_key(key))
+                        }));
+                        pending.push(ClassifyStep::Pattern(inner, direct));
+                    }
+                    GraphPattern::Project { inner, variables } => {
+                        scopes.push(Scope::Project(variables));
+                        pending.push(ClassifyStep::LeaveScope);
+                        pending.push(ClassifyStep::Pattern(inner, direct));
+                    }
+                    // A slice keeps a positional selection of its input, and which rows it
+                    // keeps depends on every row before them — including rows from endpoints
+                    // outside the list. The identity slice selects nothing.
+                    GraphPattern::Slice {
+                        inner,
+                        start,
+                        length,
+                    } => {
+                        let identity = *start == 0 && length.is_none();
+                        pending.push(ClassifyStep::Pattern(inner, direct && identity));
+                    }
+                    // The aggregates' expressions are classified once the list is left.
+                    GraphPattern::Group {
+                        inner,
+                        variables,
+                        aggregates,
+                    } => {
+                        scopes.push(Scope::Group(variables));
+                        let first = pending.len();
+                        for (_, aggregate) in aggregates {
+                            for e in aggregate.args().iter().chain(
+                                aggregate
+                                    .order_by()
+                                    .iter()
+                                    .map(crate::modifier::order_sort_key),
+                            ) {
+                                pending.push(ClassifyStep::Expression(e));
+                            }
+                        }
+                        pending[first..].reverse();
+                        pending.push(ClassifyStep::LeaveScope);
+                        pending.push(ClassifyStep::Pattern(inner, direct));
                     }
                 }
             }
-        }
-        GraphPattern::Project { inner, variables } => {
-            scopes.push(Scope::Project(variables));
-            classify(inner, direct, scopes, uses, placeholders);
-            scopes.pop();
-        }
-        // A slice keeps a positional selection of its input, and which rows it keeps
-        // depends on every row before them — including rows from endpoints outside the
-        // list. The identity slice selects nothing.
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => {
-            let identity = *start == 0 && length.is_none();
-            classify(inner, direct && identity, scopes, uses, placeholders);
-        }
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            scopes.push(Scope::Group(variables));
-            classify(inner, direct, scopes, uses, placeholders);
-            scopes.pop();
-            for (_, aggregate) in aggregates {
-                for e in aggregate.args().iter().chain(
-                    aggregate
-                        .order_by()
-                        .iter()
-                        .map(crate::modifier::order_sort_key),
-                ) {
-                    classify_expression(e, scopes, uses, placeholders);
+            // The `SERVICE ?v` clauses inside an expression's `EXISTS` patterns are never
+            // direct, since an `EXISTS` answers a boolean rather than carrying rows
+            // upwards.
+            ClassifyStep::Expression(expr) => {
+                let first = pending.len();
+                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        ExpressionPart::Sub(sub) => pending.push(ClassifyStep::Expression(sub)),
+                        ExpressionPart::Exists(body) => pending.push(ClassifyStep::Exists(body)),
+                        ExpressionPart::Call(_) => {}
+                    }
+                    false
+                });
+                pending[first..].reverse();
+            }
+            // A substituted copy's placeholder stands for a body the walk cannot see: its
+            // site lists the body's `SERVICE ?v` clauses, and the substitution it is owed
+            // decides which of them are still variable endpoints.
+            ClassifyStep::Exists(body) => {
+                match placeholders.and_then(|map| map.get(&(std::ptr::from_ref(body) as usize))) {
+                    Some(slot) => {
+                        for variable in &slot.site.service_uses {
+                            if !slot.env.resolves_endpoint(variable) {
+                                record(variable, false, &scopes, uses);
+                            }
+                        }
+                    }
+                    None => pending.push(ClassifyStep::Pattern(body, false)),
                 }
+            }
+            ClassifyStep::LeaveScope => {
+                scopes.pop();
             }
         }
     }
 }
 
-/// Classify the `SERVICE ?v` clauses inside an expression's `EXISTS` patterns: never
-/// direct, since an `EXISTS` answers a boolean rather than carrying rows upwards.
-fn classify_expression<'a>(
-    expr: &'a Expression,
-    scopes: &mut Vec<Scope<'a>>,
-    uses: &mut Vec<EndpointUse>,
-    placeholders: Option<&crate::deferred_exists::DeferredMap>,
-) {
-    if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-        return;
-    }
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-        match part {
-            ExpressionPart::Sub(sub) => classify_expression(sub, scopes, uses, placeholders),
-            // A substituted copy's placeholder stands for a body the walk cannot see: its
-            // site lists the body's `SERVICE ?v` clauses, and the substitution it is owed
-            // decides which of them are still variable endpoints.
-            ExpressionPart::Exists(pattern) => match placeholders
-                .and_then(|map| map.get(&(std::ptr::from_ref(pattern) as usize)))
-            {
-                Some(slot) => {
-                    for variable in &slot.site.service_uses {
-                        if !slot.env.resolves_endpoint(variable) {
-                            record(variable, false, scopes, uses);
-                        }
-                    }
-                }
-                None => classify(pattern, false, scopes, uses, placeholders),
-            },
-            ExpressionPart::Call(_) => {}
-        }
-        false
-    });
+/// One node of [`mentions_variable_endpoint`]'s work list.
+enum ScanNode<'a> {
+    /// A pattern.
+    Pattern(&'a GraphPattern),
+    /// An expression whose `EXISTS` patterns are scanned.
+    Expression(&'a Expression),
 }
 
 /// Whether `pattern` contains a variable-endpoint `SERVICE` anywhere a local evaluation
 /// can reach — every position, projections and `EXISTS` included, so the answer is
 /// never "absent" for a clause some inner join could serve.
+///
+/// A loop over a work list that keeps a shallow query's pending nodes inline, so the
+/// scan every evaluation runs allocates nothing for one and never needs more stack for
+/// a deeper query.
 pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
-    if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-        return true;
-    }
-    if let GraphPattern::Service { name, .. } = pattern {
-        return matches!(name, NamedNodePattern::Variable(_));
-    }
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| match part {
-        crate::governor::soundness::PatternPart::Child(child, _) => {
-            mentions_variable_endpoint(child)
+    let mut pending: smallvec::SmallVec<[ScanNode<'_>; 16]> = smallvec::SmallVec::new();
+    pending.push(ScanNode::Pattern(pattern));
+    while let Some(node) = pending.pop() {
+        match node {
+            // A `SERVICE` body is forwarded as text, never evaluated here, so it is not
+            // entered.
+            ScanNode::Pattern(GraphPattern::Service { name, .. }) => {
+                if matches!(name, NamedNodePattern::Variable(_)) {
+                    return true;
+                }
+            }
+            ScanNode::Pattern(pattern) => {
+                crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                    pending.push(match part {
+                        PatternPart::Child(child, _) => ScanNode::Pattern(child),
+                        PatternPart::Expression(expr) => ScanNode::Expression(expr),
+                    });
+                    false
+                });
+            }
+            ScanNode::Expression(expr) => {
+                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        ExpressionPart::Sub(sub) => pending.push(ScanNode::Expression(sub)),
+                        ExpressionPart::Exists(body) => pending.push(ScanNode::Pattern(body)),
+                        ExpressionPart::Call(_) => {}
+                    }
+                    false
+                });
+            }
         }
-        crate::governor::soundness::PatternPart::Expression(expr) => {
-            expression_mentions_variable_endpoint(expr)
-        }
-    })
-}
-
-/// [`mentions_variable_endpoint`] through an expression's `EXISTS` patterns. Recursive
-/// rather than worklist-driven, so the once-per-query scan allocates nothing.
-fn expression_mentions_variable_endpoint(expr: &Expression) -> bool {
-    if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-        return true;
     }
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| match part {
-        ExpressionPart::Sub(sub) => expression_mentions_variable_endpoint(sub),
-        ExpressionPart::Exists(pattern) => mentions_variable_endpoint(pattern),
-        ExpressionPart::Call(_) => false,
-    })
+    false
 }
 
 /// The scan [`crate::eval::prepare_query_context`] installs for `pattern`.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] when the walk runs out of stack.
-pub(crate) fn scan(pattern: &GraphPattern) -> Result<EndpointScan, EvalError> {
-    if !crate::stack::walk(|| mentions_variable_endpoint(pattern))? {
-        return Ok(EndpointScan::Absent);
+pub(crate) fn scan(pattern: &GraphPattern) -> EndpointScan {
+    if !mentions_variable_endpoint(pattern) {
+        return EndpointScan::Absent;
     }
     let mut index = ServedIndex::default();
-    crate::stack::walk(|| {
-        index.summarize(pattern);
-    })?;
-    Ok(EndpointScan::Present(Arc::new(index)))
+    index.summarize(pattern);
+    EndpointScan::Present(Arc::new(index))
 }
 
 /// One variable's variable-endpoint `SERVICE` occurrences below a node, relative to that
@@ -449,6 +484,7 @@ pub(crate) fn scan(pattern: &GraphPattern) -> Result<EndpointScan, EvalError> {
 /// occurrence reaches it only through an operator that could absorb, drop or re-select
 /// them. The bottom-up form of [`classify`].
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 struct Occurrence {
     variable: Variable,
     direct: bool,
@@ -493,74 +529,227 @@ impl ServedIndex {
 
     /// The occurrences below `pattern`, indexing every operand and `EXISTS` body on the
     /// way. Wildcard-free, like [`classify`], whose classification it computes.
+    ///
+    /// A loop over an explicit frame stack and a stack of the summaries computed so
+    /// far: a node is entered, its parts are pushed above it in the order the node
+    /// evaluates them ([`summary_parts`]), and once every part has left its summary on
+    /// the summary stack the node is exited and combines them. The order the parts'
+    /// summaries are merged in is the order the operator evaluates the parts, so the
+    /// served lists and `EXISTS` uses come out in that order.
     fn summarize(&mut self, pattern: &GraphPattern) -> Vec<Occurrence> {
-        // Run inside a `crate::stack::walk` scope, which discards the partial index when
-        // a level refuses.
-        if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-            return Vec::new();
+        let mut frames = vec![SummaryFrame::Enter(SummaryNode::Pattern(pattern))];
+        let mut summaries: Vec<Vec<Occurrence>> = Vec::new();
+        while let Some(frame) = frames.pop() {
+            match frame {
+                SummaryFrame::Enter(node) => {
+                    let exit = frames.len();
+                    frames.push(SummaryFrame::Exit(node, 0));
+                    let first = frames.len();
+                    summary_parts(node, &mut |part| frames.push(SummaryFrame::Enter(part)));
+                    let parts = frames.len() - first;
+                    frames[first..].reverse();
+                    frames[exit] = SummaryFrame::Exit(node, parts);
+                }
+                SummaryFrame::Exit(node, parts) => {
+                    let start = summaries.len() - parts;
+                    let mut kids = summaries.split_off(start).into_iter();
+                    let summary = self.combine(node, &mut kids);
+                    summaries.push(summary);
+                }
+            }
         }
-        match pattern {
+        summaries
+            .pop()
+            .expect("the root's summary is the last one computed")
+    }
+
+    /// The summary of `node` from its parts' summaries, `kids`, in the order
+    /// [`summary_parts`] pushed the parts.
+    fn combine(
+        &mut self,
+        node: SummaryNode<'_>,
+        kids: &mut std::vec::IntoIter<Vec<Occurrence>>,
+    ) -> Vec<Occurrence> {
+        fn part(kids: &mut std::vec::IntoIter<Vec<Occurrence>>) -> Vec<Occurrence> {
+            kids.next().expect("every part pushed its summary")
+        }
+        match node {
+            SummaryNode::Pattern(pattern) => match pattern {
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::PropertyFunction(_) => Vec::new(),
+                GraphPattern::Service { name, .. } => match name {
+                    NamedNodePattern::Variable(variable) => vec![Occurrence {
+                        variable: variable.clone(),
+                        direct: true,
+                        conflict: false,
+                    }],
+                    NamedNodePattern::NamedNode(_) => Vec::new(),
+                },
+                GraphPattern::Join { left, right } => {
+                    let mut summary = part(kids);
+                    let right_summary = part(kids);
+                    self.note(left, &summary);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Lateral { .. } => {
+                    let mut summary = part(kids);
+                    let right_summary = part(kids);
+                    merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Union { .. } => {
+                    let mut summary = Vec::new();
+                    for arm_summary in kids.by_ref() {
+                        merge(&mut summary, arm_summary);
+                    }
+                    summary
+                }
+                GraphPattern::LeftJoin {
+                    right, expression, ..
+                } => {
+                    let mut summary = part(kids);
+                    let right_summary = part(kids);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, indirect(right_summary));
+                    if expression.is_some() {
+                        let expression_summary = part(kids);
+                        merge(&mut summary, expression_summary);
+                    }
+                    summary
+                }
+                GraphPattern::Minus { right, .. } => {
+                    let mut summary = part(kids);
+                    let right_summary = part(kids);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, indirect(right_summary));
+                    summary
+                }
+                GraphPattern::Filter { .. }
+                | GraphPattern::Extend { .. }
+                | GraphPattern::Unfold { .. } => {
+                    let mut summary = part(kids);
+                    let expression_summary = part(kids);
+                    merge(&mut summary, expression_summary);
+                    summary
+                }
+                GraphPattern::Graph { .. }
+                | GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. } => part(kids),
+                GraphPattern::OrderBy { .. } => {
+                    let mut summary = part(kids);
+                    for key_summary in kids.by_ref() {
+                        merge(&mut summary, key_summary);
+                    }
+                    summary
+                }
+                GraphPattern::Project { variables, .. } => {
+                    let mut summary = part(kids);
+                    summary.retain(|o| variables.contains(&o.variable));
+                    summary
+                }
+                GraphPattern::Slice { start, length, .. } => {
+                    let summary = part(kids);
+                    if *start == 0 && length.is_none() {
+                        summary
+                    } else {
+                        indirect(summary)
+                    }
+                }
+                GraphPattern::Group { variables, .. } => {
+                    let mut summary = part(kids);
+                    for occurrence in &mut summary {
+                        if !variables.contains(&occurrence.variable) {
+                            occurrence.conflict |= occurrence.direct;
+                            occurrence.direct = false;
+                        }
+                    }
+                    for expression_summary in kids.by_ref() {
+                        merge(&mut summary, expression_summary);
+                    }
+                    summary
+                }
+            },
+            // The occurrences inside an expression's `EXISTS` patterns: never direct.
+            SummaryNode::Expression(_) => {
+                let mut summary = Vec::new();
+                for part_summary in kids.by_ref() {
+                    merge(&mut summary, part_summary);
+                }
+                summary
+            }
+            SummaryNode::Exists(body) => {
+                let body_summary = part(kids);
+                let uses: Arc<[Variable]> =
+                    body_summary.iter().map(|o| o.variable.clone()).collect();
+                self.exists_uses
+                    .insert(std::ptr::from_ref(body) as usize, uses);
+                indirect(body_summary)
+            }
+        }
+    }
+}
+
+/// One node of [`ServedIndex::summarize`]'s walk.
+#[derive(Clone, Copy)]
+enum SummaryNode<'a> {
+    /// A pattern, summarized by its variant.
+    Pattern(&'a GraphPattern),
+    /// An expression, summarized as the merge of its parts' summaries.
+    Expression(&'a Expression),
+    /// An `EXISTS` body reached through an expression: its summary is recorded as the
+    /// body's uses and merged as never direct.
+    Exists(&'a GraphPattern),
+}
+
+/// One frame of that walk: a node entered, whose parts are pushed above it, or a node
+/// exited, whose parts' summaries — that many of them — top the summary stack.
+enum SummaryFrame<'a> {
+    Enter(SummaryNode<'a>),
+    Exit(SummaryNode<'a>, usize),
+}
+
+/// Push the parts of `node` whose summaries [`ServedIndex::combine`] reads, in the order
+/// it reads them: the order the node evaluates them.
+///
+/// Wildcard-free, so a new algebra variant is a compile error here rather than a node
+/// whose parts are silently skipped.
+fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a>)) {
+    match node {
+        SummaryNode::Pattern(pattern) => match pattern {
             GraphPattern::Bgp { .. }
             | GraphPattern::Path { .. }
             | GraphPattern::Values { .. }
-            | GraphPattern::PropertyFunction(_) => Vec::new(),
-            GraphPattern::Service { name, .. } => match name {
-                NamedNodePattern::Variable(variable) => vec![Occurrence {
-                    variable: variable.clone(),
-                    direct: true,
-                    conflict: false,
-                }],
-                NamedNodePattern::NamedNode(_) => Vec::new(),
-            },
-            GraphPattern::Join { left, right } => {
-                let mut summary = self.summarize(left);
-                let right_summary = self.summarize(right);
-                self.note(left, &summary);
-                self.note(right, &right_summary);
-                merge(&mut summary, right_summary);
-                summary
-            }
-            GraphPattern::Lateral { left, right } => {
-                let mut summary = self.summarize(left);
-                let right_summary = self.summarize(right);
-                merge(&mut summary, right_summary);
-                summary
+            | GraphPattern::PropertyFunction(_)
+            | GraphPattern::Service { .. } => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right } => {
+                push(SummaryNode::Pattern(left));
+                push(SummaryNode::Pattern(right));
             }
             GraphPattern::Union { arms } => {
-                let mut summary = Vec::new();
                 for arm in arms {
-                    let arm_summary = self.summarize(arm);
-                    merge(&mut summary, arm_summary);
+                    push(SummaryNode::Pattern(arm));
                 }
-                summary
             }
             GraphPattern::LeftJoin {
                 left,
                 right,
                 expression,
             } => {
-                let mut summary = self.summarize(left);
-                let right_summary = self.summarize(right);
-                self.note(right, &right_summary);
-                merge(&mut summary, indirect(right_summary));
+                push(SummaryNode::Pattern(left));
+                push(SummaryNode::Pattern(right));
                 if let Some(expression) = expression {
-                    let expression_summary = self.summarize_expression(expression);
-                    merge(&mut summary, expression_summary);
+                    push(SummaryNode::Expression(expression));
                 }
-                summary
-            }
-            GraphPattern::Minus { left, right } => {
-                let mut summary = self.summarize(left);
-                let right_summary = self.summarize(right);
-                self.note(right, &right_summary);
-                merge(&mut summary, indirect(right_summary));
-                summary
             }
             GraphPattern::Filter { expr, inner } => {
-                let mut summary = self.summarize(inner);
-                let expression_summary = self.summarize_expression(expr);
-                merge(&mut summary, expression_summary);
-                summary
+                push(SummaryNode::Pattern(inner));
+                push(SummaryNode::Expression(expr));
             }
             GraphPattern::Extend {
                 inner, expression, ..
@@ -568,52 +757,26 @@ impl ServedIndex {
             | GraphPattern::Unfold {
                 inner, expression, ..
             } => {
-                let mut summary = self.summarize(inner);
-                let expression_summary = self.summarize_expression(expression);
-                merge(&mut summary, expression_summary);
-                summary
+                push(SummaryNode::Pattern(inner));
+                push(SummaryNode::Expression(expression));
             }
             GraphPattern::Graph { inner, .. }
             | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner } => self.summarize(inner),
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Slice { inner, .. } => push(SummaryNode::Pattern(inner)),
             GraphPattern::OrderBy { inner, expression } => {
-                let mut summary = self.summarize(inner);
+                push(SummaryNode::Pattern(inner));
                 for key in expression {
-                    let key_summary =
-                        self.summarize_expression(crate::modifier::order_sort_key(key));
-                    merge(&mut summary, key_summary);
-                }
-                summary
-            }
-            GraphPattern::Project { inner, variables } => {
-                let mut summary = self.summarize(inner);
-                summary.retain(|o| variables.contains(&o.variable));
-                summary
-            }
-            GraphPattern::Slice {
-                inner,
-                start,
-                length,
-            } => {
-                let summary = self.summarize(inner);
-                if *start == 0 && length.is_none() {
-                    summary
-                } else {
-                    indirect(summary)
+                    push(SummaryNode::Expression(crate::modifier::order_sort_key(
+                        key,
+                    )));
                 }
             }
             GraphPattern::Group {
-                inner,
-                variables,
-                aggregates,
+                inner, aggregates, ..
             } => {
-                let mut summary = self.summarize(inner);
-                for occurrence in &mut summary {
-                    if !variables.contains(&occurrence.variable) {
-                        occurrence.conflict |= occurrence.direct;
-                        occurrence.direct = false;
-                    }
-                }
+                push(SummaryNode::Pattern(inner));
                 for (_, aggregate) in aggregates {
                     for e in aggregate.args().iter().chain(
                         aggregate
@@ -621,64 +784,39 @@ impl ServedIndex {
                             .iter()
                             .map(crate::modifier::order_sort_key),
                     ) {
-                        let expression_summary = self.summarize_expression(e);
-                        merge(&mut summary, expression_summary);
+                        push(SummaryNode::Expression(e));
                     }
                 }
-                summary
             }
-        }
-    }
-
-    /// The occurrences inside an expression's `EXISTS` patterns: never direct.
-    fn summarize_expression(&mut self, expr: &Expression) -> Vec<Occurrence> {
-        if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-            return Vec::new();
-        }
-        let mut summary = Vec::new();
-        crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-            match part {
-                ExpressionPart::Sub(sub) => {
-                    let sub_summary = self.summarize_expression(sub);
-                    merge(&mut summary, sub_summary);
+        },
+        SummaryNode::Expression(expr) => {
+            crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                match part {
+                    ExpressionPart::Sub(sub) => push(SummaryNode::Expression(sub)),
+                    ExpressionPart::Exists(body) => push(SummaryNode::Exists(body)),
+                    ExpressionPart::Call(_) => {}
                 }
-                ExpressionPart::Exists(body) => {
-                    let body_summary = self.summarize(body);
-                    let uses: Arc<[Variable]> =
-                        body_summary.iter().map(|o| o.variable.clone()).collect();
-                    self.exists_uses
-                        .insert(std::ptr::from_ref(body) as usize, uses);
-                    merge(&mut summary, indirect(body_summary));
-                }
-                ExpressionPart::Call(_) => {}
-            }
-            false
-        });
-        summary
+                false
+            });
+        }
+        SummaryNode::Exists(body) => push(SummaryNode::Pattern(body)),
     }
 }
 
 /// The endpoint variables served in `operand` (see [`served_endpoint_variables`]): read
 /// from the query's index when `operand` is one of its nodes and no deferred `EXISTS`
 /// placeholder is in scope, and analysed here otherwise.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] from the analysis walk.
 fn served_in<D: DatasetView + Sync>(
     operand: &GraphPattern,
     index: &ServedIndex,
     ctx: &EvalCtx<'_, D>,
-) -> Result<Arc<[Variable]>, EvalError> {
+) -> Arc<[Variable]> {
     if ctx.deferred_exists.is_none()
         && let Some(served) = index.served.get(&(std::ptr::from_ref(operand) as usize))
     {
-        return Ok(Arc::clone(served));
+        return Arc::clone(served);
     }
-    let placeholders = ctx.deferred_exists.clone();
-    let served =
-        crate::stack::walk(|| served_endpoint_variables(operand, placeholders.as_deref()))?;
-    Ok(served.into())
+    served_endpoint_variables(operand, ctx.deferred_exists.as_deref()).into()
 }
 
 /// The innermost frame for `variable`, if any frame names it.
@@ -707,8 +845,7 @@ fn binding_for<'c, I>(
 ///
 /// # Errors
 ///
-/// Whatever evaluating `right` raises, and [`EvalError::StackExhausted`] from the
-/// analysis walk.
+/// Whatever evaluating `right` raises.
 pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
@@ -719,7 +856,7 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
         return eval_evaluated(right, ctx);
     };
     let index = Arc::clone(index);
-    let served = served_in(right, &index, ctx)?;
+    let served = served_in(right, &index, ctx);
     if served.is_empty() {
         return eval_evaluated(right, ctx);
     }
@@ -781,19 +918,15 @@ pub(crate) struct MinusPartition<I> {
 /// where it is evaluated, so the whole operand takes the unpartitioned route; one an
 /// enclosing operator already lists endpoints for keeps that list, as in
 /// [`eval_right_operand`].
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] from the analysis walk.
 pub(crate) fn minus_partitions<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
-) -> Result<Option<Vec<MinusPartition<D::Id>>>, EvalError> {
+) -> Option<Vec<MinusPartition<D::Id>>> {
     let EndpointScan::Present(index) = &ctx.endpoint_scan else {
-        return Ok(None);
+        return None;
     };
-    let served = served_in(right, index, ctx)?;
+    let served = served_in(right, index, ctx);
     let mut columns: Vec<(Variable, usize)> = Vec::new();
     for variable in served.iter() {
         match left.schema.index_of(variable) {
@@ -804,12 +937,12 @@ pub(crate) fn minus_partitions<D: DatasetView + Sync>(
                 binding_for(&ctx.endpoint_frames, variable),
                 Some(EndpointBinding::Endpoints(_))
             ) => {}
-            Some(_) => return Ok(None),
+            Some(_) => return None,
             None => {}
         }
     }
     if columns.is_empty() {
-        return Ok(None);
+        return None;
     }
     let mut partitions: Vec<MinusPartition<D::Id>> = Vec::new();
     let mut by_key: crate::DetHashMap<Vec<SolutionTerm<D::Id>>, usize> =
@@ -829,7 +962,7 @@ pub(crate) fn minus_partitions<D: DatasetView + Sync>(
         });
         partitions[slot].rows.push(position);
     }
-    Ok(Some(partitions))
+    Some(partitions)
 }
 
 /// Evaluate `right` for one [`MinusPartition`]: every partitioning variable's clause
@@ -882,8 +1015,8 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
     let EndpointScan::Present(index) = &ctx.endpoint_scan else {
         return Ok(false);
     };
-    let served = served_in(left, index, ctx)?;
-    if served.is_empty() || !served_in(right, index, ctx)?.is_empty() {
+    let served = served_in(left, index, ctx);
+    if served.is_empty() || !served_in(right, index, ctx).is_empty() {
         return Ok(false);
     }
     if served.iter().any(|variable| {
@@ -938,15 +1071,14 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     if ctx.endpoint_scan.is_absent() || left.rows.is_empty() {
         return Ok(());
     }
-    let uses = crate::stack::walk(|| {
-        let mut uses: Vec<(Variable, bool)> = Vec::new();
-        lateral_endpoint_uses(right, &mut uses);
+    let mut uses: Vec<(Variable, bool)> = Vec::new();
+    lateral_endpoint_uses(right, &mut uses);
+    crate::stack::walk(|| {
         uses.retain(|(variable, _)| {
             let mut outside = crate::DetHashSet::default();
             crate::expr::pattern_vars_outside(right, Some(variable), &mut outside);
             !outside.contains(variable)
         });
-        uses
     })?;
     for (variable, silent) in uses {
         let column = left.schema.index_of(&variable);
@@ -988,36 +1120,57 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
 /// `SERVICE` body (forwarded, never evaluated here) nor an expression, and not below a
 /// sub-`SELECT` that does not project `?v` (a different `?v`, which no substitution
 /// reaches).
+///
+/// A loop over an explicit work list, popping each node's children in written order, so
+/// `uses` fills in the order the clauses are written and a right operand of any depth
+/// costs heap and never stack.
 fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
-    match pattern {
-        GraphPattern::Service { name, silent, .. } => {
-            if let NamedNodePattern::Variable(variable) = name {
-                if let Some((_, all_silent)) = uses.iter_mut().find(|(seen, _)| seen == variable) {
-                    *all_silent &= *silent;
-                } else {
-                    uses.push((variable.clone(), *silent));
+    /// One step of the walk.
+    enum Step<'a> {
+        /// A pattern to walk.
+        Pattern(&'a GraphPattern),
+        /// A sub-`SELECT` whose inner pattern is walked: of the uses the walk added
+        /// below it — from position `first` on — keep those it projects.
+        LeaveProject(&'a [Variable], usize),
+    }
+    let mut pending = vec![Step::Pattern(pattern)];
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Pattern(GraphPattern::Service { name, silent, .. }) => {
+                if let NamedNodePattern::Variable(variable) = name {
+                    if let Some((_, all_silent)) =
+                        uses.iter_mut().find(|(seen, _)| seen == variable)
+                    {
+                        *all_silent &= *silent;
+                    } else {
+                        uses.push((variable.clone(), *silent));
+                    }
                 }
             }
-        }
-        GraphPattern::Project { inner, variables } => {
-            let before = uses.len();
-            lateral_endpoint_uses(inner, uses);
-            let mut index = before;
-            while index < uses.len() {
-                if variables.contains(&uses[index].0) {
-                    index += 1;
-                } else {
-                    uses.remove(index);
-                }
+            Step::Pattern(GraphPattern::Project { inner, variables }) => {
+                pending.push(Step::LeaveProject(variables, uses.len()));
+                pending.push(Step::Pattern(inner));
             }
-        }
-        _ => {
-            crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-                if let crate::governor::soundness::PatternPart::Child(child, _) = part {
-                    lateral_endpoint_uses(child, uses);
+            Step::Pattern(pattern) => {
+                let first = pending.len();
+                crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                    if let PatternPart::Child(child, _) = part {
+                        pending.push(Step::Pattern(child));
+                    }
+                    false
+                });
+                pending[first..].reverse();
+            }
+            Step::LeaveProject(variables, first) => {
+                let mut kept = first;
+                for index in first..uses.len() {
+                    if variables.contains(&uses[index].0) {
+                        uses.swap(kept, index);
+                        kept += 1;
+                    }
                 }
-                false
-            });
+                uses.truncate(kept);
+            }
         }
     }
 }
@@ -1774,7 +1927,7 @@ mod tests {
                 .parse_query(&query)
                 .expect("parse");
             let pattern = crate::eval::query_pattern(&parsed);
-            let super::EndpointScan::Present(index) = super::scan(pattern).expect("scan") else {
+            let super::EndpointScan::Present(index) = super::scan(pattern) else {
                 panic!("{body}: the query has a variable endpoint");
             };
             let mut all = Vec::new();
@@ -1793,11 +1946,7 @@ mod tests {
         let parsed = purrdf_sparql_algebra::SparqlParser::new()
             .parse_query(&q("{ ?g ex:endpoint ?e } { SERVICE ex:e1 { ?s ?p ?x } }"))
             .expect("parse");
-        assert!(
-            super::scan(crate::eval::query_pattern(&parsed))
-                .expect("scan")
-                .is_absent()
-        );
+        assert!(super::scan(crate::eval::query_pattern(&parsed)).is_absent());
     }
 
     #[test]
@@ -2122,5 +2271,773 @@ mod tests {
             );
             assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
         }
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    //! The loop-driven walks of this module against recursive references, over generated
+    //! shapes and at a depth no thread stack holds.
+
+    use std::sync::Arc;
+
+    use purrdf_sparql_algebra::{
+        AggregateExpression, AggregateFunction, Args, Chain, Child, Expression, Function,
+        GraphPattern, NamedNode, NamedNodePattern, OrderExpression, PropertyPathExpression,
+        TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{EndpointUse, Occurrence, Scope, ServedIndex, indirect, merge, record};
+    use crate::governor::soundness::{ExpressionPart, PatternPart};
+    use crate::test_rng::splitmix64_next;
+
+    const EX: &str = "http://example.org/";
+
+    // ── The recursive references ────────────────────────────────────────────────────
+
+    /// [`super::classify`], as a recursion over the pattern.
+    fn classify_reference<'a>(
+        pattern: &'a GraphPattern,
+        direct: bool,
+        scopes: &mut Vec<Scope<'a>>,
+        uses: &mut Vec<EndpointUse>,
+    ) {
+        match pattern {
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Service { name, .. } => {
+                if let NamedNodePattern::Variable(variable) = name {
+                    record(variable, direct, scopes, uses);
+                }
+            }
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                classify_reference(left, direct, scopes, uses);
+                classify_reference(right, direct, scopes, uses);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    classify_reference(arm, direct, scopes, uses);
+                }
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                classify_reference(left, direct, scopes, uses);
+                classify_reference(right, false, scopes, uses);
+                if let Some(expression) = expression {
+                    classify_expression_reference(expression, scopes, uses);
+                }
+            }
+            GraphPattern::Minus { left, right } => {
+                classify_reference(left, direct, scopes, uses);
+                classify_reference(right, false, scopes, uses);
+            }
+            GraphPattern::Filter { expr, inner } => {
+                classify_reference(inner, direct, scopes, uses);
+                classify_expression_reference(expr, scopes, uses);
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            }
+            | GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                classify_reference(inner, direct, scopes, uses);
+                classify_expression_reference(expression, scopes, uses);
+            }
+            GraphPattern::Graph { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner } => classify_reference(inner, direct, scopes, uses),
+            GraphPattern::OrderBy { inner, expression } => {
+                classify_reference(inner, direct, scopes, uses);
+                for key in expression {
+                    classify_expression_reference(
+                        crate::modifier::order_sort_key(key),
+                        scopes,
+                        uses,
+                    );
+                }
+            }
+            GraphPattern::Project { inner, variables } => {
+                scopes.push(Scope::Project(variables));
+                classify_reference(inner, direct, scopes, uses);
+                scopes.pop();
+            }
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => {
+                let identity = *start == 0 && length.is_none();
+                classify_reference(inner, direct && identity, scopes, uses);
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                scopes.push(Scope::Group(variables));
+                classify_reference(inner, direct, scopes, uses);
+                scopes.pop();
+                for (_, aggregate) in aggregates {
+                    for e in aggregate.args().iter().chain(
+                        aggregate
+                            .order_by()
+                            .iter()
+                            .map(crate::modifier::order_sort_key),
+                    ) {
+                        classify_expression_reference(e, scopes, uses);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The expression half of [`classify_reference`], with no deferred placeholders.
+    fn classify_expression_reference<'a>(
+        expr: &'a Expression,
+        scopes: &mut Vec<Scope<'a>>,
+        uses: &mut Vec<EndpointUse>,
+    ) {
+        crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+            match part {
+                ExpressionPart::Sub(sub) => classify_expression_reference(sub, scopes, uses),
+                ExpressionPart::Exists(pattern) => {
+                    classify_reference(pattern, false, scopes, uses);
+                }
+                ExpressionPart::Call(_) => {}
+            }
+            false
+        });
+    }
+
+    /// [`super::mentions_variable_endpoint`], as a recursion.
+    fn mentions_reference(pattern: &GraphPattern) -> bool {
+        if let GraphPattern::Service { name, .. } = pattern {
+            return matches!(name, NamedNodePattern::Variable(_));
+        }
+        crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| match part {
+            PatternPart::Child(child, _) => mentions_reference(child),
+            PatternPart::Expression(expr) => expression_mentions_reference(expr),
+        })
+    }
+
+    fn expression_mentions_reference(expr: &Expression) -> bool {
+        crate::governor::soundness::visit_expression_parts(expr, &mut |part| match part {
+            ExpressionPart::Sub(sub) => expression_mentions_reference(sub),
+            ExpressionPart::Exists(pattern) => mentions_reference(pattern),
+            ExpressionPart::Call(_) => false,
+        })
+    }
+
+    impl ServedIndex {
+        /// [`Self::summarize`], as a recursion over the pattern.
+        fn summarize_reference(&mut self, pattern: &GraphPattern) -> Vec<Occurrence> {
+            match pattern {
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::PropertyFunction(_) => Vec::new(),
+                GraphPattern::Service { name, .. } => match name {
+                    NamedNodePattern::Variable(variable) => vec![Occurrence {
+                        variable: variable.clone(),
+                        direct: true,
+                        conflict: false,
+                    }],
+                    NamedNodePattern::NamedNode(_) => Vec::new(),
+                },
+                GraphPattern::Join { left, right } => {
+                    let mut summary = self.summarize_reference(left);
+                    let right_summary = self.summarize_reference(right);
+                    self.note(left, &summary);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Lateral { left, right } => {
+                    let mut summary = self.summarize_reference(left);
+                    let right_summary = self.summarize_reference(right);
+                    merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Union { arms } => {
+                    let mut summary = Vec::new();
+                    for arm in arms {
+                        let arm_summary = self.summarize_reference(arm);
+                        merge(&mut summary, arm_summary);
+                    }
+                    summary
+                }
+                GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } => {
+                    let mut summary = self.summarize_reference(left);
+                    let right_summary = self.summarize_reference(right);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, indirect(right_summary));
+                    if let Some(expression) = expression {
+                        let expression_summary = self.summarize_expression_reference(expression);
+                        merge(&mut summary, expression_summary);
+                    }
+                    summary
+                }
+                GraphPattern::Minus { left, right } => {
+                    let mut summary = self.summarize_reference(left);
+                    let right_summary = self.summarize_reference(right);
+                    self.note(right, &right_summary);
+                    merge(&mut summary, indirect(right_summary));
+                    summary
+                }
+                GraphPattern::Filter { expr, inner } => {
+                    let mut summary = self.summarize_reference(inner);
+                    let expression_summary = self.summarize_expression_reference(expr);
+                    merge(&mut summary, expression_summary);
+                    summary
+                }
+                GraphPattern::Extend {
+                    inner, expression, ..
+                }
+                | GraphPattern::Unfold {
+                    inner, expression, ..
+                } => {
+                    let mut summary = self.summarize_reference(inner);
+                    let expression_summary = self.summarize_expression_reference(expression);
+                    merge(&mut summary, expression_summary);
+                    summary
+                }
+                GraphPattern::Graph { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner } => self.summarize_reference(inner),
+                GraphPattern::OrderBy { inner, expression } => {
+                    let mut summary = self.summarize_reference(inner);
+                    for key in expression {
+                        let key_summary = self
+                            .summarize_expression_reference(crate::modifier::order_sort_key(key));
+                        merge(&mut summary, key_summary);
+                    }
+                    summary
+                }
+                GraphPattern::Project { inner, variables } => {
+                    let mut summary = self.summarize_reference(inner);
+                    summary.retain(|o| variables.contains(&o.variable));
+                    summary
+                }
+                GraphPattern::Slice {
+                    inner,
+                    start,
+                    length,
+                } => {
+                    let summary = self.summarize_reference(inner);
+                    if *start == 0 && length.is_none() {
+                        summary
+                    } else {
+                        indirect(summary)
+                    }
+                }
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates,
+                } => {
+                    let mut summary = self.summarize_reference(inner);
+                    for occurrence in &mut summary {
+                        if !variables.contains(&occurrence.variable) {
+                            occurrence.conflict |= occurrence.direct;
+                            occurrence.direct = false;
+                        }
+                    }
+                    for (_, aggregate) in aggregates {
+                        for e in aggregate.args().iter().chain(
+                            aggregate
+                                .order_by()
+                                .iter()
+                                .map(crate::modifier::order_sort_key),
+                        ) {
+                            let expression_summary = self.summarize_expression_reference(e);
+                            merge(&mut summary, expression_summary);
+                        }
+                    }
+                    summary
+                }
+            }
+        }
+
+        /// The expression half of [`Self::summarize_reference`].
+        fn summarize_expression_reference(&mut self, expr: &Expression) -> Vec<Occurrence> {
+            let mut summary = Vec::new();
+            crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                match part {
+                    ExpressionPart::Sub(sub) => {
+                        let sub_summary = self.summarize_expression_reference(sub);
+                        merge(&mut summary, sub_summary);
+                    }
+                    ExpressionPart::Exists(body) => {
+                        let body_summary = self.summarize_reference(body);
+                        let uses: Arc<[Variable]> =
+                            body_summary.iter().map(|o| o.variable.clone()).collect();
+                        self.exists_uses
+                            .insert(std::ptr::from_ref(body) as usize, uses);
+                        merge(&mut summary, indirect(body_summary));
+                    }
+                    ExpressionPart::Call(_) => {}
+                }
+                false
+            });
+            summary
+        }
+    }
+
+    /// [`super::lateral_endpoint_uses`], as a recursion.
+    fn lateral_uses_reference(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
+        match pattern {
+            GraphPattern::Service { name, silent, .. } => {
+                if let NamedNodePattern::Variable(variable) = name {
+                    if let Some((_, all_silent)) =
+                        uses.iter_mut().find(|(seen, _)| seen == variable)
+                    {
+                        *all_silent &= *silent;
+                    } else {
+                        uses.push((variable.clone(), *silent));
+                    }
+                }
+            }
+            GraphPattern::Project { inner, variables } => {
+                let before = uses.len();
+                lateral_uses_reference(inner, uses);
+                let mut index = before;
+                while index < uses.len() {
+                    if variables.contains(&uses[index].0) {
+                        index += 1;
+                    } else {
+                        uses.remove(index);
+                    }
+                }
+            }
+            _ => {
+                crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                    if let PatternPart::Child(child, _) = part {
+                        lateral_uses_reference(child, uses);
+                    }
+                    false
+                });
+            }
+        }
+    }
+
+    // ── The generator ───────────────────────────────────────────────────────────────
+
+    /// A deterministic sequence of choices, drawn from one SplitMix64 counter stream.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        /// One of `n` alternatives.
+        fn pick(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("an alternative count fits a u64");
+            usize::try_from(splitmix64_next(&mut self.state) % bound)
+                .expect("a remainder below the count fits a usize")
+        }
+
+        fn flag(&mut self) -> bool {
+            self.pick(2) == 1
+        }
+
+        /// One of the four variables the shapes draw from.
+        fn variable(&mut self) -> Variable {
+            Variable::new(format!("e{}", self.pick(4)))
+        }
+
+        /// A subset of those four, in name order.
+        fn variables(&mut self) -> Vec<Variable> {
+            (0..4)
+                .filter(|_| self.flag())
+                .map(|i| Variable::new(format!("e{i}")))
+                .collect()
+        }
+
+        /// A `SERVICE` name: a variable three times in four, otherwise an IRI.
+        fn endpoint(&mut self) -> NamedNodePattern {
+            if self.pick(4) == 0 {
+                NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}endpoint")))
+            } else {
+                NamedNodePattern::Variable(self.variable())
+            }
+        }
+    }
+
+    /// A pattern that owns no other pattern.
+    fn leaf(choices: &mut Choices) -> GraphPattern {
+        match choices.pick(3) {
+            0 => GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(choices.variable()),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!(
+                        "{EX}p"
+                    ))),
+                    object: TermPattern::Variable(choices.variable()),
+                }],
+            },
+            1 => GraphPattern::Values {
+                variables: Vec::new(),
+                bindings: Vec::new(),
+            },
+            _ => GraphPattern::Path {
+                subject: TermPattern::Variable(choices.variable()),
+                path: PropertyPathExpression::NamedNode(NamedNode::new_unchecked(format!("{EX}p"))),
+                object: TermPattern::Variable(choices.variable()),
+            },
+        }
+    }
+
+    /// A `SERVICE` clause over an empty body.
+    fn service(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Service {
+            name: choices.endpoint(),
+            inner: Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            silent: choices.flag(),
+        }
+    }
+
+    /// A pattern of at most `budget` interior nodes, every variant of the algebra reachable.
+    fn pattern(choices: &mut Choices, budget: &mut usize) -> GraphPattern {
+        if *budget == 0 {
+            return if choices.flag() {
+                service(choices)
+            } else {
+                leaf(choices)
+            };
+        }
+        *budget -= 1;
+        let child =
+            |choices: &mut Choices, budget: &mut usize| Child::new(pattern(choices, budget));
+        match choices.pick(17) {
+            0 => leaf(choices),
+            1 | 2 => service(choices),
+            3 => GraphPattern::Join {
+                left: child(choices, budget),
+                right: child(choices, budget),
+            },
+            4 => GraphPattern::Lateral {
+                left: child(choices, budget),
+                right: child(choices, budget),
+            },
+            5 => GraphPattern::Minus {
+                left: child(choices, budget),
+                right: child(choices, budget),
+            },
+            6 => GraphPattern::LeftJoin {
+                left: child(choices, budget),
+                right: child(choices, budget),
+                expression: choices.flag().then(|| expression(choices, budget)),
+            },
+            7 => {
+                let first = pattern(choices, budget);
+                let second = pattern(choices, budget);
+                let rest = choices.flag().then(|| pattern(choices, budget));
+                GraphPattern::Union {
+                    arms: Chain::new(first, second, rest),
+                }
+            }
+            8 => GraphPattern::Filter {
+                expr: expression(choices, budget),
+                inner: child(choices, budget),
+            },
+            9 => GraphPattern::Extend {
+                inner: child(choices, budget),
+                variable: choices.variable(),
+                expression: expression(choices, budget),
+            },
+            10 => GraphPattern::Unfold {
+                inner: child(choices, budget),
+                expression: expression(choices, budget),
+                element: choices.variable(),
+                companion: choices.flag().then(|| choices.variable()),
+            },
+            11 => GraphPattern::Graph {
+                name: NamedNodePattern::Variable(choices.variable()),
+                inner: child(choices, budget),
+            },
+            12 => {
+                let inner = child(choices, budget);
+                if choices.flag() {
+                    GraphPattern::Distinct { inner }
+                } else {
+                    GraphPattern::Reduced { inner }
+                }
+            }
+            13 => GraphPattern::OrderBy {
+                inner: child(choices, budget),
+                expression: (0..choices.pick(3))
+                    .map(|_| {
+                        let key = expression(choices, budget);
+                        if choices.flag() {
+                            OrderExpression::Asc(key)
+                        } else {
+                            OrderExpression::Desc(key)
+                        }
+                    })
+                    .collect(),
+            },
+            14 => GraphPattern::Project {
+                inner: child(choices, budget),
+                variables: choices.variables(),
+            },
+            15 => GraphPattern::Slice {
+                inner: child(choices, budget),
+                start: choices.pick(2),
+                length: choices.flag().then(|| choices.pick(2)),
+            },
+            _ => {
+                let inner = child(choices, budget);
+                let variables = choices.variables();
+                let aggregates = (0..choices.pick(3))
+                    .map(|_| {
+                        let aggregate = if choices.flag() {
+                            AggregateExpression::new(
+                                AggregateFunction::Count,
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                false,
+                            )
+                        } else {
+                            AggregateExpression::new(
+                                AggregateFunction::Sample,
+                                vec![expression(choices, budget)],
+                                Vec::new(),
+                                Vec::new(),
+                                false,
+                            )
+                        };
+                        (
+                            choices.variable(),
+                            aggregate.expect("COUNT(*) and a one-argument SAMPLE are valid"),
+                        )
+                    })
+                    .collect();
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates,
+                }
+            }
+        }
+    }
+
+    /// An expression of at most `budget` interior nodes, `EXISTS` bodies included.
+    fn expression(choices: &mut Choices, budget: &mut usize) -> Expression {
+        if *budget == 0 {
+            return Expression::Bound(choices.variable());
+        }
+        *budget -= 1;
+        match choices.pick(6) {
+            0 => Expression::Bound(choices.variable()),
+            1 | 2 => Expression::Exists(Child::new(pattern(choices, budget))),
+            3 => Expression::Not(Child::new(expression(choices, budget))),
+            4 => {
+                let first = expression(choices, budget);
+                let second = expression(choices, budget);
+                if choices.flag() {
+                    Expression::And(Chain::new(first, second, []))
+                } else {
+                    Expression::Or(Chain::new(first, second, []))
+                }
+            }
+            _ => Expression::FunctionCall(
+                Function::Str,
+                Args::from(vec![expression(choices, budget)]),
+            ),
+        }
+    }
+
+    fn address(pattern: &GraphPattern) -> usize {
+        std::ptr::from_ref(pattern) as usize
+    }
+
+    // ── The checks ──────────────────────────────────────────────────────────────────
+
+    /// Every walk answers what its recursive reference answers, on two hundred generated
+    /// shapes: the same uses in the same order, the same summaries, the same served lists
+    /// and `EXISTS` uses under the same addresses, the same `LATERAL` uses.
+    #[test]
+    fn every_walk_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut choices = Choices { state: 0x5EED_0358 };
+        let mut with_endpoint = 0_usize;
+        for shape in 0..200 {
+            let mut budget = 24;
+            let root = pattern(&mut choices, &mut budget);
+
+            let mentions = super::mentions_variable_endpoint(&root);
+            assert_eq!(
+                mentions,
+                mentions_reference(&root),
+                "shape {shape}: {root:?}"
+            );
+            with_endpoint += usize::from(mentions);
+            assert_eq!(
+                super::scan(&root).is_absent(),
+                !mentions,
+                "shape {shape}: the scan is present exactly when a variable endpoint is"
+            );
+
+            let mut uses = Vec::new();
+            super::classify(&root, true, &mut uses, None);
+            let mut reference_uses = Vec::new();
+            classify_reference(&root, true, &mut Vec::new(), &mut reference_uses);
+            assert_eq!(uses, reference_uses, "shape {shape}: {root:?}");
+
+            let mut index = ServedIndex::default();
+            let summary = index.summarize(&root);
+            let mut reference_index = ServedIndex::default();
+            let reference_summary = reference_index.summarize_reference(&root);
+            assert_eq!(summary, reference_summary, "shape {shape}: {root:?}");
+            assert_eq!(
+                index.served, reference_index.served,
+                "shape {shape}: {root:?}"
+            );
+            assert_eq!(
+                index.exists_uses, reference_index.exists_uses,
+                "shape {shape}: {root:?}"
+            );
+
+            let mut lateral = Vec::new();
+            super::lateral_endpoint_uses(&root, &mut lateral);
+            let mut reference_lateral = Vec::new();
+            lateral_uses_reference(&root, &mut reference_lateral);
+            assert_eq!(lateral, reference_lateral, "shape {shape}: {root:?}");
+        }
+        assert!(
+            with_endpoint > 50,
+            "the generator writes a variable endpoint into most shapes: {with_endpoint}"
+        );
+    }
+
+    /// Every walk answers over an operand a hundred thousand levels deep on a thread with
+    /// 128 KiB of stack — a few hundred frames of any recursion — so each walks its
+    /// nesting on the heap. The answers are the ones the shapes construct: a `SERVICE ?e`
+    /// under a chain of `Join`s, `DISTINCT`s and `FILTER`s is served at the root's right
+    /// operand, and one under a chain of `FILTER EXISTS` bodies is a use of every body and
+    /// served nowhere.
+    #[test]
+    fn a_hundred_thousand_level_operand_is_walked_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+
+        fn bottom() -> GraphPattern {
+            GraphPattern::Service {
+                name: NamedNodePattern::Variable(Variable::new("e")),
+                inner: Child::new(GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                }),
+                silent: false,
+            }
+        }
+
+        fn empty() -> Child<GraphPattern> {
+            Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            })
+        }
+
+        /// `Join(Bgp, Distinct(Filter(BOUND(?x), Join(…))))`, `DEPTH` levels, a `Join` at
+        /// the root.
+        fn direct_chain() -> GraphPattern {
+            let mut chain = bottom();
+            for level in 1..=DEPTH {
+                chain = match level % 3 {
+                    1 if level != DEPTH => GraphPattern::Distinct {
+                        inner: Child::new(chain),
+                    },
+                    2 if level != DEPTH => GraphPattern::Filter {
+                        expr: Expression::Bound(Variable::new("x")),
+                        inner: Child::new(chain),
+                    },
+                    _ => GraphPattern::Join {
+                        left: empty(),
+                        right: Child::new(chain),
+                    },
+                };
+            }
+            chain
+        }
+
+        /// `Filter(EXISTS { Filter(EXISTS { … }, Bgp) }, Bgp)`, `DEPTH` bodies deep.
+        fn exists_chain() -> GraphPattern {
+            let mut chain = bottom();
+            for _ in 0..DEPTH {
+                chain = GraphPattern::Filter {
+                    expr: Expression::Exists(Child::new(chain)),
+                    inner: empty(),
+                };
+            }
+            chain
+        }
+
+        let checked = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let e = Variable::new("e");
+
+                let chain = direct_chain();
+                assert!(super::mentions_variable_endpoint(&chain));
+                let super::EndpointScan::Present(index) = super::scan(&chain) else {
+                    panic!("the chain holds a variable endpoint");
+                };
+                let GraphPattern::Join { right, .. } = &chain else {
+                    panic!("the chain's root is a Join");
+                };
+                assert_eq!(
+                    index.served.get(&address(right)).map(AsRef::as_ref),
+                    Some([e.clone()].as_slice()),
+                    "the root's right operand serves ?e"
+                );
+                assert_eq!(index.served.len(), DEPTH / 3 * 2 + 2);
+                assert!(index.exists_uses.is_empty());
+                assert_eq!(
+                    super::served_endpoint_variables(&chain, None),
+                    std::slice::from_ref(&e)
+                );
+                let mut uses = Vec::new();
+                super::lateral_endpoint_uses(&chain, &mut uses);
+                assert_eq!(uses, [(e.clone(), false)]);
+                drop(chain);
+
+                let nested = exists_chain();
+                assert!(super::mentions_variable_endpoint(&nested));
+                let super::EndpointScan::Present(index) = super::scan(&nested) else {
+                    panic!("the nested chain holds a variable endpoint");
+                };
+                assert_eq!(index.exists_uses.len(), DEPTH, "one entry per EXISTS body");
+                assert!(
+                    index
+                        .exists_uses
+                        .values()
+                        .all(|uses| uses.as_ref() == [e.clone()]),
+                    "every body uses ?e"
+                );
+                assert!(
+                    index.served.is_empty(),
+                    "no join operand: nothing is served"
+                );
+                assert!(
+                    super::served_endpoint_variables(&nested, None).is_empty(),
+                    "reached only through EXISTS, ?e is a conflict at the root"
+                );
+                let mut uses = Vec::new();
+                super::lateral_endpoint_uses(&nested, &mut uses);
+                assert!(uses.is_empty(), "an expression is not entered");
+                drop(nested);
+            })
+            .expect("spawn")
+            .join();
+        checked.expect("the 128 KiB thread returned");
     }
 }

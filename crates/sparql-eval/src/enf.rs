@@ -215,7 +215,7 @@
 //!
 //! ## Fixpoint, determinism, idempotence
 //!
-//! [`normalize`] recurses on every law that erases a wrapper, so a chain of several
+//! [`normalize`] walks on through every law that erases a wrapper, so a chain of several
 //! spine wrappers (e.g. `OrderBy(Distinct(LeftJoin(A, B, c)))`) collapses in one call
 //! to `A` (further normalized itself, in case `A` is ALSO spine-shaped). The walk is
 //! a pure function of the input tree — no clock, no RNG, no iteration-order
@@ -247,14 +247,14 @@
 //! recomputed per row.
 
 use purrdf_sparql_algebra::{Chain, Child};
-use purrdf_sparql_algebra::{GraphPattern, OrderExpression};
+use purrdf_sparql_algebra::{GraphPattern, OrderExpression, Variable};
 
 use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
 use crate::governor::soundness;
 
 /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
 /// Normal Form (see the [module docs](self)).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Enf {
     /// The normalized pattern: `exists(pattern, μ)` and `exists(original, μ)` agree
     /// for every μ (this module's laws are emptiness-preserving), so evaluating THIS
@@ -295,105 +295,147 @@ fn order_by_erasable(expression: &[OrderExpression]) -> bool {
 /// Normalize `pattern` — an `EXISTS`/`NOT EXISTS` inner — to Existential Normal Form
 /// (see the [module docs](self) for the laws and their proof sketches).
 ///
-/// Applied to fixpoint: every law that erases a wrapper recurses into what it
+/// Applied to fixpoint: every law that erases a wrapper walks on into what it
 /// exposed, so a chain of several spine wrappers collapses in one call. Pure,
 /// deterministic, and idempotent — see the module doc's "Fixpoint, determinism,
 /// idempotence" section.
+///
+/// The walk keeps its own work list — the spine nodes still to enter, and the `Project`
+/// and `Union` nodes waiting to be rebuilt over their children's normal forms, which
+/// collect on a value stack — so a spine of any height needs no more machine stack.
+/// Union arms are entered left to right, each one's whole spine before the next, so the
+/// gates run and the copies are made in the order the arms are written.
 pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
-    // One level per erased spine wrapper, reached from an `EXISTS` that may already be
-    // deep: see `crate::stack::walk`, whose scope discards this placeholder.
-    if crate::stack::walk_is_low("EXISTS normalization") {
-        return Enf::FoldedEmpty;
+    /// One step of the walk.
+    enum Step<'a> {
+        /// Normalize this spine node.
+        Enter(&'a GraphPattern),
+        /// Rebuild a `Project` over the normal form on top of the value stack.
+        Project(&'a [Variable]),
+        /// Rebuild a `Union` over the `count` normal forms on top of the value stack,
+        /// the first arm's deepest.
+        Union(usize),
     }
-    match pattern {
-        // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
-        // join condition) being effect-free; see the module doc's "Side
-        // conditions" section and `crate::governor::soundness::NodeAnalysis::can_hard_error`.
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            if left_join_erasable(right, expression.as_ref()) {
-                normalize(left)
-            } else {
-                Enf::Pattern(copied(pattern))
-            }
-        }
-        // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
-        GraphPattern::OrderBy { inner, expression } => {
-            if order_by_erasable(expression) {
-                normalize(inner)
-            } else {
-                Enf::Pattern(copied(pattern))
-            }
-        }
-        // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
-        // the module doc). Unconditional: nothing evaluable is erased, only the
-        // dedup wrapper — `inner` is still evaluated by whatever this recursion
-        // returns.
-        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => normalize(inner),
-        // Law 4a/4b.
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => match (*start, *length) {
-            // 4b is gated on the WHOLE inner being effect-free: the fold answers
-            // `EXISTS` without evaluating anything, so an inner that could have
-            // hard-failed or reached a federation endpoint must not be erased.
-            (_, Some(0)) => {
-                if soundness::pattern_can_hard_error(inner) {
-                    Enf::Pattern(copied(pattern))
-                } else {
-                    Enf::FoldedEmpty
+    let mut steps: Vec<Step<'_>> = vec![Step::Enter(pattern)];
+    let mut forms: Vec<Enf> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(pattern) => match pattern {
+                // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
+                // join condition) being effect-free; see the module doc's "Side
+                // conditions" section and
+                // `crate::governor::soundness::NodeAnalysis::can_hard_error`.
+                GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } => {
+                    if left_join_erasable(right, expression.as_ref()) {
+                        steps.push(Step::Enter(left));
+                    } else {
+                        forms.push(Enf::Pattern(copied(pattern)));
+                    }
                 }
+                // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
+                GraphPattern::OrderBy { inner, expression } => {
+                    if order_by_erasable(expression) {
+                        steps.push(Step::Enter(inner));
+                    } else {
+                        forms.push(Enf::Pattern(copied(pattern)));
+                    }
+                }
+                // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
+                // the module doc). Unconditional: nothing evaluable is erased, only the
+                // dedup wrapper — `inner` is still evaluated by whatever the walk
+                // returns.
+                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                    steps.push(Step::Enter(inner));
+                }
+                // Law 4a/4b.
+                GraphPattern::Slice {
+                    inner,
+                    start,
+                    length,
+                } => match (*start, *length) {
+                    // 4b is gated on the WHOLE inner being effect-free: the fold answers
+                    // `EXISTS` without evaluating anything, so an inner that could have
+                    // hard-failed or reached a federation endpoint must not be erased.
+                    (_, Some(0)) => {
+                        forms.push(if soundness::pattern_can_hard_error(inner) {
+                            Enf::Pattern(copied(pattern))
+                        } else {
+                            Enf::FoldedEmpty
+                        });
+                    }
+                    // 4a is unconditional: an offset-zero, room-for-at-least-one-row
+                    // slice erases nothing evaluable — `inner` is still evaluated by
+                    // whatever the walk returns.
+                    (0, _) => steps.push(Step::Enter(inner)),
+                    // start > 0: not a transparent wrapper; stop here, unmodified.
+                    (_, _) => forms.push(Enf::Pattern(copied(pattern))),
+                },
+                // Project is transparent to the spine, but it is also a real node in the
+                // output (the `PrjMap` boundary substitution narrows against) — rebuild it
+                // over whatever its own child normalized to, rather than erasing it
+                // outright.
+                GraphPattern::Project { inner, variables } => {
+                    steps.push(Step::Project(variables));
+                    steps.push(Step::Enter(inner));
+                }
+                // Union: every arm is on the spine (empty iff ALL are), so each gets the
+                // same treatment; an arm that folds to empty drops out of the
+                // reconstructed Union entirely (Union(∅, R) ≡ R for emptiness purposes),
+                // and a union left with one arm is that arm. The arms are pushed last
+                // first, so the first arm is entered first.
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::Union(arms.len()));
+                    for arm in arms.iter().rev() {
+                        steps.push(Step::Enter(arm));
+                    }
+                }
+                // Every other variant consumes a row SET, not merely emptiness (Join/
+                // Filter/Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/
+                // Path/Values/PropertyFunction/Service/Group/Lateral) — the spine stops
+                // here, unmodified.
+                //
+                // `Unfold` is on that list for a reason of its own rather than by
+                // default: it is NOT emptiness-transparent. Its inner can be non-empty
+                // while its own output is empty (every row whose expression denotes no
+                // composite, or an empty one, contributes zero rows), so erasing it
+                // would answer `EXISTS` `true` for a pattern that has no solutions.
+                other => forms.push(Enf::Pattern(copied(other))),
+            },
+            Step::Project(variables) => {
+                let inner = forms
+                    .pop()
+                    .expect("a Project's inner is normalized before the Project is rebuilt");
+                forms.push(match inner {
+                    Enf::FoldedEmpty => Enf::FoldedEmpty,
+                    Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
+                        inner: Child::new(p),
+                        variables: variables.to_vec(),
+                    }),
+                });
             }
-            // 4a is unconditional: an offset-zero, room-for-at-least-one-row
-            // slice erases nothing evaluable — `inner` is still evaluated by
-            // whatever this recursion returns.
-            (0, _) => normalize(inner),
-            // start > 0: not a transparent wrapper; stop here, unmodified.
-            (_, _) => Enf::Pattern(copied(pattern)),
-        },
-        // Project is transparent to the spine, but it is also a real node in the
-        // output (the `PrjMap` boundary substitution narrows against) — rebuild it
-        // over whatever its own child normalized to, rather than erasing it outright.
-        GraphPattern::Project { inner, variables } => match normalize(inner) {
-            Enf::FoldedEmpty => Enf::FoldedEmpty,
-            Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
-                inner: Child::new(p),
-                variables: variables.clone(),
-            }),
-        },
-        // Union: every arm is on the spine (empty iff ALL are), so each gets the
-        // same treatment; an arm that folds to empty drops out of the reconstructed
-        // Union entirely (Union(∅, R) ≡ R for emptiness purposes), and a union left
-        // with one arm is that arm.
-        GraphPattern::Union { arms } => {
-            let kept: Vec<GraphPattern> = arms
-                .iter()
-                .filter_map(|arm| match normalize(arm) {
-                    Enf::FoldedEmpty => None,
-                    Enf::Pattern(p) => Some(p),
-                })
-                .collect();
-            match Chain::try_from(kept) {
-                Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
-                Err(mut kept) => kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern),
+            Step::Union(count) => {
+                let first = forms.len() - count;
+                let kept: Vec<GraphPattern> = forms
+                    .drain(first..)
+                    .filter_map(|arm| match arm {
+                        Enf::FoldedEmpty => None,
+                        Enf::Pattern(p) => Some(p),
+                    })
+                    .collect();
+                forms.push(match Chain::try_from(kept) {
+                    Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
+                    Err(mut kept) => kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern),
+                });
             }
         }
-        // Every other variant consumes a row SET, not merely emptiness (Join/Filter/
-        // Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
-        // PropertyFunction/Service/Group/Lateral) — the spine stops here, unmodified.
-        //
-        // `Unfold` is on that list for a reason of its own rather than by default:
-        // it is NOT emptiness-transparent. Its inner can be non-empty while its own
-        // output is empty (every row whose expression denotes no composite, or an
-        // empty one, contributes zero rows), so erasing it would answer `EXISTS`
-        // `true` for a pattern that has no solutions.
-        other => Enf::Pattern(copied(other)),
     }
+    forms
+        .pop()
+        .expect("the root's normal form is the last one computed")
 }
 
 /// A copy of `pattern`, made by the algebra's `Clone`; a test build counts the pattern
@@ -427,7 +469,7 @@ fn copied(pattern: &GraphPattern) -> GraphPattern {
 ///
 /// # What this walk covers, and what it deliberately does not
 ///
-/// Mirrors [`normalize`]'s own recursion for the two erasure-only wrappers (a
+/// Mirrors [`normalize`]'s own spine walk for the two erasure-only wrappers (a
 /// spine-erasing `LeftJoin`/`OrderBy`/`Distinct`/`Reduced`/`Slice(0, _)`: no address of
 /// its own, pure delegation to whatever its child resolves to) and the common terminal
 /// case (every other variant, which `normalize` clones wholesale — `normalized` is then
@@ -458,92 +500,98 @@ pub(crate) fn ledger_source_map(
     map
 }
 
-/// [`ledger_source_map`]'s recursive spine walk. See that function's doc.
+/// [`ledger_source_map`]'s spine walk. See that function's doc.
+///
+/// Two kinds of node wait on the work list. A **spine** node of `original` is one
+/// `normalize` erased or fell through, whose normalized counterpart is the whole
+/// `normalized` tree; the walk steps through the same wrappers `normalize` erased, by the
+/// same gates. A **clone** pair is a node of the terminal shape `normalize` copied
+/// wholesale, beside its copy: the copy is recorded against the node, and every one of
+/// its descendants — INCLUDING any `EXISTS` pattern reached through a nested expression
+/// — is paired with its own copy and queued. `counts_rows` is unconditionally `true`
+/// throughout: unlike `LATERAL`'s Values-Insertion machinery, this walk never adds a
+/// node `original` did not already have, so there is no wrapper/wrapped ambiguity to
+/// arbitrate — every node here really is the one true output of the real node it
+/// corresponds to.
 fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut SubstitutionSourceMap) {
-    // See `normalize`: the same spine, walked again. The partial map is discarded by the
-    // enclosing `crate::stack::walk` scope.
-    if crate::stack::walk_is_low("EXISTS normalization") {
-        return;
+    /// A node still to be mapped.
+    enum Pending<'a> {
+        /// A node on `original`'s erasable spine.
+        Spine(&'a GraphPattern),
+        /// A node of the wholesale clone, with its copy.
+        Clone(&'a GraphPattern, &'a GraphPattern),
     }
-    match original {
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } if left_join_erasable(right, expression.as_ref()) => {
-            map_spine(left, normalized, map);
+    let mut pending = vec![Pending::Spine(original)];
+    while let Some(next) = pending.pop() {
+        match next {
+            Pending::Spine(original) => match original {
+                GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } if left_join_erasable(right, expression.as_ref()) => {
+                    pending.push(Pending::Spine(left));
+                }
+                GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
+                    pending.push(Pending::Spine(inner));
+                }
+                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                    pending.push(Pending::Spine(inner));
+                }
+                // Mirrors law 4a: an offset-zero slice with room for at least one row
+                // erases. A `Slice(_, Some(0))` reached here is, by construction, the
+                // can-hard-error terminal-clone case (see `normalize`'s law 4b): if it
+                // had folded empty instead, EVERY enclosing step that transparently
+                // forwarded it here would have folded empty too, and
+                // `ledger_source_map`'s caller would never have had an `Enf::Pattern` —
+                // and therefore a `normalized` tree — to walk in the first place. It
+                // falls through to the terminal arm below, exactly like `normalize`'s
+                // own `(_, Some(0)) if can_hard_error` branch.
+                GraphPattern::Slice {
+                    inner,
+                    start: 0,
+                    length,
+                } if *length != Some(0) => {
+                    pending.push(Pending::Spine(inner));
+                }
+                // `Project`/`Union`: synthesizing cases this walk declines to track — see
+                // [`ledger_source_map`]'s doc.
+                GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
+                // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`,
+                // is the terminal shape `normalize` clones wholesale.
+                _ => pending.push(Pending::Clone(original, normalized)),
+            },
+            Pending::Clone(original, normalized) => {
+                map.insert(
+                    std::ptr::from_ref(normalized) as usize,
+                    SubstitutionSource {
+                        source: std::ptr::from_ref(original) as usize,
+                        counts_rows: true,
+                    },
+                );
+                let mut original_children: smallvec::SmallVec<[&GraphPattern; 4]> =
+                    smallvec::SmallVec::new();
+                soundness::visit_classified_children(original, &mut |child, _edge| {
+                    original_children.push(child);
+                    false
+                });
+                let mut normalized_children: smallvec::SmallVec<[&GraphPattern; 4]> =
+                    smallvec::SmallVec::new();
+                soundness::visit_classified_children(normalized, &mut |child, _edge| {
+                    normalized_children.push(child);
+                    false
+                });
+                debug_assert_eq!(
+                    original_children.len(),
+                    normalized_children.len(),
+                    "normalized is a structural clone of original at this point in the walk, \
+                     so their classified children must pair up 1:1"
+                );
+                for (o, n) in original_children.into_iter().zip(normalized_children).rev() {
+                    pending.push(Pending::Clone(o, n));
+                }
+            }
         }
-        GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
-            map_spine(inner, normalized, map);
-        }
-        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-            map_spine(inner, normalized, map);
-        }
-        // Mirrors law 4a: an offset-zero slice with room for at least one row erases.
-        // A `Slice(_, Some(0))` reached here is, by construction, the can-hard-error
-        // terminal-clone case (see `normalize`'s law 4b): if it had folded empty
-        // instead, EVERY enclosing step that transparently forwarded it here would
-        // have folded empty too, and `ledger_source_map`'s caller would never have had
-        // an `Enf::Pattern` — and therefore a `normalized` tree — to walk in the first
-        // place. It falls through to the terminal arm below, exactly like `normalize`'s
-        // own `(_, Some(0)) if can_hard_error` branch.
-        GraphPattern::Slice {
-            inner,
-            start: 0,
-            length,
-        } if *length != Some(0) => {
-            map_spine(inner, normalized, map);
-        }
-        // `Project`/`Union`: synthesizing cases this walk declines to track — see
-        // [`ledger_source_map`]'s doc.
-        GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
-        // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`, is
-        // the terminal shape `normalize` clones wholesale.
-        _ => map_clone_1to1(original, normalized, map),
-    }
-}
-
-/// Record `normalized` (a 1:1 structural clone of `original` — see [`map_spine`]) and
-/// every one of its descendants, INCLUDING any `EXISTS` pattern reached through a
-/// nested expression, against the corresponding node of `original`. `counts_rows` is
-/// unconditionally `true` throughout: unlike `LATERAL`'s Values-Insertion machinery,
-/// this walk never adds a node `original` did not already have, so there is no
-/// wrapper/wrapped ambiguity to arbitrate — every node here really is the one true
-/// output of the real node it corresponds to.
-fn map_clone_1to1(
-    original: &GraphPattern,
-    normalized: &GraphPattern,
-    map: &mut SubstitutionSourceMap,
-) {
-    // A walk over the whole normalized subtree: see `map_spine`.
-    if crate::stack::walk_is_low("EXISTS normalization") {
-        return;
-    }
-    map.insert(
-        std::ptr::from_ref(normalized) as usize,
-        SubstitutionSource {
-            source: std::ptr::from_ref(original) as usize,
-            counts_rows: true,
-        },
-    );
-    let mut original_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
-    soundness::visit_classified_children(original, &mut |child, _edge| {
-        original_children.push(child);
-        false
-    });
-    let mut normalized_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
-    soundness::visit_classified_children(normalized, &mut |child, _edge| {
-        normalized_children.push(child);
-        false
-    });
-    debug_assert_eq!(
-        original_children.len(),
-        normalized_children.len(),
-        "normalized is a structural clone of original at this point in the walk, so their \
-         classified children must pair up 1:1"
-    );
-    for (o, n) in original_children.into_iter().zip(normalized_children) {
-        map_clone_1to1(o, n, map);
     }
 }
 
@@ -1129,5 +1177,452 @@ mod effect_free_gate_tests {
         assert_quoted_triple_term_variable_error(results[0].as_ref().expect_err(
             "Law 1 must not erase a B whose Path endpoint bears a quoted-triple-term variable",
         ));
+    }
+}
+
+/// The loop-based walks checked against their recursive forms: [`normalize`] and
+/// [`ledger_source_map`] over generated spines — every erasable wrapper, both outcomes
+/// of every gate, `Project` and `Union` rebuilds, and the terminal shapes — and one
+/// spine a hundred thousand wrappers tall on a thread with a 128 KiB stack.
+#[cfg(test)]
+mod iterative_walk_tests {
+    use purrdf_sparql_algebra::{
+        Args, Chain, Child, Expression, Function, GraphPattern, GroundTerm, Literal, NamedNode,
+        NamedNodePattern, OrderExpression, PropertyPathExpression, TermPattern, TriplePattern,
+        Variable,
+    };
+
+    use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
+    use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
+    use crate::governor::soundness;
+    use crate::test_rng::splitmix64_next;
+
+    const EX: &str = "http://example.org/";
+
+    /// The stack every deep case runs on.
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// The height of the deep case's spine.
+    const DEPTH: usize = 100_000;
+
+    // ── The recursive references ────────────────────────────────────────────────────
+
+    /// [`normalize`], written as the recursion over the spine it replaces.
+    fn normalize_ref(pattern: &GraphPattern) -> Enf {
+        match pattern {
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                if left_join_erasable(right, expression.as_ref()) {
+                    normalize_ref(left)
+                } else {
+                    Enf::Pattern(copied(pattern))
+                }
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                if order_by_erasable(expression) {
+                    normalize_ref(inner)
+                } else {
+                    Enf::Pattern(copied(pattern))
+                }
+            }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                normalize_ref(inner)
+            }
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => match (*start, *length) {
+                (_, Some(0)) => {
+                    if soundness::pattern_can_hard_error(inner) {
+                        Enf::Pattern(copied(pattern))
+                    } else {
+                        Enf::FoldedEmpty
+                    }
+                }
+                (0, _) => normalize_ref(inner),
+                (_, _) => Enf::Pattern(copied(pattern)),
+            },
+            GraphPattern::Project { inner, variables } => match normalize_ref(inner) {
+                Enf::FoldedEmpty => Enf::FoldedEmpty,
+                Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
+                    inner: Child::new(p),
+                    variables: variables.clone(),
+                }),
+            },
+            GraphPattern::Union { arms } => {
+                let kept: Vec<GraphPattern> = arms
+                    .iter()
+                    .filter_map(|arm| match normalize_ref(arm) {
+                        Enf::FoldedEmpty => None,
+                        Enf::Pattern(p) => Some(p),
+                    })
+                    .collect();
+                match Chain::try_from(kept) {
+                    Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
+                    Err(mut kept) => kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern),
+                }
+            }
+            other => Enf::Pattern(copied(other)),
+        }
+    }
+
+    /// [`ledger_source_map`]'s spine walk, written as the recursion it replaces.
+    fn map_spine_ref(
+        original: &GraphPattern,
+        normalized: &GraphPattern,
+        map: &mut SubstitutionSourceMap,
+    ) {
+        match original {
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } if left_join_erasable(right, expression.as_ref()) => {
+                map_spine_ref(left, normalized, map);
+            }
+            GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
+                map_spine_ref(inner, normalized, map);
+            }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                map_spine_ref(inner, normalized, map);
+            }
+            GraphPattern::Slice {
+                inner,
+                start: 0,
+                length,
+            } if *length != Some(0) => {
+                map_spine_ref(inner, normalized, map);
+            }
+            GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
+            _ => map_clone_1to1_ref(original, normalized, map),
+        }
+    }
+
+    /// The clone pairing of [`map_spine_ref`]'s terminal arm, written as the recursion
+    /// it replaces.
+    fn map_clone_1to1_ref(
+        original: &GraphPattern,
+        normalized: &GraphPattern,
+        map: &mut SubstitutionSourceMap,
+    ) {
+        map.insert(
+            std::ptr::from_ref(normalized) as usize,
+            SubstitutionSource {
+                source: std::ptr::from_ref(original) as usize,
+                counts_rows: true,
+            },
+        );
+        let mut original_children: Vec<&GraphPattern> = Vec::new();
+        soundness::visit_classified_children(original, &mut |child, _edge| {
+            original_children.push(child);
+            false
+        });
+        let mut normalized_children: Vec<&GraphPattern> = Vec::new();
+        soundness::visit_classified_children(normalized, &mut |child, _edge| {
+            normalized_children.push(child);
+            false
+        });
+        assert_eq!(original_children.len(), normalized_children.len());
+        for (o, n) in original_children.into_iter().zip(normalized_children) {
+            map_clone_1to1_ref(o, n, map);
+        }
+    }
+
+    /// A map's entries as `(address, source, counts_rows)`, sorted, so two maps built
+    /// over the same trees compare as values.
+    fn entries(map: &SubstitutionSourceMap) -> Vec<(usize, usize, bool)> {
+        let mut entries: Vec<(usize, usize, bool)> = map
+            .iter()
+            .map(|(&address, entry)| (address, entry.source, entry.counts_rows))
+            .collect();
+        entries.sort_unstable();
+        entries
+    }
+
+    // ── A deterministic choice sequence ────────────────────────────────────────────
+
+    /// The choices one generated shape is built from: a SplitMix64 counter stream, so
+    /// a seed names a shape.
+    struct Choices(u64);
+
+    impl Choices {
+        /// One choice in `0..bound`.
+        fn pick(&mut self, bound: u64) -> u64 {
+            splitmix64_next(&mut self.0) % bound
+        }
+
+        /// One even choice.
+        fn coin(&mut self) -> bool {
+            self.pick(2) == 1
+        }
+    }
+
+    fn nn(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    fn var(name: &str) -> Variable {
+        Variable::new(name)
+    }
+
+    /// The basic graph pattern `?s{n} ex:p{n} ?o{n}`.
+    fn bgp(n: u64) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(var(&format!("s{n}"))),
+                predicate: NamedNodePattern::NamedNode(nn(&format!("p{n}"))),
+                object: TermPattern::Variable(var(&format!("o{n}"))),
+            }],
+        }
+    }
+
+    /// `VALUES ?v { ex:a UNDEF }`.
+    fn values() -> GraphPattern {
+        GraphPattern::Values {
+            variables: vec![var("v")],
+            bindings: vec![vec![Some(GroundTerm::NamedNode(nn("a")))], vec![None]],
+        }
+    }
+
+    /// `?s ex:q+ ?o`.
+    fn path() -> GraphPattern {
+        GraphPattern::Path {
+            subject: TermPattern::Variable(var("s")),
+            path: PropertyPathExpression::OneOrMore(Child::new(PropertyPathExpression::NamedNode(
+                nn("q"),
+            ))),
+            object: TermPattern::Variable(var("o")),
+        }
+    }
+
+    /// A `SERVICE` call: an effect no law may erase.
+    fn service(silent: bool) -> GraphPattern {
+        GraphPattern::Service {
+            name: NamedNodePattern::NamedNode(nn("endpoint")),
+            inner: Child::new(bgp(9)),
+            silent,
+        }
+    }
+
+    /// A call of a custom function: an expression that can hard-error.
+    fn custom_call() -> Expression {
+        Expression::FunctionCall(
+            Function::Custom(nn("fn")),
+            Args::from(vec![Expression::Variable(var("w"))]),
+        )
+    }
+
+    /// An expression no law's gate refuses.
+    fn clean_expression(choices: &mut Choices) -> Expression {
+        if choices.coin() {
+            Expression::Variable(var("y"))
+        } else {
+            Expression::Literal(Literal::new_typed(
+                "true",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+            ))
+        }
+    }
+
+    /// An expression a gate refuses about half the time.
+    fn maybe_dirty_expression(choices: &mut Choices) -> Expression {
+        if choices.coin() {
+            custom_call()
+        } else {
+            clean_expression(choices)
+        }
+    }
+
+    /// A leaf of the spine: a data pattern, or an effect.
+    fn terminal(choices: &mut Choices) -> GraphPattern {
+        match choices.pick(5) {
+            0 => bgp(choices.pick(3)),
+            1 => values(),
+            2 => path(),
+            3 => service(choices.coin()),
+            _ => GraphPattern::Filter {
+                expr: maybe_dirty_expression(choices),
+                inner: Child::new(bgp(4)),
+            },
+        }
+    }
+
+    /// One generated pattern, at most `budget` operators over its leaves.
+    fn gen_pattern(choices: &mut Choices, budget: &mut usize) -> GraphPattern {
+        if *budget == 0 {
+            return terminal(choices);
+        }
+        *budget -= 1;
+        match choices.pick(14) {
+            0 => GraphPattern::LeftJoin {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(if choices.coin() {
+                    bgp(5)
+                } else {
+                    terminal(choices)
+                }),
+                expression: match choices.pick(3) {
+                    0 => None,
+                    1 => Some(clean_expression(choices)),
+                    _ => Some(custom_call()),
+                },
+            },
+            1 => GraphPattern::OrderBy {
+                inner: Child::new(gen_pattern(choices, budget)),
+                expression: match choices.pick(3) {
+                    0 => Vec::new(),
+                    1 => vec![OrderExpression::Asc(clean_expression(choices))],
+                    _ => vec![
+                        OrderExpression::Desc(clean_expression(choices)),
+                        OrderExpression::Asc(custom_call()),
+                    ],
+                },
+            },
+            2 => GraphPattern::Distinct {
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            3 => GraphPattern::Reduced {
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            4 => GraphPattern::Slice {
+                inner: Child::new(gen_pattern(choices, budget)),
+                start: choices.pick(2) as usize,
+                length: [None, Some(0), Some(1)][choices.pick(3) as usize],
+            },
+            5 => GraphPattern::Project {
+                inner: Child::new(gen_pattern(choices, budget)),
+                variables: vec![var("s0")],
+            },
+            6 => {
+                let first = gen_pattern(choices, budget);
+                let second = gen_pattern(choices, budget);
+                let rest = if choices.coin() {
+                    vec![gen_pattern(choices, budget)]
+                } else {
+                    Vec::new()
+                };
+                GraphPattern::Union {
+                    arms: Chain::new(first, second, rest),
+                }
+            }
+            7 => GraphPattern::Join {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+            },
+            8 => GraphPattern::Filter {
+                expr: maybe_dirty_expression(choices),
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            9 => GraphPattern::Extend {
+                inner: Child::new(gen_pattern(choices, budget)),
+                variable: var("b"),
+                expression: clean_expression(choices),
+            },
+            10 => GraphPattern::Graph {
+                name: NamedNodePattern::Variable(var("g")),
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            11 => GraphPattern::Minus {
+                left: Child::new(gen_pattern(choices, budget)),
+                right: Child::new(gen_pattern(choices, budget)),
+            },
+            12 => GraphPattern::Filter {
+                expr: Expression::Exists(Child::new(gen_pattern(choices, budget))),
+                inner: Child::new(gen_pattern(choices, budget)),
+            },
+            _ => terminal(choices),
+        }
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The checks ─────────────────────────────────────────────────────────────────
+
+    /// Over two hundred generated spines, the loop normalizes to what the recursion
+    /// normalizes to, copies exactly as many pattern nodes, and maps the normal form's
+    /// nodes to the same sources.
+    #[test]
+    fn the_loops_agree_with_the_recursive_references_over_generated_spines() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices(seed);
+            let mut budget = 3 + choices.pick(10) as usize;
+            let pattern = gen_pattern(&mut choices, &mut budget);
+
+            crate::op_count::reset();
+            let looped = normalize(&pattern);
+            let looped_copies = crate::op_count::read().cloned;
+            crate::op_count::reset();
+            let recursed = normalize_ref(&pattern);
+            let recursed_copies = crate::op_count::read().cloned;
+            assert_eq!(looped, recursed, "seed {seed}: {pattern:?}");
+            assert_eq!(
+                looped_copies, recursed_copies,
+                "seed {seed}: the loop copies as many nodes as the recursion"
+            );
+
+            if let Enf::Pattern(normalized) = &looped {
+                let looped_map = ledger_source_map(&pattern, normalized);
+                let mut recursed_map = SubstitutionSourceMap::default();
+                map_spine_ref(&pattern, normalized, &mut recursed_map);
+                assert_eq!(
+                    entries(&looped_map),
+                    entries(&recursed_map),
+                    "seed {seed}: {pattern:?}"
+                );
+            }
+        }
+    }
+
+    /// A spine of a hundred thousand `DISTINCT`/`REDUCED` wrappers over one basic graph
+    /// pattern normalizes to that pattern, and the source map pairs the copy with the
+    /// leaf, on a thread whose stack holds a few hundred frames of any recursion.
+    #[test]
+    fn a_hundred_thousand_wrappers_normalize_and_map_on_a_128_kib_thread() {
+        on_small_stack(|| {
+            let leaf = bgp(0);
+            let mut spine = leaf.clone();
+            for level in 0..DEPTH {
+                spine = if level % 2 == 0 {
+                    GraphPattern::Distinct {
+                        inner: Child::new(spine),
+                    }
+                } else {
+                    GraphPattern::Reduced {
+                        inner: Child::new(spine),
+                    }
+                };
+            }
+            let normalized = normalize(&spine);
+            assert_eq!(normalized, Enf::Pattern(leaf));
+
+            let Enf::Pattern(normalized) = normalized else {
+                unreachable!("asserted a pattern above");
+            };
+            let map = ledger_source_map(&spine, &normalized);
+            let mut at = &spine;
+            while let GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } = at {
+                at = inner;
+            }
+            assert_eq!(
+                entries(&map),
+                vec![(
+                    std::ptr::from_ref(&normalized) as usize,
+                    std::ptr::from_ref(at) as usize,
+                    true,
+                )]
+            );
+        });
     }
 }

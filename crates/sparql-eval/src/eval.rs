@@ -290,18 +290,13 @@ fn placeholder_unsafe(
 }
 
 impl PreparedExists {
-    /// [`Self::build`] inside a [`crate::stack::walk`] scope: preparing a site walks its
-    /// whole inner pattern (normalization, the source map, the structural analysis), and
-    /// the site may be reached deep in the evaluation, so every level of those walks may
-    /// refuse and the half-built preparation is discarded.
-    pub(crate) fn build_guarded(pattern: &GraphPattern) -> Result<Self, EvalError> {
-        crate::stack::walk(|| Self::build(pattern))
-    }
-
     /// Build a [`PreparedExists`] for `pattern` — the walk `crate::expr::exists` calls
     /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
-    /// per-evaluation cache and the substituted-temporary ABA guard).
-    fn build(pattern: &GraphPattern) -> Self {
+    /// per-evaluation cache and the substituted-temporary ABA guard). Preparing a site
+    /// walks its whole inner pattern — normalization, the source map, the structural
+    /// analysis and the copies — over work lists, so a site reached deep in the
+    /// evaluation, over a body of any depth, is prepared on the stack it has.
+    pub(crate) fn build(pattern: &GraphPattern) -> Self {
         #[cfg(test)]
         PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
         match crate::enf::normalize(pattern) {
@@ -2408,25 +2403,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// window is a body the window evaluates as it is written, or one substituted in full
     /// (a `SERVICE` body, or layers that disagree) — the second of which is exactly the
     /// case a cached preparation would answer with an earlier row's substitution.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::StackExhausted`] when the walks that prepare the site ran out of stack
-    /// (see [`crate::stack::walk`]); nothing is cached then.
-    pub(crate) fn prepared_exists(
-        &mut self,
-        pattern: &GraphPattern,
-    ) -> Result<Arc<PreparedExists>, EvalError> {
+    pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
         if self.in_substituted_exists {
-            return Ok(Arc::new(PreparedExists::build_guarded(pattern)?));
+            return Arc::new(PreparedExists::build(pattern));
         }
         let key = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
-            return Ok(existing.clone());
+            return existing.clone();
         }
-        let built = Arc::new(PreparedExists::build_guarded(pattern)?);
+        let built = Arc::new(PreparedExists::build(pattern));
         self.exists_prepared_cache.insert(key, built.clone());
-        Ok(built)
+        built
     }
 }
 
@@ -2987,7 +2974,7 @@ pub fn eval<D: DatasetView + Sync>(
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
-    ctx.endpoint_scan = crate::service_endpoints::scan(pattern)?;
+    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -3231,7 +3218,7 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query))?;
+    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
     install_answer_cap_pushdown(query, ctx);
     Ok(reserve)
 }
@@ -3420,45 +3407,76 @@ fn memoized_value_of<D: DatasetView + Sync>(
 }
 
 /// `scratch::term_id_to_value`, with the literal datatype id → IRI string
-/// resolution memoized across cells (recursing through RDF-1.2 triple terms).
+/// resolution memoized across cells.
+///
+/// A triple term is assembled bottom-up over a work list: its components are resolved
+/// subject, predicate, object — each fully before the next, so the memo is written in
+/// that order — and the triple is built once all three exist. A term of any nesting
+/// costs no more machine stack.
 fn memoized_term_value<D: DatasetView>(
     dataset: &D,
     id: D::Id,
     datatype_memo: &mut DetHashMap<D::Id, String>,
 ) -> TermValue {
-    match dataset.resolve(id) {
-        purrdf_core::TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        purrdf_core::TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        purrdf_core::TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = datatype_memo
-                .entry(datatype)
-                .or_insert_with(|| match dataset.resolve(datatype) {
-                    purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
-                    // A literal's datatype is always an interned IRI (C0.1).
-                    other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-                })
-                .clone();
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
+    enum Step<I> {
+        Resolve(I),
+        Assemble,
+    }
+    let mut steps: Vec<Step<D::Id>> = vec![Step::Resolve(id)];
+    let mut values: Vec<TermValue> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Resolve(id) => match dataset.resolve(id) {
+                purrdf_core::TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
+                purrdf_core::TermRef::Blank { label, scope } => values.push(TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                }),
+                purrdf_core::TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let datatype = datatype_memo
+                        .entry(datatype)
+                        .or_insert_with(|| match dataset.resolve(datatype) {
+                            purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
+                            // A literal's datatype is always an interned IRI (C0.1).
+                            other => {
+                                unreachable!("literal datatype must be an IRI, got {other:?}")
+                            }
+                        })
+                        .clone();
+                    values.push(TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype,
+                        language: language.map(str::to_owned),
+                        direction,
+                    });
+                }
+                purrdf_core::TermRef::Triple { s, p, o } => steps.extend([
+                    Step::Assemble,
+                    Step::Resolve(o),
+                    Step::Resolve(p),
+                    Step::Resolve(s),
+                ]),
+            },
+            Step::Assemble => {
+                let o = values.pop().expect("a triple term's object is resolved");
+                let p = values.pop().expect("a triple term's predicate is resolved");
+                let s = values.pop().expect("a triple term's subject is resolved");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
             }
         }
-        purrdf_core::TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(memoized_term_value(dataset, s, datatype_memo)),
-            p: TermBox::new(memoized_term_value(dataset, p, datatype_memo)),
-            o: TermBox::new(memoized_term_value(dataset, o, datatype_memo)),
-        },
     }
+    values
+        .pop()
+        .expect("the root term's value is the last one assembled")
 }
 
 /// Where a per-row operator admits its rows: see [`EvalCtx::row_admission`].
@@ -4484,5 +4502,154 @@ mod tests {
             eval(&plan, &mut governed).is_err(),
             "a truncation reaching the completion-only entry point must be refused"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_value_walk_tests {
+    //! The memoized id-to-value resolution, checked against a recursive reference over
+    //! generated triple-term shapes: the same value and the same datatype memo after
+    //! each. There is no deep case: a dataset's triple terms nest a bounded number of
+    //! levels, so the deepest term it can hand back is far shallower than the generated
+    //! shapes already cover.
+
+    use super::memoized_term_value;
+    use crate::DetHashMap;
+    use purrdf_core::{
+        BlankScope, RdfDataset, RdfDatasetBuilder, TermBox, TermFactory as _, TermId, TermRef,
+        TermValue,
+    };
+    use std::sync::Arc;
+
+    const EX: &str = "http://example.org/";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn typed(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A generated value a dataset admits, with triple terms nested through the object
+    /// while `budget` lasts.
+    fn admissible(choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Blank {
+                label: ["a", "bb"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => typed(["x", "y"][choices.choose(2)], XSD_STRING),
+            3 => typed(["1", "2"][choices.choose(2)], XSD_INTEGER),
+            _ => {
+                *budget -= 1;
+                TermValue::Triple {
+                    s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
+                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                    o: TermBox::new(admissible(choices, budget)),
+                }
+            }
+        }
+    }
+
+    /// The recursive reference for [`memoized_term_value`].
+    fn reference(
+        dataset: &RdfDataset,
+        id: TermId,
+        memo: &mut DetHashMap<TermId, String>,
+    ) -> TermValue {
+        match dataset.resolve(id) {
+            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+            TermRef::Blank { label, scope } => TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype = memo
+                    .entry(datatype)
+                    .or_insert_with(|| {
+                        let TermRef::Iri(iri) = dataset.resolve(datatype) else {
+                            panic!("a literal's datatype is an IRI");
+                        };
+                        iri.to_owned()
+                    })
+                    .clone();
+                TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype,
+                    language: language.map(str::to_owned),
+                    direction,
+                }
+            }
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference(dataset, s, memo)),
+                p: TermBox::new(reference(dataset, p, memo)),
+                o: TermBox::new(reference(dataset, o, memo)),
+            },
+        }
+    }
+
+    /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
+    fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let ids: Vec<TermId> = values
+            .iter()
+            .map(|value| {
+                let id = builder.intern_value(value);
+                builder.push_quad(s, p, id, None);
+                id
+            })
+            .collect();
+        (builder.freeze().expect("the generated values freeze"), ids)
+    }
+
+    #[test]
+    fn the_memoized_resolution_agrees_with_the_recursive_reference() {
+        let mut choices = Choices::new(13);
+        let values: Vec<TermValue> = (0..200)
+            .map(|_| {
+                let mut budget = 6;
+                admissible(&mut choices, &mut budget)
+            })
+            .collect();
+        let (dataset, ids) = dataset_of(&values);
+        let mut memo_walk = DetHashMap::default();
+        let mut memo_ref = DetHashMap::default();
+        for (value, id) in values.iter().zip(ids) {
+            let walked = memoized_term_value(&*dataset, id, &mut memo_walk);
+            assert_eq!(walked, reference(&dataset, id, &mut memo_ref));
+            assert_eq!(walked, *value);
+            assert_eq!(memo_walk, memo_ref);
+        }
+        assert_eq!(memo_walk.len(), 2, "one memo entry per literal datatype");
     }
 }

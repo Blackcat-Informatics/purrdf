@@ -911,11 +911,11 @@ pub(crate) struct LiteralKey<'a> {
 ///
 /// # Adding a term category
 ///
-/// A new recursive category is one variant here plus one arm each in [`project`],
-/// [`SortKey::rank`] and [`total_order`]; its members recurse back through
-/// `total_order`, exactly as [`SortKey::Triple`] does, so the category inherits the
-/// whole relation instead of restating any of it. [`SortKey::Composite`] is the
-/// worked example.
+/// A new category is one variant here plus one arm each in [`project`],
+/// [`SortKey::rank`] and [`total_order`]; a category whose members are themselves
+/// keys puts them back through `total_order`'s pair walk, as [`SortKey::Triple`]
+/// does, so the category inherits the whole relation instead of restating any of
+/// it. [`SortKey::Composite`] is the worked example of a leaf category.
 pub(crate) enum SortKey<'a> {
     /// Unbound — sorts before every bound term.
     Unbound,
@@ -944,7 +944,49 @@ pub(crate) enum SortKey<'a> {
     /// rank below every composite that does parse.
     Composite(purrdf_cdt::CdtValue),
     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
-    Triple(Box<[Self; 3]>),
+    Triple(TripleKey<'a>),
+}
+
+/// The three component keys of a triple term's [`SortKey`], boxed.
+///
+/// Reads like a `Box<[SortKey; 3]>` — it dereferences to the array — and its drop takes
+/// the nested keys apart over a work list, so the key of a term nested to any depth is
+/// dropped without recursion.
+pub(crate) struct TripleKey<'a>(Option<Box<[SortKey<'a>; 3]>>);
+
+impl<'a> TripleKey<'a> {
+    /// The key of a triple term whose components project to `components`.
+    fn new(components: [SortKey<'a>; 3]) -> Self {
+        Self(Some(Box::new(components)))
+    }
+}
+
+impl<'a> std::ops::Deref for TripleKey<'a> {
+    type Target = [SortKey<'a>; 3];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_deref()
+            .expect("a triple key is emptied only by its own drop")
+    }
+}
+
+impl Drop for TripleKey<'_> {
+    fn drop(&mut self) {
+        let Some(root) = self.0.take() else {
+            return;
+        };
+        let mut pending: Vec<Box<[SortKey<'_>; 3]>> = vec![root];
+        while let Some(mut components) = pending.pop() {
+            for component in &mut *components {
+                if let SortKey::Triple(nested) = component
+                    && let Some(inner) = nested.0.take()
+                {
+                    pending.push(inner);
+                }
+            }
+        }
+    }
 }
 
 impl SortKey<'_> {
@@ -963,7 +1005,41 @@ impl SortKey<'_> {
 }
 
 /// Project one (possibly unbound) term onto its sort key.
+///
+/// A triple term's key is assembled bottom-up over a work list — its components
+/// projected subject, predicate, object, and the triple's key built once all three
+/// exist — so a term nested to any depth costs no more machine stack. Every other
+/// term is projected directly.
 pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
+    enum Step<'v> {
+        Term(&'v TermValue),
+        Assemble,
+    }
+    let Some(root @ TermValue::Triple { .. }) = value else {
+        return project_shallow(value);
+    };
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(root)];
+    let mut keys: Vec<SortKey<'_>> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(TermValue::Triple { s, p, o }) => {
+                steps.extend([Step::Assemble, Step::Term(o), Step::Term(p), Step::Term(s)]);
+            }
+            Step::Term(leaf) => keys.push(project_shallow(Some(leaf))),
+            Step::Assemble => {
+                let o = keys.pop().expect("a triple term's object is projected");
+                let p = keys.pop().expect("a triple term's predicate is projected");
+                let s = keys.pop().expect("a triple term's subject is projected");
+                keys.push(SortKey::Triple(TripleKey::new([s, p, o])));
+            }
+        }
+    }
+    keys.pop()
+        .expect("the root term's key is the last one assembled")
+}
+
+/// [`project`] for an unbound cell or a term that is not a triple term.
+fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
     match value {
         None => SortKey::Unbound,
         Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
@@ -997,8 +1073,8 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
                 lexical: lexical_form,
             })
         }
-        Some(TermValue::Triple { s, p, o }) => {
-            SortKey::Triple(Box::new([s, p, o].map(|t| project(Some(&**t)))))
+        Some(TermValue::Triple { .. }) => {
+            unreachable!("a triple term is projected over the work list")
         }
     }
 }
@@ -1021,7 +1097,36 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
 /// order is a lexicographic product of total orders, so it is transitive by
 /// construction, and it is what the CDT crate already sorts map entries and renders
 /// canonical lexical forms with.
+///
+/// # Triple terms
+///
+/// Two triple terms compare subject, then predicate, then object, each pair by this
+/// same relation: the first pair of components that does not compare equal decides.
+/// The pairs are walked over a work list rather than the call stack — a pair of
+/// triple terms puts its three component pairs in front of whatever follows it — so
+/// two terms nested to any depth cost no more machine stack.
 pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+    if !matches!((a, b), (SortKey::Triple(_), SortKey::Triple(_))) {
+        return shallow_order(a, b);
+    }
+    let mut pending: Vec<(&SortKey<'_>, &SortKey<'_>)> = vec![(a, b)];
+    while let Some((a, b)) = pending.pop() {
+        match (a, b) {
+            (SortKey::Triple(x), SortKey::Triple(y)) => {
+                pending.extend([(&x[2], &y[2]), (&x[1], &y[1]), (&x[0], &y[0])]);
+            }
+            _ => match shallow_order(a, b) {
+                Ordering::Equal => {}
+                decided => return decided,
+            },
+        }
+    }
+    Ordering::Equal
+}
+
+/// [`total_order`] on two keys of which at most one is a triple term's: two keys of
+/// the same kind by that kind's own order, two of different kinds by their rank.
+fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
     match (a, b) {
         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
         (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
@@ -1037,9 +1142,8 @@ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
         }
         (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
-        (SortKey::Triple(x), SortKey::Triple(y)) => total_order(&x[0], &y[0])
-            .then_with(|| total_order(&x[1], &y[1]))
-            .then_with(|| total_order(&x[2], &y[2])),
+        // Two triple terms are decided by their components, which `total_order` walks.
+        (SortKey::Triple(_), SortKey::Triple(_)) => Ordering::Equal,
         _ => a.rank().cmp(&b.rank()),
     }
 }
@@ -6410,5 +6514,170 @@ mod numeric_chain_tests {
             tree_disagreements > 0,
             "no generated group separates the partial-sum tree from the chain"
         );
+    }
+}
+
+#[cfg(test)]
+mod sort_key_walk_tests {
+    //! The sort-key projection and the total order over nested triple terms, checked
+    //! against recursive references over every pair of generated terms; and two keys a
+    //! hundred thousand levels deep, projected, compared and released on a thread with
+    //! a 128 KiB stack.
+
+    use super::{SortKey, TripleKey, project, project_shallow, shallow_order, total_order};
+    use purrdf_core::{BlankScope, TermBox, TermValue};
+    use std::cmp::Ordering;
+
+    const EX: &str = "http://example.org/";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn literal(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A generated term of every kind the order ranks, triple terms nested while
+    /// `budget` lasts; `None` is an unbound cell.
+    fn value(choices: &mut Choices, budget: &mut usize) -> Option<TermValue> {
+        Some(match choices.choose(if *budget > 0 { 7 } else { 6 }) {
+            0 => return None,
+            1 => TermValue::Blank {
+                label: ["a", "b"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            3 => literal(["1", "2", "10"][choices.choose(3)], XSD_INTEGER),
+            4 => literal(["a", "b"][choices.choose(2)], XSD_STRING),
+            5 => literal(["[1, 2]", "[2]"][choices.choose(2)], purrdf_cdt::CDT_LIST),
+            _ => {
+                *budget -= 1;
+                let component = |choices: &mut Choices, budget: &mut usize| {
+                    value(choices, budget).unwrap_or_else(|| literal("u", XSD_STRING))
+                };
+                let s = component(choices, budget);
+                let p = component(choices, budget);
+                let o = component(choices, budget);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+        })
+    }
+
+    /// The recursive reference for [`project`].
+    fn project_reference(value: Option<&TermValue>) -> SortKey<'_> {
+        match value {
+            Some(TermValue::Triple { s, p, o }) => SortKey::Triple(TripleKey::new(
+                [s, p, o].map(|component| project_reference(Some(&**component))),
+            )),
+            other => project_shallow(other),
+        }
+    }
+
+    /// The recursive reference for [`total_order`].
+    fn total_order_reference(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+        match (a, b) {
+            (SortKey::Triple(x), SortKey::Triple(y)) => total_order_reference(&x[0], &y[0])
+                .then_with(|| total_order_reference(&x[1], &y[1]))
+                .then_with(|| total_order_reference(&x[2], &y[2])),
+            _ => shallow_order(a, b),
+        }
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// A triple-term chain `depth` levels deep whose innermost object is the string
+    /// `innermost`.
+    fn chain(depth: usize, innermost: &str) -> TermValue {
+        let mut term = literal(innermost, XSD_STRING);
+        for _ in 0..depth {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    #[test]
+    fn the_order_over_generated_terms_agrees_with_the_recursive_reference() {
+        let mut choices = Choices::new(7);
+        let values: Vec<Option<TermValue>> = (0..60)
+            .map(|_| {
+                let mut budget = 4;
+                value(&mut choices, &mut budget)
+            })
+            .collect();
+        let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+        let references: Vec<SortKey<'_>> = values
+            .iter()
+            .map(|v| project_reference(v.as_ref()))
+            .collect();
+        for (i, (key_a, ref_a)) in keys.iter().zip(&references).enumerate() {
+            for (j, (key_b, ref_b)) in keys.iter().zip(&references).enumerate() {
+                let walked = total_order(key_a, key_b);
+                assert_eq!(walked, total_order_reference(ref_a, ref_b), "{i} vs {j}");
+                assert_eq!(walked, total_order(key_b, key_a).reverse(), "{i} vs {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_key_is_projected_compared_and_released_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let a = chain(DEPTH, "a");
+            let b = chain(DEPTH, "b");
+            let again = chain(DEPTH, "a");
+            let shorter = chain(DEPTH - 1, "a");
+            let (key_a, key_b, key_again, key_shorter) = (
+                project(Some(&a)),
+                project(Some(&b)),
+                project(Some(&again)),
+                project(Some(&shorter)),
+            );
+            assert_eq!(total_order(&key_a, &key_b), Ordering::Less);
+            assert_eq!(total_order(&key_b, &key_a), Ordering::Greater);
+            assert_eq!(total_order(&key_a, &key_again), Ordering::Equal);
+            // At the innermost position the shorter chain holds a literal where the
+            // other holds a triple term, and a literal ranks below a triple term.
+            assert_eq!(total_order(&key_shorter, &key_a), Ordering::Less);
+            drop((key_a, key_b, key_again, key_shorter));
+        });
     }
 }

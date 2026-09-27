@@ -77,83 +77,76 @@ pub fn predicate_use(query: &Query) -> PredicateUse {
 
 /// Walk `pattern` and every sub-pattern, recording what each leaf says.
 ///
-/// Recursion comes from `visit_pattern_parts`, the crate's exhaustive shallow
-/// visitor — exhaustive being the load-bearing word: a graph-pattern variant added
-/// later fails to compile there rather than being silently skipped here, which is
-/// the difference between a classification that stays true and one that quietly
-/// stops covering a construct.
+/// The walk keeps a work list of the patterns and expressions still to be read, so a
+/// query of any depth is classified without a machine-stack frame per level. Each
+/// node's parts come from `visit_pattern_parts` and `visit_expression_parts`, the
+/// crate's exhaustive shallow visitors — exhaustive being the load-bearing word: a
+/// graph-pattern or expression variant added later fails to compile there rather
+/// than being silently skipped here, which is the difference between a
+/// classification that stays true and one that quietly stops covering a construct.
 ///
-/// The two leaves that carry predicates are handled directly, because the visitor
-/// treats both as leaves: it exists to propagate truncation, and a BGP is where
+/// The three leaves that carry predicates are handled directly, because the visitor
+/// treats them as leaves: it exists to propagate truncation, and a BGP is where
 /// truncation originates rather than something it passes through.
 ///
 /// # Expression-position patterns count
 ///
-/// The visitor yields two part kinds, and BOTH carry patterns. Following only
-/// `Child` misses every pattern reachable only through an expression, and
+/// The pattern visitor yields two part kinds, and BOTH carry patterns. Following
+/// only `Child` misses every pattern reachable only through an expression, and
 /// `FILTER EXISTS { ?s <rel> ?o }` is exactly that shape: the inner pattern arrives
-/// as `ExpressionPart::Exists`. A relation invoked only inside a `FILTER EXISTS`
-/// would then report `calls_nothing() == true` — the precise opposite of the fact
-/// this module exists to make visible, and a silent one.
+/// as `ExpressionPart::Exists`, at any expression nesting depth. A relation invoked
+/// only inside a `FILTER EXISTS` would then report `calls_nothing() == true` — the
+/// precise opposite of the fact this module exists to make visible, and a silent
+/// one. The report is a pair of sorted sets, so the order the nodes are read in does
+/// not reach it.
 fn walk(pattern: &GraphPattern, out: &mut PredicateUse) {
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            for triple in patterns {
-                record_data(&triple.predicate, out);
+    use crate::governor::soundness::{
+        ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
+    };
+
+    enum Node<'a> {
+        Pattern(&'a GraphPattern),
+        Expression(&'a purrdf_sparql_algebra::Expression),
+    }
+
+    let mut pending = vec![Node::Pattern(pattern)];
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Pattern(GraphPattern::Bgp { patterns }) => {
+                for triple in patterns {
+                    record_data(&triple.predicate, out);
+                }
             }
-            return;
+            Node::Pattern(GraphPattern::PropertyFunction(call)) => {
+                out.calls.insert(call.iri.clone());
+            }
+            // A property path is never a call: the parser only lowers a BARE,
+            // length-one predicate IRI to a call node, so anything that reached a
+            // `Path` is a path operator and reads the graph.
+            Node::Pattern(GraphPattern::Path { path, .. }) => record_path(path, out),
+            Node::Pattern(pattern) => {
+                visit_pattern_parts(pattern, &mut |part| {
+                    pending.push(match part {
+                        PatternPart::Child(child, _) => Node::Pattern(child),
+                        PatternPart::Expression(expr) => Node::Expression(expr),
+                    });
+                    // `false` keeps the visit going; this walk has no early exit.
+                    false
+                });
+            }
+            Node::Expression(expr) => {
+                visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        ExpressionPart::Sub(inner) => pending.push(Node::Expression(inner)),
+                        ExpressionPart::Exists(inner) => pending.push(Node::Pattern(inner)),
+                        // A named function is not a pattern and carries none.
+                        ExpressionPart::Call(_) => {}
+                    }
+                    false
+                });
+            }
         }
-        GraphPattern::PropertyFunction(call) => {
-            out.calls.insert(call.iri.clone());
-            return;
-        }
-        // A property path is never a call: the parser only lowers a BARE,
-        // length-one predicate IRI to a call node, so anything that reached a
-        // `Path` is a path operator and reads the graph.
-        GraphPattern::Path { path, .. } => {
-            record_path(path, out);
-            return;
-        }
-        _ => {}
     }
-
-    use crate::governor::soundness::{PatternPart, visit_pattern_parts};
-
-    let mut pending: Vec<&GraphPattern> = Vec::new();
-    visit_pattern_parts(pattern, &mut |part| {
-        match part {
-            PatternPart::Child(child, _) => pending.push(child),
-            PatternPart::Expression(expr) => collect_exists_patterns(expr, &mut pending),
-        }
-        // `false` keeps the visit going; this walk has no early exit.
-        false
-    });
-    for child in pending {
-        walk(child, out);
-    }
-}
-
-/// Collect every pattern reachable through `expr` — the `EXISTS`/`NOT EXISTS` bodies,
-/// at any nesting depth.
-///
-/// Recursion again comes from the crate's own exhaustive expression visitor, for the
-/// same reason the pattern walk uses its counterpart: an expression variant added
-/// later fails to compile there rather than silently dropping a pattern here.
-fn collect_exists_patterns<'a>(
-    expr: &'a purrdf_sparql_algebra::Expression,
-    pending: &mut Vec<&'a GraphPattern>,
-) {
-    use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
-
-    visit_expression_parts(expr, &mut |part| {
-        match part {
-            ExpressionPart::Sub(inner) => collect_exists_patterns(inner, pending),
-            ExpressionPart::Exists(inner) => pending.push(inner),
-            // A named function is not a pattern and carries none.
-            ExpressionPart::Call(_) => {}
-        }
-        false
-    });
 }
 
 /// Record a triple-pattern predicate, when it is an IRI rather than a variable.
@@ -163,34 +156,35 @@ fn record_data(predicate: &NamedNodePattern, out: &mut PredicateUse) {
     }
 }
 
-/// Record every IRI a property path names, all of them as data.
+/// Record every IRI a property path names, all of them as data, over a work list of
+/// the path's nodes.
 fn record_path(path: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut PredicateUse) {
     use purrdf_sparql_algebra::PropertyPathExpression as P;
-    match path {
-        P::NamedNode(node) => {
-            out.data.insert(node.as_str().to_owned());
-        }
-        P::Reverse(inner) | P::ZeroOrMore(inner) | P::OneOrMore(inner) | P::ZeroOrOne(inner) => {
-            record_path(inner, out);
-        }
-        P::Sequence(elements) | P::Alternative(elements) => {
-            for element in elements {
-                record_path(element, out);
+    let mut pending = vec![path];
+    while let Some(path) = pending.pop() {
+        match path {
+            P::NamedNode(node) => {
+                out.data.insert(node.as_str().to_owned());
             }
-        }
-        // A negated set names the predicates it EXCLUDES. They are still predicate
-        // IRIs the query mentions and still not calls, so they are reported as data —
-        // a host asking "did my relation IRI become a call here?" gets the right
-        // answer either way, and gets told the IRI was seen.
-        P::NegatedPropertySet(elements) => {
-            for element in elements {
-                out.data.insert(element.predicate.as_str().to_owned());
+            P::Reverse(inner)
+            | P::ZeroOrMore(inner)
+            | P::OneOrMore(inner)
+            | P::ZeroOrOne(inner)
+            | P::Range { inner, .. } => pending.push(inner),
+            P::Sequence(elements) | P::Alternative(elements) => pending.extend(elements.iter()),
+            // A negated set names the predicates it EXCLUDES. They are still predicate
+            // IRIs the query mentions and still not calls, so they are reported as data —
+            // a host asking "did my relation IRI become a call here?" gets the right
+            // answer either way, and gets told the IRI was seen.
+            P::NegatedPropertySet(elements) => {
+                for element in elements {
+                    out.data.insert(element.predicate.as_str().to_owned());
+                }
             }
+            // A wildcard names no predicate, so there is nothing to report — its
+            // namespace bound is a restriction on matching, not an IRI the query uses.
+            P::Wildcard { .. } => {}
         }
-        P::Range { inner, .. } => record_path(inner, out),
-        // A wildcard names no predicate, so there is nothing to report — its
-        // namespace bound is a restriction on matching, not an IRI the query uses.
-        P::Wildcard { .. } => {}
     }
 }
 
@@ -318,5 +312,291 @@ mod tests {
             "a path is not a call however the IRI is configured: {used:?}"
         );
         assert_eq!(used.data.iter().collect::<Vec<_>>(), vec![REL]);
+    }
+}
+
+/// The work-list walk against a recursive reading of the same algebra, over generated
+/// shapes, and at a depth no recursive reading could reach on a small stack.
+#[cfg(test)]
+mod walk_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, NamedNode, NamedNodePattern, NegatedPathElement,
+        PropertyFunctionCall, PropertyPathExpression as P, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{PredicateUse, record_data, record_path, walk};
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    fn reference_walk(pattern: &GraphPattern, out: &mut PredicateUse) {
+        use crate::governor::soundness::{PatternPart, visit_pattern_parts};
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    record_data(&triple.predicate, out);
+                }
+                return;
+            }
+            GraphPattern::PropertyFunction(call) => {
+                out.calls.insert(call.iri.clone());
+                return;
+            }
+            GraphPattern::Path { path, .. } => {
+                reference_record_path(path, out);
+                return;
+            }
+            _ => {}
+        }
+        let mut pending: Vec<&GraphPattern> = Vec::new();
+        visit_pattern_parts(pattern, &mut |part| {
+            match part {
+                PatternPart::Child(child, _) => pending.push(child),
+                PatternPart::Expression(expr) => reference_collect_exists(expr, &mut pending),
+            }
+            false
+        });
+        for child in pending {
+            reference_walk(child, out);
+        }
+    }
+
+    fn reference_collect_exists<'a>(expr: &'a Expression, pending: &mut Vec<&'a GraphPattern>) {
+        use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
+        visit_expression_parts(expr, &mut |part| {
+            match part {
+                ExpressionPart::Sub(inner) => reference_collect_exists(inner, pending),
+                ExpressionPart::Exists(inner) => pending.push(inner),
+                ExpressionPart::Call(_) => {}
+            }
+            false
+        });
+    }
+
+    fn reference_record_path(path: &P, out: &mut PredicateUse) {
+        match path {
+            P::NamedNode(node) => {
+                out.data.insert(node.as_str().to_owned());
+            }
+            P::Reverse(inner)
+            | P::ZeroOrMore(inner)
+            | P::OneOrMore(inner)
+            | P::ZeroOrOne(inner) => {
+                reference_record_path(inner, out);
+            }
+            P::Sequence(elements) | P::Alternative(elements) => {
+                for element in elements {
+                    reference_record_path(element, out);
+                }
+            }
+            P::NegatedPropertySet(elements) => {
+                for element in elements {
+                    out.data.insert(element.predicate.as_str().to_owned());
+                }
+            }
+            P::Range { inner, .. } => reference_record_path(inner, out),
+            P::Wildcard { .. } => {}
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 40,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(n: usize) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/p{n}"))
+    }
+
+    fn predicate(choices: &mut Choices) -> NamedNodePattern {
+        if choices.choose(4) == 0 {
+            NamedNodePattern::Variable(Variable::new("p"))
+        } else {
+            NamedNodePattern::NamedNode(iri(choices.choose(6)))
+        }
+    }
+
+    fn path(choices: &mut Choices) -> P {
+        if !choices.spend() {
+            return P::NamedNode(iri(choices.choose(6)));
+        }
+        match choices.choose(8) {
+            0 | 1 => P::NamedNode(iri(choices.choose(6))),
+            2 => P::Reverse(Child::new(path(choices))),
+            3 => P::ZeroOrMore(Child::new(path(choices))),
+            4 => P::Sequence(Chain::try_from(vec![path(choices), path(choices)]).expect("two")),
+            5 => P::Alternative(Chain::try_from(vec![path(choices), path(choices)]).expect("two")),
+            6 => P::NegatedPropertySet(vec![NegatedPathElement {
+                predicate: iri(choices.choose(6)),
+                inverse: choices.choose(2) == 0,
+            }]),
+            _ => P::Range {
+                inner: Child::new(path(choices)),
+                min: 1,
+                max: Some(2),
+            },
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..=choices.choose(2))
+                .map(|_| TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: predicate(choices),
+                    object: TermPattern::Variable(Variable::new("o")),
+                })
+                .collect(),
+        }
+    }
+
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return Expression::Variable(Variable::new("v"));
+        }
+        match choices.choose(4) {
+            0 => Expression::Not(Child::new(expression(choices))),
+            1 => Expression::Or(
+                Chain::try_from(vec![expression(choices), expression(choices)]).expect("two"),
+            ),
+            2 => Expression::FunctionCall(
+                purrdf_sparql_algebra::Function::Str,
+                vec![expression(choices)].into(),
+            ),
+            _ => Expression::Exists(Child::new(pattern(choices))),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        match choices.choose(9) {
+            0 | 1 => bgp(choices),
+            2 => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("http://example.org/rel{}", choices.choose(3)),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![TermPattern::Variable(Variable::new("o"))],
+            }),
+            3 => GraphPattern::Path {
+                subject: TermPattern::Variable(Variable::new("s")),
+                path: path(choices),
+                object: TermPattern::Variable(Variable::new("o")),
+            },
+            4 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: Some(expression(choices)),
+            },
+            6 => GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            7 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two"),
+            },
+            _ => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: Variable::new("x"),
+                expression: expression(choices),
+            },
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work list reports exactly what the recursion reports, for every generated
+    /// shape.
+    #[test]
+    fn the_walk_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut with_calls = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let mut ours = PredicateUse::default();
+            walk(&shape, &mut ours);
+            let mut expected = PredicateUse::default();
+            reference_walk(&shape, &mut expected);
+            assert_eq!(ours, expected, "seed {seed}: {shape:?}");
+            with_calls += usize::from(!ours.calls_nothing());
+        }
+        assert!(
+            with_calls > 40 && with_calls < 360,
+            "the generator produces shapes with and without calls ({with_calls} of 400)"
+        );
+    }
+
+    /// A call reached only through a hundred thousand nested `FILTER EXISTS` bodies,
+    /// and a predicate named at the bottom of a hundred thousand path operators, are
+    /// both reported on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_query_is_classified_on_a_128_kib_thread() {
+        let used = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut shape = GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: "http://example.org/rel".to_owned(),
+                    subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                    object_args: vec![],
+                });
+                for _ in 0..100_000 {
+                    shape = GraphPattern::Filter {
+                        expr: Expression::Exists(Child::new(shape)),
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: vec![TriplePattern {
+                                subject: TermPattern::Variable(Variable::new("s")),
+                                predicate: NamedNodePattern::NamedNode(iri(1)),
+                                object: TermPattern::Variable(Variable::new("o")),
+                            }],
+                        }),
+                    };
+                }
+                let mut deep_path = P::NamedNode(iri(2));
+                for _ in 0..100_000 {
+                    deep_path = P::Reverse(Child::new(deep_path));
+                }
+                let mut used = PredicateUse::default();
+                walk(&shape, &mut used);
+                record_path(&deep_path, &mut used);
+                used
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(
+            used.calls.iter().collect::<Vec<_>>(),
+            vec!["http://example.org/rel"]
+        );
+        assert_eq!(
+            used.data.iter().collect::<Vec<_>>(),
+            vec!["http://example.org/p1", "http://example.org/p2"]
+        );
     }
 }

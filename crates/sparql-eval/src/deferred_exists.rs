@@ -447,7 +447,7 @@ fn build_site<D: DatasetView + Sync>(
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<ExistsSite, EvalError> {
-    let prepared = Arc::new(PreparedExists::build_guarded(body)?);
+    let prepared = Arc::new(PreparedExists::build(body));
     let vars = crate::stack::walk(|| {
         let mut vars = DetHashSet::default();
         crate::expr::pattern_all_vars(body, &mut vars);
@@ -458,7 +458,7 @@ fn build_site<D: DatasetView + Sync>(
         crate::service_endpoints::EndpointScan::Absent => Vec::new(),
         crate::service_endpoints::EndpointScan::Present(index) => match index.exists_uses(body) {
             Some(uses) => uses.to_vec(),
-            None => crate::stack::walk(|| endpoint_uses(body))?,
+            None => endpoint_uses(body),
         },
     };
     let plan_map = match (&ctx.ledger, prepared.as_ref()) {
@@ -513,9 +513,6 @@ fn endpoint_uses(body: &GraphPattern) -> Vec<Variable> {
     let mut uses = Vec::new();
     let mut pending = vec![Node::Pattern(body, usize::MAX)];
     while let Some(node) = pending.pop() {
-        if crate::stack::walk_is_low("SERVICE endpoint analysis") {
-            break;
-        }
         match node {
             Node::Pattern(pattern, scope) => match pattern {
                 GraphPattern::Service { name, .. } => {

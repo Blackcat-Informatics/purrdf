@@ -22,33 +22,28 @@
 //! * **Evaluation proper** checks and returns the error: every algebra node
 //!   (`eval::eval_evaluated`), every expression node (`expr::eval_expr`), every `EXISTS`,
 //!   every correlated evaluation (a `LATERAL` right side or a correlated `EXISTS`, per
-//!   outer row) and every user-defined function call — and so do the fallible walks a
-//!   plan passes through before its first operator: a governed evaluation's plan survey
-//!   and the `1.2-basic` profile's admission.
+//!   outer row) and every user-defined function call — and so does the fallible walk a
+//!   governed plan passes through before its first operator, its plan survey.
 //! * **Walks with no error channel** that run while evaluating — over a subtree as tall
 //!   as the stack that parsed it held — run inside a `walk` scope. Each level asks
 //!   `walk_is_low`; the first that finds the margin gone latches the refusal and returns a
 //!   placeholder, and the scope discards whatever the walk built and returns the error.
-//!   These are an `EXISTS` site's preparation (normalization, its source map, its
-//!   structural analysis) and its scope-collision check, a correlated evaluation's
-//!   per-row substitution copy, a property path's traversal, a `SERVICE` body's analysis
-//!   and copy, an in-process
-//!   `SERVICE`'s blank-node rewrite, a function body's copy and pre-binding rewrite, and
-//!   template instantiation (`CONSTRUCT`, and an update's `DELETE`/`INSERT` and `DATA`
-//!   templates). Their copies of algebra trees are the algebra's own `Clone`, which walks
-//!   a work list and needs no stack per level.
+//!   These are a correlated evaluation's per-row substitution copy, the variable
+//!   collections that precede a correlated evaluation, an in-process `SERVICE`'s
+//!   blank-node rewrite, and a function body's pre-binding rewrite. Their copies of
+//!   algebra trees are the algebra's own `Clone`, which walks a work list and needs no
+//!   stack per level.
 //! * **Walks whose answer has a safe side** answer it when the stack is low, with no
 //!   scope: the parallel-safety classification answers "unsafe" (the loop runs
-//!   sequentially), `EXISTS` probe admissibility answers "not admissible" (the per-row
-//!   definition runs), and the `GRAPH` emptiness proofs answer "not proven" (the graph
-//!   is evaluated). Each is always correct, and the evaluation that follows refuses at
-//!   its own next check.
+//!   sequentially), and the `GRAPH` emptiness proofs answer "not proven" (the graph is
+//!   evaluated). Each is always correct, and the evaluation that follows refuses at its
+//!   own next check.
 //!
 //! What remains unchecked is bounded otherwise:
 //!
 //! * The infallible walks that run once over the whole plan before its first operator
-//!   (planning, blank-node scoping, the endpoint, parallel and admission analyses)
-//!   start from the top of the stack the evaluation starts on. Every evaluation first
+//!   (the parallel-safety analysis and the plan survey) start from the top of the stack
+//!   the evaluation starts on. Every evaluation first
 //!   measures the whole plan's height against that stack at a per-level charge
 //!   ([`height`], through `governor::soundness::validate_graph_pattern_depth`), which
 //!   holds the costliest of those walks with room to spare, and refuses the plan, typed,
@@ -277,9 +272,8 @@ pub(crate) fn is_low() -> bool {
 ///
 /// The scope state lives in [`purrdf_stack`] beside the stack floor, as one
 /// [`purrdf_stack::Context`] per running computation: a host that suspends an evaluation
-/// inside a scope — a property path's traversal polls the stop signal, and the wasm
-/// package's asynchronous lane suspends there — swaps the context out, so whatever runs
-/// while it waits neither sees the open scope nor latches its own refusals in it.
+/// inside a scope swaps the context out, so whatever runs while it waits neither sees
+/// the open scope nor latches its own refusals in it.
 ///
 /// # Errors
 ///

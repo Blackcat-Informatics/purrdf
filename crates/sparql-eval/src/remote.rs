@@ -1184,10 +1184,9 @@ pub(crate) fn evaluate_in_memory(
     // Evaluated here without the engine's admission, so the one rewrite admission
     // makes that changes answers rather than refusing — a blank node label shared by
     // two pieces of one basic graph pattern is one variable — is applied here too.
-    // A walk over the whole forwarded body, at whatever depth the `SERVICE` sits.
-    let parsed = crate::stack::walk(|| crate::blank_scope::join_shared_blanks_in_query(&parsed))
-        .map_err(remote_error_for)?
-        .unwrap_or(parsed);
+    // A walk over the whole forwarded body, over work lists, at whatever depth the
+    // `SERVICE` sits.
+    let parsed = crate::blank_scope::join_shared_blanks_in_query(&parsed).unwrap_or(parsed);
     let mut ctx = EvalCtx::new(dataset).with_remote(nested);
     if stop.is_some() || max_intermediate_cells.is_some() {
         let mut governors = QueryGovernors::UNBOUNDED;

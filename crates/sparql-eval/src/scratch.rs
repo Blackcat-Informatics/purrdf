@@ -166,22 +166,34 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
     /// discriminant, none of which vary with the value's payload.
     const TERM_OVERHEAD: u64 = 32;
 
-    let payload = match value {
-        TermValue::Iri(iri) => iri.len() as u64,
-        TermValue::Blank { label, .. } => label.len() as u64,
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        } => {
-            (lexical_form.len() + datatype.len() + language.as_ref().map_or(0, String::len)) as u64
-        }
-        TermValue::Triple { s, p, o } => value_bytes(s)
-            .saturating_add(value_bytes(p))
-            .saturating_add(value_bytes(o)),
-    };
-    payload.saturating_add(TERM_OVERHEAD)
+    // Every term of the value — the triple terms and their components, all the way
+    // down — contributes its own payload and one `TERM_OVERHEAD`, summed with
+    // saturating addition. The sum is walked over a work list rather than the call
+    // stack, so a value of any nesting costs no more machine stack; saturating addition
+    // of unsigned terms is associative, so the total is the same in any visit order.
+    let mut total: u64 = 0;
+    let mut pending: Vec<&TermValue> = vec![value];
+    while let Some(term) = pending.pop() {
+        let payload = match term {
+            TermValue::Iri(iri) => iri.len() as u64,
+            TermValue::Blank { label, .. } => label.len() as u64,
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => {
+                (lexical_form.len() + datatype.len() + language.as_ref().map_or(0, String::len))
+                    as u64
+            }
+            TermValue::Triple { s, p, o } => {
+                pending.extend([&**o, &**p, &**s]);
+                0
+            }
+        };
+        total = total.saturating_add(payload).saturating_add(TERM_OVERHEAD);
+    }
+    total
 }
 
 /// Whether `value` is a blank node the QUERY wrote inside a composite literal —
@@ -216,7 +228,7 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
     purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 /// Whether every language tag `value` carries is one the RDF concrete syntaxes
-/// would have lexed, recursing through triple-term components.
+/// would have lexed, through every triple-term component.
 ///
 /// A value that fails this is not a term any writer in the workspace can
 /// serialize: the results writers spell a tag as `"x"@<tag>` (TSV), as
@@ -224,18 +236,26 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// those is bytes no reader takes back. `Iri` and `Blank` carry no tag at all, so
 /// they are a discriminant test; a literal with no tag is one more branch. The
 /// walk is strictly cheaper than the [`hash_value`] the intern path already pays.
+///
+/// A triple term's components are visited subject, predicate, object, each fully
+/// before the next, over a work list rather than the call stack; the first tag that
+/// fails the grammar ends the walk.
 pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
-    match value {
-        TermValue::Iri(_) | TermValue::Blank { .. } => true,
-        TermValue::Literal { language, .. } => language
-            .as_deref()
-            .is_none_or(|tag| purrdf_iri::langtag::is_well_formed_with(tag, LANGTAG_PROFILE)),
-        TermValue::Triple { s, p, o } => {
-            language_tags_well_formed(s)
-                && language_tags_well_formed(p)
-                && language_tags_well_formed(o)
+    let mut pending: Vec<&TermValue> = vec![value];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermValue::Iri(_) | TermValue::Blank { .. } => {}
+            TermValue::Literal { language, .. } => {
+                if language.as_deref().is_some_and(|tag| {
+                    !purrdf_iri::langtag::is_well_formed_with(tag, LANGTAG_PROFILE)
+                }) {
+                    return false;
+                }
+            }
+            TermValue::Triple { s, p, o } => pending.extend([&**o, &**p, &**s]),
         }
     }
+    true
 }
 
 impl ScratchInterner {
@@ -584,39 +604,68 @@ fn admitted(value: TermValue) -> Result<TermValue, EvalError> {
 /// Resolve a dataset-local [`TermId`] to an owned, dataset-independent
 /// [`TermValue`].
 ///
-/// Recurses through RDF-1.2 triple terms and expands a literal's datatype id to its
+/// Walks through RDF-1.2 triple terms and expands a literal's datatype id to its
 /// IRI string, so the result carries no dataset-local ids (the C0.8 boundary).
+///
+/// The value is assembled bottom-up over a work list: a triple term's components
+/// are resolved subject, predicate, object — each fully before the next — and the
+/// triple is built once all three exist, so a term of any nesting costs no more
+/// machine stack.
 pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match dataset.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                // A literal's datatype is always an interned IRI (C0.1).
-                other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
+    enum Step<I> {
+        Resolve(I),
+        Assemble,
+    }
+    let mut steps: Vec<Step<D::Id>> = vec![Step::Resolve(id)];
+    let mut values: Vec<TermValue> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Resolve(id) => match dataset.resolve(id) {
+                TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
+                TermRef::Blank { label, scope } => values.push(TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                }),
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let datatype = match dataset.resolve(datatype) {
+                        TermRef::Iri(iri) => iri.to_owned(),
+                        // A literal's datatype is always an interned IRI (C0.1).
+                        other => unreachable!("literal datatype must be an IRI, got {other:?}"),
+                    };
+                    values.push(TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype,
+                        language: language.map(str::to_owned),
+                        direction,
+                    });
+                }
+                TermRef::Triple { s, p, o } => steps.extend([
+                    Step::Assemble,
+                    Step::Resolve(o),
+                    Step::Resolve(p),
+                    Step::Resolve(s),
+                ]),
+            },
+            Step::Assemble => {
+                let o = values.pop().expect("a triple term's object is resolved");
+                let p = values.pop().expect("a triple term's predicate is resolved");
+                let s = values.pop().expect("a triple term's subject is resolved");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
             }
         }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(term_id_to_value(dataset, s)),
-            p: TermBox::new(term_id_to_value(dataset, p)),
-            o: TermBox::new(term_id_to_value(dataset, o)),
-        },
     }
+    values
+        .pop()
+        .expect("the root term's value is the last one assembled")
 }
 
 #[cfg(test)]
@@ -806,5 +855,274 @@ mod tests {
         let mut scratch = ScratchInterner::new();
         assert!(scratch.intern_checked(&ds, quoted("en-US")).is_some());
         assert!(scratch.intern_checked(&ds, quoted("en us")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The whole-term walks of this module — the byte proxy, the language-tag check
+    //! and the id-to-value resolution — checked against recursive references over
+    //! generated shapes, and the first two over a term a hundred thousand levels deep
+    //! on a thread with a 128 KiB stack.
+    //!
+    //! The resolution has no deep case: a dataset's triple terms nest a bounded number
+    //! of levels, so the deepest term it can hand back is far shallower than the
+    //! generated shapes already cover.
+
+    use super::{LANGTAG_PROFILE, language_tags_well_formed, term_id_to_value, value_bytes};
+    use purrdf_core::{
+        BlankScope, RdfDataset, RdfDatasetBuilder, TermBox, TermFactory as _, TermId, TermRef,
+        TermValue,
+    };
+    use std::sync::Arc;
+
+    const EX: &str = "http://example.org/";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn typed(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    fn tagged(lexical: &str, tag: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: Some(tag.to_owned()),
+            direction: None,
+        }
+    }
+
+    /// A generated value of every kind — tags well-formed and not — with triple terms
+    /// nested while `budget` lasts.
+    fn value(choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Blank {
+                label: ["a", "bb"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => typed(["x", "12"][choices.choose(2)], XSD_STRING),
+            3 => tagged("x", ["en", "en-US", "en-", "de"][choices.choose(4)]),
+            _ => {
+                *budget -= 1;
+                TermValue::Triple {
+                    s: TermBox::new(value(choices, budget)),
+                    p: TermBox::new(value(choices, budget)),
+                    o: TermBox::new(value(choices, budget)),
+                }
+            }
+        }
+    }
+
+    /// A generated value a dataset admits: IRIs, blank nodes and typed literals, and
+    /// triple terms whose subject is an IRI or a blank node and whose predicate is an
+    /// IRI, nested through the object while `budget` lasts.
+    fn admissible(choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Blank {
+                label: ["a", "bb"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => typed(["x", "y"][choices.choose(2)], XSD_STRING),
+            3 => typed(["1", "2"][choices.choose(2)], XSD_INTEGER),
+            _ => {
+                *budget -= 1;
+                let s = if choices.choose(2) == 0 {
+                    TermValue::Iri(format!("{EX}s"))
+                } else {
+                    TermValue::Blank {
+                        label: "s".to_owned(),
+                        scope: BlankScope::DEFAULT,
+                    }
+                };
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                    o: TermBox::new(admissible(choices, budget)),
+                }
+            }
+        }
+    }
+
+    /// The recursive reference for [`value_bytes`].
+    fn bytes_reference(value: &TermValue) -> u64 {
+        let payload = match value {
+            TermValue::Iri(iri) => iri.len() as u64,
+            TermValue::Blank { label, .. } => label.len() as u64,
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => {
+                (lexical_form.len() + datatype.len() + language.as_ref().map_or(0, String::len))
+                    as u64
+            }
+            TermValue::Triple { s, p, o } => bytes_reference(s)
+                .saturating_add(bytes_reference(p))
+                .saturating_add(bytes_reference(o)),
+        };
+        payload.saturating_add(32)
+    }
+
+    /// The recursive reference for [`language_tags_well_formed`].
+    fn tags_reference(value: &TermValue) -> bool {
+        match value {
+            TermValue::Iri(_) | TermValue::Blank { .. } => true,
+            TermValue::Literal { language, .. } => language
+                .as_deref()
+                .is_none_or(|tag| purrdf_iri::langtag::is_well_formed_with(tag, LANGTAG_PROFILE)),
+            TermValue::Triple { s, p, o } => {
+                tags_reference(s) && tags_reference(p) && tags_reference(o)
+            }
+        }
+    }
+
+    /// The recursive reference for [`term_id_to_value`].
+    fn resolve_reference(dataset: &RdfDataset, id: TermId) -> TermValue {
+        match dataset.resolve(id) {
+            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+            TermRef::Blank { label, scope } => TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    panic!("a literal's datatype is an IRI");
+                };
+                TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype: datatype.to_owned(),
+                    language: language.map(str::to_owned),
+                    direction,
+                }
+            }
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(resolve_reference(dataset, s)),
+                p: TermBox::new(resolve_reference(dataset, p)),
+                o: TermBox::new(resolve_reference(dataset, o)),
+            },
+        }
+    }
+
+    /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
+    fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let ids: Vec<TermId> = values
+            .iter()
+            .map(|value| {
+                let id = builder.intern_value(value);
+                builder.push_quad(s, p, id, None);
+                id
+            })
+            .collect();
+        (builder.freeze().expect("the generated values freeze"), ids)
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// A triple-term chain `depth` levels deep over `innermost`.
+    fn chain(depth: usize, innermost: TermValue) -> TermValue {
+        let mut term = innermost;
+        for _ in 0..depth {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    #[test]
+    fn the_byte_proxy_and_the_tag_check_agree_with_the_recursive_references() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 6;
+            let term = value(&mut choices, &mut budget);
+            assert_eq!(value_bytes(&term), bytes_reference(&term), "seed {seed}");
+            assert_eq!(
+                language_tags_well_formed(&term),
+                tags_reference(&term),
+                "seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_resolution_agrees_with_the_recursive_reference_and_round_trips() {
+        let mut choices = Choices::new(11);
+        let values: Vec<TermValue> = (0..200)
+            .map(|_| {
+                let mut budget = 6;
+                admissible(&mut choices, &mut budget)
+            })
+            .collect();
+        let (dataset, ids) = dataset_of(&values);
+        for (value, id) in values.iter().zip(ids) {
+            let resolved = term_id_to_value(&*dataset, id);
+            assert_eq!(resolved, resolve_reference(&dataset, id));
+            assert_eq!(resolved, *value);
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_term_is_measured_and_checked_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let well_formed = chain(DEPTH, tagged("x", "en"));
+            let s_len = format!("{EX}s").len() as u64;
+            let p_len = format!("{EX}p").len() as u64;
+            let level = (s_len + 32) + (p_len + 32) + 32;
+            let leaf = (1 + RDF_LANG_STRING.len() + 2) as u64 + 32;
+            let expected = leaf + level * DEPTH as u64;
+            assert_eq!(value_bytes(&well_formed), expected);
+            assert!(language_tags_well_formed(&well_formed));
+
+            let ill_formed = chain(DEPTH, tagged("x", "en-"));
+            assert!(!language_tags_well_formed(&ill_formed));
+        });
     }
 }

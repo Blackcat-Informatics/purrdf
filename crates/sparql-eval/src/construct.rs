@@ -551,26 +551,44 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // from this map) — hoisted so its table allocation is reused across rows.
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
 
-    // Instantiating a template term recurses through its nested triple terms, and a
-    // `CONSTRUCT` may be reached with the stack already deep (a SHACL rule, a nested
-    // host call): every level may refuse, and this scope then discards the half-built
-    // graph with the error. See `crate::stack::walk`.
-    crate::stack::walk(|| {
-        for row in &seq.rows {
-            blanks.clear();
+    for row in &seq.rows {
+        blanks.clear();
 
-            if !has_reifier_decls {
-                // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
-                for ((quad, slot), ordinal) in
-                    template.iter().zip(&graph_slots).zip(&template_ordinals)
-                {
-                    // The graph is resolved FIRST: a statement its graph slot skips
-                    // is not instantiated at all, so it mints no blank labels and
-                    // consumes no counter values on the way to being dropped.
-                    let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
-                        continue;
-                    };
-                    if let Some((s, p, o)) = instantiate(
+        if !has_reifier_decls {
+            // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
+            for ((quad, slot), ordinal) in template.iter().zip(&graph_slots).zip(&template_ordinals)
+            {
+                // The graph is resolved FIRST: a statement its graph slot skips
+                // is not instantiated at all, so it mints no blank labels and
+                // consumes no counter values on the way to being dropped.
+                let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
+                    continue;
+                };
+                if let Some((s, p, o)) = instantiate(
+                    &quad.triple,
+                    ordinal,
+                    row,
+                    &mut builder,
+                    &mut blanks,
+                    ctx,
+                    tracker,
+                ) {
+                    builder.push_quad(s, p, o, graph_id.term());
+                }
+            }
+        } else {
+            // TWO-PASS EMIT: first collect all instantiated statements, then route
+            // each one to push_reifier / push_annotation / push_quad.
+
+            // Instantiate every template quad for this row (None = skipped, by
+            // its graph slot or by the ordinary §16.2 template rules).
+            let instantiated: Vec<Option<Instantiated>> = template
+                .iter()
+                .zip(&graph_slots)
+                .zip(&template_ordinals)
+                .map(|((quad, slot), ordinal)| {
+                    let graph = slot.resolve(row, &mut builder, ctx)?;
+                    let (s, p, o) = instantiate(
                         &quad.triple,
                         ordinal,
                         row,
@@ -578,106 +596,81 @@ fn build_construct_graph<D: DatasetView + Sync>(
                         &mut blanks,
                         ctx,
                         tracker,
-                    ) {
-                        builder.push_quad(s, p, o, graph_id.term());
-                    }
-                }
-            } else {
-                // TWO-PASS EMIT: first collect all instantiated statements, then route
-                // each one to push_reifier / push_annotation / push_quad.
+                    )?;
+                    Some(Instantiated { s, p, o, graph })
+                })
+                .collect();
 
-                // Instantiate every template quad for this row (None = skipped, by
-                // its graph slot or by the ordinary §16.2 template rules).
-                let instantiated: Vec<Option<Instantiated>> = template
-                    .iter()
-                    .zip(&graph_slots)
-                    .zip(&template_ordinals)
-                    .map(|((quad, slot), ordinal)| {
-                        let graph = slot.resolve(row, &mut builder, ctx)?;
-                        let (s, p, o) = instantiate(
-                            &quad.triple,
-                            ordinal,
-                            row,
-                            &mut builder,
-                            &mut blanks,
-                            ctx,
-                            tracker,
-                        )?;
-                        Some(Instantiated { s, p, o, graph })
-                    })
-                    .collect();
-
-                // Pass 1: emit reifier declarations and build the per-row reifier set.
-                //
-                // The set is keyed by `(graph, reifier)`, not by the reifier alone:
-                // the statement layer is per-graph, so an annotation may only be
-                // routed onto a reifier that was declared in the SAME graph. With a
-                // single-graph template — every pre-quad-template `CONSTRUCT` — the
-                // graph half is constant and the key degenerates to the reifier id,
-                // which is exactly the previous behavior.
-                // Membership-only (insert/contains, never iterated), so the fixed-key
-                // `DetHashSet` is used: no `RandomState` seeding per row.
-                let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
-                for &idx in plan.reifier_decl_indices {
-                    if let Some(e) = instantiated[idx] {
-                        builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                        reifier_ids.insert((e.graph, e.s));
-                    }
-                }
-
-                // Pass 2: emit remaining triples, routing by VALUE, not just template
-                // position. A template slot with a variable predicate/object (e.g. the
-                // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
-                // annotation triple — but the `WHERE` reifier/annotation virtual layer
-                // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
-                // generic pattern's predicate/object against the reifier's OWN
-                // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
-                // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
-                // same fact `reifier_decl_indices` already declared for this row. Routing
-                // that row's `?q ?z` slot by POSITION alone would re-push it as a
-                // spurious "annotation whose predicate is rdf:reifies", doubling the
-                // reifier's encoding; routing it by VALUE instead recognizes the
-                // dynamically-produced edge and calls `push_reifier` again, which is an
-                // idempotent no-op against the identical pass-1 binding (W3C
-                // `eval-triple-terms` `construct-5`).
-                for (idx, statement) in instantiated.iter().enumerate() {
-                    if reifier_decl_mask[idx] {
-                        continue; // already handled in pass 1
-                    }
-                    if let Some(e) = *statement {
-                        let is_dynamic_reifies = e.p == reifies_id
-                            && matches!(builder.resolve(e.o), TermRef::Triple { .. });
-                        if is_dynamic_reifies {
-                            builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                        } else if reifier_ids.contains(&(e.graph, e.s)) {
-                            builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
-                        } else {
-                            builder.push_quad(e.s, e.p, e.o, e.graph.term());
-                        }
-                    }
+            // Pass 1: emit reifier declarations and build the per-row reifier set.
+            //
+            // The set is keyed by `(graph, reifier)`, not by the reifier alone:
+            // the statement layer is per-graph, so an annotation may only be
+            // routed onto a reifier that was declared in the SAME graph. With a
+            // single-graph template — every pre-quad-template `CONSTRUCT` — the
+            // graph half is constant and the key degenerates to the reifier id,
+            // which is exactly the previous behavior.
+            // Membership-only (insert/contains, never iterated), so the fixed-key
+            // `DetHashSet` is used: no `RandomState` seeding per row.
+            let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
+            for &idx in plan.reifier_decl_indices {
+                if let Some(e) = instantiated[idx] {
+                    builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
+                    reifier_ids.insert((e.graph, e.s));
                 }
             }
 
-            if let Some(ids) = loss_term_ids
+            // Pass 2: emit remaining triples, routing by VALUE, not just template
+            // position. A template slot with a variable predicate/object (e.g. the
+            // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
+            // annotation triple — but the `WHERE` reifier/annotation virtual layer
+            // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
+            // generic pattern's predicate/object against the reifier's OWN
+            // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
+            // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
+            // same fact `reifier_decl_indices` already declared for this row. Routing
+            // that row's `?q ?z` slot by POSITION alone would re-push it as a
+            // spurious "annotation whose predicate is rdf:reifies", doubling the
+            // reifier's encoding; routing it by VALUE instead recognizes the
+            // dynamically-produced edge and calls `push_reifier` again, which is an
+            // idempotent no-op against the identical pass-1 binding (W3C
+            // `eval-triple-terms` `construct-5`).
+            for (idx, statement) in instantiated.iter().enumerate() {
+                if reifier_decl_mask[idx] {
+                    continue; // already handled in pass 1
+                }
+                if let Some(e) = *statement {
+                    let is_dynamic_reifies =
+                        e.p == reifies_id && matches!(builder.resolve(e.o), TermRef::Triple { .. });
+                    if is_dynamic_reifies {
+                        builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
+                    } else if reifier_ids.contains(&(e.graph, e.s)) {
+                        builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
+                    } else {
+                        builder.push_quad(e.s, e.p, e.o, e.graph.term());
+                    }
+                }
+            }
+        }
+
+        if let Some(ids) = loss_term_ids
             && !plan.dropped.is_empty()
             // A uniform graph VARIABLE that this row leaves unbound (or binds to
             // a non-IRI) skips the declaration exactly as it skips a statement:
             // the row emitted nothing into a graph, so there is no graph to
             // declare the loss in.
             && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)
-            {
-                emit_dropped_losses(
-                    plan.dropped,
-                    &dropped_ordinals,
-                    row,
-                    &mut builder,
-                    ctx,
-                    ids,
-                    graph_id.term(),
-                );
-            }
+        {
+            emit_dropped_losses(
+                plan.dropped,
+                &dropped_ordinals,
+                row,
+                &mut builder,
+                ctx,
+                ids,
+                graph_id.term(),
+            );
         }
-    })?;
+    }
 
     // Value-constructing builtins (`listSlice`/`listConcat`) invent fresh
     // `rdf:List` cells while the WHERE is evaluated. A SPARQL expression can only
@@ -829,19 +822,21 @@ impl MintTracker {
 /// just a missed optimization. `MintTracker`'s sets are also accumulated
 /// across the *entire* row loop and checked only once at the end, so there is
 /// no valid "before the first mint" window to skip in the first place.
+///
+/// A triple term's components are visited subject, predicate, object, each fully
+/// before the next, over a work list rather than the call stack.
 fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
-    match value {
-        TermValue::Blank { label, .. } => {
-            if !out.contains(label.as_str()) {
-                out.insert(label.clone());
+    let mut pending: Vec<&TermValue> = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            TermValue::Blank { label, .. } => {
+                if !out.contains(label.as_str()) {
+                    out.insert(label.clone());
+                }
             }
+            TermValue::Triple { s, p, o } => pending.extend([&**o, &**p, &**s]),
+            TermValue::Iri(_) | TermValue::Literal { .. } => {}
         }
-        TermValue::Triple { s, p, o } => {
-            collect_value_blank_labels(s, out);
-            collect_value_blank_labels(p, out);
-            collect_value_blank_labels(o, out);
-        }
-        TermValue::Iri(_) | TermValue::Literal { .. } => {}
     }
 }
 
@@ -856,31 +851,65 @@ fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
 ///
 /// A no-op pass-through when `tracker.enabled` is `false` — see the field's doc
 /// comment for why that is sound, not just fast, for a blank-free template.
+///
+/// A quoted-triple position is walked subject, predicate, object — each classified
+/// fully before the next, so the tracker's sets are written in written order — and
+/// its value is reassembled once all three are back. The walk keeps its own work
+/// list, so a term nested to any depth costs no more machine stack.
 fn track_minted(pattern: &TermPattern, value: TermValue, tracker: &mut MintTracker) -> TermValue {
     if !tracker.enabled {
         return value;
     }
-    match (pattern, value) {
-        (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
-            tracker.minted.insert(label.clone());
-            let label = tracker.remap.get(&label).cloned().unwrap_or(label);
-            TermValue::Blank { label, scope }
-        }
-        (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => {
-            let s = track_minted(&tp.subject, s.into_inner(), tracker);
-            let p = track_minted_predicate(&tp.predicate, p.into_inner(), tracker);
-            let o = track_minted(&tp.object, o.into_inner(), tracker);
-            TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
+    enum Step<'t> {
+        Term(&'t TermPattern, TermValue),
+        Predicate(&'t NamedNodePattern, TermValue),
+        Assemble,
+    }
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(pattern, value)];
+    let mut values: Vec<TermValue> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(pattern, value) => match (pattern, value) {
+                (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
+                    tracker.minted.insert(label.clone());
+                    let label = tracker.remap.get(&label).cloned().unwrap_or(label);
+                    values.push(TermValue::Blank { label, scope });
+                }
+                (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => steps.extend([
+                    Step::Assemble,
+                    Step::Term(&tp.object, o.into_inner()),
+                    Step::Predicate(&tp.predicate, p.into_inner()),
+                    Step::Term(&tp.subject, s.into_inner()),
+                ]),
+                (_, value) => {
+                    collect_value_blank_labels(&value, &mut tracker.data);
+                    values.push(value);
+                }
+            },
+            Step::Predicate(pattern, value) => {
+                values.push(track_minted_predicate(pattern, value, tracker));
+            }
+            Step::Assemble => {
+                let o = values
+                    .pop()
+                    .expect("a quoted triple's object is classified");
+                let p = values
+                    .pop()
+                    .expect("a quoted triple's predicate is classified");
+                let s = values
+                    .pop()
+                    .expect("a quoted triple's subject is classified");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
             }
         }
-        (_, value) => {
-            collect_value_blank_labels(&value, &mut tracker.data);
-            value
-        }
     }
+    values
+        .pop()
+        .expect("the position's value is the last one reassembled")
 }
 
 /// The predicate-position twin of [`track_minted`]: a predicate can never be a
@@ -1066,15 +1095,28 @@ fn collect_triple_pattern_vars(tp: &TriplePattern, out: &mut BTreeSet<String>) {
     collect_term_pattern_vars(&tp.object, out);
 }
 
-/// Collect the variable names mentioned in a term pattern (recursing into a quoted
-/// triple term).
+/// Collect the variable names mentioned in a term pattern, a quoted triple term's
+/// positions included.
+///
+/// The walk keeps its own work list, so a term nested to any depth costs no more
+/// machine stack. `out` is a set, so the order the positions are visited in leaves
+/// no trace: a quoted triple's predicate variable is recorded when the triple is
+/// reached, its subject and object as their positions come up.
 fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
-    match term {
-        TermPattern::Variable(v) => {
-            out.insert(v.as_str().to_owned());
+    let mut pending: Vec<&TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(v) => {
+                out.insert(v.as_str().to_owned());
+            }
+            TermPattern::Triple(t) => {
+                if let NamedNodePattern::Variable(v) = &t.predicate {
+                    out.insert(v.as_str().to_owned());
+                }
+                pending.extend([&t.object, &t.subject]);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
-        TermPattern::Triple(t) => collect_triple_pattern_vars(t, out),
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
 }
 
@@ -1263,14 +1305,19 @@ fn triple_pattern_has_blank_node(tp: &TriplePattern) -> bool {
     term_pattern_has_blank_node(&tp.subject) || term_pattern_has_blank_node(&tp.object)
 }
 
-/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, recursing
-/// through nested quoted-triple positions.
+/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+/// quoted-triple positions — subject before object, over a work list rather than the
+/// call stack, ending at the first blank node found.
 fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
-    match term {
-        TermPattern::BlankNode(_) => true,
-        TermPattern::Triple(inner) => triple_pattern_has_blank_node(inner),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
+    let mut pending: Vec<&TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return true,
+            TermPattern::Triple(inner) => pending.extend([&inner.object, &inner.subject]),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
     }
+    false
 }
 
 #[cfg(test)]
@@ -2665,5 +2712,275 @@ mod tests {
             1,
             "identical drops collapse to one loss node"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The blank-label walks over instantiated terms — the minted/data classification
+    //! and the label collection — checked against recursive references over generated
+    //! (template position, value) pairs: the same value back, the same minted set and
+    //! the same data set; and a position a hundred thousand levels deep, classified on
+    //! a thread with a 128 KiB stack.
+
+    use super::{
+        MintTracker, collect_value_blank_labels, term_pattern_has_blank_node, track_minted,
+        track_minted_predicate,
+    };
+    use purrdf_core::{BlankScope, TermBox, TermValue};
+    use purrdf_sparql_algebra::{
+        BlankNode, Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+    };
+    use std::collections::BTreeSet;
+
+    const EX: &str = "http://example.org/";
+    const LABELS: [&str; 4] = ["c1", "c2", "d1", "d2"];
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    /// A generated template position: an IRI, a blank node, a variable, or — while
+    /// `budget` lasts — a quoted triple.
+    fn pattern(choices: &mut Choices, budget: &mut usize) -> TermPattern {
+        match choices.choose(if *budget > 0 { 4 } else { 3 }) {
+            0 => TermPattern::NamedNode(iri("n")),
+            1 => TermPattern::BlankNode(BlankNode::new(["b0", "b1"][choices.choose(2)])),
+            2 => TermPattern::Variable(Variable::new("v")),
+            _ => {
+                *budget -= 1;
+                let subject = pattern(choices, budget);
+                let predicate = if choices.choose(2) == 0 {
+                    NamedNodePattern::Variable(Variable::new("p"))
+                } else {
+                    NamedNodePattern::NamedNode(iri("p"))
+                };
+                let object = pattern(choices, budget);
+                TermPattern::Triple(Child::new(TriplePattern {
+                    subject,
+                    predicate,
+                    object,
+                }))
+            }
+        }
+    }
+
+    /// A generated leaf value.
+    fn leaf(choices: &mut Choices) -> TermValue {
+        match choices.choose(3) {
+            0 => TermValue::Iri(format!("{EX}i")),
+            1 => TermValue::Blank {
+                label: LABELS[choices.choose(LABELS.len())].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            _ => TermValue::Literal {
+                lexical_form: "x".to_owned(),
+                datatype: format!("{EX}dt"),
+                language: None,
+                direction: None,
+            },
+        }
+    }
+
+    /// A value for `pattern`: one that mirrors a quoted-triple position most of the
+    /// time, a blank at a blank position most of the time, and otherwise a leaf or a
+    /// triple term that does not mirror the position.
+    fn value_for(pattern: &TermPattern, choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match pattern {
+            TermPattern::Triple(tp) if *budget > 0 && choices.choose(4) != 0 => {
+                *budget -= 1;
+                let s = value_for(&tp.subject, choices, budget);
+                let p = leaf(choices);
+                let o = value_for(&tp.object, choices, budget);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+            TermPattern::BlankNode(_) if choices.choose(4) != 0 => TermValue::Blank {
+                label: LABELS[choices.choose(LABELS.len())].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            _ if *budget > 0 && choices.choose(3) == 0 => {
+                *budget -= 1;
+                TermValue::Triple {
+                    s: TermBox::new(leaf(choices)),
+                    p: TermBox::new(leaf(choices)),
+                    o: TermBox::new(leaf(choices)),
+                }
+            }
+            _ => leaf(choices),
+        }
+    }
+
+    /// The recursive reference for [`collect_value_blank_labels`].
+    fn collect_reference(value: &TermValue, out: &mut BTreeSet<String>) {
+        match value {
+            TermValue::Blank { label, .. } => {
+                if !out.contains(label.as_str()) {
+                    out.insert(label.clone());
+                }
+            }
+            TermValue::Triple { s, p, o } => {
+                collect_reference(s, out);
+                collect_reference(p, out);
+                collect_reference(o, out);
+            }
+            TermValue::Iri(_) | TermValue::Literal { .. } => {}
+        }
+    }
+
+    /// The recursive reference for [`track_minted`].
+    fn track_reference(
+        pattern: &TermPattern,
+        value: TermValue,
+        tracker: &mut MintTracker,
+    ) -> TermValue {
+        if !tracker.enabled {
+            return value;
+        }
+        match (pattern, value) {
+            (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
+                tracker.minted.insert(label.clone());
+                let label = tracker.remap.get(&label).cloned().unwrap_or(label);
+                TermValue::Blank { label, scope }
+            }
+            (TermPattern::Triple(tp), TermValue::Triple { s, p, o }) => {
+                let s = track_reference(&tp.subject, s.into_inner(), tracker);
+                let p = track_minted_predicate(&tp.predicate, p.into_inner(), tracker);
+                let o = track_reference(&tp.object, o.into_inner(), tracker);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+            (_, value) => {
+                collect_reference(&value, &mut tracker.data);
+                value
+            }
+        }
+    }
+
+    /// A tracker on its freshness re-pass, relabeling `c1`.
+    fn tracker() -> MintTracker {
+        let mut tracker = MintTracker::new(true);
+        tracker.remap.insert("c1".to_owned(), "c1r0".to_owned());
+        tracker
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// How many triple terms `value`'s object chain nests, and its innermost object.
+    fn unwind(value: &TermValue) -> (usize, &TermValue) {
+        let mut levels = 0;
+        let mut term = value;
+        while let TermValue::Triple { o, .. } = term {
+            levels += 1;
+            term = o;
+        }
+        (levels, term)
+    }
+
+    #[test]
+    fn the_classification_agrees_with_the_recursive_reference() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 5;
+            let pattern = pattern(&mut choices, &mut budget);
+            let mut budget = 5;
+            let value = value_for(&pattern, &mut choices, &mut budget);
+
+            let mut tracker_walk = tracker();
+            let walked = track_minted(&pattern, value.clone(), &mut tracker_walk);
+            let mut tracker_ref = tracker();
+            let referenced = track_reference(&pattern, value.clone(), &mut tracker_ref);
+            assert_eq!(walked, referenced, "seed {seed}");
+            assert_eq!(tracker_walk.minted, tracker_ref.minted, "seed {seed}");
+            assert_eq!(tracker_walk.data, tracker_ref.data, "seed {seed}");
+
+            let mut labels_walk = BTreeSet::new();
+            collect_value_blank_labels(&value, &mut labels_walk);
+            let mut labels_ref = BTreeSet::new();
+            collect_reference(&value, &mut labels_ref);
+            assert_eq!(labels_walk, labels_ref, "seed {seed}");
+
+            let mut disabled = MintTracker::new(false);
+            assert_eq!(
+                track_minted(&pattern, value.clone(), &mut disabled),
+                value,
+                "seed {seed}: a disabled tracker passes the value through"
+            );
+        }
+    }
+
+    /// A blank position at every level, minting `_:m`, over a data blank `_:d` at the
+    /// bottom.
+    #[test]
+    fn a_hundred_thousand_level_position_is_classified_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let mut pattern = TermPattern::Variable(Variable::new("v"));
+            let mut value = TermValue::Blank {
+                label: "d".to_owned(),
+                scope: BlankScope::DEFAULT,
+            };
+            for _ in 0..DEPTH {
+                pattern = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::BlankNode(BlankNode::new("b")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: pattern,
+                }));
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::Blank {
+                        label: "m".to_owned(),
+                        scope: BlankScope::DEFAULT,
+                    }),
+                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                    o: TermBox::new(value),
+                };
+            }
+            assert!(term_pattern_has_blank_node(&pattern));
+
+            let mut labels = BTreeSet::new();
+            collect_value_blank_labels(&value, &mut labels);
+            assert_eq!(labels, BTreeSet::from(["d".to_owned(), "m".to_owned()]));
+
+            let mut tracker = MintTracker::new(true);
+            let tracked = track_minted(&pattern, value, &mut tracker);
+            assert_eq!(tracker.minted, BTreeSet::from(["m".to_owned()]));
+            assert_eq!(tracker.data, BTreeSet::from(["d".to_owned()]));
+            let (levels, innermost) = unwind(&tracked);
+            assert_eq!(levels, DEPTH);
+            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "d"));
+        });
     }
 }

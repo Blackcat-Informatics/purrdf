@@ -1420,7 +1420,7 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     // list of endpoints to invoke comes from the left: a row from any other endpoint binds
     // the endpoint variable to a different IRI than every row of the partition, so it
     // could remove none of them. See `crate::service_endpoints`.
-    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
+    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx) {
         let mut removed = vec![false; l.rows.len()];
         for partition in &partitions {
             let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;

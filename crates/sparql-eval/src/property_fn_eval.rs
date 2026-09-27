@@ -2880,8 +2880,8 @@ pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
 /// (an `EXISTS`'s inner `GROUP BY`, e.g. `FILTER EXISTS { SELECT (AGG(<iri>,?x)
 /// AS ?v) WHERE {...} GROUP BY ?g }`).
 ///
-/// `pub(crate)`: also read directly by `crate::property_fn_plan::plan_expression`'s
-/// own short-circuit, for the identical reason `plan_where_pattern` reads
+/// `pub(crate)`: also read directly by `crate::property_fn_plan`'s expression planning
+/// short-circuit, for the identical reason `plan_where_pattern` reads
 /// [`pattern_reaches_custom_aggregate`] — an expression containing an `EXISTS`
 /// whose inner pattern has a `Custom` aggregate but no property-function call
 /// must not skip the walk that reaches that aggregate's prepare-time admission.
@@ -3965,8 +3965,8 @@ mod tests {
     /// The outer chain has three atoms, in this TEXTUAL order: an unrelated, always-
     /// feasible call to `PF_SPLIT` (written first so its own `Lateral` anchors the
     /// chain the parser assembles — this is what makes the group a `collect_chain`
-    /// chain at all, rather than an opaque node `map_children` recurses into
-    /// structurally, which is already correct and does not exercise this bug); a
+    /// chain at all, rather than an opaque node the planner rebuilds child by child,
+    /// which is already correct and does not exercise this bug); a
     /// `UNION` whose each arm is its own nested call to `PF_LOOKUP` (subject-bound
     /// only, `bf`); and a `Bgp` that binds `?x`. The two non-call atoms (`UNION`,
     /// `Bgp`) tie on the ordering key's first two components — a data atom always

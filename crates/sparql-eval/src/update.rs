@@ -509,19 +509,6 @@ fn apply_operation(
     }
 }
 
-/// Instantiate one template quad inside a [`crate::stack::walk`] scope: a template term
-/// recurses through its nested triple terms, and an update may be applied from a stack
-/// that is already deep, so every level may refuse — the placeholder it leaves is
-/// discarded here and the refusal becomes the operation's typed failure.
-fn template_walk<T>(instantiate: impl FnOnce() -> T) -> Result<T, UpdateAbort> {
-    crate::stack::walk(instantiate).map_err(|e| {
-        UpdateAbort::Failed(RdfDiagnostic::error(
-            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
-            e.to_string(),
-        ))
-    })
-}
-
 // ── INSERT DATA / DELETE DATA ────────────────────────────────────────────────
 
 /// `INSERT DATA`: instantiate each quad (variable-free by parser invariant) with ONE
@@ -539,7 +526,7 @@ fn insert_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = template_walk(|| instantiate_ground_quad(qp, &mut blanks, counter))? {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
             // Charged per quad rather than per operation because an ill-formed template
             // quad is skipped rather than inserted (§16.2), and fuel counts what the store
             // actually did.
@@ -560,7 +547,7 @@ fn delete_data(
 ) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
-        if let Some(q) = template_walk(|| instantiate_ground_quad(qp, &mut blanks, counter))? {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
             charge_mutations(governors, 1)?;
             m.remove(&q);
         }
@@ -693,11 +680,8 @@ fn delete_insert(
     //
     // Nothing has been written to `m` at this point (the mutations below are collected
     // first), so this return needs no undo of its own.
-    let seq = crate::service_endpoints::scan(pattern)
-        .and_then(|scan| {
-            ctx.endpoint_scan = scan;
-            eval_evaluated(pattern, &mut ctx)
-        })
+    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
+    let seq = eval_evaluated(pattern, &mut ctx)
         .map_err(|e| {
             RdfDiagnostic::error(
                 crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
@@ -729,16 +713,14 @@ fn delete_insert(
     for row in &seq.rows {
         del_blanks.clear();
         for (qp, ordinal) in delete.iter().zip(&delete_ordinals) {
-            if let Some(q) = template_walk(|| {
-                instantiate_quad_with_default(
-                    qp,
-                    ordinal,
-                    row,
-                    &mut del_blanks,
-                    &mut ctx,
-                    with_value.as_ref(),
-                )
-            })? {
+            if let Some(q) = instantiate_quad_with_default(
+                qp,
+                ordinal,
+                row,
+                &mut del_blanks,
+                &mut ctx,
+                with_value.as_ref(),
+            ) {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),
@@ -748,16 +730,14 @@ fn delete_insert(
         }
         ins_blanks.clear();
         for (qp, ordinal) in insert.iter().zip(&insert_ordinals) {
-            if let Some(q) = template_walk(|| {
-                instantiate_quad_with_default(
-                    qp,
-                    ordinal,
-                    row,
-                    &mut ins_blanks,
-                    &mut ctx,
-                    with_value.as_ref(),
-                )
-            })? {
+            if let Some(q) = instantiate_quad_with_default(
+                qp,
+                ordinal,
+                row,
+                &mut ins_blanks,
+                &mut ctx,
+                with_value.as_ref(),
+            ) {
                 observe_staged_mutation(
                     cfg.governors,
                     to_remove.len().saturating_add(to_insert.len()),

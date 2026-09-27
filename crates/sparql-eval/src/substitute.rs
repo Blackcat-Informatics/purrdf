@@ -697,7 +697,7 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
 ///
 /// This is the single definition of that reach: [`push_probes`] writes through a
 /// `GROUP BY` by it, and the prepare-time planner (`crate::property_fn_plan`'s
-/// `map_children`) promises a pre-bound parameter bound beneath one by it too.
+/// `Planner`) promises a pre-bound parameter bound beneath one by it too.
 ///
 /// # Why a key, and only a key
 ///
@@ -733,7 +733,7 @@ pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool 
 /// `collect_chain`) makes a call a member of the enclosing chain exactly when the plan
 /// it produces puts the call here. Any other right operand is one [`push_probes`]
 /// recurses into by its ordinary rule, and the planner hands it the same promise
-/// (`crate::property_fn_plan`'s `map_children`); the planner's drift guard holds the
+/// (`crate::property_fn_plan`'s `Planner`); the planner's drift guard holds the
 /// two to the same reach, shape by shape.
 pub(crate) const fn lateral_call(right: &GraphPattern) -> Option<&PropertyFunctionCall> {
     match right {

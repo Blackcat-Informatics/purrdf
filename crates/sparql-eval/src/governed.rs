@@ -526,33 +526,51 @@ fn withhold_blank_nodes_from_result(
     }
 }
 
+/// Whether `term`, or any component of it at any depth, is a blank node `withhold`
+/// selects.
+///
+/// The blank nodes are offered to `withhold` in the order they are written — a triple
+/// term's subject, then its predicate, then its object, each fully before the next —
+/// and the first one selected ends the walk. The walk keeps its own work list, so a
+/// term of any nesting costs no more machine stack.
 fn term_value_mentions_withheld_blank(
     term: &TermValue,
     withhold: &mut impl FnMut(&str) -> bool,
 ) -> bool {
-    match term {
-        TermValue::Blank { label, .. } => withhold(label),
-        TermValue::Triple { s, p, o } => {
-            term_value_mentions_withheld_blank(s, withhold)
-                || term_value_mentions_withheld_blank(p, withhold)
-                || term_value_mentions_withheld_blank(o, withhold)
+    let mut pending: Vec<&TermValue> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermValue::Blank { label, .. } => {
+                if withhold(label) {
+                    return true;
+                }
+            }
+            TermValue::Triple { s, p, o } => pending.extend([&**o, &**p, &**s]),
+            TermValue::Iri(_) | TermValue::Literal { .. } => {}
         }
-        TermValue::Iri(_) | TermValue::Literal { .. } => false,
     }
+    false
 }
 
+/// [`term_value_mentions_withheld_blank`] over an egress [`RdfTerm`], whose triple
+/// term nests through its subject and object (its predicate is an IRI string).
 fn rdf_term_mentions_withheld_blank(
     term: &RdfTerm,
     withhold: &mut impl FnMut(&str) -> bool,
 ) -> bool {
-    match term {
-        RdfTerm::BlankNode(label) => withhold(label),
-        RdfTerm::Triple(triple) => {
-            rdf_term_mentions_withheld_blank(&triple.subject, withhold)
-                || rdf_term_mentions_withheld_blank(&triple.object, withhold)
+    let mut pending: Vec<&RdfTerm> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            RdfTerm::BlankNode(label) => {
+                if withhold(label) {
+                    return true;
+                }
+            }
+            RdfTerm::Triple(triple) => pending.extend([&triple.object, &triple.subject]),
+            RdfTerm::Iri(_) | RdfTerm::Literal(_) => {}
         }
-        RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
     }
+    false
 }
 
 /// Rebuild `dataset` without selected blank-bearing items, returning `None` for a no-op.
@@ -646,5 +664,216 @@ impl<Evidence> GovernedEvidence<Evidence> {
     /// accounting.
     pub(crate) const fn new(view: Evidence, governors: GovernorEvidence) -> Self {
         Self { view, governors }
+    }
+}
+
+#[cfg(test)]
+mod withheld_blank_walk_tests {
+    //! The withheld-blank walks over egress terms, checked against a recursive
+    //! reference: the same answer and the same labels offered to the predicate in the
+    //! same order, over generated shapes; and a term a hundred thousand levels deep,
+    //! walked on a thread with a 128 KiB stack.
+
+    use super::{rdf_term_mentions_withheld_blank, term_value_mentions_withheld_blank};
+    use purrdf_core::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue};
+
+    const EX: &str = "http://example.org/";
+    const LABELS: [&str; 4] = ["a", "b", "c", "d"];
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    /// A generated term value: leaves of every kind, and triple terms while `budget`
+    /// lasts.
+    fn value(choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match choices.choose(if *budget > 0 { 4 } else { 3 }) {
+            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Blank {
+                label: LABELS[choices.choose(LABELS.len())].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => TermValue::Literal {
+                lexical_form: "x".to_owned(),
+                datatype: format!("{EX}dt"),
+                language: None,
+                direction: None,
+            },
+            _ => {
+                *budget -= 1;
+                TermValue::Triple {
+                    s: TermBox::new(value(choices, budget)),
+                    p: TermBox::new(value(choices, budget)),
+                    o: TermBox::new(value(choices, budget)),
+                }
+            }
+        }
+    }
+
+    /// A generated egress term, shaped like [`value`].
+    fn rdf_term(choices: &mut Choices, budget: &mut usize) -> RdfTerm {
+        match choices.choose(if *budget > 0 { 4 } else { 3 }) {
+            0 => RdfTerm::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => RdfTerm::BlankNode(LABELS[choices.choose(LABELS.len())].to_owned()),
+            2 => RdfTerm::Literal(RdfLiteral::simple("x")),
+            _ => {
+                *budget -= 1;
+                let subject = rdf_term(choices, budget);
+                let object = rdf_term(choices, budget);
+                RdfTerm::Triple(Box::new(RdfTriple::new(subject, format!("{EX}p"), object)))
+            }
+        }
+    }
+
+    /// The recursive reference for [`term_value_mentions_withheld_blank`].
+    fn reference_value(term: &TermValue, withhold: &mut impl FnMut(&str) -> bool) -> bool {
+        match term {
+            TermValue::Blank { label, .. } => withhold(label),
+            TermValue::Triple { s, p, o } => {
+                reference_value(s, withhold)
+                    || reference_value(p, withhold)
+                    || reference_value(o, withhold)
+            }
+            TermValue::Iri(_) | TermValue::Literal { .. } => false,
+        }
+    }
+
+    /// The recursive reference for [`rdf_term_mentions_withheld_blank`].
+    fn reference_rdf(term: &RdfTerm, withhold: &mut impl FnMut(&str) -> bool) -> bool {
+        match term {
+            RdfTerm::BlankNode(label) => withhold(label),
+            RdfTerm::Triple(triple) => {
+                reference_rdf(&triple.subject, withhold) || reference_rdf(&triple.object, withhold)
+            }
+            RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
+        }
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// Release a deep egress term one level at a time; its derived drop would take one
+    /// stack frame per level.
+    fn dismantle(mut term: RdfTerm) {
+        while let RdfTerm::Triple(triple) = term {
+            term = triple.object;
+        }
+    }
+
+    #[test]
+    fn the_term_value_walk_offers_the_same_labels_as_the_recursive_reference() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 6;
+            let term = value(&mut choices, &mut budget);
+            for target in LABELS.iter().chain(std::iter::once(&"none")) {
+                let mut seen_walk = Vec::new();
+                let hit_walk = term_value_mentions_withheld_blank(&term, &mut |label| {
+                    seen_walk.push(label.to_owned());
+                    label == *target
+                });
+                let mut seen_ref = Vec::new();
+                let hit_ref = reference_value(&term, &mut |label| {
+                    seen_ref.push(label.to_owned());
+                    label == *target
+                });
+                assert_eq!((hit_walk, seen_walk), (hit_ref, seen_ref), "seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_egress_term_walk_offers_the_same_labels_as_the_recursive_reference() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 6;
+            let term = rdf_term(&mut choices, &mut budget);
+            for target in LABELS.iter().chain(std::iter::once(&"none")) {
+                let mut seen_walk = Vec::new();
+                let hit_walk = rdf_term_mentions_withheld_blank(&term, &mut |label| {
+                    seen_walk.push(label.to_owned());
+                    label == *target
+                });
+                let mut seen_ref = Vec::new();
+                let hit_ref = reference_rdf(&term, &mut |label| {
+                    seen_ref.push(label.to_owned());
+                    label == *target
+                });
+                assert_eq!((hit_walk, seen_walk), (hit_ref, seen_ref), "seed {seed}");
+            }
+        }
+    }
+
+    /// A blank node at every level, and the selected one at the bottom: every level's
+    /// label is offered before the walk answers.
+    #[test]
+    fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let mut term = TermValue::Blank {
+                label: "deep".to_owned(),
+                scope: BlankScope::DEFAULT,
+            };
+            for _ in 0..DEPTH {
+                term = TermValue::Triple {
+                    s: TermBox::new(TermValue::Blank {
+                        label: "b".to_owned(),
+                        scope: BlankScope::DEFAULT,
+                    }),
+                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                    o: TermBox::new(term),
+                };
+            }
+            let mut offered = 0_usize;
+            assert!(term_value_mentions_withheld_blank(&term, &mut |label| {
+                offered += 1;
+                label == "deep"
+            }));
+            assert_eq!(offered, DEPTH + 1);
+            let mut offered = 0_usize;
+            assert!(!term_value_mentions_withheld_blank(&term, &mut |label| {
+                offered += 1;
+                label == "none"
+            }));
+            assert_eq!(offered, DEPTH + 1);
+
+            let mut egress = RdfTerm::BlankNode("deep".to_owned());
+            for _ in 0..DEPTH {
+                egress = RdfTerm::Triple(Box::new(RdfTriple::new(
+                    RdfTerm::BlankNode("b".to_owned()),
+                    format!("{EX}p"),
+                    egress,
+                )));
+            }
+            let mut offered = 0_usize;
+            assert!(rdf_term_mentions_withheld_blank(&egress, &mut |label| {
+                offered += 1;
+                label == "deep"
+            }));
+            assert_eq!(offered, DEPTH + 1);
+            dismantle(egress);
+        });
     }
 }
