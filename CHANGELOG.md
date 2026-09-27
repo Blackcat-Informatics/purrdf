@@ -1121,6 +1121,15 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **shapes, cli, python, wasm, capi (BREAKING for Rust):** an `unreached-import` refusal for a table entry that
+  an `owl:imports` triple DOES name — on a subject that is no anchor, so the triple is
+  data — now says so: it names the triple's object, says the subject is not anchored, and
+  points at the shapes lint's `unanchored-imports` section (`purrdf shapes lint` on the
+  command line). The command line used to say "the shapes graph has no owl:imports at all"
+  of such a graph; it now says the shapes graph imports nothing (no `owl:imports` of it is
+  anchored). `ShapesImportError::Unreached` gained `unanchored`, the entries such a triple
+  names; every host renders the same sentence (`UnanchoredNote`).
+
 - **validate, cli, python, wasm, capi:** a SARIF log whose run found nothing now carries
   `"results": []`; it used to omit `results`. SARIF 2.1.0 §3.14.23: "In all other
   circumstances, results SHALL be present and SHALL contain all results detected by the

@@ -63,7 +63,7 @@
 
 use std::sync::Arc;
 
-use purrdf::shapes::{ShapesError, ShapesImportError, ShapesImports};
+use purrdf::shapes::{ShapesError, ShapesImportError, ShapesImports, UnanchoredNote};
 use purrdf_core::RdfDataset;
 use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
@@ -259,35 +259,43 @@ pub(crate) fn shapes_error(
                 },
             ))
         }
-        ShapesImportError::Unreached { iris } => {
+        ShapesImportError::Unreached { iris, unanchored } => {
             let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
+            let these = if iris.len() == 1 {
+                "this document"
+            } else {
+                "these documents"
+            };
+            // The one sentence every host adds when an owl:imports names the entry from a
+            // subject that is no anchor, with this command's lint spelled as a command.
+            let note = if unanchored.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ". {}",
+                    UnanchoredNote {
+                        iris: &unanchored,
+                        lint: Some("purrdf shapes lint"),
+                    }
+                )
+            };
             let loaded: Vec<&str> = root.loaded.iter().map(String::as_str).collect();
             if imported_iris(root.dataset.as_ref(), &loaded).is_empty() {
                 return CliError::Usage(format!(
-                    "unreached-import: --import {named}: the shapes graph has no owl:imports at \
-                     all and the data graph links no such graph, so {these} would be read and \
-                     never used. Remove the pair, import the IRI from the shapes graph, or link \
-                     it from the data graph with sh:shapesGraph",
+                    "unreached-import: --import {named}: the shapes graph imports nothing — no \
+                     owl:imports of it is anchored — and the data graph links no such graph, so \
+                     {these} would be read and never used. Remove the pair, import the IRI from \
+                     the shapes graph, or link it from the data graph with sh:shapesGraph{note}",
                     named = named.join(", "),
-                    these = if iris.len() == 1 {
-                        "this document"
-                    } else {
-                        "these documents"
-                    },
                 ));
             }
             CliError::Usage(format!(
                 "unreached-import: --import {named}: the shapes graph's import closure never \
                  reaches {it} and no data-graph sh:shapesGraph link names {it}, so {these} \
                  would be read and never used. Remove the pair, import the IRI from the shapes \
-                 graph, or link it from the data graph",
+                 graph, or link it from the data graph{note}",
                 named = named.join(", "),
                 it = if iris.len() == 1 { "it" } else { "them" },
-                these = if iris.len() == 1 {
-                    "this document"
-                } else {
-                    "these documents"
-                },
             ))
         }
         error @ ShapesImportError::InvalidEntry { .. } => {

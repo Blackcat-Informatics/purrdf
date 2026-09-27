@@ -125,7 +125,7 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 use purrdf_core::dataset_view::{DatasetView, GraphMatch};
 use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
-use purrdf_core::imports::{ImportMap, declared_import_targets};
+use purrdf_core::imports::{ImportMap, UnanchoredImport, declared_import_targets};
 pub use purrdf_core::imports::{VersionConflict, VersionConflictKind};
 use purrdf_core::ir::{TermRef, TermValue};
 
@@ -372,6 +372,11 @@ pub enum ShapesImportError {
     Unreached {
         /// The unreached table keys.
         iris: Vec<String>,
+        /// The unreached keys an `owl:imports` triple of the closure DOES name, on a subject
+        /// that is no anchor of the document the triple occurs in — so the triple is data, not
+        /// an import (see [`ImportMap::unanchored_imports`]). A subset of `iris`, in its
+        /// order; empty when no unanchored triple names any of them.
+        unanchored: Vec<String>,
     },
     /// The data graph links shapes graphs (SHACL 1.2 Core §6.4, `sh:shapesGraph`) that
     /// nothing in hand resolves — no table entry, no loaded document, no `owl:Ontology`,
@@ -451,13 +456,70 @@ impl ShapesImportError {
                 named
             }
             Self::Unresolved { iris }
-            | Self::Unreached { iris }
+            | Self::Unreached { iris, .. }
             | Self::UnresolvedLink { iris }
             | Self::UnheldLink { iris } => iris.iter().map(String::as_str).collect(),
             Self::InvalidLink { values } => values.iter().map(String::as_str).collect(),
             Self::InvalidEntry { iri, .. } => vec![iri.as_str()],
         }
     }
+}
+
+/// The sentence an `unreached-import` refusal adds when an `owl:imports` triple names the
+/// entry from a subject that is no anchor: the triple is data, and the author most likely
+/// meant it as an import. Every host renders it: `lint` is the host's spelling of the lint
+/// entry point (`purrdf shapes lint` on the command line), and `None` names it by what it
+/// is, the shapes lint, which every host exposes (Python `shapes.lint_shapes`, WebAssembly
+/// `shaclLintShapes`, C `purrdf_shacl_lint_shapes`).
+#[derive(Debug, Clone, Copy)]
+pub struct UnanchoredNote<'a> {
+    /// The unreached import IRIs an unanchored `owl:imports` triple names.
+    pub iris: &'a [String],
+    /// The host's spelling of the lint entry point, or `None` for "the shapes lint".
+    pub lint: Option<&'a str>,
+}
+
+impl fmt::Display for UnanchoredNote<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let named = self
+            .iris
+            .iter()
+            .map(|iri| format!("<{iri}>"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let one = self.iris.len() == 1;
+        let lint = self
+            .lint
+            .map_or_else(|| "The shapes lint".to_owned(), |lint| format!("`{lint}`"));
+        write!(
+            f,
+            "The shapes graph does state owl:imports {named}, but on a subject that is not \
+             anchored — not the IRI the document was read or imported under, not an \
+             owl:Ontology header, not a sh:ShapesGraph, and not a node naming one of those as \
+             its owl:versionIRI — so {that} data, not an import. {lint} lists \
+             {each} in its unanchored-imports section. To import {it}, state the owl:imports on \
+             the shapes graph's own IRI or on its ontology header",
+            that = if one {
+                "that triple is"
+            } else {
+                "those triples are"
+            },
+            each = if one { "it" } else { "each" },
+            it = if one { "it" } else { "them" },
+        )
+    }
+}
+
+/// The IRIs of `iris` (in order) that an entry of `unanchored` names as its object.
+fn unanchored_targets(unanchored: &[UnanchoredImport], iris: &[String]) -> Vec<String> {
+    iris.iter()
+        .filter(|iri| {
+            unanchored
+                .iter()
+                .any(|entry| matches!(&entry.object, TermValue::Iri(object) if object == *iri))
+        })
+        .cloned()
+        .collect()
 }
 
 impl fmt::Display for ShapesImportError {
@@ -482,16 +544,29 @@ impl fmt::Display for ShapesImportError {
                 named = named(iris),
                 verb = if iris.len() == 1 { "is" } else { "are" },
             ),
-            Self::Unreached { iris } => write!(
-                f,
-                "{kind}: the import table supplies {named}, which no owl:imports in the shapes \
-                 graph's closure names, so {it} would be read and never used. Remove the \
-                 {entry}, or import the IRI from the shapes graph",
-                kind = self.kind(),
-                named = named(iris),
-                it = if iris.len() == 1 { "it" } else { "they" },
-                entry = if iris.len() == 1 { "entry" } else { "entries" },
-            ),
+            Self::Unreached { iris, unanchored } => {
+                write!(
+                    f,
+                    "{kind}: the import table supplies {named}, which no owl:imports in the \
+                     shapes graph's closure names, so {it} would be read and never used. Remove \
+                     the {entry}, or import the IRI from the shapes graph",
+                    kind = self.kind(),
+                    named = named(iris),
+                    it = if iris.len() == 1 { "it" } else { "they" },
+                    entry = if iris.len() == 1 { "entry" } else { "entries" },
+                )?;
+                if !unanchored.is_empty() {
+                    write!(
+                        f,
+                        ". {}",
+                        UnanchoredNote {
+                            iris: unanchored,
+                            lint: None,
+                        }
+                    )?;
+                }
+                Ok(())
+            }
             Self::IncompatibleVersions { conflicts } => {
                 write!(
                     f,
@@ -645,9 +720,10 @@ pub fn resolve_shapes_imports(
     included.sort_unstable();
     included.dedup();
     if !closure.unreached().is_empty() {
-        return Err(ShapesImportError::Unreached {
-            iris: closure.unreached().to_vec(),
-        });
+        let iris = closure.unreached().to_vec();
+        // COLD: only a refusal pays for the survey, and only to say why the entry is unused.
+        let unanchored = unanchored_targets(&map.unanchored_imports(dataset), &iris);
+        return Err(ShapesImportError::Unreached { iris, unanchored });
     }
     if !closure.conflicts().is_empty() {
         return Err(ShapesImportError::IncompatibleVersions {
@@ -935,7 +1011,7 @@ mod tests {
     fn an_unreached_entry_is_refused_and_a_reached_one_is_not() {
         let mut imports = ShapesImports::new();
         imports.insert_turtle(LIB, "").expect("empty turtle");
-        let Err(ShapesImportError::Unreached { iris }) =
+        let Err(ShapesImportError::Unreached { iris, .. }) =
             resolve_shapes_imports(&graph(""), &[], &[], &imports)
         else {
             panic!("unreached");
@@ -1197,7 +1273,7 @@ mod tests {
             results(&root, &table(&[(LIB, &lib_data)])).expect("the deeper triple is data"),
             []
         );
-        let Err(ShapesError::Imports(ShapesImportError::Unreached { iris })) =
+        let Err(ShapesError::Imports(ShapesImportError::Unreached { iris, .. })) =
             results(&root, &table(&[(LIB, &lib_data), (DEEP, LIB_SHAPE)]))
         else {
             panic!("a document only a data triple names is never reached");
@@ -1292,12 +1368,41 @@ mod tests {
             results(&data_only, &ShapesImports::new()).expect("a data-graph import is data"),
             []
         );
-        let Err(ShapesError::Imports(ShapesImportError::Unreached { iris })) =
+        let Err(ShapesError::Imports(refusal @ ShapesImportError::Unreached { .. })) =
             results(&data_only, &table(&[(LIB, LIB_SHAPE)]))
         else {
             panic!("a document only a data-graph triple names is never reached");
         };
-        assert_eq!(iris, [LIB]);
+        assert_eq!(
+            refusal,
+            ShapesImportError::Unreached {
+                iris: vec![LIB.to_owned()],
+                unanchored: vec![LIB.to_owned()],
+            }
+        );
+        // The refusal says WHY the stated owl:imports is not one, and where the lint lists
+        // it — the wording every non-CLI host (Python, WebAssembly, C) carries verbatim.
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&format!("does state owl:imports <{LIB}>"))
+                && message.contains("not anchored")
+                && message.contains("The shapes lint lists it in its unanchored-imports section"),
+            "{message}"
+        );
+
+        // The observing neighbour: an entry nothing names at all is unreached with NO
+        // unanchored note, so the note is about the triple, not about every refusal.
+        let Err(ShapesError::Imports(bare)) = results("", &table(&[(LIB, LIB_SHAPE)])) else {
+            panic!("an entry nothing names is never reached");
+        };
+        assert_eq!(
+            bare,
+            ShapesImportError::Unreached {
+                iris: vec![LIB.to_owned()],
+                unanchored: vec![],
+            }
+        );
+        assert!(!bare.to_string().contains("not anchored"), "{bare}");
 
         let with_header = format!("ex:D a sh:DataGraph , owl:Ontology ; owl:imports <{LIB}> .\n");
         assert_eq!(

@@ -81,7 +81,9 @@ pub use graphql::{
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
     GraphqlUnionMemberMap, emit_graphql, import_graphql_package,
 };
-pub use imports::{ResolvedShapesGraph, ShapesImportError, ShapesImports, resolve_shapes_imports};
+pub use imports::{
+    ResolvedShapesGraph, ShapesImportError, ShapesImports, UnanchoredNote, resolve_shapes_imports,
+};
 pub use json_schema::{
     Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
     SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,

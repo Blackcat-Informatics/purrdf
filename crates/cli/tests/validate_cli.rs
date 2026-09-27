@@ -1945,8 +1945,67 @@ fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
     let err = stderr(&no_imports);
     assert_eq!(code(&no_imports), 2, "a usage error: {err}");
     assert!(
-        err.contains("no owl:imports at all"),
+        err.contains("the shapes graph imports nothing"),
         "the refusal says why the pair cannot be used: {err}"
+    );
+}
+
+/// An `owl:imports` stated on a node that is no anchor is DATA, not an import, so a pair
+/// supplying its object is unreached. The refusal must not claim the graph "has no
+/// owl:imports": it names the unanchored triple and points at `purrdf shapes lint`'s
+/// `unanchored-imports` section. The neighbour anchors the same triple (the node is typed
+/// `owl:Ontology`) and the very same pair is used, and validation runs.
+#[test]
+fn an_unreached_pair_named_by_an_unanchored_import_says_the_import_is_not_anchored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let b = write_file(dir.path(), "b.ttl", IMPORT_B);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+    let shapes = |anchor: &str| {
+        format!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix ex: <http://example.org/> .\n\
+             ex:node {anchor}owl:imports <http://example.org/shapes-b> .\n"
+        )
+    };
+    let unanchored = write_file(dir.path(), "unanchored.ttl", &shapes(""));
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &unanchored,
+        "--import",
+        &format!("http://example.org/shapes-b={b}"),
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 2, "a usage error: {err}");
+    assert!(
+        err.contains("unreached-import")
+            && err.contains("the shapes graph imports nothing")
+            && err.contains("does state owl:imports <http://example.org/shapes-b>")
+            && err.contains("not anchored")
+            && err.contains("`purrdf shapes lint` lists it in its unanchored-imports section"),
+        "{err}"
+    );
+
+    let anchored = write_file(dir.path(), "anchored.ttl", &shapes("a owl:Ontology ; "));
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &anchored,
+        "--import",
+        &format!("http://example.org/shapes-b={b}"),
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a decided verdict exits 0: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the anchored import is used, and its shape reports the violation: {err}"
+    );
+    assert!(
+        stdout(&out).contains("name is required"),
+        "the imported shape fired: {}",
+        stdout(&out)
     );
 }
 

@@ -187,6 +187,7 @@ fn a_link_on_a_non_anchor_node_is_data() {
         &fired(LOCAL_SHAPES, &unanchored, &[(SHAPES1, &document)]).expect_err("unreached"),
         &ShapesImportError::Unreached {
             iris: vec![SHAPES1.to_owned()],
+            unanchored: vec![],
         },
     );
     // The triple is ordinary data: a shape targeting its subject sees it.

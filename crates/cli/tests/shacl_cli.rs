@@ -275,7 +275,7 @@ fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
     let err = stderr(&out);
     assert_eq!(code(&out), 2, "a usage error, not a runtime one: {err}");
     assert!(
-        err.contains("no owl:imports at all") && err.contains("--import"),
+        err.contains("the shapes graph imports nothing") && err.contains("--import"),
         "the refusal says why the pair cannot be used: {err}"
     );
 

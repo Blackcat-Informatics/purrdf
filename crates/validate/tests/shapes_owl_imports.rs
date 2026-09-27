@@ -378,7 +378,8 @@ fn a_table_entry_nothing_imports_is_refused_and_a_reached_one_is_not() {
     assert_eq!(
         refused.as_imports(),
         Some(&ShapesImportError::Unreached {
-            iris: vec![LIB.to_owned()]
+            iris: vec![LIB.to_owned()],
+            unanchored: vec![],
         })
     );
     validate_to_sarif_string(IMPORTER, None, DATA, &options, TABLE)
@@ -540,7 +541,8 @@ fn a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does() 
         assert_eq!(
             refused.as_imports(),
             Some(&ShapesImportError::Unreached {
-                iris: vec![LIB.to_owned()]
+                iris: vec![LIB.to_owned()],
+                unanchored: vec![],
             }),
             "{class}"
         );
