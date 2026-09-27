@@ -233,15 +233,22 @@ ownership, and all limits. Complete examples are in
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
 - `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-  maxTermGeneratingRounds?)` — runs exactly one rule source, the SHACL 1.2 rules of
-  `shapesTtl` or the SPARQL 1.2 RL rule set `srl`, and returns a
-  `ShaclRulesInference`: `inferred` is the inference graph (the inferred triples
-  only) as N-Triples, and `proof` is the proof of every inferred triple when
-  `explain` is set. `maxTermGeneratingRounds` (a `bigint`) bounds the rounds that
-  infer a new term. Omitted, the limit is a divergence criterion derived from the
-  input, `max(256, 4 × N)` rounds for `N` distinct input terms, past which the rule
-  set is refused as divergent, naming its rules; a rule set bounded by a constant
-  past that horizon states its bound here. Call `free()` when done.
+  maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?)` —
+  runs exactly one rule source, the SHACL 1.2 rules of `shapesTtl` or the SPARQL 1.2
+  RL rule set `srl`, and returns a `ShaclRulesInference`: `inferred` is the
+  inference graph (the inferred triples only) as N-Triples, and `proof` is the proof
+  of every inferred triple when `explain` is set. Two limits stop a rule set that
+  keeps inferring new terms. `maxTermGeneratingRounds` (a `bigint`) bounds the
+  evaluation rounds that infer a term the graph did not hold (default 16384), and
+  `maxGeneratedTerms` (a `bigint`) the terms inferred beyond the input's (default
+  `max(65536, 4 × N)` for `N` distinct input terms). A run past either throws
+  naming the limit, the numbers, the rules that inferred a new term last, and the
+  argument that raises it; a rule set that needs more states it here.
+  `importIris` / `importDocuments` are the rule source's import table: the shapes
+  graph's `owl:imports` table (Turtle documents) beside `shapesTtl`, the rule set's
+  `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+  imported document's rules run. An import no entry supplies, and an entry the
+  import closure never names, throw. Call `free()` when done.
 - `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
   importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
   one node expression of the shapes graph against a focus node, with `scope` as

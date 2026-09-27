@@ -713,7 +713,7 @@ purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
 purrdf rules (--shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
               | --srl <FILE> [--srl-base <IRI>])
              [--import <IRI>=<FILE>]... [--explain[=<PATH>]]
-             [--max-term-generating-rounds <N>]
+             [--max-term-generating-rounds <N>] [--max-generated-terms <N>]
              [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
@@ -1168,7 +1168,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | Code | Meaning |
 |---|---|
 | `0` | success — including every **decided negative verdict** (see below) |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds`, or a [`shapes lint`](#shapes-lint) report with a finding |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds` or `--max-generated-terms`, or a [`shapes lint`](#shapes-lint) report with a finding |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, a malformed `--import` pair, two documents reading stdin, or a flag that names something the selected mode does not produce |
 | `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, an `update` or a [`validate`](#validate); or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `update` and `validate`, nothing was produced (a mutation is atomic and a truncated SHACL run cannot license a verdict) and the receipt is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 
