@@ -5,7 +5,8 @@
 //! that pass, one that panics, one ignored — handed to the runner exactly as a
 //! `harness = false` test target hands its own. Running it as a real process
 //! is what lets the oracle observe the exit status and the console output
-//! instead of a model of them.
+//! instead of a model of them. `scripts/check-wasm-test-runner.sh` runs the
+//! same fixture on wasm32, through the wasm32 test runner.
 
 use std::process::ExitCode;
 

@@ -3,6 +3,11 @@
 
 //! Goldens compare byte for byte — CRLF, trailing whitespace and the final
 //! newline included — and regeneration writes the produced bytes verbatim.
+//!
+//! These run where a test can create a path; wasm32-unknown-unknown has no file
+//! system, and the scratch-space types do not exist there.
+
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::process::Command;
 

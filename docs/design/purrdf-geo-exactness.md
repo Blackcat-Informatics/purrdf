@@ -93,12 +93,14 @@ DE-9IM matrices, the exact decimal measures, the constructors, and the IEEE bit
 patterns at the float boundary. It folds the resulting **bytes** into one FNV-1a
 `u64`.
 
-* `crates/geo/tests/determinism.rs` pins that number natively, in `GOLDEN_DIGEST`.
-* `scripts/check-geo-determinism.sh` builds the same function for
-  `wasm32-unknown-unknown` — through `crates/geo/determinism`, a
-  workspace-excluded one-function `cdylib` — runs it under Node, reads
-  `GOLDEN_DIGEST` out of the test file rather than restating it, and fails unless
-  all three agree.
+* `crates/geo/tests/determinism.rs` pins that number, in `GOLDEN_DIGEST`. It is
+  `harness = false` on the shared test runner, so the same named cases run
+  natively and on `wasm32-unknown-unknown`, each printing the digest it computed.
+* `scripts/check-geo-determinism.sh` runs that target natively and on
+  `wasm32-unknown-unknown` — in Node, through `scripts/wasm-test-runner.sh`, the
+  cargo runner every wasm32 test uses — reads `GOLDEN_DIGEST` out of the test
+  file rather than restating it, and fails unless every named case reports the
+  same digest on both targets and it is the golden.
 * `make geo-determinism` runs it; CI runs it in the `wasm` job, where the target
   and Node are already present.
 
@@ -110,13 +112,17 @@ and double renderings at once, and it is the artefact a downstream cache, diff o
 signature would key on. A digest over internal values would pass while the
 renderer diverged.
 
-**Every wasm host import is bound to a throwing stub.** `purrdf-geo` depends on
-`purrdf-sparql-eval`, which target-gates `js-sys` and `wasm-bindgen` on wasm32 to
-give SPARQL's `NOW()` and `RAND()` a browser clock and browser entropy. The
-digest touches neither. Binding those imports to no-ops would let a future change
-quietly consult a clock and still produce a digest — a digest that agreed on two
-targets while one had read a clock is precisely the false green the harness
-exists to prevent. A throwing stub turns that into a failure with the import's
+**Every host clock and entropy source throws while the digest runs.**
+`purrdf-geo` depends on `purrdf-sparql-eval`, which target-gates `js-sys` and
+`wasm-bindgen` on wasm32 to give SPARQL's `NOW()` and `RAND()` a browser clock
+and browser entropy. The digest touches neither. Leaving those sources live
+would let a future change quietly consult a clock and still produce a digest — a
+digest that agreed on two targets while one had read a clock is precisely the
+false green the harness exists to prevent. So the test computes the digest
+inside `purrdf_testkit::harness::without_host_clock_or_entropy`, and on wasm32
+the runner replaces `Date.now`, `new Date()`, `performance.now`, `Math.random`,
+`crypto.getRandomValues` and `crypto.randomUUID` with functions that throw for
+that duration, turning a clock or entropy read into a failure with the source's
 name in it.
 
 ### 2.1 What the guarantee does not cover

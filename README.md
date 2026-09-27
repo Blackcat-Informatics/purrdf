@@ -149,8 +149,8 @@ bits may depend on the target and build — and every ordering is canonical:
 document ids are assigned after sorting on
 `(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
 and kNN ties break on the content-derived `TargetId`. The claim is executed,
-not argued: the text and kNN determinism tests are one body carrying both
-`#[test]` and `#[wasm_bindgen_test]`, run natively by `cargo test` and on
+not argued: the text and kNN determinism tests are one body per case on one
+shared test runner, run natively by `cargo test` and on
 `wasm32-unknown-unknown` by `make wasm-test`, and `make geo-determinism` runs
 the same corpus on both targets and compares bytes.
 

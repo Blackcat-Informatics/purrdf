@@ -4,6 +4,11 @@
 //! `TempDir` / `NamedTempFile`: distinct under concurrency, removed on drop,
 //! under the target directory and never the system temporary directory, and
 //! exclusive on creation.
+//!
+//! These run where a test can create a path; wasm32-unknown-unknown has no file
+//! system, and the scratch-space types do not exist there.
+
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::BTreeSet;
 use std::io::Write as _;

@@ -10,11 +10,17 @@
 //! failure mode determinism exists to prevent produces no symptom at all. So the claim is
 //! made *observable*.
 //!
-//! [`GOLDEN_DIGEST`] is the one constant in the tree. This file pins it natively at four
-//! worker counts, and `scripts/check-hnsw-determinism.sh` reads it out of this file, runs
-//! the same digest under `wasm32-unknown-unknown` through the workspace-excluded
-//! `crates/hnsw/determinism` cdylib, and fails unless the wasm side agrees. The digest
-//! itself is hand-rolled FNV-1a over the canonical payload bytes — see
+//! [`GOLDEN_DIGEST`] is the one constant in the tree. This target is `harness = false` on
+//! the shared test runner, so the same named cases run natively under `cargo test` and on
+//! `wasm32-unknown-unknown` in Node under `scripts/wasm-test-runner.sh`, each asserting the
+//! same golden; natively it also pins the digest at four worker counts, which wasm32, with
+//! no threads, cannot run. Each case that computes a digest prints it on a
+//! `determinism-digest` line, and `scripts/check-hnsw-determinism.sh` runs the target
+//! natively, on wasm32 and on wasm32 with `+simd128`, reads the goldens out of this file,
+//! and fails unless every named case reports the same digest on every build and those
+//! digests are the goldens. The digests are computed inside [`without_host_clock_or_entropy`],
+//! so on wasm32 a build that reached a host clock or entropy source fails by that source's
+//! name. The digest itself is hand-rolled FNV-1a over the canonical payload bytes — see
 //! [`purrdf_hnsw::determinism`] — so a moved golden is a serialization defect and never a
 //! hasher change.
 //!
@@ -38,6 +44,8 @@ use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hnsw::determinism::{CORPUS_ROWS, corpus_len, digest, digest_serial};
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
+use purrdf_testkit::harness::{print_line, without_host_clock_or_entropy};
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::ThreadPoolBuilder;
 
 /// The pinned digest of the profile-rule build.
@@ -60,9 +68,32 @@ const GOLDEN_DIGEST: u64 = 0xa367_d6c5_8963_1389;
 /// order, and the image header carries the arithmetic field.
 const GOLDEN_SERIAL_DIGEST: u64 = 0xf0b2_fd33_0bcc_fcc7;
 
+/// `compute`'s digest, computed with the host's clocks and entropy withdrawn, and reported
+/// on a `determinism-digest` line under `case`'s name for
+/// `scripts/check-hnsw-determinism.sh` to compare across targets and builds.
+fn reported(case: &str, compute: fn() -> u64) -> u64 {
+    let value = without_host_clock_or_entropy(compute);
+    print_line(&format!(
+        "determinism-digest case={case} digest={value:016x} corpus_len={}",
+        corpus_len()
+    ));
+    value
+}
+
+/// The digest equals the pinned golden, on whichever target and build this runs.
+fn the_digest_is_the_pinned_golden() {
+    let value = reported("the_digest_is_the_pinned_golden", digest);
+    assert_eq!(
+        value, GOLDEN_DIGEST,
+        "the digest is {value:016x}, golden {GOLDEN_DIGEST:016x}. If another target or \
+         build still agrees with the golden, this one computes a different graph or image."
+    );
+}
+
 /// The digest is a property of the input alone, not of a schedule: one, two, four and
-/// eight rayon workers all fold the same bytes.
-#[test]
+/// eight rayon workers all fold the same bytes. Native only: wasm32-unknown-unknown has
+/// no threads to build a worker pool from.
+#[cfg(not(target_arch = "wasm32"))]
 fn the_digest_is_identical_across_worker_counts() {
     for workers in [1_usize, 2, 4, 8] {
         let pool = ThreadPoolBuilder::new()
@@ -81,9 +112,8 @@ fn the_digest_is_identical_across_worker_counts() {
 
 /// Within-round isolation is load-bearing: a serial insertion, where every node sees all
 /// of its predecessors, produces a different canonical image.
-#[test]
 fn a_serial_insert_builds_a_different_graph() {
-    let serial = digest_serial();
+    let serial = reported("a_serial_insert_builds_a_different_graph", digest_serial);
     assert_eq!(
         serial, GOLDEN_SERIAL_DIGEST,
         "the serial-insert digest moved: computed {serial:016x}, golden \
@@ -98,7 +128,6 @@ fn a_serial_insert_builds_a_different_graph() {
 
 /// A digest that folded nothing would agree on two targets and prove nothing. This is the
 /// non-vacuity check, asserted where the golden is pinned.
-#[test]
 fn the_digest_is_not_vacuous() {
     assert_eq!(
         corpus_len(),
@@ -125,10 +154,12 @@ fn the_digest_is_not_vacuous() {
 /// reassociated build of the same shape whose image differs from the exact one in the
 /// header's arithmetic field -- so this control can tell the exact image from the fast one,
 /// and a reassociated arithmetic leaking into the exact build would move the digest.
-#[test]
 fn exact_image_golden_unchanged_by_reassociated_surface() {
     assert_eq!(
-        digest(),
+        reported(
+            "exact_image_golden_unchanged_by_reassociated_surface",
+            digest
+        ),
         GOLDEN_DIGEST,
         "the exact index's canonical image moved; the reassociated surface must leave it \
          byte for byte where it was"
@@ -158,3 +189,12 @@ fn exact_image_golden_unchanged_by_reassociated_surface() {
         "the header before the arithmetic field is the same identity"
     );
 }
+
+purrdf_testkit::harness_main!(
+    a_serial_insert_builds_a_different_graph,
+    exact_image_golden_unchanged_by_reassociated_surface,
+    #[cfg(not(target_arch = "wasm32"))]
+    the_digest_is_identical_across_worker_counts,
+    the_digest_is_not_vacuous,
+    the_digest_is_the_pinned_golden,
+);

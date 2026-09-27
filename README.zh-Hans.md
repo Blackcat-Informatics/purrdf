@@ -132,8 +132,8 @@ PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技�
 以此保证换取速度，其最后几位可能随目标与构建而不同——并且每一种排序
 都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
 `TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。这一声称是被执行
-而非被论证的：文本与 k 近邻的确定性测试是同时带有 `#[test]` 与
-`#[wasm_bindgen_test]` 的同一份测试体，由 `cargo test` 在原生上运行，由
+而非被论证的：文本与 k 近邻的确定性测试每个用例只有一份测试体，运行在同一个
+共享的测试运行器上，由 `cargo test` 在原生上运行，由
 `make wasm-test` 在 `wasm32-unknown-unknown` 上运行，而 `make geo-determinism` 在
 两个目标上运行同一语料并比较字节。
 

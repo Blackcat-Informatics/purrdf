@@ -36,10 +36,10 @@ use purrdf_core::{
     EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
     RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
 };
-use purrdf_sparql_eval::test_rng::splitmix64_step;
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PfArgs, PropertyFunction,
 };
+use purrdf_testkit::rng::splitmix64_step;
 
 /// The rows in every space.
 const ROWS: usize = 4_096;

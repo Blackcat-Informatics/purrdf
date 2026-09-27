@@ -16,12 +16,15 @@
 //! exact relation's distance for the same neighbour.
 //!
 //! `make wasm-test` runs it twice on wasm32: on the baseline build, whose path is
-//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`. Natively it
-//! is an ordinary `#[test]`, on `x86_64` and `aarch64` along their named paths and on
-//! every other target along the portable one.
+//! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`, each time in
+//! Node through `scripts/wasm-test-runner.sh`. The target is `harness = false` on
+//! `purrdf_testkit::harness`, so natively the same named cases run under `cargo test`,
+//! on `x86_64` and `aarch64` along their named paths and on every other target along
+//! the portable one.
 //!
 //! ```text
-//! cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_reassociated
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_reassociated
 //! ```
 
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
@@ -41,20 +44,15 @@ use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction,
 };
 
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
-
 // A seeded splitmix64 stream of values in `[-1, 1)`, none of them exactly
 // representable as short decimals, so every product and partial sum rounds.
-use purrdf_sparql_eval::test_rng::stream;
+use purrdf_testkit::rng::signed_unit_stream as stream;
 
 /// The reassociated arithmetic on this target.
 fn resolved() -> Resolved<Reassociated> {
     Reassociated::resolve().expect("the default float environment is the IEEE one")
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_reassociated_path_is_the_one_this_build_was_made_for() {
     let fast = resolved();
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -90,8 +88,6 @@ fn the_reassociated_path_is_the_one_this_build_was_made_for() {
     assert!(Reassociated::IMAGE_CODES.contains(&fast.image_code()));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
     let fast = resolved();
     let exact_handle = Exact::resolve().expect("the default float environment");
@@ -177,8 +173,6 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_reassociated_distance_refuses_an_overflow() {
     let fast = resolved();
     let huge = vec![1e300_f64; 70];
@@ -341,8 +335,6 @@ fn neighbours(relation: &dyn PropertyFunction, query: &str, k: usize) -> BTreeMa
     out
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_exact_one() {
     const DIMS: usize = 70;
     const ROWS: usize = 8;
@@ -391,3 +383,10 @@ fn the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_
         }
     }
 }
+
+purrdf_testkit::harness_main!(
+    the_reassociated_distance_is_within_the_error_bound_of_the_exact_one,
+    the_reassociated_distance_refuses_an_overflow,
+    the_reassociated_path_is_the_one_this_build_was_made_for,
+    the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_exact_one,
+);

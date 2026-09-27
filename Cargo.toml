@@ -41,14 +41,6 @@ members = [
 ]
 exclude = [
     "crates/gts/fuzz",
-    # The wasm32 half of purrdf-geo's cross-target determinism check: a
-    # one-function cdylib a Node harness calls so the native and wasm
-    # digests can be compared. Never published, depended on by nothing,
-    # and built only by scripts/check-geo-determinism.sh.
-    "crates/geo/determinism",
-    # The same pattern for purrdf-hnsw's cross-target determinism check,
-    # built only by scripts/check-hnsw-determinism.sh.
-    "crates/hnsw/determinism",
 ]
 
 [workspace.package]
@@ -143,8 +135,15 @@ getrandom = "0.3"
 # major `indexmap` (via serde_yaml_ng) resolves, so the graph holds one hashbrown.
 hashbrown = { version = "0.17", default-features = false }
 # Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
-# crates/sparql-eval's target-gated dependency section).
-js-sys = "0.3"
+# crates/sparql-eval's target-gated dependency section), and Node's process,
+# console and clock for the wasm32 test harness (crates/testkit). Default
+# features off: `std` only adds a `std::error::Error` impl this workspace never
+# names and pulls in futures-util (with futures-core, futures-task,
+# pin-project-lite and slab) for a stream adapter it never uses, and
+# `unsafe-eval` only gates `eval` and the string-bodied `Function`
+# constructors, which nothing here calls. `Date::now` and `Math::random`
+# compile without either.
+js-sys = { version = "0.3", default-features = false }
 md-5 = { version = "0.10", default-features = false }
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
@@ -215,17 +214,11 @@ unicode-segmentation = "1"
 # BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
 visual-hashing = "1.0.0"
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
-# the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
-# the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
+# the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
+# wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
+# refuses any other CLI version) and the CI Node lane use
+# `wasm-bindgen-cli@0.2.125` to match this.
 wasm-bindgen = "=0.2.125"
-# The wasm32 test harness. Dev-only, and pulled ONLY on wasm32 targets, so a
-# native build never sees it. It exists so a determinism claim about
-# `wasm32-unknown-unknown` can be an executed test rather than an argument:
-# `make wasm-test` compiles the tagged tests to wasm and runs them in Node
-# through `wasm-bindgen-test-runner`, which ships in the same pinned
-# wasm-bindgen-cli archive the wasm lane already installs. Resolves to the
-# 0.3.x release paired with the exact wasm-bindgen pin above.
-wasm-bindgen-test = "0.3"
 
 [workspace.lints.rust]
 missing_docs = "warn"

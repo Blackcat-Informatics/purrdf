@@ -6,7 +6,9 @@
 The workspace's shared test support, written once instead of once per crate.
 
 Never published, never a runtime dependency: it appears only in
-`[dev-dependencies]`, so no release crate and no wasm build ever sees it. It
+`[dev-dependencies]`, so no release crate and no release wasm build ever sees
+it. It builds and runs on `wasm32-unknown-unknown` too, where the workspace's
+cross-target test targets run on its harness. It
 depends on no `purrdf-*` crate — every member's tests may use it, and a
 first-party edge from here would close a cycle through that member.
 
@@ -32,6 +34,17 @@ first-party edge from here would close a cycle through that member.
   `test result: … passed; … failed; … ignored; 0 measured; … filtered out; finished in …s`
   tally line), accepts libtest's flags, runs cases on `--test-threads` workers
   with per-case panic isolation, and refuses any flag it does not implement.
+  `purrdf_testkit::harness_main!(case_a, case_b)` writes the `main` that runs
+  plain functions as cases named after them. The same target runs on
+  `wasm32-unknown-unknown` in Node under `scripts/wasm-test-runner.sh`, the
+  cargo runner `make wasm-test` sets: the command line, environment, console
+  and clock are Node's, cases run serially, and since a panic aborts a wasm32
+  module, a panicking case is reported `FAILED` with its message and tally
+  before the module traps and the runner exits non-zero.
+  `harness::without_host_clock_or_entropy` runs a computation with every host
+  clock and entropy source throwing on wasm32, for answers that must be a
+  function of their inputs alone; `harness::print_line` prints a line that
+  reaches the console on both targets.
 * **Property-based testing** — `purrdf_testkit::prop` and `prop_test!`.
   Strategies (ranges, `any::<T>()`, `prop::collection::{vec, btree_set,
   btree_map}`, `prop::option::of`, `prop::sample::select`, `prop_oneof!`,

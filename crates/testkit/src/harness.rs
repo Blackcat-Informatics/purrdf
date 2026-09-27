@@ -57,17 +57,45 @@
 //! * **Names are unique**: two cases with one name are refused before
 //!   anything runs, since a filter or a failure report naming one of them
 //!   would be ambiguous.
+//! * **Console locking**: the standard output lock is taken per write, never
+//!   for the whole run, so a case that prints from a worker thread or from a
+//!   thread it spawned does not block behind the reporter.
+//!
+//! # On `wasm32-unknown-unknown`
+//!
+//! The same target runs in Node under `scripts/wasm-test-runner.sh`, the cargo
+//! runner `make wasm-test` sets. The standard library has no command line,
+//! environment, console or clock there, so the harness takes all four from the
+//! runner's host, and the output is the same console lines and tally.
+//!
+//! * Cases run serially: there are no threads. `--test-threads` is accepted
+//!   and has no effect.
+//! * A panic aborts a wasm32 module (the module traps; nothing unwinds), so a
+//!   panicking case ends the run. It is still reported `FAILED` with its
+//!   message, followed by the `failures:` section, a note giving the number of
+//!   cases that did not run, and the tally. The runner then exits 101. A
+//!   JavaScript exception that escapes a case, such as a read of a host clock
+//!   that [`without_host_clock_or_entropy`] withdrew, is reported the same
+//!   way with the exception's text. Because the run ends there, the message
+//!   is shown in the `failures:` section even under `--nocapture`.
+//! * The exit status is reported to the host by [`main`]. A module that
+//!   returns without reporting one is refused by the runner.
+//!
+//! A `harness = false` target written as plain functions uses
+//! [`harness_main!`](crate::harness_main) instead of writing `main` itself.
 
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
-use std::io::{self, IsTerminal as _, Write};
+use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::{Mutex, Once};
-use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+use crate::host;
 
 /// The exit status of a failed run or a refused command line, as libtest's.
 pub const ERROR_EXIT_CODE: u8 = 101;
@@ -279,16 +307,18 @@ Options:
 impl Arguments {
     /// Parse the process's arguments (after the program name) and the
     /// `RUST_TEST_THREADS` / `RUST_TEST_NOCAPTURE` environment variables.
+    ///
+    /// On wasm32 both come from the runner's host: Node's command line after
+    /// the module path, and Node's environment.
     pub fn from_env() -> Result<Self, ArgumentError> {
-        let mut arguments = Self::parse(std::env::args().skip(1))?;
+        let mut arguments = Self::parse(platform::args())?;
         if !arguments.nocapture {
             arguments.nocapture =
-                std::env::var_os("RUST_TEST_NOCAPTURE").is_some_and(|value| value != "0");
+                platform::env_var("RUST_TEST_NOCAPTURE").is_some_and(|value| value != "0");
         }
         if arguments.test_threads.is_none()
-            && let Some(value) = std::env::var_os("RUST_TEST_THREADS")
+            && let Some(value) = platform::env_var("RUST_TEST_THREADS")
         {
-            let value = value.to_string_lossy();
             arguments.test_threads = Some(parse_threads(&value).map_err(|_| {
                 ArgumentError(format!(
                     "RUST_TEST_THREADS is `{value}`, should be a positive integer."
@@ -491,38 +521,99 @@ impl Conclusion {
 /// Parse the command line, run `trials`, print libtest's output to standard
 /// output, and return the exit status. A refused command line prints
 /// `error: <message>` to standard error and returns 101.
+///
+/// On wasm32 the status is also reported to the runner's host, which is where
+/// the runner reads it; see the [module documentation](self).
 pub fn main(trials: impl IntoIterator<Item = Trial>) -> ExitCode {
+    let status = main_status(trials);
+    platform::report_exit(status);
+    ExitCode::from(status)
+}
+
+/// [`main`]'s status as a number, so that it can be reported before it
+/// becomes an opaque [`ExitCode`].
+fn main_status(trials: impl IntoIterator<Item = Trial>) -> u8 {
     let arguments = match Arguments::from_env() {
         Ok(arguments) => arguments,
         Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::from(ERROR_EXIT_CODE);
+            platform::print_error(&format!("error: {error}\n"));
+            return ERROR_EXIT_CODE;
         }
     };
     if arguments.action == Action::Help {
-        print!("{USAGE}");
-        return ExitCode::SUCCESS;
+        let mut out = Console::new();
+        return match out.write_all(USAGE.as_bytes()).and_then(|()| out.flush()) {
+            Ok(()) => 0,
+            Err(error) => {
+                platform::print_error(&format!("error: {error}\n"));
+                ERROR_EXIT_CODE
+            }
+        };
     }
     let trials: Vec<Trial> = trials.into_iter().collect();
     let color = match arguments.color {
         ColorChoice::Always => true,
         ColorChoice::Never => false,
-        ColorChoice::Auto => io::stdout().is_terminal(),
+        ColorChoice::Auto => platform::stdout_is_terminal(),
     };
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
+    let mut out = Console::new();
     match run_to(&arguments, trials, &mut out, color) {
-        Ok(conclusion) => conclusion.exit_code(),
+        Ok(conclusion) if conclusion.has_failed() => ERROR_EXIT_CODE,
+        Ok(_) => 0,
         Err(error) => {
-            eprintln!("error: {error}");
-            ExitCode::from(ERROR_EXIT_CODE)
+            platform::print_error(&format!("error: {error}\n"));
+            ERROR_EXIT_CODE
         }
+    }
+}
+
+/// Write `line` and a newline to standard output as one write.
+///
+/// Natively this goes straight to the process's standard output, bypassing
+/// the `print!` capture libtest installs, so the line reaches the console
+/// under a plain `cargo test` without `--nocapture` as well as under this
+/// runner. On wasm32 it goes to the runner's host console, where `println!`
+/// reaches nothing. Panics if standard output cannot be written, as
+/// `println!` does.
+pub fn print_line(line: &str) {
+    let mut text = String::with_capacity(line.len() + 1);
+    text.push_str(line);
+    text.push('\n');
+    platform::print_raw(&text);
+}
+
+/// Run `computation` with every host clock and entropy source withdrawn, and
+/// return its value.
+///
+/// On wasm32 each of the host's clocks (`Date`, `performance.now`,
+/// `process.hrtime`, `process.uptime`) and entropy sources (`Math.random`,
+/// Web Crypto's `getRandomValues` and `randomUUID`, and `node:crypto`'s random
+/// functions) throws an error that names it for the duration. A computation
+/// that reaches one fails its case by that source's name, rather than
+/// producing an answer that agrees across targets by accident. Seals nest.
+///
+/// Natively there is no host to withdraw, and `computation` simply runs. The
+/// wasm32 run of the same case is the one that observes the seal.
+pub fn without_host_clock_or_entropy<T>(computation: impl FnOnce() -> T) -> T {
+    #[cfg(target_arch = "wasm32")]
+    {
+        host::seal();
+        let value = computation();
+        host::unseal();
+        value
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        computation()
     }
 }
 
 /// Run `trials` under `arguments`, writing libtest's console output to `out`
 /// (uncoloured). Returns what the run concluded, or an error when the output
 /// could not be written or two cases share a name.
+///
+/// On wasm32 a panicking case ends the module, and its report goes to the
+/// runner's host console rather than to `out`.
 pub fn run(
     arguments: &Arguments,
     trials: Vec<Trial>,
@@ -574,19 +665,17 @@ fn run_to(
         });
     }
 
-    let started = Instant::now();
+    let started = platform::Stopwatch::start();
     let noun = if selected.len() == 1 { "test" } else { "tests" };
-    write!(out, "\nrunning {} {noun}\n", selected.len())?;
+    out.write_all(format!("\nrunning {} {noun}\n", selected.len()).as_bytes())?;
     out.flush()?;
 
-    let threads = arguments
-        .test_threads
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
+    let threads = platform::threads(arguments.test_threads);
     let mut report = Report {
-        out,
         format: arguments.format,
         color,
         serial: threads == 1,
+        show_output: arguments.show_output,
         total: selected.len(),
         done: 0,
         conclusion: Conclusion {
@@ -601,13 +690,18 @@ fn run_to(
     let runs = |trial: &Trial| !trial.ignored || arguments.run_ignored != RunIgnored::No;
     let running = selected.iter().filter(|trial| runs(trial)).count();
     if threads == 1 || running <= 1 {
-        for trial in selected {
+        let count = selected.len();
+        for (index, trial) in selected.into_iter().enumerate() {
             if runs(&trial) {
-                report.start(&trial.name)?;
+                report.start(out, &trial.name)?;
+                let armed = platform::arm(&report, &trial.name, count - index - 1, &started);
                 let outcome = execute(&trial.name, trial.body, arguments.nocapture);
-                report.finish(&trial.name, &outcome)?;
+                if armed {
+                    platform::disarm();
+                }
+                report.finish(out, &trial.name, &outcome)?;
             } else {
-                report.finish(&trial.name, &Outcome::Ignored)?;
+                report.finish(out, &trial.name, &Outcome::Ignored)?;
             }
         }
     } else {
@@ -616,7 +710,7 @@ fn run_to(
             if runs(&trial) {
                 queue.push_back(trial);
             } else {
-                report.finish(&trial.name, &Outcome::Ignored)?;
+                report.finish(out, &trial.name, &Outcome::Ignored)?;
             }
         }
         let queue = Mutex::new(queue);
@@ -646,13 +740,15 @@ fn run_to(
             }
             drop(sender);
             for (name, outcome) in receiver {
-                report.finish(&name, &outcome)?;
+                report.finish(out, &name, &outcome)?;
             }
             Ok(())
         })?;
     }
 
-    report.conclude(started.elapsed().as_secs_f64(), arguments.show_output)
+    let elapsed = format!("{:.2}", started.seconds());
+    report.conclude(out, &elapsed, 0)?;
+    Ok(report.conclusion)
 }
 
 /// Whether `trial` survives the name filters, `--skip` and `--ignored`.
@@ -690,11 +786,20 @@ struct Capture {
 
 /// Route panics on a thread running a case into that case's capture; every
 /// other panic goes to the hook that was installed before.
+///
+/// On wasm32 the panic ends the module, so a case's panic is handed to the
+/// host's armed report at once, and any other panic's message is written to
+/// the host's standard error (the standard library's hook has no console
+/// there).
 fn install_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         let previous = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
+            let location = info
+                .location()
+                .map_or_else(String::new, |location| format!(" at {location}"));
+            let payload = payload_text(info.payload());
             let handled = CAPTURE.with(|slot| {
                 let Ok(mut slot) = slot.try_borrow_mut() else {
                     return false;
@@ -702,18 +807,21 @@ fn install_panic_hook() {
                 let Some(capture) = slot.as_mut() else {
                     return false;
                 };
-                let location = info
-                    .location()
-                    .map_or_else(String::new, |location| format!(" at {location}"));
-                let payload = payload_text(info.payload());
                 let text = format!("thread '{}' panicked{location}:\n{payload}\n", capture.name);
-                if capture.echo {
+                if cfg!(target_arch = "wasm32") {
+                    platform::fail_armed(&text);
+                } else if capture.echo {
                     eprint!("{text}");
                 }
                 capture.message.push_str(&text);
                 true
             });
             if !handled {
+                if cfg!(target_arch = "wasm32") {
+                    platform::print_error(&format!(
+                        "thread 'main' panicked{location}:\n{payload}\n"
+                    ));
+                }
                 previous(info);
             }
         }));
@@ -753,11 +861,15 @@ fn execute(name: &str, body: Body, echo: bool) -> Outcome {
 }
 
 /// The console reporter: libtest's pretty and terse formatters.
-struct Report<'a> {
-    out: &'a mut dyn Write,
+///
+/// It holds the run's state, not its output, so that on wasm32 a copy can
+/// render the report a case would end the run with before that case starts.
+#[derive(Clone)]
+struct Report {
     format: Format,
     color: bool,
     serial: bool,
+    show_output: bool,
     total: usize,
     done: usize,
     conclusion: Conclusion,
@@ -765,17 +877,18 @@ struct Report<'a> {
     successes: Vec<String>,
 }
 
-impl Report<'_> {
+impl Report {
     /// Before a case runs: serial pretty output names it first, as libtest.
-    fn start(&mut self, name: &str) -> io::Result<()> {
+    fn start(&self, out: &mut dyn Write, name: &str) -> io::Result<()> {
         if self.format == Format::Pretty && self.serial {
-            write!(self.out, "test {name} ... ")?;
-            self.out.flush()?;
+            out.write_all(format!("test {name} ... ").as_bytes())?;
+            out.flush()?;
         }
         Ok(())
     }
 
-    fn finish(&mut self, name: &str, outcome: &Outcome) -> io::Result<()> {
+    /// After a case ends: its result, written as one piece.
+    fn finish(&mut self, out: &mut dyn Write, name: &str, outcome: &Outcome) -> io::Result<()> {
         let (word, short, colour) = match outcome {
             Outcome::Passed => {
                 self.conclusion.passed += 1;
@@ -792,46 +905,53 @@ impl Report<'_> {
                 ("ignored", "i", "33")
             }
         };
+        let mut text = String::new();
         match self.format {
             Format::Pretty => {
                 let printed_name = self.serial && !matches!(outcome, Outcome::Ignored);
                 if !printed_name {
-                    write!(self.out, "test {name} ... ")?;
+                    let _ = write!(text, "test {name} ... ");
                 }
-                self.paint(word, colour)?;
-                writeln!(self.out)?;
+                self.paint(&mut text, word, colour);
+                text.push('\n');
             }
             Format::Terse => {
-                self.paint(short, colour)?;
+                self.paint(&mut text, short, colour);
                 if self.done % TERSE_COLUMNS == TERSE_COLUMNS - 1 {
-                    writeln!(self.out, " {}/{}", self.done + 1, self.total)?;
+                    let _ = writeln!(text, " {}/{}", self.done + 1, self.total);
                 }
             }
         }
         self.done += 1;
-        self.out.flush()
+        out.write_all(text.as_bytes())?;
+        out.flush()
     }
 
-    fn paint(&mut self, text: &str, colour: &str) -> io::Result<()> {
+    fn paint(&self, text: &mut String, word: &str, colour: &str) {
         if self.color {
-            write!(self.out, "\u{1b}[{colour}m{text}\u{1b}[0m")
+            let _ = write!(text, "\u{1b}[{colour}m{word}\u{1b}[0m");
         } else {
-            self.out.write_all(text.as_bytes())
+            text.push_str(word);
         }
     }
 
-    fn conclude(mut self, seconds: f64, show_output: bool) -> io::Result<Conclusion> {
-        if show_output {
-            write!(self.out, "\nsuccesses:\n")?;
-            write!(self.out, "\nsuccesses:\n")?;
+    /// The `successes:` section (under `--show-output`), the `failures:`
+    /// section and the tally line, with
+    /// `elapsed` as the duration. `not_run` counts the cases a wasm32 panic
+    /// kept from running; a note names them when it is not zero.
+    fn conclude(&mut self, out: &mut dyn Write, elapsed: &str, not_run: usize) -> io::Result<()> {
+        let mut text = String::new();
+        if self.show_output {
+            text.push_str("\nsuccesses:\n");
+            text.push_str("\nsuccesses:\n");
             self.successes.sort();
             for name in &self.successes {
-                writeln!(self.out, "    {name}")?;
+                let _ = writeln!(text, "    {name}");
             }
         }
         let ok = self.conclusion.failed == 0;
         if !ok {
-            write!(self.out, "\nfailures:\n")?;
+            text.push_str("\nfailures:\n");
             let blocks = self
                 .failures
                 .iter()
@@ -841,10 +961,10 @@ impl Report<'_> {
                     blocks
                 });
             if !blocks.is_empty() {
-                writeln!(self.out)?;
-                self.out.write_all(blocks.as_bytes())?;
+                text.push('\n');
+                text.push_str(&blocks);
             }
-            write!(self.out, "\nfailures:\n")?;
+            text.push_str("\nfailures:\n");
             let mut names: Vec<&str> = self
                 .failures
                 .iter()
@@ -852,14 +972,21 @@ impl Report<'_> {
                 .collect();
             names.sort_unstable();
             for name in names {
-                writeln!(self.out, "    {name}")?;
+                let _ = writeln!(text, "    {name}");
             }
         }
-        write!(self.out, "\ntest result: ")?;
+        if not_run > 0 {
+            let noun = if not_run == 1 { "case" } else { "cases" };
+            let _ = write!(
+                text,
+                "\nnote: {not_run} {noun} not run: a panic ends a wasm32 run at the case that panicked\n"
+            );
+        }
+        text.push_str("\ntest result: ");
         if ok {
-            self.paint("ok", "32")?;
+            self.paint(&mut text, "ok", "32");
         } else {
-            self.paint("FAILED", "31")?;
+            self.paint(&mut text, "FAILED", "31");
         }
         let Conclusion {
             passed,
@@ -867,12 +994,222 @@ impl Report<'_> {
             ignored,
             filtered_out,
         } = self.conclusion;
-        write!(
-            self.out,
+        let _ = write!(
+            text,
             ". {passed} passed; {failed} failed; {ignored} ignored; 0 measured; \
-             {filtered_out} filtered out; finished in {seconds:.2}s\n\n"
-        )?;
-        self.out.flush()?;
-        Ok(self.conclusion)
+             {filtered_out} filtered out; finished in {elapsed}s\n\n"
+        );
+        out.write_all(text.as_bytes())?;
+        out.flush()
+    }
+}
+
+use platform::Console;
+
+/// The command line, environment, console and clock: the process's natively,
+/// the runner's host on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+mod platform {
+    use std::io::{self, IsTerminal as _, Write};
+    use std::time::Instant;
+
+    use super::Report;
+
+    /// The arguments after the program name.
+    pub(super) fn args() -> Vec<String> {
+        std::env::args().skip(1).collect()
+    }
+
+    /// An environment variable, lossily decoded.
+    pub(super) fn env_var(name: &str) -> Option<String> {
+        std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+    }
+
+    /// Write `text` to standard error.
+    pub(super) fn print_error(text: &str) {
+        eprint!("{text}");
+    }
+
+    /// Write `text` to standard output under one lock, and flush it.
+    pub(super) fn print_raw(text: &str) {
+        let mut out = io::stdout().lock();
+        if let Err(error) = out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+            panic!("failed printing to stdout: {error}");
+        }
+    }
+
+    pub(super) fn stdout_is_terminal() -> bool {
+        io::stdout().is_terminal()
+    }
+
+    /// The worker count: the request, or the available parallelism.
+    pub(super) fn threads(requested: Option<usize>) -> usize {
+        requested.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from))
+    }
+
+    /// Nothing to report: the process's exit status is `main`'s.
+    pub(super) const fn report_exit(_status: u8) {}
+
+    /// Natively a panicking case unwinds and the run goes on: nothing to arm.
+    pub(super) const fn arm(
+        _report: &Report,
+        _name: &str,
+        _not_run: usize,
+        _started: &Stopwatch,
+    ) -> bool {
+        false
+    }
+
+    pub(super) const fn disarm() {}
+
+    pub(super) const fn fail_armed(_message: &str) {}
+
+    pub(super) struct Stopwatch(Instant);
+
+    impl Stopwatch {
+        pub(super) fn start() -> Self {
+            Self(Instant::now())
+        }
+
+        pub(super) fn seconds(&self) -> f64 {
+            self.0.elapsed().as_secs_f64()
+        }
+    }
+
+    /// Standard output, locked per write rather than per run, so a case
+    /// printing from another thread never waits on the reporter.
+    pub(super) struct Console;
+
+    impl Console {
+        pub(super) const fn new() -> Self {
+            Self
+        }
+    }
+
+    impl Write for Console {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            io::stdout().lock().write(buf)
+        }
+
+        fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+            io::stdout().lock().write_all(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            io::stdout().lock().flush()
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod platform {
+    use std::io::{self, Write};
+
+    use super::{Outcome, Report};
+    use crate::host;
+
+    pub(super) fn args() -> Vec<String> {
+        (0..host::arg_count()).map(host::arg).collect()
+    }
+
+    pub(super) fn env_var(name: &str) -> Option<String> {
+        host::env_var(name)
+    }
+
+    pub(super) fn print_error(text: &str) {
+        host::write_stderr(text);
+    }
+
+    pub(super) fn print_raw(text: &str) {
+        host::write_stdout(text);
+    }
+
+    pub(super) fn stdout_is_terminal() -> bool {
+        host::stdout_is_terminal()
+    }
+
+    /// One: cases run serially, whatever was asked for.
+    pub(super) const fn threads(_requested: Option<usize>) -> usize {
+        1
+    }
+
+    pub(super) fn report_exit(status: u8) {
+        host::exit(status);
+    }
+
+    /// Hand the host the rest of the run's output as it will read if the case
+    /// `name` ends the module: its `FAILED` result, the failure sections, the
+    /// count of the `not_run` cases after it, and the tally.
+    pub(super) fn arm(report: &Report, name: &str, not_run: usize, started: &Stopwatch) -> bool {
+        let mut scratch = report.clone();
+        let mut text = Vec::new();
+        let rendered = scratch
+            .finish(
+                &mut text,
+                name,
+                &Outcome::Failed(host::MESSAGE_SLOT.to_owned()),
+            )
+            .and_then(|()| scratch.conclude(&mut text, host::ELAPSED_SLOT, not_run));
+        if let Err(error) = rendered {
+            // Rendering into memory cannot fail; say so loudly if it ever does.
+            panic!("the abort report could not be rendered: {error}");
+        }
+        host::arm(name, &String::from_utf8_lossy(&text), started.0);
+        true
+    }
+
+    pub(super) fn disarm() {
+        host::disarm();
+    }
+
+    pub(super) fn fail_armed(message: &str) {
+        host::fail(message);
+    }
+
+    /// The run's start, in the host's milliseconds.
+    pub(super) struct Stopwatch(f64);
+
+    impl Stopwatch {
+        pub(super) fn start() -> Self {
+            Self(host::now_millis())
+        }
+
+        pub(super) fn seconds(&self) -> f64 {
+            (host::now_millis() - self.0) / 1000.0
+        }
+    }
+
+    /// The host's standard output. Text is forwarded as soon as it is complete
+    /// UTF-8; an incomplete trailing sequence waits for the next write.
+    pub(super) struct Console {
+        pending: Vec<u8>,
+    }
+
+    impl Console {
+        pub(super) const fn new() -> Self {
+            Self {
+                pending: Vec::new(),
+            }
+        }
+    }
+
+    impl Write for Console {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.pending.extend_from_slice(buf);
+            let complete = match std::str::from_utf8(&self.pending) {
+                Ok(_) => self.pending.len(),
+                Err(error) if error.error_len().is_some() => self.pending.len(),
+                Err(error) => error.valid_up_to(),
+            };
+            if complete > 0 {
+                host::write_stdout(&String::from_utf8_lossy(&self.pending[..complete]));
+                self.pending.drain(..complete);
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 }

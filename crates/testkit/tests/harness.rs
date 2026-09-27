@@ -3,10 +3,14 @@
 
 //! The runner, observed from outside: the fixture binary (three passing
 //! cases, one panicking, one ignored) runs as a child process, and its exit
-//! status and console output are compared with libtest's. The command-line
-//! parser and the in-process runner are checked directly as well.
+//! status and console output are compared with libtest's. The print fixture,
+//! written with `harness_main!`, runs the same way to show that cases printing
+//! from worker threads and from threads they spawn never block the run. The
+//! command-line parser and the in-process runner are checked directly as well.
 
-use std::process::{Command, Output};
+use std::io::Read as _;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use purrdf_testkit::harness::{
     self, Action, Arguments, ColorChoice, Conclusion, ERROR_EXIT_CODE, Failed, Format, RunIgnored,
@@ -14,6 +18,8 @@ use purrdf_testkit::harness::{
 };
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-fixture");
+const PRINT_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-harness-print-fixture");
+const HOST_FIXTURE: &str = env!("CARGO_BIN_EXE_testkit-wasm-host-fixture");
 
 fn run_fixture(args: &[&str]) -> Output {
     Command::new(FIXTURE)
@@ -599,4 +605,148 @@ fn a_conclusion_fails_exactly_when_a_case_failed() {
         std::process::ExitCode::from(ERROR_EXIT_CODE)
     );
     assert!(!Conclusion::default().has_failed());
+}
+
+/// Run `program` with `args`, killing it and failing the test if it has not
+/// exited within `deadline`. A run that deadlocks is then a failure with a
+/// message rather than a test that never finishes.
+fn run_with_deadline(program: &str, args: &[&str], deadline: Duration) -> Output {
+    let mut child = Command::new(program)
+        .args(args)
+        .env_remove("RUST_TEST_THREADS")
+        .env_remove("RUST_TEST_NOCAPTURE")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the fixture");
+    // Drain both pipes while waiting, so a full pipe cannot stall the child.
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let stdout = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the fixture") {
+            break status;
+        }
+        if started.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{program} {args:?} did not finish within {deadline:?}: the run is blocked");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Output {
+        status,
+        stdout: stdout
+            .join()
+            .expect("the stdout reader finishes")
+            .expect("read stdout"),
+        stderr: stderr
+            .join()
+            .expect("the stderr reader finishes")
+            .expect("read stderr"),
+    }
+}
+
+#[test]
+fn cases_printing_from_worker_and_spawned_threads_do_not_block_the_run() {
+    let output = run_with_deadline(
+        PRINT_FIXTURE,
+        &["--test-threads=4", "--nocapture"],
+        Duration::from_secs(60),
+    );
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "every case passes:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; "
+        ),
+        "{stdout}"
+    );
+    // Every printed line arrives whole: each write holds the lock for exactly
+    // one line, the reporter's included.
+    for case in [
+        "prints_through_print_line",
+        "prints_through_println",
+        "prints_from_a_spawned_thread",
+        "prints_more_through_print_line",
+    ] {
+        for line in 0..32 {
+            let expected = format!("print-fixture case={case} line={line}");
+            assert_eq!(
+                stdout
+                    .lines()
+                    .filter(|printed| *printed == expected)
+                    .count(),
+                1,
+                "`{expected}` is printed once, on a line of its own:\n{stdout}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_serial_run_prints_every_line_too() {
+    let output = run_with_deadline(
+        PRINT_FIXTURE,
+        &["--test-threads=1"],
+        Duration::from_secs(60),
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.contains("print-fixture case="))
+            .count(),
+        4 * 32,
+        "{stdout}"
+    );
+}
+
+#[test]
+fn harness_main_registers_cases_by_name_in_written_order() {
+    let output = run_fixture_at(PRINT_FIXTURE, &["--list"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        stdout_of(&output),
+        "prints_through_print_line: test\n\
+         prints_through_println: test\n\
+         prints_from_a_spawned_thread: test\n\
+         prints_more_through_print_line: test\n\
+         \n4 tests, 0 benchmarks\n"
+    );
+    // A case attributed `#[cfg(target_arch = "wasm32")]` is not registered
+    // natively: the host fixture has one case here, the rest on wasm32.
+    let host = run_fixture_at(HOST_FIXTURE, &["--list"]);
+    assert_eq!(
+        stdout_of(&host),
+        "the_seal_returns_the_computations_value_passes: test\n\n1 test, 0 benchmarks\n"
+    );
+    let run = run_fixture_at(HOST_FIXTURE, &["--test-threads=1"]);
+    assert_eq!(run.status.code(), Some(0), "{}", stdout_of(&run));
+}
+
+fn run_fixture_at(program: &str, args: &[&str]) -> Output {
+    run_with_deadline(program, args, Duration::from_secs(60))
+}
+
+#[test]
+fn the_seal_is_transparent_natively() {
+    assert_eq!(harness::without_host_clock_or_entropy(|| 6 * 7), 42);
+    let nested = harness::without_host_clock_or_entropy(|| {
+        harness::without_host_clock_or_entropy(|| "inner").len()
+    });
+    assert_eq!(nested, 5);
 }

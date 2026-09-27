@@ -28,17 +28,31 @@ rayon = { workspace = true }
 # crate's runtime surface is untouched: a dev-dependency never reaches the wasm32 `--lib`
 # build, and the receipt schema (not serde) is what fixes the record's shape.
 serde_json = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/wasm_reassociated.rs` — the test that builds,
-# records, decodes, verifies and searches a reassociated index ON wasm32-unknown-unknown
-# rather than merely compiling for it. The reassociated image records the wasm dispatch
-# path (`wasm-simd128` or `wasm-scalar`) and the build shape, and refuses the other path;
-# a claim about wasm32 is evidence only when it executes there. Run by `make wasm-test`.
-wasm-bindgen-test = { workspace = true }
+# The shared `harness = false` runner the two cross-target targets below run on,
+# natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so it is
+# stripped from the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
 
 [lints]
 workspace = true
+
+# The test that builds, records, decodes, verifies and searches a reassociated index
+# ON wasm32-unknown-unknown rather than merely compiling for it. The reassociated image
+# records the wasm dispatch path (`wasm-simd128` or `wasm-scalar`) and the build shape,
+# and refuses the other path; a claim about wasm32 is evidence only when it executes
+# there. `harness = false` on the shared runner, so `make wasm-test` runs the same named
+# cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs natively.
+[[test]]
+name = "wasm_reassociated"
+harness = false
+
+# The cross-target determinism proof: the same named cases run natively and on
+# wasm32-unknown-unknown (baseline and +simd128) in Node through
+# scripts/wasm-test-runner.sh, and `make hnsw-determinism` compares the digest each
+# one reports.
+[[test]]
+name = "determinism"
+harness = false
 
 # Both benches are one-shot, report-only measurement harnesses rather than criterion
 # statistical targets, and deliberately so. The build-cost harness measures a build that

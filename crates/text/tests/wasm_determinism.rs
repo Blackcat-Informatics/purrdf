@@ -28,13 +28,16 @@
 //!
 //! # How it runs on both
 //!
-//! One test body, two attributes. Natively each is an ordinary `#[test]` picked
-//! up by `cargo test --workspace`. On `wasm32-unknown-unknown` each is a
-//! `#[wasm_bindgen_test]`, compiled to wasm and executed in Node by `make
-//! wasm-test` (and by CI's wasm job):
+//! One test body per case, one runner on both targets. The target is
+//! `harness = false`, and its `main` hands the named cases to
+//! `purrdf_testkit::harness`: natively they run under `cargo test --workspace`,
+//! and on `wasm32-unknown-unknown` the same named cases run in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` (and CI's
+//! wasm job) sets:
 //!
 //! ```text
-//! cargo test -p purrdf-text --target wasm32-unknown-unknown --test wasm_determinism
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-text --target wasm32-unknown-unknown --test wasm_determinism
 //! ```
 //!
 //! # Why the expectations are what they are
@@ -58,9 +61,6 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_text::{
     Analyzer, Fixed, GraphSelector, PartitionFilter, TextIndex, TextIndexConfig, select,
 };
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
 
 /// The one predicate the fixture indexes.
 const NOTE: &str = "https://example.org/note";
@@ -148,8 +148,6 @@ fn ranked() -> Vec<(String, String)> {
 }
 
 /// The pinned ranking is reproduced on whichever target is executing this.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_pinned_ranking_is_reproduced_on_this_target() {
     let rows = ranked();
 
@@ -193,8 +191,6 @@ fn the_pinned_ranking_is_reproduced_on_this_target() {
 /// same way everywhere. This pins the series against values computed outside
 /// this crate, so the cross-target claim and the correctness claim are separate
 /// assertions rather than one assertion doing double duty.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_integer_logarithm_agrees_with_its_hand_values_on_this_target() {
     // ln 1 = 0 exactly, and it is the one input whose answer needs no series.
     assert_eq!(
@@ -228,8 +224,12 @@ fn the_integer_logarithm_agrees_with_its_hand_values_on_this_target() {
 mod bm25f_reference;
 
 /// All fielded scoring vectors, including maximum bounds, agree on this target.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_independent_fielded_reference_is_reproduced_on_this_target() {
     bm25f_reference::verify_reference_corpus();
 }
+
+purrdf_testkit::harness_main!(
+    the_independent_fielded_reference_is_reproduced_on_this_target,
+    the_integer_logarithm_agrees_with_its_hand_values_on_this_target,
+    the_pinned_ranking_is_reproduced_on_this_target,
+);

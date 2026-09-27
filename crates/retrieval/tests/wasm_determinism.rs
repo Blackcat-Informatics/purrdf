@@ -27,13 +27,16 @@
 //!
 //! # How it runs on both
 //!
-//! One test body, two attributes. Natively each is an ordinary `#[test]` picked
-//! up by `cargo test`. On `wasm32-unknown-unknown` each is a
-//! `#[wasm_bindgen_test]`, compiled to wasm and executed in Node by `make
-//! wasm-test` (and by CI's wasm job):
+//! One test body per case, one runner on both targets. The target is
+//! `harness = false`, and its `main` hands the named cases to
+//! `purrdf_testkit::harness`: natively they run under `cargo test`, and on
+//! `wasm32-unknown-unknown` the same named cases run in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` (and CI's
+//! wasm job) sets:
 //!
 //! ```text
-//! cargo test -p purrdf-retrieval --target wasm32-unknown-unknown --test wasm_determinism
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-retrieval --target wasm32-unknown-unknown --test wasm_determinism
 //! ```
 //!
 //! # Why the expectations are what they are
@@ -92,9 +95,6 @@ use purrdf_retrieval::{
     ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
     RowBlock, ScoreExactness, ServiceLevel, StreamContract, Term, TopK, contribution, fuse,
 };
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
 
 /// The reciprocal-rank smoothing constant the fixture profile fixes.
 const K: u32 = 60;
@@ -261,8 +261,6 @@ fn decimal(raw: i128) -> String {
 
 /// The contributions themselves, before any fusion: one integer division each,
 /// truncating toward zero, at exactly the values computed in this file's header.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets() {
     for (rank, expected) in [(1_u64, RANK_1), (2, RANK_2), (3, RANK_3)] {
         let value = contribution(Fixed::ONE, rank, K).expect("the contribution fits");
@@ -277,8 +275,6 @@ fn a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets() {
 /// The fused answer: three candidates the two strata rank in different orders,
 /// so each score is the sum of two different ranks and the order is decided by
 /// arithmetic rather than by a tie-break.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets() {
     let profile = profile();
     let streams = vec![
@@ -355,8 +351,6 @@ fn a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets() {
 
 /// The law's identity: a digest over a canonical, length-framed encoding, which
 /// must name the same law on every target.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_fusion_profile_names_the_same_identity_on_both_targets() {
     let profile = profile();
     assert_eq!(profile.id().to_hex(), PROFILE_ID_HEX);
@@ -398,8 +392,6 @@ fn a_fusion_profile_names_the_same_identity_on_both_targets() {
 ///
 /// Two ranks, deliberately: the collision is reachable at the shortest possible
 /// stream, so this costs nothing to run under Node.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
     const COLLIDED: i128 = 16;
 
@@ -558,8 +550,6 @@ fn framed(out: &mut Vec<u8>, part: &str) {
 /// per stratum in canonical order the framed stratum IRI, the generation
 /// discriminant with its framed spelling, and the service-level discriminant with
 /// its framed reason. Every integer little-endian.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     const REASON: &str = "shard 3 rebuilding";
 
@@ -664,8 +654,6 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
 /// leading candidates tie exactly, so their order falls to the declared
 /// tie-break's later keys, and the streams are longer than the bound so the
 /// bounded stop is what ends them.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
     let docs = ["doc-1", "doc-2", "doc-3", "doc-4"];
     let people = ["person-1", "person-2", "person-3", "person-4"];
@@ -720,3 +708,12 @@ fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
         );
     }
 }
+
+purrdf_testkit::harness_main!(
+    a_collided_pair_fuses_to_the_same_order_on_both_targets,
+    a_declared_candidate_domain_bounds_the_same_read_on_both_targets,
+    a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets,
+    a_fusion_profile_names_the_same_identity_on_both_targets,
+    a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets,
+    an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets,
+);
