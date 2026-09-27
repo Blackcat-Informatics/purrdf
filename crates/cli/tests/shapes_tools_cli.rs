@@ -1199,20 +1199,26 @@ fn cli_rules_capacity_limits() {
     assert_eq!(stdout(&roomy), expected_inference());
 }
 
-/// The NON-linear transitive closure of a 1,000-edge chain enumerates more candidates
-/// than the default join-step limit admits: `rules` refuses it naming `--max-join-steps`
-/// and writes no graph, and completes with every one of its 500,500 triples when the
-/// limit is raised. The linear closure of the same chain fits the default.
+/// The NON-linear transitive closure of a 181-edge chain enumerates 1,056,743 join
+/// steps, just past the default limit of 2^20: `rules` refuses it naming
+/// `--max-join-steps` and writes no graph, and completes with every one of its 16,471
+/// triples when the limit is raised to 2^21. One edge fewer (1,039,835 steps) fits the
+/// default, so the refusal is the limit's and not the rule shape's. The linear closure
+/// of the same chain fits the default and yields the identical graph.
 #[test]
 fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     use std::fmt::Write as _;
-    const EDGES: usize = 1_000;
+    const EDGES: usize = 181;
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
-    for index in 0..EDGES {
-        writeln!(chain, "ex:n{index} ex:link ex:n{} .", index + 1).expect("write to String");
-    }
-    let data = write_file(dir.path(), "chain.ttl", &chain);
+    let chain_of = |edges: usize| {
+        let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
+        for index in 0..edges {
+            writeln!(chain, "ex:n{index} ex:link ex:n{} .", index + 1).expect("write to String");
+        }
+        chain
+    };
+    let data = write_file(dir.path(), "chain.ttl", &chain_of(EDGES));
+    let shorter = write_file(dir.path(), "shorter.ttl", &chain_of(EDGES - 1));
     let rules = |recursive_atom: &str| {
         format!(
             "PREFIX ex: <http://example.org/ns#>\n\
@@ -1222,7 +1228,6 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     };
     let nonlinear = write_file(dir.path(), "nonlinear.srl", &rules("ex:connected"));
     let linear = write_file(dir.path(), "linear.srl", &rules("ex:link"));
-    let closure = EDGES * (EDGES + 1) / 2;
 
     let refused = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
@@ -1237,18 +1242,22 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     );
     assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
+    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &shorter]);
+    assert_eq!(code(&fits), 0, "{}", stderr(&fits));
+    assert_eq!(stdout(&fits).lines().count(), 16_290);
+
     let raised = run(&[
         "rules",
         "--srl",
         &nonlinear,
         "--max-join-steps",
-        "268435456",
+        "2097152",
         "--to",
         "ntriples",
         &data,
     ]);
     assert_eq!(code(&raised), 0, "{}", stderr(&raised));
-    assert_eq!(stdout(&raised).lines().count(), closure);
+    assert_eq!(stdout(&raised).lines().count(), 16_471);
 
     let linear_run = run(&["rules", "--srl", &linear, "--to", "ntriples", &data]);
     assert_eq!(code(&linear_run), 0, "{}", stderr(&linear_run));
