@@ -262,7 +262,7 @@ fn hex_kernel(input: &[u8], output: &mut [u8]) {
 /// such a build.
 #[cfg(all(target_endian = "little", target_feature = "aes"))]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Block(core::arch::aarch64::uint8x16_t);
+pub(crate) struct Block(uint8x16_t);
 
 // SAFETY (every `unsafe` block below): the intrinsics need NEON and AES, which
 // this item's `cfg(target_feature = "aes")` proves the build's target enables
