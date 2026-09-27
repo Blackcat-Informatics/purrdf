@@ -356,7 +356,10 @@ ORDER BY ?rank
   赋予它们含义。
   形状图的 `owl:imports` 从不被
   获取——由调用方提供 `--import IRI=FILE`，与 `entails` 和 `shex` 接受的形式相同，并从
-  该表出发传递地跟随导入闭包。对形状文档自身 IRI 的导入，或对形状图中已有本体
+  该表出发传递地跟随导入闭包。只有位于形状文档自身 IRI 上、`owl:Ontology` 头上，或以
+  二者之一作为其 `owl:versionIRI` 的节点上的 `owl:imports` 才是导入；在其他任何节点上
+  ——SHACL 的 `sh:prefixes/owl:imports*/sh:declare` 前缀边也在其中——它都是数据。
+  对形状文档自身 IRI 的导入，或对形状图中已有本体
   （`<X> a owl:Ontology`，或某个 `owl:versionIRI` 指名它）的导入，无需配对；其他任何
   未解析的导入都会被点名拒绝，而不是针对一个更小的形状图进行验证。
 - **模式通道：SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML / TypeScript / GraphQL**
