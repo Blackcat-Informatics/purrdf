@@ -150,7 +150,7 @@ Path("void.tar").write_bytes(description.archive)
 
 对于大型 LPG 载体，`purrdf.project_artifacts(...)` 会调用一个事务式的工件回调，带有
 包/工件开始、有界分块、工件结束、提交与中止事件。可选的进度回调会收到不可变的
-`ProjectionProgress` 快照；回调中的异常会中止该包，并原样传回给调用方（即重新抛出）。这条路径保留所选的规范
+`ProjectionProgress` 快照；回调中的异常会中止该包，并被原样重新抛出。这条路径保留所选的规范
 LPG 模型，但不保留完整的工件体或 USTAR 字节。参见可运行的原子目录式
 [`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
 示例。
@@ -177,7 +177,10 @@ conformance_disallows=[...])` 设定哪些严重级别 IRI 会使报告判定为
 IRI，与 `purrdf validate --shapes-graph` 相同：`$shapesGraph` 预绑定到该 IRI，
 `GRAPH $shapesGraph { ... }` 读取的就是形状图（这是 SHACL 1.0 的预绑定，SHACL 1.2
 已将其移除）。省略时，`$shapesGraph` 是一个普通变量。`Shapes` 会把它带入 `prepare()`
-及其产物。`shapes.validate` 与 `shapes.Shapes` 上的 `subclass_of_in_shapes_graph=True`
+及其产物。`shapes.apply_rules` 与 `shapes.entail` 接受同一个关键字参数，用它预绑定
+`sh:SPARQLRule` 的 `$shapesGraph`；若与 `srl` 一同指名它，`apply_rules` 会抛出
+`ValueError`，因为 `srl` 没有形状图。`shapes.validate` 与 `shapes.Shapes` 上的
+`subclass_of_in_shapes_graph=True`
 就是 SHACL 1.2 Core §6.3 的 `subClassOfInShapesGraph`：在 SHACL 类型判定类成员资格的
 每一处（`sh:targetClass`、隐式类目标、`sh:class`、`sh:rootClass`、`shnex:instancesOf`），
 除数据图的 `rdfs:subClassOf` 三元组之外，还会读取形状图的这些三元组。它默认关闭，这也是

@@ -420,9 +420,10 @@ ORDER BY ?rank
   `queryEntailmentGoverned`、C `purrdf_query_entailment_governed`）解析查询、在七种
   蕴涵机制之一下求闭包、在闭包上求值，并把答案连同推理报告一起交回；路径关系
   （`--path-relation`）从闭包重新派生，因此游走能看到推导出的边，而 OWL-Direct 通道在
-  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：若
-  chase 生成了存在性见证，同时又提供了从闭包重新派生关系的重建器（rebuilder），这一
-  组合会按名称被拒绝（`reasoning-closure-relation-witness`）；
+  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：若向
+  一次 OWL-Direct 运行提供了闭包关系重建器（rebuilder，即从闭包重新派生路径关系的宿主
+  代码），而该运行的受限 chase 生成了存在性见证，这一组合会按名称被拒绝
+  （`reasoning-closure-relation-witness`）；
   闭包阶段只遵守停止信号（取消或墙钟截止时间），而数值上限只作用于查询阶段；
   `ClosureStopped` 结果不携带任何行，也不携带报告。
 - **GTS 图传输**——面向 RDF 1.2 图及其引用的二进制对象的单文件、内容寻址、仅追加
