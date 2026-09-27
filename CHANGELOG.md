@@ -37,11 +37,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the data graph was known — a `Shapes`, a `PreparedShapes`, a prepared product —
   cannot take a graph in: every validation and every binding checks that each link
   is one it already holds (its loaded IRI, a graph its closure or links folded in, or
-  an anchor or version IRI it declares) and refuses any other as `UnheldLink`, typed
-  on the product and Python paths and led by the kind label in the engine's string
-  errors. A change that adds or retracts a link changes the shapes graph, so the
-  incremental change path reports `ChangeScope::Everything` and validates in full.
-  Python's `Shapes.validate_against_dataset` now returns a `Result`. `purrdf validate
+  an anchor or version IRI it declares) and refuses any other as
+  `ShapesError::Imports(UnheldLink)`, typed on every host. A prepared product records
+  the IRIs of every graph its shapes graph absorbed by name in its identity section,
+  so a product packed with a table-supplied document that declares no ontology header
+  of its own holds a link to that document after `admit` and after `rebuild` alike;
+  the preparation stage id now digests that preamble carrier (`ParseProvenance`) as
+  well as the model, and moved to
+  `b4c4a547c28b743e110bb68a8b766a9abfdeb4cbe37718443e69637c7620c8f5`, so every earlier
+  product is refused at `admit` and re-derived by `rebuild` (holding only what its
+  merged dataset declares); the fixture product was regenerated with its generator.
+  **Breaking API:** the engine's validation entry points return the typed
+  `ShapesError` instead of `String` — `validate_with`, `validate_with_focus_filter`,
+  `validate_with_governors`, `validate_dataset`, `validate_dataset_with_governors`,
+  `validate_dataset_with_shapes_graph`, `validate_projected_dataset`,
+  `validate_projected_dataset_with_focus_filter`,
+  `validate_projected_dataset_with_shapes_graph`, every `PreparedShapes::bind*`, and
+  `PreparedValidator::new`, `from_dataset`, `from_projected_dataset` and
+  `from_projected_dataset_with_shapes_graph`. A hard validation failure is
+  `ShapesError::Invalid` carrying the old message, and `String: From<ShapesError>`
+  keeps `?` working in string-error callers. A change that adds or retracts a link
+  changes the shapes graph, so the incremental change path reports
+  `ChangeScope::Everything` and validates in full. Python's
+  `Shapes.validate_against_dataset` now returns a `Result`. `purrdf validate
   --changes` reads its change documents before the shapes graph, because the mutated
   graph's links decide what the shapes graph is. The change expansion's fixed
   allocation cost rises by one (the `sh:shapesGraph` lookup), re-pinned in

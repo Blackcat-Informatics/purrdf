@@ -143,6 +143,7 @@ fn people() -> Arc<RdfDataset> {
 fn validate(relations: Arc<PropertyFunctionRegistry>) -> Result<GovernedValidation, String> {
     let _relations = enter_property_function_scope(relations);
     validate_dataset_with_governors(&people(), &shapes(), None, &QueryGovernors::UNBOUNDED)
+        .map_err(Into::into)
 }
 
 #[test]

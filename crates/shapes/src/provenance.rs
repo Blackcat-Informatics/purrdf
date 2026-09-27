@@ -96,9 +96,9 @@ pub struct ParseProvenance {
     /// each data-graph `sh:shapesGraph` link it resolved
     /// ([`crate::imports::ResolvedShapesGraph::included`]).
     ///
-    /// Not carried by a prepared product, which stores the merged graph rather than the
-    /// table it was merged from: a restored preparation holds a link only through its base
-    /// or a graph its dataset declares (see [`crate::imports::check_data_graph_links`]).
+    /// A prepared product carries them in its identity section, so a restored
+    /// preparation holds a link to a table-supplied document exactly as the parse that
+    /// packed it did (see [`crate::imports::check_data_graph_links`]).
     included_graphs: Vec<String>,
 }
 
@@ -133,8 +133,8 @@ impl ParseProvenance {
 
     /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
     /// each IRI it was loaded under, each `owl:imports` document its closure reached, and
-    /// each data-graph `sh:shapesGraph` link it resolved. Empty for a preparation restored
-    /// from a prepared product, which carries the merged graph rather than its table.
+    /// each data-graph `sh:shapesGraph` link it resolved. A prepared product records them,
+    /// so a restored preparation answers the same list.
     #[must_use]
     pub fn included_graphs(&self) -> &[String] {
         &self.included_graphs

@@ -885,11 +885,9 @@ fn validate_prepared(
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))?;
     // A product was prepared before this data graph existed and cannot take a graph the
-    // data graph links (SHACL 1.2 Core section 6.4) in: each link must be one it already
-    // holds. Checked here, typed, so every host reads the refusal's kind and IRIs; the
-    // engine's own bind check below is the same rule.
-    purrdf_shapes::imports::check_data_graph_links(data.as_ref(), &[], prepared.shapes())
-        .map_err(|error| ShapesProductRefusal::Shapes(error.into()))?;
+    // data graph links (SHACL 1.2 Core section 6.4) in: the engine refuses a link the
+    // product does not hold with the typed `ShapesError::Imports`, which every host reads
+    // the refusal's kind and IRIs from.
     // The request's options travel with the call, not with the product: a
     // restored preparation answers under the default set until a request names
     // another, and only then is the shapes value copied to carry it.
@@ -900,7 +898,7 @@ fn validate_prepared(
         shapes.set_validation_options(options.validation.clone());
         engine::validate_dataset_with_shapes_graph(data.as_ref(), &shapes, None)
     }
-    .map_err(|error| ShapesProductRefusal::Shapes(error.into()))?;
+    .map_err(ShapesProductRefusal::Shapes)?;
     Ok(report_to_sarif_string(&report, options))
 }
 

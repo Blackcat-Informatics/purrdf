@@ -724,7 +724,9 @@ refused as `invalid-shapes-graph-link`. A `sh:shapesGraph` on any other node is
 data. `--shapes` stays required; an empty shapes document makes the linked
 graphs the whole shapes graph. A `--shapes-product` was prepared before the
 data graph existed and cannot take a graph in: a link it does not hold (its
-base, or a graph it declares) is refused as `unheld-shapes-graph-link`. A
+base, a document it was packed with — the product records every `--import`
+document its closure reached — or a graph it declares) is refused as
+`unheld-shapes-graph-link`. A
 `--changes` run whose change adds or retracts a link validates in full, and its
 `shacl change-expansion everything` line says why.
 

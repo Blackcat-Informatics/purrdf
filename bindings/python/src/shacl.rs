@@ -535,57 +535,29 @@ impl PyShapes {
     ///
     /// # Errors
     ///
-    /// [`Unheld::Link`] when the data graph links (SHACL 1.2 Core section 6.4) a
-    /// shapes graph these shapes, parsed without it, do not hold; [`Unheld::Other`] on
-    /// a hard validation failure.
-    pub fn validate_against_dataset(&self, data: &RdfDataset) -> Result<ValidationReport, Unheld> {
-        validate_held(data, &self.inner)
+    /// [`purrdf_validate::ShapesError::Imports`] when the data graph links (SHACL 1.2
+    /// Core section 6.4) a shapes graph these shapes, parsed without it, do not hold —
+    /// raised as `ShapesImportError`, kind `unheld-shapes-graph-link` — and
+    /// [`purrdf_validate::ShapesError::Invalid`] on a hard validation failure.
+    pub fn validate_against_dataset(
+        &self,
+        data: &RdfDataset,
+    ) -> Result<ValidationReport, purrdf_validate::ShapesError> {
+        engine::validate_dataset(data, &self.inner)
     }
 }
 
-/// Why validating a data graph against shapes prepared WITHOUT it failed.
-///
-/// A `Shapes`, a `PreparedShapes` and a restored product were built before the data
-/// graph was known, so a graph the data graph links with `sh:shapesGraph` (SHACL 1.2
-/// Core section 6.4) cannot be folded in any more: it must be one the shapes already
-/// hold, or the call is refused — typed, as `ShapesImportError` with kind
-/// `unheld-shapes-graph-link` (or `invalid-shapes-graph-link`), never as a verdict about
-/// a smaller shapes graph than the data graph names.
-#[derive(Debug)]
-pub enum Unheld {
-    /// The data graph's links are not all held; raised as `ShapesImportError`.
-    Link(purrdf_validate::ShapesImportError),
-    /// Anything else: a data-graph parse failure or a hard validation failure.
-    Other(String),
-}
-
-impl Unheld {
-    /// The Python exception this raises.
-    fn into_py(self, py: Python<'_>) -> PyErr {
-        match self {
-            Self::Link(error) => import_error(py, &error),
-            Self::Other(message) => pyo3::exceptions::PyValueError::new_err(message),
-        }
-    }
-}
-
-/// Check `data`'s `sh:shapesGraph` links against `shapes`, then validate.
-fn validate_held(
-    data: &RdfDataset,
-    shapes: &purrdf_shapes::shapes::Shapes,
-) -> Result<ValidationReport, Unheld> {
-    purrdf_shapes::imports::check_data_graph_links(data, &[], shapes).map_err(Unheld::Link)?;
-    engine::validate_dataset(data, shapes).map_err(Unheld::Other)
-}
-
-/// Parse `data_nt` and [`validate_held`] it.
-fn validate_nt_held(
+/// Parse `data_nt` and validate it against `shapes`, which were built without it: a
+/// graph the data graph links with `sh:shapesGraph` (SHACL 1.2 Core section 6.4) that
+/// `shapes` does not hold is the engine's typed import refusal, raised by
+/// [`shapes_error`] as `ShapesImportError`.
+fn validate_nt_against(
     data_nt: &str,
     shapes: &purrdf_shapes::shapes::Shapes,
-) -> Result<ValidationReport, Unheld> {
+) -> Result<ValidationReport, purrdf_validate::ShapesError> {
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| Unheld::Other(errors.join("\n")))?;
-    validate_held(data.as_ref(), shapes)
+        .map_err(|errors| errors.join("\n"))?;
+    engine::validate_dataset(data.as_ref(), shapes)
 }
 
 #[pymethods]
@@ -626,8 +598,8 @@ impl PyShapes {
         // Both the ingest and the validation run detached (GIL released).
         let shapes = &self.inner;
         let report = py
-            .detach(|| validate_nt_held(data_nt, shapes))
-            .map_err(|error| error.into_py(py))?;
+            .detach(|| validate_nt_against(data_nt, shapes))
+            .map_err(|error| shapes_error(py, error))?;
         Ok(PyValidationReport::new(report))
     }
 
@@ -760,7 +732,7 @@ impl PyShapes {
         let py = data.py();
         let report = py
             .detach(|| self.validate_against_dataset(dataset.as_ref()))
-            .map_err(|error| error.into_py(py))?;
+            .map_err(|error| shapes_error(py, error))?;
         Ok(PyValidationReport::new(report))
     }
 }
@@ -1017,31 +989,23 @@ impl PyPreparedShapes {
         // and the validation below run detached with nothing py-bound in hand.
         let snapshot = Arc::new(store.borrow().change_snapshot()?);
         let prepared = &self.inner;
-        // The mutated graph's links must all be held by this preparation, which was
-        // built before the graph existed (see [`Unheld`]).
-        py.detach(|| {
-            purrdf_shapes::imports::check_data_graph_links(
-                snapshot.as_ref(),
-                &[],
-                prepared.shapes(),
-            )
-        })
-        .map_err(|error| import_error(py, &error))?;
-        let validation = py.detach(|| {
-            let validator = prepared
-                .bind_delta_with_shapes_graph(
+        // The binding refuses a mutated graph whose `sh:shapesGraph` links this
+        // preparation, built before the graph existed, does not hold — typed, and raised
+        // as `ShapesImportError` below.
+        let validation = py
+            .detach(|| -> Result<_, purrdf_validate::ShapesError> {
+                let validator = prepared.bind_delta_with_shapes_graph(
                     Arc::clone(&snapshot),
                     None,
                     ::purrdf::ir::ViewLimits::default(),
-                )
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            // The engine's own expand-then-validate entry point, which is what the
-            // command line, the C ABI and the WebAssembly guest all drive: one
-            // implementation of the loop, so no surface can answer a question the
-            // others would not.
-            engine::validate_change(&validator, &snapshot)
-                .map_err(pyo3::exceptions::PyValueError::new_err)
-        })?;
+                )?;
+                // The engine's own expand-then-validate entry point, which is what the
+                // command line, the C ABI and the WebAssembly guest all drive: one
+                // implementation of the loop, so no surface can answer a question the
+                // others would not.
+                Ok(engine::validate_change(&validator, &snapshot)?)
+            })
+            .map_err(|error| shapes_error(py, error))?;
         Ok(PyChangeValidation {
             report: Py::new(py, PyValidationReport::new(validation.report))?,
             scope: validation.scope,
@@ -1055,8 +1019,8 @@ impl PyPreparedShapes {
     fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
         let prepared = &self.inner;
         let report = py
-            .detach(|| validate_nt_held(data_nt, prepared.shapes()))
-            .map_err(|error| error.into_py(py))?;
+            .detach(|| validate_nt_against(data_nt, prepared.shapes()))
+            .map_err(|error| shapes_error(py, error))?;
         Ok(PyValidationReport::new(report))
     }
 }

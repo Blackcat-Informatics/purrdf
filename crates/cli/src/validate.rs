@@ -466,7 +466,7 @@ fn validate(
     if !options.governors.is_engaged() {
         return engine::validate_dataset_with_shapes_graph(data, shapes, shapes_graph)
             .map(Some)
-            .map_err(CliError::Runtime);
+            .map_err(|error| CliError::Runtime(error.into()));
     }
 
     let governed = engine::validate_dataset_with_governors(
@@ -475,7 +475,7 @@ fn validate(
         shapes_graph,
         &options.governors.to_governors(),
     )
-    .map_err(CliError::Runtime)?;
+    .map_err(|error| CliError::Runtime(error.into()))?;
 
     match governed {
         GovernedValidation::Complete { report, .. } => Ok(Some(report)),
@@ -611,7 +611,7 @@ fn validate_change(
     let validator = source
         .prepared()
         .bind_delta_with_shapes_graph(Arc::clone(snapshot), shapes_graph, ViewLimits::default())
-        .map_err(CliError::Runtime)?;
+        .map_err(|error| CliError::Runtime(error.into()))?;
 
     if !options.governors.is_engaged() {
         let validation =

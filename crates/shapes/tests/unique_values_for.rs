@@ -339,7 +339,7 @@ fn changing_one_focus_nodes_value_revalidates_another() {
     );
     let before = prepared
         .bind_dataset(&base)
-        .and_then(|validator| validator.validate())
+        .and_then(|validator| validator.validate().map_err(Into::into))
         .expect("base validation");
     assert!(before.conforms, "{:?}", before.results);
 

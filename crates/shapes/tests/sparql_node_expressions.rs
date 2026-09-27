@@ -726,6 +726,7 @@ fn validate_graphs(
     let shapes = parse_shapes(shapes_ttl, None)?;
     let data = parse_turtle_to_dataset(data_ttl, None).expect("data parse");
     purrdf_shapes::engine::validate_dataset_with_shapes_graph(&data, &shapes, None)
+        .map_err(Into::into)
 }
 
 /// The built-in's declaration loads, and `sh:sparqlExpr` still evaluates

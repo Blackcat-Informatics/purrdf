@@ -25,7 +25,7 @@ use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
 use purrdf_shapes::{ShapesError, ShapesImportError, ShapesImports};
 use purrdf_validate::{
     SarifOptions, pack_shapes_product, validate_changes_to_sarif_string, validate_to_sarif_string,
-    validate_with_shapes_product,
+    validate_with_rebuilt_shapes_product, validate_with_shapes_product,
 };
 
 const SH: &str = "http://www.w3.org/ns/shacl#";
@@ -454,6 +454,9 @@ fn a_prepared_shapes_graph_must_hold_every_link() {
             .collect();
         assert_eq!(fired, shapes(&["LibShape", "LocalShape"]), "{held}");
     }
+    let unheld = ShapesImportError::UnheldLink {
+        iris: vec![SHAPES1.to_owned()],
+    };
     let error = engine::validate_dataset(
         parse_ntriples_to_dataset(&linking(&[SHAPES1]))
             .expect("data")
@@ -461,28 +464,85 @@ fn a_prepared_shapes_graph_must_hold_every_link() {
         &prepared,
     )
     .expect_err("not held");
-    assert!(error.starts_with("unheld-shapes-graph-link"), "{error}");
-    assert!(error.contains(&format!("<{SHAPES1}>")), "{error}");
+    assert_import_error(&error, &unheld);
+    assert_eq!(unheld.kind(), "unheld-shapes-graph-link");
+    assert!(
+        error.to_string().contains(&format!("<{SHAPES1}>")),
+        "{error}"
+    );
     let binding = engine::PreparedShapes::new(Arc::clone(&prepared)).bind_dataset(
         parse_ntriples_to_dataset(&linking(&[SHAPES1]))
             .expect("data")
             .as_ref(),
     );
-    assert!(
-        binding.is_err_and(|error| error.starts_with("unheld-shapes-graph-link")),
-        "a binding checks the links too"
+    assert_import_error(
+        &binding.expect_err("a binding checks the links too"),
+        &unheld,
     );
+}
 
-    // A prepared PRODUCT holds its base and the graphs its merged dataset declares.
+/// A prepared PRODUCT records every graph its shapes graph absorbed by name, so it holds
+/// a link to a table-supplied document with no ontology header of its own — the merged
+/// dataset alone could never say that document was folded in — as well as its base and
+/// the shapes graphs it declares, on the admit and rebuild paths alike. The linked shape's
+/// result is in the report. A product packed WITHOUT that document refuses the same data
+/// by name, typed.
+#[test]
+fn a_product_holds_every_graph_it_absorbed() {
+    let lib = "http://example.org/lib";
+    let declared = "http://example.org/declared";
+    let base = "http://example.org/shapes";
+    let importer = format!(
+        "{LOCAL_SHAPES}<{base}> <{OWL}imports> <{lib}> .\n\
+         <{declared}> <{RDF_TYPE}> <{SH}ShapesGraph> .\n"
+    );
+    // Header-less: the document declares no `owl:Ontology` or `sh:ShapesGraph` for its own
+    // IRI, so only the import table knows it is `lib`.
+    let lib_document = linked_document("LibShape", "p", "");
+    assert!(!lib_document.contains("Ontology") && !lib_document.contains("ShapesGraph"));
     let table: &[(&str, &str)] = &[(lib, &lib_document)];
     let product = pack_shapes_product(&importer, Some(base), table).expect("packed");
     let options = SarifOptions::default();
-    let sarif = validate_with_shapes_product(&product, &linking(&[declared]), &options)
-        .expect("a declared shapes graph is held");
-    assert!(sarif.contains("LibShape"), "{sarif}");
-    validate_with_shapes_product(&product, &linking(&[base]), &options).expect("the base is held");
+    for held in [lib, declared, base] {
+        for (lane, sarif) in [
+            (
+                "admit",
+                validate_with_shapes_product(&product, &linking(&[held]), &options),
+            ),
+            (
+                "rebuild",
+                validate_with_rebuilt_shapes_product(&product, &linking(&[held]), &options),
+            ),
+        ] {
+            let sarif = sarif.unwrap_or_else(|error| panic!("{lane}: {held} is held: {error}"));
+            assert!(sarif.contains("LibShape"), "{lane} {held}: {sarif}");
+            assert!(sarif.contains("LocalShape"), "{lane} {held}: {sarif}");
+        }
+    }
+    let unheld = ShapesImportError::UnheldLink {
+        iris: vec![SHAPES1.to_owned()],
+    };
     let refused = validate_with_shapes_product(&product, &linking(&[SHAPES1]), &options)
-        .expect_err("not held")
-        .to_string();
-    assert!(refused.contains("unheld-shapes-graph-link"), "{refused}");
+        .expect_err("not held");
+    assert_eq!(refused.import_error(), Some(&unheld), "{refused}");
+
+    // The neighbour that lacks the document: packed from the supplied shapes alone, it
+    // holds no `lib`, and the same data is refused naming it.
+    let bare = pack_shapes_product(LOCAL_SHAPES, Some(base), &[]).expect("packed");
+    let refused = validate_with_shapes_product(&bare, &linking(&[lib]), &options)
+        .expect_err("the bare product does not hold lib");
+    assert_eq!(
+        refused.import_error(),
+        Some(&ShapesImportError::UnheldLink {
+            iris: vec![lib.to_owned()],
+        }),
+        "{refused}"
+    );
+    let refused = validate_with_rebuilt_shapes_product(&bare, &linking(&[lib]), &options)
+        .expect_err("nor does its rebuild");
+    assert_eq!(
+        refused.import_error().map(ShapesImportError::kind),
+        Some("unheld-shapes-graph-link"),
+        "{refused}"
+    );
 }

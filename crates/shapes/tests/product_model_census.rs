@@ -800,6 +800,39 @@ pub fn census() -> Vec<ModelType> {
     scan_sources(&shapes_sources()).rows(&CENSUS_TYPES)
 }
 
+/// The PREAMBLE's carrier: the parse provenance a product writes into its identity
+/// section beside the stage id — the base, the prefix map, the box-role vocabulary, the
+/// shapes-graph IRI and the IRIs of every graph the shapes graph was assembled from.
+///
+/// Not part of the model closure (it hangs off `Shapes` through a crate-private
+/// field, so [`census`] never reaches it), but what it carries decides what a
+/// restored preparation answers: which data-graph `sh:shapesGraph` links it holds, for
+/// one. A field entering or leaving it therefore moves the stage id like a model field
+/// does.
+const PREAMBLE_TYPES: [&str; 1] = ["ParseProvenance"];
+
+/// The rows of [`PREAMBLE_TYPES`], read from the live sources.
+///
+/// # Panics
+///
+/// Panics when a row names no type, or names an ambiguous one.
+#[must_use]
+pub fn preamble() -> Vec<ModelType> {
+    scan_sources(&shapes_sources()).rows(&PREAMBLE_TYPES)
+}
+
+/// Every row the stage id digests: the model [`census`], then the [`preamble`].
+#[must_use]
+pub fn stage_types() -> Vec<ModelType> {
+    [census(), preamble()].concat()
+}
+
+/// [`stage_types`] over an arbitrary scan — the detector self-tests' patched sources.
+#[must_use]
+pub fn stage_rows(scan: &Scan) -> Vec<ModelType> {
+    [scan.rows(&CENSUS_TYPES), scan.rows(&PREAMBLE_TYPES)].concat()
+}
+
 // ── Stage id ────────────────────────────────────────────────────────────────────
 
 /// The `builtin_function_keyword` table: every name the SPARQL parser's built-in
@@ -1316,7 +1349,7 @@ pub fn stage_id(
 #[must_use]
 pub fn live_stage_id() -> String {
     stage_id(
-        &census(),
+        &stage_types(),
         &builtin_function_table(),
         &constraint_component_parameter_table(),
         &class_analysis_table(),
@@ -1484,7 +1517,7 @@ fn stage_id_matches_shipped_constant() {
         computed, shipped,
         "the SHACL prepared-product stage id moved. Something in the declarative model, the \
          SPARQL built-in table, the constraint-component parameter table (spec symbol table \
-         included), the class-analysis derivation or the profile id changed, which means every product written under \
+         included), the class-analysis derivation, the preamble's parse provenance or the profile id changed, which means every product written under \
          `{shipped}` describes a preparation this build no longer performs. Update STAGE_ID in \
          the product module to `{computed}` ONLY after confirming the codec covers the change, \
          then re-prepare the product fixture the new stage id invalidates with the supported \
@@ -1548,7 +1581,7 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
 /// different profiles must not share a stage id.
 #[test]
 fn stage_id_depends_on_the_profile_id() {
-    let types = census();
+    let types = stage_types();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
     let analysis = class_analysis_table();
@@ -1561,6 +1594,39 @@ fn stage_id_depends_on_the_profile_id() {
     assert_ne!(
         purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(other.as_bytes())),
         live_stage_id()
+    );
+}
+
+/// Adding a field to the preamble's carrier moves the stage id: a product records its
+/// parse provenance beside the stage id, and a reader expecting a different field set
+/// would misread it.
+#[test]
+fn stage_id_changes_when_the_preamble_gains_a_field() {
+    let (real, patched) = patched_sources(
+        "crates/shapes/src/provenance.rs",
+        "pub struct ParseProvenance {",
+        "pub struct ParseProvenance {\n    /// A synthetic census probe.\n    probe: bool,",
+    );
+    let builtins = builtin_function_table();
+    let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
+    let before = stage_id(
+        &stage_rows(&scan_sources(&real)),
+        &builtins,
+        &components,
+        &analysis,
+    );
+    let after = stage_id(
+        &stage_rows(&scan_sources(&patched)),
+        &builtins,
+        &components,
+        &analysis,
+    );
+    assert_eq!(before, shipped_stage_id());
+    assert_ne!(
+        before, after,
+        "a new ParseProvenance field left the stage id unchanged; the digest is not reading the \
+         preamble"
     );
 }
 
@@ -1580,13 +1646,13 @@ fn stage_id_changes_when_a_variant_is_added() {
     let components = constraint_component_parameter_table();
     let analysis = class_analysis_table();
     let before = stage_id(
-        &scan_sources(&real).rows(&CENSUS_TYPES),
+        &stage_rows(&scan_sources(&real)),
         &builtins,
         &components,
         &analysis,
     );
     let after = stage_id(
-        &scan_sources(&patched).rows(&CENSUS_TYPES),
+        &stage_rows(&scan_sources(&patched)),
         &builtins,
         &components,
         &analysis,
@@ -1614,13 +1680,13 @@ fn stage_id_changes_when_a_rule_variant_is_added() {
     let components = constraint_component_parameter_table();
     let analysis = class_analysis_table();
     let before = stage_id(
-        &scan_sources(&real).rows(&CENSUS_TYPES),
+        &stage_rows(&scan_sources(&real)),
         &builtins,
         &components,
         &analysis,
     );
     let after = stage_id(
-        &scan_sources(&patched).rows(&CENSUS_TYPES),
+        &stage_rows(&scan_sources(&patched)),
         &builtins,
         &components,
         &analysis,
@@ -1636,7 +1702,7 @@ fn stage_id_changes_when_a_rule_variant_is_added() {
 /// stage id, with the model held fixed.
 #[test]
 fn stage_id_changes_when_a_capability_table_changes() {
-    let types = census();
+    let types = stage_types();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
     let analysis = class_analysis_table();
@@ -1685,7 +1751,7 @@ fn stage_id_changes_when_a_capability_table_changes() {
 /// prepared under.
 #[test]
 fn stage_id_changes_when_the_spec_table_changes() {
-    let types = census();
+    let types = stage_types();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
     let analysis = class_analysis_table();
@@ -1783,7 +1849,7 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
          patching nothing and would pass vacuously"
     );
 
-    let types = census();
+    let types = stage_types();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
     let before = stage_id(

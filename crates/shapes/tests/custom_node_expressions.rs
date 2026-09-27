@@ -119,7 +119,7 @@ fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
 /// Validate `data_ttl` against `shapes_ttl` through the production entry point.
 fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
     let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)?;
-    validate_with(&store_of(data_ttl), &shapes)
+    validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
 }
 
 /// The shapes-load error a malformed fixture produces.

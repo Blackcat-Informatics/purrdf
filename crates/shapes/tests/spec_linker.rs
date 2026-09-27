@@ -1343,7 +1343,8 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:c true .
     )
     .expect("the validator's query is well-formed");
     let error = validate_dataset_with_shapes_graph(&data_of(""), &shapes, None)
-        .expect_err("the selected validator cannot run");
+        .expect_err("the selected validator cannot run")
+        .to_string();
     assert!(
         error.contains("http://example.org/ns#notAFunction"),
         "{error}"

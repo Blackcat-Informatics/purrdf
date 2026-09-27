@@ -211,7 +211,7 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
 
     let before = prepared
         .bind_dataset(&base)
-        .and_then(|validator| validator.validate())
+        .and_then(|validator| validator.validate().map_err(Into::into))
         .unwrap_or_else(|error| panic!("{}: base validation: {error}", case.name));
 
     let mut mutation = MutableDataset::new(Arc::clone(&base));
@@ -253,7 +253,7 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
                 .freeze()
                 .unwrap_or_else(|error| panic!("{}: freeze: {error}", case.name)),
         )
-        .and_then(|validator| validator.validate())
+        .and_then(|validator| validator.validate().map_err(Into::into))
         .unwrap_or_else(|error| panic!("{}: owned validation: {error}", case.name));
     assert_eq!(
         after.result_tuples(),
@@ -1107,7 +1107,7 @@ ex:PersonShape a sh:NodeShape ;
     .expect("fixture data must parse");
     let before = prepared
         .bind_dataset(&base)
-        .and_then(|validator| validator.validate())
+        .and_then(|validator| validator.validate().map_err(Into::into))
         .expect("base validation");
     assert!(
         before.conforms,
@@ -1163,7 +1163,7 @@ ex:PersonShape a sh:NodeShape ;
     );
     let owned = prepared
         .bind_dataset(&mutation.freeze().expect("freeze"))
-        .and_then(|validator| validator.validate())
+        .and_then(|validator| validator.validate().map_err(Into::into))
         .expect("owned validation");
     assert_eq!(
         after.result_tuples(),

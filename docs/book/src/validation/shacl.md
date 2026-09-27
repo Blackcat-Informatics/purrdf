@@ -255,7 +255,8 @@ directives.
 A shapes graph prepared before the data graph was known — a parsed `Shapes`
 validated against many graphs, a `PreparedShapes`, a prepared product —
 cannot take a graph in. Validating with one checks that every link is a graph
-it already holds: its base, a document its closure or links folded in, or a
+it already holds: its base, a document its closure or links folded in (a
+product records those IRIs, so it holds them after a restore too), or a
 shapes graph, ontology or version IRI it declares. Any other link is refused as
 `unheld-shapes-graph-link` rather than validated against a smaller shapes graph
 than the data graph names. On the incremental change path, a change that adds

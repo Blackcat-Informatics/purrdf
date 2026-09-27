@@ -1643,7 +1643,8 @@ class _ShapesImportError(ValueError):
 
     A shapes graph prepared before the data graph was known (`Shapes`,
     `PreparedShapes`, a product) cannot take a linked graph in: validating a data graph
-    that links one it does not hold raises `ValueError` whose message leads with
+    that links one it does not hold — one that is not its base, a document its import
+    closure absorbed, or a graph it declares — raises this class with kind
     `unheld-shapes-graph-link`.
     """
 

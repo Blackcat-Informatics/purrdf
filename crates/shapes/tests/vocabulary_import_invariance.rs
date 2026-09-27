@@ -142,7 +142,9 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
 /// The N-Triples report `shapes` produces over the case's data, or the error.
 fn report(input: &Input, shapes: &Shapes) -> Result<String, String> {
     let data = input.data.as_ref().map_err(Clone::clone)?;
-    validate_dataset_with_shapes_graph(data, shapes, None).map(|report| report.to_ntriples())
+    validate_dataset_with_shapes_graph(data, shapes, None)
+        .map(|report| report.to_ntriples())
+        .map_err(Into::into)
 }
 
 /// Every case of the three corpora.

@@ -3161,4 +3161,39 @@ fn a_product_must_hold_every_link() {
     let err = stderr(&accepted);
     assert_eq!(code(&accepted), 0, "{err}");
     assert!(err.contains("shacl results 1\n"), "{err}");
+
+    // A product packed WITH the linked document — supplied by `--import`, with no ontology
+    // header of its own — records it, and holds the link the bare product refused: the
+    // linked shape's result is in the report.
+    let linked = write_file(dir.path(), "linked.ttl", LINKED_SHAPES);
+    let importing = write_file(
+        dir.path(),
+        "importing.ttl",
+        &format!(
+            "{LINK_LOCAL_SHAPES}<> <http://www.w3.org/2002/07/owl#imports> \
+             <http://example.org/graph-shapes1> .\n"
+        ),
+    );
+    let with_lib = dir.path().join("with-lib.purrshp");
+    let with_lib = with_lib.to_str().expect("utf-8");
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &importing,
+        "--import",
+        &format!("http://example.org/graph-shapes1={linked}"),
+        "--out",
+        with_lib,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let holds = run(&["validate", "--shapes-product", with_lib, &unheld]);
+    let err = stderr(&holds);
+    assert_eq!(code(&holds), 0, "{err}");
+    assert!(err.contains("shacl results 2\n"), "{err}");
+    assert!(
+        stdout(&holds).contains("MinCountConstraintComponent"),
+        "{}",
+        stdout(&holds)
+    );
 }

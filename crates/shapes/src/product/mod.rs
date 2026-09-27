@@ -219,8 +219,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x11, 0xce, 0x88, 0x6c, 0x7d, 0xec, 0x84, 0x68, 0xdc, 0xaa, 0x44, 0x3c, 0x7b, 0x3c, 0xcf, 0x39,
-    0x28, 0x4e, 0xdb, 0x2b, 0xc7, 0x8b, 0x7a, 0x7a, 0xe9, 0x38, 0xbb, 0xd5, 0x01, 0x4e, 0xeb, 0x04,
+    0xb4, 0xc4, 0xa5, 0x47, 0xc2, 0x8b, 0x74, 0x3e, 0x11, 0x0b, 0xb6, 0x8a, 0x8b, 0x76, 0x6a, 0x9a,
+    0xbf, 0xde, 0xb4, 0xcb, 0xe3, 0x77, 0x18, 0x44, 0x3e, 0x69, 0x63, 0x7c, 0x76, 0x20, 0xc8, 0xf5,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -625,6 +625,16 @@ fn encode_preamble(shapes: &Shapes) -> Vec<u8> {
         write_text(&mut out, prefix);
         write_text(&mut out, namespace);
     }
+    // The IRIs of every graph the shapes graph was assembled from by name — its loaded
+    // IRIs, each `owl:imports` document its closure reached, each data-graph link it
+    // resolved — sorted by the resolver. The merged dataset alone cannot say which
+    // table-supplied document it absorbed (one with no ontology header declares no IRI
+    // of its own), and a data graph that links such a document is only held by a
+    // product that remembers it (`imports::check_data_graph_links`).
+    write_varint(&mut out, provenance.included_graphs().len() as u64);
+    for iri in provenance.included_graphs() {
+        write_text(&mut out, iri);
+    }
     out
 }
 
@@ -701,6 +711,27 @@ fn decode_preamble(
         doc_prefixes.push((prefix, namespace));
     }
 
+    // The included-graph IRIs close the section. A product of THIS stage always writes
+    // them, so their absence there is a truncation. A product of an earlier stage was
+    // written before they existed; it can never be admitted (its stage id is not this
+    // build's), and `rebuild` re-derives it holding only what its merged dataset
+    // declares, so reading no list for it is the honest answer rather than a guess.
+    let mut included_graphs = Vec::new();
+    if pos < bytes.len() || stage_id == STAGE_ID {
+        let included = read_count(bytes, &mut pos)?;
+        included_graphs.reserve_exact(included);
+        for _ in 0..included {
+            included_graphs.push(read_text(bytes, &mut pos)?);
+        }
+    }
+    if !included_graphs.is_sorted_by(|a, b| a < b) {
+        return Err(malformed(
+            "this product's included-graph IRIs are not strictly sorted; re-prepare the \
+             product, because the writer records each IRI once, in order"
+                .to_owned(),
+        ));
+    }
+
     if pos != bytes.len() {
         return Err(malformed(format!(
             "this product carries {} bytes after the end of its identity section; re-prepare the \
@@ -709,11 +740,9 @@ fn decode_preamble(
         )));
     }
 
-    Ok((
-        stage_id,
-        profile,
-        ParseProvenance::new(base, doc_prefixes, box_role_vocab, shapes_graph),
-    ))
+    let mut provenance = ParseProvenance::new(base, doc_prefixes, box_role_vocab, shapes_graph);
+    provenance.set_included_graphs(included_graphs);
+    Ok((stage_id, profile, provenance))
 }
 
 /// Read one raw byte.
@@ -1408,7 +1437,7 @@ impl<'a> ShapesProductView<'a> {
         // The carried dataset IS the shapes graph's resolved `owl:imports` closure — the
         // packer resolved it before it wrote this product — so it re-derives without
         // resolving again.
-        let shapes = crate::shapes::from_resolved_dataset(
+        let mut shapes = crate::shapes::from_resolved_dataset(
             &dataset,
             self.provenance.base(),
             self.provenance.doc_prefixes(),
@@ -1422,6 +1451,11 @@ impl<'a> ShapesProductView<'a> {
                  shapes graph this build parses"
             ))
         })?;
+        // The graphs the packer's resolution absorbed are a parse input the carried
+        // dataset cannot re-derive; the product recorded them.
+        shapes
+            .parse_provenance
+            .set_included_graphs(self.provenance.included_graphs().to_vec());
 
         CertifiedParts::from_rebuilt(self.declared_identity(), shapes, host)
             .map(CertifiedParts::into_prepared)

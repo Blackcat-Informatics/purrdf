@@ -1462,7 +1462,7 @@ impl PreparedShapes {
     ///
     /// # Errors
     /// Returns an error when an active target cannot be evaluated.
-    pub fn bind(&self, data: ShaclData) -> Result<PreparedValidator, String> {
+    pub fn bind(&self, data: ShaclData) -> Result<PreparedValidator, ShapesError> {
         PreparedValidator::bind(data, self)
     }
 
@@ -1470,7 +1470,7 @@ impl PreparedShapes {
     ///
     /// # Errors
     /// Returns an error when projection or target evaluation fails.
-    pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, String> {
+    pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, ShapesError> {
         self.bind_projected_dataset(project_dataset(data)?)
     }
 
@@ -1480,7 +1480,10 @@ impl PreparedShapes {
     ///
     /// # Errors
     /// Returns an error when a target cannot be evaluated.
-    pub fn bind_shared_dataset(&self, data: Arc<RdfDataset>) -> Result<PreparedValidator, String> {
+    pub fn bind_shared_dataset(
+        &self,
+        data: Arc<RdfDataset>,
+    ) -> Result<PreparedValidator, ShapesError> {
         let view = Arc::new(ShaclDatasetView::project(data));
         self.bind_view(view)
     }
@@ -1497,7 +1500,7 @@ impl PreparedShapes {
     ///
     /// # Errors
     /// Returns an error when a target cannot be evaluated.
-    pub fn bind_view(&self, view: Arc<ShaclDatasetView>) -> Result<PreparedValidator, String> {
+    pub fn bind_view(&self, view: Arc<ShaclDatasetView>) -> Result<PreparedValidator, ShapesError> {
         self.bind(ShaclData::from_views(Arc::clone(&view), view, None))
     }
 
@@ -1511,7 +1514,7 @@ impl PreparedShapes {
         data: Arc<RdfDataset>,
         shapes_graph_iri: Option<&str>,
         limits: ::purrdf::ir::ViewLimits,
-    ) -> Result<PreparedValidator, String> {
+    ) -> Result<PreparedValidator, ShapesError> {
         let core = Arc::new(ShaclDatasetView::project(Arc::clone(&data)));
         let (sparql, graph) = build_sparql_view(
             ::purrdf::ir::CompositeSource::new(data),
@@ -1539,7 +1542,7 @@ impl PreparedShapes {
         data: Arc<::purrdf::ir::DeltaDatasetView>,
         shapes_graph_iri: Option<&str>,
         limits: ::purrdf::ir::ViewLimits,
-    ) -> Result<PreparedValidator, String> {
+    ) -> Result<PreparedValidator, ShapesError> {
         let core = Arc::new(ShaclDatasetView::delta(Arc::clone(&data), true, limits)?);
         let (sparql, graph) = build_sparql_view(
             ::purrdf::ir::CompositeSource::from_delta(data),
@@ -1558,7 +1561,7 @@ impl PreparedShapes {
     pub fn bind_projected_dataset(
         &self,
         projected: Arc<RdfDataset>,
-    ) -> Result<PreparedValidator, String> {
+    ) -> Result<PreparedValidator, ShapesError> {
         self.bind(ShaclData::new(Arc::clone(&projected), projected, None))
     }
 
@@ -1571,7 +1574,7 @@ impl PreparedShapes {
         &self,
         projected: Arc<RdfDataset>,
         shapes_graph_iri: Option<&str>,
-    ) -> Result<PreparedValidator, String> {
+    ) -> Result<PreparedValidator, ShapesError> {
         self.bind(build_projected_data(
             projected,
             &self.shapes,
@@ -1662,11 +1665,11 @@ impl PreparedValidator {
     /// # Errors
     ///
     /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
-    pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, String> {
+    pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, ShapesError> {
         PreparedShapes::new(shapes).bind(data)
     }
 
-    fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
+    fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, ShapesError> {
         let shapes = Arc::clone(&prepared.shapes);
         check_links(&data, &shapes)?;
         // The rules entailment regime applies to every validation this binding answers.
@@ -1728,7 +1731,7 @@ impl PreparedValidator {
     ///
     /// Returns an error when projection fails or an active SHACL-SPARQL target
     /// cannot be evaluated.
-    pub fn from_dataset(data: &RdfDataset, shapes: Arc<Shapes>) -> Result<Self, String> {
+    pub fn from_dataset(data: &RdfDataset, shapes: Arc<Shapes>) -> Result<Self, ShapesError> {
         Self::from_projected_dataset(project_dataset(data)?, shapes)
     }
 
@@ -1742,7 +1745,7 @@ impl PreparedValidator {
     pub fn from_projected_dataset(
         projected: Arc<RdfDataset>,
         shapes: Arc<Shapes>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ShapesError> {
         let data = ShaclData::new(Arc::clone(&projected), projected, None);
         Self::new(data, shapes)
     }
@@ -1760,7 +1763,7 @@ impl PreparedValidator {
         projected: Arc<RdfDataset>,
         shapes: Arc<Shapes>,
         shapes_graph_iri: Option<&str>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ShapesError> {
         let data = build_projected_data(projected, &shapes, shapes_graph_iri)?;
         Self::new(data, shapes)
     }
@@ -2374,7 +2377,7 @@ pub fn __prepared_class_membership_view(
 ///
 /// Returns `Err(String)` on a hard validation failure: a SHACL-SPARQL target
 /// or constraint query the engine cannot evaluate.
-pub fn validate_with(data: &ShaclData, shapes: &Shapes) -> Result<ValidationReport, String> {
+pub fn validate_with(data: &ShaclData, shapes: &Shapes) -> Result<ValidationReport, ShapesError> {
     validate_with_focus_filter(data, shapes, |_, _| true)
 }
 
@@ -2455,7 +2458,7 @@ pub fn validate_with_governors(
     data: &ShaclData,
     shapes: &Shapes,
     governors: &QueryGovernors,
-) -> Result<GovernedValidation, String> {
+) -> Result<GovernedValidation, ShapesError> {
     let state = Arc::new(GovernorState::new(governors));
     let outcome = {
         let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
@@ -2485,7 +2488,7 @@ pub fn validate_dataset_with_governors(
     shapes: &Shapes,
     shapes_graph_iri: Option<&str>,
     governors: &QueryGovernors,
-) -> Result<GovernedValidation, String> {
+) -> Result<GovernedValidation, ShapesError> {
     let projected = project_dataset(data)?;
     let data = build_projected_data(projected, shapes, shapes_graph_iri)?;
     validate_with_governors(&data, shapes, governors)
@@ -2699,12 +2702,16 @@ pub fn validate_with_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
     include_focus: F,
-) -> Result<ValidationReport, String>
+) -> Result<ValidationReport, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
     check_links(data, shapes)?;
-    validate_linked_with_focus_filter(data, shapes, include_focus)
+    Ok(validate_linked_with_focus_filter(
+        data,
+        shapes,
+        include_focus,
+    )?)
 }
 
 /// Whether `delta` changes the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4),
@@ -2736,7 +2743,7 @@ fn changes_a_shapes_graph_link(delta: &::purrdf::ir::DeltaDatasetView) -> bool {
 ///
 /// A data graph that does not intern `sh:shapesGraph` links nothing; asking costs a borrowed
 /// lookup, which on a native dataset allocates nothing.
-fn check_links(data: &ShaclData, shapes: &Shapes) -> Result<(), String> {
+fn check_links(data: &ShaclData, shapes: &Shapes) -> Result<(), ShapesError> {
     use crate::data_view::ShaclRead as _;
     let core = data.core_view();
     if core
@@ -2745,7 +2752,7 @@ fn check_links(data: &ShaclData, shapes: &Shapes) -> Result<(), String> {
     {
         return Ok(());
     }
-    crate::imports::check_data_graph_links(core, &[], shapes).map_err(|error| error.to_string())
+    Ok(crate::imports::check_data_graph_links(core, &[], shapes)?)
 }
 
 /// [`validate_with_focus_filter`] after the data graph's links were checked — or, for
@@ -2843,10 +2850,15 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error string if the SHACL projection cannot be frozen into the IR, or —
-/// led by `unheld-shapes-graph-link` or `invalid-shapes-graph-link` — when the data
-/// graph links a graph `shapes` does not hold or names a link that is not an IRI.
-pub fn validate_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<ValidationReport, String> {
+/// [`ShapesError::Imports`] — `ShapesImportError::UnheldLink` or `InvalidLink` — when the
+/// data graph links a graph `shapes` does not hold or names a link that is not an IRI;
+/// [`ShapesError::Invalid`] if the SHACL projection cannot be frozen into the IR or
+/// validation hard-fails. Every validation entry point here and every
+/// [`PreparedShapes`] binding answers with the same typed error.
+pub fn validate_dataset(
+    data: &RdfDataset,
+    shapes: &Shapes,
+) -> Result<ValidationReport, ShapesError> {
     let dataset = project_dataset(data)?;
     // The engine reads pattern lookups directly from the frozen IR; SHACL-SPARQL
     // paths run the native SPARQL engine over the same `Arc<RdfDataset>`.
@@ -2865,7 +2877,7 @@ pub fn validate_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<Validation
 pub fn validate_projected_dataset(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
-) -> Result<ValidationReport, String> {
+) -> Result<ValidationReport, ShapesError> {
     // Core lookups and the SHACL-SPARQL paths run over the same `Arc<RdfDataset>`.
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
     validate_with(&data, shapes)
@@ -2880,7 +2892,7 @@ pub fn validate_projected_dataset_with_focus_filter<F>(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
     include_focus: F,
-) -> Result<ValidationReport, String>
+) -> Result<ValidationReport, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -2954,7 +2966,7 @@ pub fn validate_dataset_with_shapes_graph(
     data: &RdfDataset,
     shapes: &Shapes,
     shapes_graph_iri: Option<&str>,
-) -> Result<ValidationReport, String> {
+) -> Result<ValidationReport, ShapesError> {
     let projected = project_dataset(data)?;
     validate_projected_dataset_with_shapes_graph(projected, shapes, shapes_graph_iri)
 }
@@ -2964,7 +2976,7 @@ pub fn validate_projected_dataset_with_shapes_graph(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
     shapes_graph_iri: Option<&str>,
-) -> Result<ValidationReport, String> {
+) -> Result<ValidationReport, ShapesError> {
     let data = build_projected_data(projected, shapes, shapes_graph_iri)?;
     validate_with(&data, shapes)
 }
@@ -3180,7 +3192,7 @@ pub fn validate_graphs_with_options(
     let imports = linked_imports(data.as_ref(), imports)?;
     let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, &imports)?;
     shapes.set_validation_options(options.clone());
-    Ok(validate_dataset(data.as_ref(), &shapes)?)
+    validate_dataset(data.as_ref(), &shapes)
 }
 
 /// `imports` with the `sh:shapesGraph` links of the data graph `data` folded in
@@ -3224,7 +3236,7 @@ pub fn validate_graphs_with_config(
 
     let imports = linked_imports(data.as_ref(), imports)?;
     let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, &imports)?;
-    Ok(validate_dataset(data.as_ref(), &shapes)?)
+    validate_dataset(data.as_ref(), &shapes)
 }
 
 /// Validate a frozen [`::purrdf::RdfDataset`] against a Turtle SHACL shapes graph, with
@@ -3243,7 +3255,7 @@ pub fn validate_dataset_graphs(
 ) -> Result<ValidationReport, ShapesError> {
     let imports = linked_imports(data, imports)?;
     let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, &imports)?;
-    Ok(validate_dataset(data, &shapes)?)
+    validate_dataset(data, &shapes)
 }
 
 /// Entail data (N-Triples) under shapes (Turtle), returning the materialized
@@ -5204,7 +5216,8 @@ mod tests {
 
         let below_err = pool
             .install(|| validate_dataset(below.as_ref(), &shapes))
-            .expect_err("an unregistered aggregate IRI must be a hard error, not a silent skip");
+            .expect_err("an unregistered aggregate IRI must be a hard error, not a silent skip")
+            .to_string();
         assert!(
             below_err.contains("no custom aggregate is registered"),
             "below-threshold error must name the refusal: {below_err}"
@@ -5213,7 +5226,8 @@ mod tests {
 
         let above_err = pool
             .install(|| validate_dataset(above.as_ref(), &shapes))
-            .expect_err("the forked path must refuse identically, not silently pass");
+            .expect_err("the forked path must refuse identically, not silently pass")
+            .to_string();
         assert!(
             above_err.contains("no custom aggregate is registered"),
             "above-threshold error must name the refusal: {above_err}"

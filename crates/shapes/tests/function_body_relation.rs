@@ -181,7 +181,7 @@ fn validate_with(
     relations: Arc<PropertyFunctionRegistry>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
-    validate_dataset(&data(), &shapes(predicate))
+    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
 }
 
 /// The focus nodes a report names, in report order.
@@ -302,7 +302,7 @@ fn validate_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &shapes(predicate))
+    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
 }
 
 /// A host-DECLARED namespace makes an unregistered IRI under it a hard error, not a
@@ -693,7 +693,7 @@ fn validate_constraint_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &sparql_constraint_shapes(predicate))
+    validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
 }
 
 /// A declared namespace reaches a `sh:sparql` body, not only a `sh:SPARQLFunction`
@@ -873,7 +873,8 @@ fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
         None,
         &purrdf_sparql_eval::QueryGovernors::UNBOUNDED,
     )
-    .expect_err("a verdict over an index declared not whole is refused");
+    .expect_err("a verdict over an index declared not whole is refused")
+    .to_string();
 
     assert!(
         opens.load(Ordering::Relaxed) > 0,
@@ -996,7 +997,7 @@ fn validate_ttl_under_declared_namespace(shapes_ttl: &str) -> Result<ValidationR
         ..ParserOptions::default()
     }));
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes)
+    validate_dataset(&data(), &shapes).map_err(Into::into)
 }
 
 /// The same shapes graph with the registry installed but NOTHING declared.
@@ -1004,7 +1005,7 @@ fn validate_ttl_undeclared(shapes_ttl: &str) -> Result<ValidationReport, String>
     let (relations, _) = registry();
     let _relations = enter_property_function_scope(relations);
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes)
+    validate_dataset(&data(), &shapes).map_err(Into::into)
 }
 
 /// A `sh:SPARQLTarget` naming `predicate`.

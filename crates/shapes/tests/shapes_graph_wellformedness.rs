@@ -1803,7 +1803,8 @@ fn a_failure_inside_some_value_propagates_unless_a_value_conforms() {
         format!("{DUCKS} ex:alice ex:tends ex:eliza . ex:bob ex:tends ex:eliza, ex:donald .");
     let error =
         validate_dataset_with_shapes_graph(&data(&data_ttl), &loads(&shapes("ex:alice")), None)
-            .expect_err("a failure with no conforming value node is produced");
+            .expect_err("a failure with no conforming value node is produced")
+            .to_string();
     assert!(
         error.contains("64"),
         "the failure is the recursion bound: {error}"
