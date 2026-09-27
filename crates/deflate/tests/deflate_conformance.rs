@@ -278,15 +278,22 @@ fn encoder_output_is_independent_of_write_chunking() {
         let whole = deflate::compress(&data, level);
         let mut rng = Xoshiro256::from_seed(99);
         let mut deflater = Deflater::new(level);
+        let mut gzip_writer = GzipWriter::new(Vec::new(), level);
         let mut out = Vec::new();
         let mut rest = data.as_slice();
         while !rest.is_empty() {
             let n = (rng.up_to(5000) as usize + 1).min(rest.len());
             deflater.write(&rest[..n], &mut out);
+            gzip_writer.write_all(&rest[..n]).expect("gzip chunk");
             rest = &rest[n..];
         }
         deflater.finish(&mut out);
         assert_eq!(out, whole, "{level:?}");
+        assert_eq!(
+            gzip_writer.finish().expect("gzip finish"),
+            gzip::compress(&data, level),
+            "one-shot and chunked gzip at {level:?}"
+        );
     }
 }
 

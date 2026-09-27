@@ -419,11 +419,21 @@ pub fn compress(data: &[u8], level: Level) -> Vec<u8> {
     // Start with at most one output chunk plus framing slack; Vec growth
     // remains amortized for incompressible streams.
     let capacity = (data.len() / 2 + 64).min(64 * 1024 + 64);
-    let mut writer = GzipWriter::new(Vec::with_capacity(capacity), level);
-    writer
-        .write_all(data)
-        .expect("writing to a Vec cannot fail");
-    writer.finish().expect("writing to a Vec cannot fail")
+    let mut out = Vec::with_capacity(capacity);
+    out.extend_from_slice(&HEADER);
+    let mut deflater = Deflater::new(level);
+    let mut crc = Crc32::new();
+    // The complete input is already available: write into the result buffer
+    // directly, without the fallible writer adapter's pending-output buffer.
+    // Bounded chunks retain the streaming encoder's working-memory bound.
+    for chunk in data.chunks(WRITE_CHUNK) {
+        deflater.write(chunk, &mut out);
+        crc.update(chunk);
+    }
+    deflater.finish(&mut out);
+    out.extend_from_slice(&crc.finalize().to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
 }
 
 // --- Read adapter ------------------------------------------------------------
