@@ -120,12 +120,14 @@ pub mod model;
 // The one named-graph refusal vocabulary the CLI, Python and wasm hosts share when a
 // graph-carrying result meets a single-graph RDF syntax.
 pub mod named_graph;
+// CSV and TSV on the W3C CSVW dialect model.
+pub mod csv;
+pub mod sink;
+// Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
+pub mod small;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
-// Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
-pub mod sink;
-pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;

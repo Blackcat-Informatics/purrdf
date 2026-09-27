@@ -87,3 +87,28 @@ smallvec = [
     '^use ::purrdf::\{[^}]*\bsmallvec\};$',
     '^\s+research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec, try_canonicalize,$',
 ]
+csv = [
+    # File names and extensions: every `nodes.csv`, `data/train.csv`,
+    # `{token}.csv` artifact path and `.csv` suffix test.
+    '\.csv\b',
+    # Hyphenated format and profile names (`lpg-csv`, `neo4j-csv`,
+    # `purrdf-lpg-neo4j-admin-csv`) and the W3C SPARQL CSV/TSV spec slug.
+    '\b(?:lpg|neo4j|admin|results)-csv\b',
+    '\bcsv-tsv\b',
+    # `purrdf_core::csv`, the in-house CSVW dialect module, and the modules
+    # named after the CSV format in purrdf-rdf's LPG projection and in
+    # purrdf-sparql-results, by path, declaration and re-export.
+    '\b(?:purrdf_core|crate|super)::csv\b',
+    '^\s*(?:pub )?mod csv;$',
+    '^\s*pub use csv::(?:to_csv;|\{)$',
+    '\bcsv::write_csv\(',
+    # The CSV results format keyword on the command line, in match arms and
+    # in documentation.
+    '"csv"',
+    '`csv`',
+    'json/xml/csv/tsv',
+    '--results-format csv\b',
+    # A local variable holding serialized CSV results.
+    '\blet csv = ',
+    '\bcsv\.bytes\b',
+]

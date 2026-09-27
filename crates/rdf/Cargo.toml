@@ -50,9 +50,6 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 ciborium = { workspace = true }
-# RFC 4180 / CSVW / LPG tabular encoding. Always-on and pure Rust so every
-# projection reader/writer follows one deterministic path on native and wasm.
-csv = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }

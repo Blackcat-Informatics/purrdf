@@ -162,6 +162,14 @@ SCANNERS: dict[str, str] = {
         "string literal and flipped a `purrdf validate` verdict from a hard error "
         "to a reported Violation"
     ),
+    "crates/rdf-core/src/csv/read.rs": (
+        "IS the CSV/TSV reader -- it decides where rows and cells end and which "
+        "whitespace a CSVW trim removes -- but keeps its position in a local "
+        "`at` and exposes no `fn peek`, so the structure test misses it. Its "
+        "trim is `terminals::is_unicode_white_space`, the enumerated Unicode "
+        "White_Space table; a `str::trim` here would reach the same set through "
+        "a property call no table pins"
+    ),
     "crates/rdf/src/projections/csvw/config.rs": (
         "listed so the reasoned NON-fix below cannot be quietly reversed: two "
         "separate audits reached the same conclusion here independently, and a "

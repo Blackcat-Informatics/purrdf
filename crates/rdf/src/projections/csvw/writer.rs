@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use csv::{QuoteStyle, Terminator, WriterBuilder};
+use purrdf_core::csv::{Dialect, write_record_text};
 use purrdf_core::{DatasetView, LossLedger};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -525,7 +525,7 @@ fn table_bytes(table: &CsvwTable) -> Result<Vec<u8>, ProjectionError> {
                 .filter(|(column, _)| !column.virtual_column)
                 .map(|(_, cell)| cell.string_value.as_str())
                 .collect::<Vec<_>>();
-            append_csv_record(&mut output, &fields)?;
+            append_csv_record(&mut output, &fields);
         } else if let Some(comment) = comments.next() {
             append_comment(&mut output, comment)?;
         } else {
@@ -538,20 +538,10 @@ fn table_bytes(table: &CsvwTable) -> Result<Vec<u8>, ProjectionError> {
     Ok(output)
 }
 
-fn append_csv_record(output: &mut Vec<u8>, fields: &[&str]) -> Result<(), ProjectionError> {
-    let mut writer = WriterBuilder::new()
-        .has_headers(false)
-        .quote_style(QuoteStyle::Always)
-        .terminator(Terminator::Any(b'\n'))
-        .from_writer(Vec::new());
-    writer
-        .write_record(fields)
-        .map_err(|error| ProjectionError::syntax(format!("write CSVW row: {error}")))?;
-    let bytes = writer
-        .into_inner()
-        .map_err(|error| ProjectionError::syntax(format!("finish CSVW row: {error}")))?;
-    output.extend_from_slice(&bytes);
-    Ok(())
+fn append_csv_record(output: &mut Vec<u8>, fields: &[&str]) {
+    let mut record = String::new();
+    write_record_text(&Dialect::CSVW_CELLS, fields, &mut record);
+    output.extend_from_slice(record.as_bytes());
 }
 
 fn append_comment(output: &mut Vec<u8>, comment: &str) -> Result<(), ProjectionError> {

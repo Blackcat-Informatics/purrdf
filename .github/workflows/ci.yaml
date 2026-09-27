@@ -504,7 +504,8 @@ jobs:
   # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
   # exists, and this job runs it. The pinned goldens these tests compare against are
   # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
-  # The reassociated arithmetic runs its NEON path too, against its error bound.
+  # The reassociated arithmetic runs its NEON path too, against its error bound, and
+  # the CSV field scanner runs its NEON kernel against its portable one.
   aarch64:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
@@ -546,6 +547,16 @@ jobs:
         env:
           PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
         run: cargo test --locked -p purrdf-hash
+
+      # The CSV field scanner's explicit NEON kernel against the portable kernel and
+      # the per-byte scan at every alignment and length (the test asserts the NEON
+      # kernel is among those compared), then the reader, writer and frozen-vector
+      # replay on the kernel aarch64 dispatches to.
+      - name: Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+        run: |
+          cargo test --locked -p purrdf-core --lib csv::
+          cargo test --locked -p purrdf-core --test csv_differential
+
 
   # The architectures whose float control register this build does not read. On them the
   # float environment is proven by the behavioural probe alone, so a kernel that computes

@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the criterion numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 71 `[[bench]]`
-targets in total; this section and the inventory table below document 22 of
+They live under `crates/*/benches/`. The workspace registers 77 `[[bench]]`
+targets in total; this section and the inventory table below document 23 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -66,6 +66,9 @@ simply not narrated here:
   binary64 access, and a one-million-chunk catalog.
 - `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
+- `crates/rdf-core/benches/csv.rs` — `purrdf_core::csv` read and write
+  throughput over 1 MiB SSSOM-shaped TSV and CSVW-shaped CSV inputs, through
+  the streaming reader, the CSVW table algorithm and the writer.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput,
   including separate context compilation and expanded/caller/derived paths.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, selective versus
@@ -142,6 +145,7 @@ here.
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
 | `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
+| `crates/rdf-core/benches/csv.rs` | `purrdf_core::csv` throughput over 1 MiB inputs: an SSSOM-shaped TSV body read and written under `Dialect::SSSOM_TSV`, and a CSVW-shaped CSV table (quoted cells with commas, doubled quotes and line breaks) read by `Reader` and by `read_table`, and written. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |

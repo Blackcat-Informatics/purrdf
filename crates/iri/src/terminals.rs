@@ -604,6 +604,44 @@ terminal! {
 }
 
 terminal! {
+    /// Unicode `White_Space` (the Unicode Character Database, `PropList.txt`):
+    /// U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028,
+    /// U+2029, U+202F, U+205F and U+3000 — twenty-five scalars.
+    ///
+    /// The class the CSVW "conditionally trim a cell value" step removes (W3C
+    /// *Model for Tabular Data and Metadata on the Web* §8): that clause says
+    /// "whitespace" over the Unicode strings of the tabular data model and
+    /// names no narrower set, so the Unicode property of that name is the
+    /// reading. The CSVW dialect's `skipInitialSpace` reaches the same class,
+    /// because *Metadata Vocabulary for Tabular Data* §5.9 defines it as
+    /// setting the trim flag to `start`.
+    ///
+    /// This is NOT [`is_ws`]: a Turtle/SPARQL `WS` is four ASCII scalars, and
+    /// a scanner for those grammars must never reach for this class. It is the
+    /// set [`char::is_whitespace`] answers, spelled out so that a trim which
+    /// depends on it is an enumerated, cited table rather than a property call.
+    tables UNICODE_WHITE_SPACE_ASCII, UNICODE_WHITE_SPACE_NON_ASCII;
+    pub const fn is_unicode_white_space(char);
+    base_ranges: &[];
+    ranges_fn: unicode_white_space_ranges;
+    ascii: [
+        (0x09, 0x0D), // CHARACTER TABULATION .. CARRIAGE RETURN
+        (0x20, 0x20), // SPACE
+    ];
+    non_ascii: [
+        (0x85, 0x85),     // NEXT LINE
+        (0xA0, 0xA0),     // NO-BREAK SPACE
+        (0x1680, 0x1680), // OGHAM SPACE MARK
+        (0x2000, 0x200A), // EN QUAD .. HAIR SPACE
+        (0x2028, 0x2029), // LINE SEPARATOR, PARAGRAPH SEPARATOR
+        (0x202F, 0x202F), // NARROW NO-BREAK SPACE
+        (0x205F, 0x205F), // MEDIUM MATHEMATICAL SPACE
+        (0x3000, 0x3000), // IDEOGRAPHIC SPACE
+    ];
+    cardinality: 25;
+}
+
+terminal! {
     /// XML 1.0 Fifth Edition §2.2 production `[2]`, `Char`.
     ///
     /// <https://www.w3.org/TR/xml/#NT-Char>. Surrogates cannot inhabit a
@@ -1084,10 +1122,11 @@ mod tests {
         ScalarRange, blank_node_label_start_ranges, in_ranges, ipvfuture_address_char_ranges,
         iriref_forbidden_ranges, is_blank_node_label_start, is_ipvfuture_address_char,
         is_iriref_forbidden, is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_pn_chars,
-        is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_varname_continue,
-        is_varname_start, is_ws, is_ws_char, is_xml_char, is_xml_name_char, is_xml_name_start_char,
-        json_string_forbidden_ranges, pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges,
-        pn_local_esc_ranges, pn_local_start_ranges, ranges_sorted_disjoint,
+        is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start,
+        is_unicode_white_space, is_varname_continue, is_varname_start, is_ws, is_ws_char,
+        is_xml_char, is_xml_name_char, is_xml_name_start_char, json_string_forbidden_ranges,
+        pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges,
+        pn_local_start_ranges, ranges_sorted_disjoint, unicode_white_space_ranges,
         varname_continue_ranges, varname_start_ranges, ws_ranges, xml_char_ranges,
         xml_name_char_ranges, xml_name_start_char_ranges,
     };
@@ -1207,6 +1246,26 @@ mod tests {
         }
     }
 
+    /// The enumerated `White_Space` table answers exactly what the Unicode
+    /// property does, on every scalar, and shares no answer with `WS` beyond
+    /// the four ASCII members `WS` names.
+    #[test]
+    fn unicode_white_space_is_the_unicode_property_on_every_scalar() {
+        let mut members = 0;
+        for c in all_scalars() {
+            assert_eq!(is_unicode_white_space(c), c.is_whitespace(), "{c:?}");
+            members += u32::from(is_unicode_white_space(c));
+            if is_ws_char(c) {
+                assert!(is_unicode_white_space(c), "{c:?}");
+            }
+        }
+        assert_eq!(members, 25);
+        assert!(is_unicode_white_space('\u{A0}') && !is_ws_char('\u{A0}'));
+        assert!(is_unicode_white_space('\u{0B}') && !is_ws_char('\u{0B}'));
+        // The valid neighbour of each: a letter beside the space characters.
+        assert!(!is_unicode_white_space('a') && !is_unicode_white_space('\u{200B}'));
+    }
+
     #[test]
     fn no_break_space_is_neither_whitespace_nor_a_name_character() {
         // The misparse in the module docs, pinned from both sides: U+00A0 is
@@ -1307,6 +1366,11 @@ mod tests {
                 is_xml_name_start_char,
             ),
             ("xml_name_char", xml_name_char_ranges(), is_xml_name_char),
+            (
+                "unicode_white_space",
+                unicode_white_space_ranges(),
+                is_unicode_white_space,
+            ),
         ];
         for (name, ranges, predicate) in scalars {
             for b in 0..=u8::MAX {
@@ -1385,6 +1449,11 @@ mod tests {
                 is_xml_name_start_char,
             ),
             ("xml_name_char", xml_name_char_ranges(), is_xml_name_char),
+            (
+                "unicode_white_space",
+                unicode_white_space_ranges(),
+                is_unicode_white_space,
+            ),
         ];
         for (name, ranges, predicate) in cases {
             assert!(

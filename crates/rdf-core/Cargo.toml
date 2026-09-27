@@ -59,10 +59,6 @@ ahash = { workspace = true }
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
 # introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
 hashbrown = { workspace = true }
-# Tab-separated body parser for the native SSSOM codec: handles quoting,
-# flexible column counts, and by-name column access. The SSSOM `#`-prefixed YAML
-# header is parsed bespoke (PURRDF owns the format); `csv` only parses the body.
-csv = { workspace = true }
 # Content-addressed blob digest for the content store. Same version as the
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
@@ -139,6 +135,12 @@ harness = false
 # table. Report-only — no timing/speedup assertions. `make bench` lane only —
 # excluded from `make check`.
 name = "intern_absoluteness"
+harness = false
+
+[[bench]]
+# `purrdf_core::csv` read/write throughput over 1 MiB SSSOM-shaped and
+# CSVW-shaped inputs. Report-only; no timing threshold is asserted.
+name = "csv"
 harness = false
 
 [[bench]]
