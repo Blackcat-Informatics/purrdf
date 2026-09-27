@@ -201,6 +201,19 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "linux-raw-sys": "purrdf_cli::mmap (libc system-call bindings)",
     "errno": "std::io::Error::last_os_error (in purrdf_cli::mmap)",
     "bitflags": "plain libc::c_int seal masks (in purrdf_cli::mmap)",
+    "smallvec": "purrdf_core::SmallVec (an in-house small-vector type)",
+    "csv": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
+    # csv's own field-scanning engine; nothing else in the graph pulled it in.
+    "csv-core": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
+    "time": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    # time's own closure: its internal core types, its compile-time format-description
+    # macros, and the ranged-integer/formatting crates its date validation used.
+    # Nothing else in the graph pulled any of them in.
+    "time-core": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time-macros": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "deranged": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "num-conv": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "powerfmt": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency
