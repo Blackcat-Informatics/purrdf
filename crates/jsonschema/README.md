@@ -129,6 +129,13 @@ Licensed under any one of the following, at your option:
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
 
+The ECMA-262 `\p{…}` property tables compiled into this crate are derived from
+the Unicode Character Database, so the crate's licence expression is
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0`: the Unicode-3.0 terms
+([`LICENSES/Unicode-3.0.txt`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSES/Unicode-3.0.txt))
+apply alongside whichever of the three you choose. See
+[`LICENSING.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).
+
 The vendored meta-schemas under `tests/metaschemas/` and the vendored
 JSON-Schema-Test-Suite under `tests/suite/` are test data under their own
 licences (see `PROVENANCE.md`) and are not part of the published package.

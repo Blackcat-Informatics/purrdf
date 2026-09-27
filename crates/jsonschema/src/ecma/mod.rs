@@ -38,6 +38,7 @@
 
 mod emit;
 mod property;
+mod property_tables;
 
 use std::fmt;
 use std::sync::OnceLock;

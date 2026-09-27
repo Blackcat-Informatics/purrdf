@@ -40,6 +40,19 @@ three IgnorableBlocks):
   `Blocks-17.0.0.txt`, dated 2025-08-01, SHA-256
   `c0edefaf1a19771e830a82735472716af6bf3c3975f6c2a23ffbe2580fbbcb15`
 
+Added 2026-09-27, from the same directory, for the property names and values
+an ECMA-262 `\p{…}` escape accepts (`purrdf-jsonschema`'s generated
+`crates/jsonschema/src/ecma/property_tables.rs`):
+
+- `PropertyValueAliases.txt` —
+  `https://www.unicode.org/Public/17.0.0/ucd/PropertyValueAliases.txt`, header
+  `PropertyValueAliases-17.0.0.txt`, dated 2025-06-30, SHA-256
+  `64e9a5f76f7a1e8b5a47d6a1f9a26522a251208f5276bdfa1559dac7cf2e827a`
+- `PropertyAliases.txt` —
+  `https://www.unicode.org/Public/17.0.0/ucd/PropertyAliases.txt`, header
+  `PropertyAliases-17.0.0.txt`, dated 2025-04-25, SHA-256
+  `4441f573caf952ffece1d7c892e7715bd7136dfc26f96eb6f268bf1e474715fb`
+
 From `https://www.unicode.org/Public/17.0.0/idna/`:
 
 - `IdnaTestV2.txt`
