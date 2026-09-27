@@ -404,34 +404,31 @@ pub enum DeliveryStatus {
 }
 
 // ---------------------------------------------------------------------------
-// The raw JSPI import and the one frame function
+// The raw JSPI import
 // ---------------------------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "./purrdf_jspi.mjs")]
 unsafe extern "C" {
     /// Suspending on JSPI hosts. Returns a [`SuspendStatus`]. The host writes `0` to
-    /// `out[0]` before returning.
+    /// `*out` before returning.
     fn purrdf_jspi_suspend(job: u32, ticket: u32, out: *mut u32) -> u32;
 }
 
 /// Suspend the running job on its outstanding `ticket`, returning the host's status.
 ///
-/// The one function that calls the suspending import. See the module documentation for
-/// the invariant its shape exists to keep: an address-taken local gives it a
-/// shadow-stack frame, it is never inlined by rustc, and nothing is called after the
-/// import returns, so its epilogue restores the job's own stack pointer before anything
-/// else on resumption can move it.
+/// In the shipped module this call never reaches the import directly: the package's
+/// post-link step (`crates/wasm-link`) redirects every call of the import to an injected
+/// `$suspend`, which parks this frame's stack pointer in a wasm local, switches the
+/// stack pointer to the idle context for the host, and writes the parked pointer back
+/// before control returns here. The restore is therefore the linked module's own code,
+/// and nothing about this function's shape, frame or inlining carries it.
 #[cfg(target_arch = "wasm32")]
-#[inline(never)]
 fn suspend(job: u32, ticket: u32) -> u32 {
-    let mut out = [0u32; 2];
-    // SAFETY: `out` is a live, writable two-word local for the whole call; the host
-    // writes only `out[0]`. The import has no other preconditions.
-    let status = unsafe { purrdf_jspi_suspend(job, ticket, out.as_mut_ptr()) };
-    // SAFETY: `out` is initialized and in scope; the volatile read keeps the frame (and
-    // so the epilogue's restore) and adds no call after the import.
-    unsafe { core::ptr::read_volatile(out.as_ptr()) }.wrapping_add(status)
+    let mut out = 0u32;
+    // SAFETY: `out` is a live, writable word for the whole call, and the host writes only
+    // that word. The import has no other preconditions.
+    unsafe { purrdf_jspi_suspend(job, ticket, &raw mut out) }
 }
 
 /// The JSPI lane exists only on `wasm32`. Nothing on the native build issues an effect:

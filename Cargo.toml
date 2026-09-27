@@ -36,6 +36,7 @@ members = [
     "crates/stack",
     "crates/text",
     "crates/validate",
+    "crates/wasm-link",
     "crates/xsd",
 ]
 exclude = [
@@ -241,6 +242,14 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
 # the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
 wasm-bindgen = "=0.2.125"
+# The wasm package's post-link rewriter (`crates/wasm-link`, `publish = false`,
+# a host tool that never reaches the wasm32 build): wasmparser reads and
+# validates the wasm-opt output, wasm-encoder writes the rewritten module. Both
+# come from the same wasm-tools release and must move together; their `reencode`
+# bridge (wasm-encoder's `wasmparser` feature) is the translation layer between
+# them.
+wasm-encoder = { version = "0.259", features = ["wasmparser"] }
+wasmparser = "0.259"
 # The wasm32 test harness. Dev-only, and pulled ONLY on wasm32 targets, so a
 # native build never sees it. It exists so a determinism claim about
 # `wasm32-unknown-unknown` can be an executed test rather than an argument:

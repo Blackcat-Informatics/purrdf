@@ -31,7 +31,9 @@ balanced by measured cold-runner wall time (compile plus run), not by crate coun
 * `shapes`   -- the validators and everything that needs `purrdf-shapes`;
 * `hosts`    -- the umbrella crate (whose doctests link every member), the CLI,
                 the wasm and Python bindings and the conformance harness, all of
-                which need the whole library graph anyway;
+                which need the whole library graph anyway, plus the wasm package's
+                post-link tool, whose small test build rides the leg that owns the
+                wasm binding;
 * `capi`     -- the C ABI alone: its smoke test runs a nested `cargo build` of the
                 cdylib and a C compiler, the longest single test in the workspace,
                 so it gets a leg whose own compile is otherwise small.
@@ -95,6 +97,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "purrdf-python",
         "purrdf-sparql-conformance",
         "purrdf-wasm",
+        "wasm-link",
     ),
     "capi": ("purrdf-capi",),
 }

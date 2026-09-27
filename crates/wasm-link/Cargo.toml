@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "wasm-link"
+description = "The PurRDF wasm package's post-link rewriter: structural stack-pointer switching for the asynchronous lane and the poison gate, applied to the optimized module after wasm-opt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["wasm", "build-tool", "purrdf"]
+categories = ["development-tools::build-utils"]
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wasm-link"
+path = "src/main.rs"
+
+[dependencies]
+# Reads the wasm-opt output and validates both the input and the rewritten
+# module against the artifact's feature set.
+wasmparser = { workspace = true }
+# Writes the rewritten module; its `reencode` bridge translates every section
+# and instruction wasmparser read, so the rewrite touches only what it changes.
+wasm-encoder = { workspace = true }

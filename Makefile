@@ -122,8 +122,6 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
-	python3 scripts/check-wasm-jspi-frame.py --self-test
-	python3 scripts/bind-wasm-glue.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/check-test-shards.py --self-test
@@ -695,13 +693,6 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
 	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
 		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
-	@# A trap out of an asynchronous job kills the instance, and every entry point —
-	@# synchronous calls and objects created before the trap included — must refuse from
-	@# then on. The glue reaches the instance through one variable; this binds it to the
-	@# runtime's poison gate, and fails the build when the glue's layout is not the one
-	@# it rewrites. Its own fixtures run first.
-	python3 scripts/bind-wasm-glue.py --self-test
-	python3 scripts/bind-wasm-glue.py crates/rdf-wasm/js/pkg/purrdf_wasm.js
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
@@ -719,13 +710,14 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
 		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
-	@# A resumed asynchronous job must restore its own stack pointer before anything
-	@# can allocate a frame. wasm-opt inlines the frame function that guarantees it, so
-	@# the optimized module is checked structurally at every call of the import; the
-	@# gate's own fixtures run first, so a gate that stopped detecting a missing restore
-	@# cannot pass the artifact.
-	python3 scripts/check-wasm-jspi-frame.py --self-test
-	python3 scripts/check-wasm-jspi-frame.py crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@# The post-link step, last because it must see the module wasm-opt ships. It
+	@# exports the shadow-stack pointer, routes every call of the suspending import
+	@# through an injected $suspend that puts the resumed job's own pointer back
+	@# before anything else runs, wraps purrdf_jspi_run so a run starts on the region
+	@# top its caller passes and returns with the idle pointer restored, and puts
+	@# every exported function behind the poison gate (crates/wasm-link). It validates
+	@# the module it writes and refuses one it does not recognize or has already linked.
+	cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
 	@# Durable proof that +simd128 actually produced SIMD codegen: a green
 	@# wasm-pkg-test round-trip only proves the module runs correctly, not that
 	@# it is vectorized — a memchr/RUSTFLAGS/dependency regression could ship a
@@ -740,8 +732,8 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 wasm-pkg-test: wasm-pkg ## Build and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
-wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
-	cd crates/rdf-wasm/js && node bench/parse.bench.mjs
+wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput and poison-gate benchmarks (report-only; never a gate).
+	cd crates/rdf-wasm/js && node bench/parse.bench.mjs && node bench/gate.bench.mjs
 
 # The static RDF-1.2 console (docs/playground/) assembled next to a fresh copy of the
 # published ESM package — the exact tree the Pages deploy ships at /playground. The app
