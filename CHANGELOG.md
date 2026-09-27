@@ -2397,8 +2397,8 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **BREAKING** **sparql-eval, sparql-algebra, wasm:** an unsupported request no longer
   reads as a development stage or as a server fault. `EvalError::Unsupported` renders
   as `unsupported: …` (it was `unsupported in sparql-eval (S6 scope): …`) and
-  `ParseError::Unsupported` as `unsupported SPARQL construct: …` (it was `… (purrdf S5
-  scope): …`). An unclassified `EvalError::Unsupported` carries its own code at the
+  `ParseError::Unsupported` as `unsupported SPARQL construct: …` (it was
+  `… (purrdf S5 scope): …`). An unclassified `EvalError::Unsupported` carries its own code at the
   engine boundary, `native-sparql-unsupported` (`EvalError::UNSUPPORTED_CODE`), where it
   used to carry `native-sparql-query-eval` or `native-sparql-update-eval` like an
   evaluation that failed; a `SERVICE ?e` bound to a literal or a blank node is now that

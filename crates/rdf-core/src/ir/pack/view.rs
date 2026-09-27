@@ -181,7 +181,7 @@ impl DatasetView for PackView<'_> {
     type ProbePlan = ();
 
     /// A pack's dictionary is admitted only when no triple term in it nests past
-    /// [`super::dict::MAX_TRIPLE_TERM_DEPTH`].
+    /// the decoder's fixed triple-term depth limit of 128, so that limit is the bound.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         Some(super::dict::MAX_TRIPLE_TERM_DEPTH)
     }

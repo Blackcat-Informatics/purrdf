@@ -372,7 +372,7 @@ impl ScratchInterner {
     /// Nor does it admit the value's depth: a triple term is walked here — looked up,
     /// hashed, compared — by recursion, so a caller handing it one nested deeper than its
     /// thread's stack holds walks off that stack. The evaluator interns through
-    /// [`Self::try_intern`], which measures first; a caller of this door owns the depth of
+    /// a crate-internal door that measures the stack first; a caller of this one owns the depth of
     /// what it hands over, as it owned building it.
     pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {
         self.intern_value(dataset, value)

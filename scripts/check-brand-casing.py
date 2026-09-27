@@ -169,7 +169,6 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/slice/src/standpoint_emit.rs", 1),
         ("crates/slice/tests/ownership_tests.rs", 4),
         ("crates/sparql-algebra/src/ast.rs", 1),
-        ("crates/sparql-algebra/src/error.rs", 1),
         ("crates/sparql-algebra/src/lexer.rs", 1),
         ("crates/sparql-algebra/src/lib.rs", 2),
         ("crates/sparql-algebra/src/parser.rs", 2),

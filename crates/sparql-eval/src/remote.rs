@@ -34,7 +34,8 @@
 //! surrounding query proceeds unchanged.
 //!
 //! A variable endpoint (`SERVICE ?e`) is evaluated once per distinct IRI `?e` is bound
-//! to — see [`crate::service_endpoints`] for the shapes that bind it. One that no solution
+//! to — by a pattern earlier in its group, by the left operand of the group join,
+//! `OPTIONAL` or `MINUS` it sits in, or by the other side of a group join. One that no solution
 //! binds is not an endpoint failure but this engine's refusal, so it is an
 //! [`EvalError::Unsupported`] that `SILENT` does not swallow: `SILENT` tolerates an
 //! endpoint that fails, not a query that names none.
