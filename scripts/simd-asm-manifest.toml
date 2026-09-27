@@ -34,6 +34,7 @@ packages = [
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
   "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
+  "purrdf-hash", "purrdf-jsonschema",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -225,7 +226,7 @@ summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on 
   label = "sha-ni"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
   crate = "sha2"
-  symbol = "sha2::sha256::x86::digest_blocks"
+  symbol = "sha2::sha256::x86_sha::compress"
   min_vector_ops = 61
   require_mnemonics = ["sha256rnds2", "sha256msg1", "sha256msg2"]
   max_fma = 0
@@ -6187,5 +6188,411 @@ summary = "the encoder's window hashing: one 16-byte load, a byte shuffle into 4
   symbol = "purrdf_deflate::arch::wasm32::hash_simd128"
   min_vector_ops = 1
   require_mnemonics = ["i8x16.swizzle", "i32x4.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+
+# purrdf-hash. Floors and mnemonics below are from real `--probe`/`--dump` measurement
+# of this tree (see the summary text of each measure for what was probed and where).
+#
+# `arch::aarch64::*` and every generic `Engine<Aes>` instantiation cannot be measured on
+# `aarch64-neoverse-v1`: `crates/hash/src/arch/aarch64.rs:265` (`pub(crate) struct
+# Block(core::arch::aarch64::uint8x16_t);`, behind `#[cfg(all(target_endian = "little",
+# target_feature = "aes"))]`) fails `-D unused-qualifications` only on a target that
+# compiles that `cfg` arm, which among the seven configurations here is
+# `aarch64-neoverse-v1` alone (the only one with `aes` at the compile-time target level).
+# That is a pre-existing defect in `crates/hash`, out of scope for this change (only
+# `scripts/simd-asm-manifest.toml` and `docs/design/purrdf-simd.md` may be touched), and
+# it fails the whole `cargo build` for that configuration -- every package in `[build]
+# packages`, not only `purrdf-hash` -- so no site's `aarch64-neoverse-v1` column can be
+# measured while it stands. See the task summary for the full report.
+[[site]]
+id = "hash.sha1-block"
+summary = "the SHA-1 block compression function, dispatched at run time to the x86 SHA extensions or the Armv8 SHA1 instructions, portable elsewhere"
+
+  # Measured v98 (x86_64), v97 (x86_64-v3), v99 (x86_64-v4): `#[target_feature(enable =
+  # "sha,ssse3,sse4.1")]` compiles unconditionally, independent of the build's baseline.
+  [[site.measure]]
+  label = "sha-ni"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::x86_64::sha1_kernel"
+  min_vector_ops = 48
+  require_mnemonics = ["sha1rnds4", "sha1nexte"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v97 on aarch64 (`sha1c`x5, `sha1h`x20, `sha1m`x5, `sha1p`x10, `sha1su0`x16,
+  # `sha1su1`x16); `aarch64-neoverse-v1` cannot be built (see the site-block header).
+  [[site.measure]]
+  label = "armv8-sha1"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::aarch64::sha1_kernel"
+  min_vector_ops = 48
+  require_mnemonics = ["sha1c", "sha1su0"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 has no SHA1 kernel; `Sha1Backend::Portable` always runs this. Measured v0 on
+  # both wasm32 and wasm32-simd128.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::sha1::compress_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.crc32-update"
+summary = "the CRC-32 register update, dispatched at run time to `pclmulqdq` folding on x86-64, the Armv8 CRC32 instructions alone or behind `pmull` folding on aarch64, portable slicing-by-16 elsewhere"
+
+  # Measured v42 on x86_64 (legacy SSE encoding: `pclmulqdq`).
+  [[site.measure]]
+  label = "pclmulqdq"
+  configs = ["x86_64"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::x86_64::crc32_kernel"
+  min_vector_ops = 21
+  require_mnemonics = ["pclmulqdq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same kernel, VEX-encoded once AVX is in the baseline: measured v41
+  # (x86_64-v3), v33 (x86_64-v4).
+  [[site.measure]]
+  label = "vpclmulqdq"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::x86_64::crc32_kernel"
+  min_vector_ops = 16
+  require_mnemonics = ["vpclmulqdq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `Crc32Backend::Aarch64Crc32`: eight bytes per `crc32x`, a scalar hardware
+  # accelerator with no packed lanes. Measured v0 on aarch64; `aarch64-neoverse-v1`
+  # cannot be built (see the site-block header).
+  [[site.measure]]
+  label = "crc scalar"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::aarch64::crc32_crc_kernel"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `Crc32Backend::Aarch64Pmull`: measured v33 on aarch64 (`pmull`x8, `pmull2`x8);
+  # `aarch64-neoverse-v1` cannot be built (see the site-block header).
+  [[site.measure]]
+  label = "pmull fold"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::aarch64::crc32_pmull_kernel"
+  min_vector_ops = 16
+  require_mnemonics = ["pmull", "pmull2"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 has no CRC32 kernel; `Crc32Backend::Portable` always runs this. Measured v0
+  # on both wasm32 and wasm32-simd128.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::crc32::update_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.hex-encode"
+summary = "the base16 encoder behind `hex::Lower`, dispatched at run time to SSSE3 `pshufb` (x86-64), NEON `tbl` (aarch64) or compiled to wasm `i8x16.swizzle` (`simd128`), portable table lookup elsewhere"
+
+  # Measured v7 on x86_64 (`pshufb`x2), out of line.
+  [[site.measure]]
+  label = "ssse3"
+  configs = ["x86_64"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::x86_64::hex_kernel"
+  min_vector_ops = 3
+  require_mnemonics = ["pshufb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Once AVX2 is in the baseline LLVM inlines `hex_kernel` into its wrapper and
+  # unrolls it 3x: measured v21 on both x86_64-v3 and x86_64-v4 (`vpshufb`x6), so the
+  # wrapper is the measured symbol here, not the (no longer standalone) kernel.
+  [[site.measure]]
+  label = "ssse3 (inlined, unrolled)"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::x86_64::hex_encode"
+  min_vector_ops = 10
+  require_mnemonics = ["vpshufb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # LLVM inlines `hex_kernel` into its wrapper on aarch64 too (not unrolled): measured
+  # v6 on aarch64 (`tbl`x2, `zip1`x1, `zip2`x1); `aarch64-neoverse-v1` cannot be built
+  # (see the site-block header).
+  [[site.measure]]
+  label = "neon (inlined)"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::aarch64::hex_encode"
+  min_vector_ops = 3
+  require_mnemonics = ["tbl"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The wasm32 arch module's only kernel; present only when the whole build has
+  # `simd128`. Measured v6 (`i8x16.swizzle`x2, `i8x16.shuffle`x2).
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::wasm32::hex_encode"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.swizzle"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A baseline wasm32 build has no `simd128` kernel at all. Measured v0.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.digest-portable"
+summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consumes the result of the one before, so neither has an instruction set or a data-parallel formulation on any target"
+
+  # Measured v0 on x86_64 and wasm32/wasm32-simd128; `aarch64-neoverse-v1` cannot be
+  # built (see the site-block header). Plain `aarch64` is scalar by the same FIPS
+  # 1321/202 chaining argument as every other configuration measured.
+  [[site.measure]]
+  label = "md5"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::md5::compress"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "sha3"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::sha3::keccak_f1600"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.fixed-compress"
+summary = "the fixed-key hasher's compression, `Engine<Selected>::bytes`: `purrdf-core`'s `FastHasher` monomorphizes `Selected` to `Portable` (folded multiplies) on every build measured here except `Aes` (four lanes of AES rounds) on the one build whose target enables AES at compile time. Neither `Engine<P>` nor `fixed::portable`/`fixed::aes` is instantiated by any call inside `purrdf_hash`'s own library; `purrdf-core`'s `FastMap`/`FastSet` (`crates/rdf-core/src/hash.rs`) is the concrete caller that instantiates it, monomorphized into `purrdf-core`'s object code but still attributed to crate `purrdf_hash`, the type's origin, by this tool's demangler"
+
+  # Cannot be measured: `aarch64-neoverse-v1` is the only one of the seven
+  # configurations that compiles `aes` at the target level (SSE2, `x86-64-v3` and
+  # `x86-64-v4` do not carry AES in LLVM's definition of those levels; plain
+  # `aarch64` and both wasm32 builds are not aarch64/x86-64 or not little-endian aarch64
+  # at all), and it cannot be built (see the site-block header).
+  [[site.measure]]
+  label = "aes"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::fixed::Engine<purrdf_hash::fixed::Aes>>::bytes"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v0 on x86_64, x86_64-v3, x86_64-v4 (in `purrdf_core`, `purrdf_datalog`,
+  # `purrdf_sparql_eval` and `purrdf_rdf`, every copy agreeing); folded multiplies have
+  # no vector form.
+  [[site.measure]]
+  label = "portable"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::fixed::Engine<purrdf_hash::fixed::Portable>>::bytes"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "jsonschema.compile-validate"
+summary = "schema compilation and instance validation: `regex` matching and `serde_json::Value` traversal, both dependency code, over no purrdf-authored vector-shaped loop"
+
+  # Measured v0 on x86_64, wasm32 and wasm32-simd128.
+  [[site.measure]]
+  label = "from_document"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_jsonschema"
+  symbol = "purrdf_jsonschema::schema::Schema>::from_document"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v0 on x86_64, wasm32 and wasm32-simd128.
+  [[site.measure]]
+  label = "is_valid"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_jsonschema"
+  symbol = "purrdf_jsonschema::schema::Schema>::is_valid"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.unicode-ascii-lower"
+summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in `unicode::case_fold`): `push_ascii_lowercase`'s bulk `[u8]::make_ascii_lowercase` over the held-back ASCII run, which LLVM compiles to a packed range-clamp-and-add on every SIMD-capable target measured here, not the SWAR prefix scan (`unicode::prefix_len`) that bounds the run, which stays scalar throughout"
+
+  # Measured v30 (`pcmpeqb`x6, `pminub`x4, `pmaxub`x2, `paddb`x6, `pand`x4, `pandn`x2,
+  # `por`x6).
+  [[site.measure]]
+  label = "x86_64"
+  configs = ["x86_64"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 15
+  require_mnemonics = ["pcmpeqb", "pminub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v54 (`vpcmpeqb`x10, `vpminub`x10, `vpaddb`x10, `vpand`x11, `vpor`x11).
+  [[site.measure]]
+  label = "x86_64-v3"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 27
+  require_mnemonics = ["vpcmpeqb", "vpminub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # AVX-512 has a direct unsigned-less-than compare, so the shape changes: measured
+  # v32 (`vpcmpltub`x10, `vpaddb`x10, `vpor`x10, `vpternlogd`x1).
+  [[site.measure]]
+  label = "x86_64-v4"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 16
+  require_mnemonics = ["vpcmpltub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v24 on aarch64 (`cmhi`x6, `add`x68, `and`x25, `orr`x19, `sub`x22, of which
+  # only `cmhi` and the `orr`/`and` logical lanes are packed work); `aarch64-neoverse-v1`
+  # cannot be built (see the `hash.*` site-block header, which this build shares since
+  # `purrdf-hash` is in the same `[build] packages` list).
+  [[site.measure]]
+  label = "aarch64"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 12
+  require_mnemonics = ["cmhi"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # No SIMD ISA at all: measured v0.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A much smaller packed footprint than any x86-64 or aarch64 configuration: measured
+  # v2 (`v128.and`x1, `v128.or`x1).
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::unicode::case_fold"
+  min_vector_ops = 1
+  require_mnemonics = ["v128.and"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "gts.rfc3339-lexical"
+summary = "RFC 3339 `date-time` parse and format for the files and tar profiles' `modified` stamps: `parse` is a byte-at-a-time scanner with no vector form on any target measured here; `format`'s decimal rendering of the civil-calendar fields is compiled to a packed multiply-and-shift by LLVM on every SIMD-capable target measured here"
+
+  # `parse` measured v0 on x86_64, x86_64-v3, x86_64-v4, aarch64, wasm32 and
+  # wasm32-simd128; `aarch64-neoverse-v1` cannot be built (see the `hash.*` site-block
+  # header, which this build shares).
+  [[site.measure]]
+  label = "parse"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::parse"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `format` measured v20 (`pmuludq`x4, `packuswb`x2, `pshufd`x6, `punpckldq`x4).
+  [[site.measure]]
+  label = "format x86_64"
+  configs = ["x86_64"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 10
+  require_mnemonics = ["pmuludq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `format` measured v12 (`vpmuludq`x2, `vpackusdw`x1, `vpackuswb`x1, `vpblendd`x2).
+  [[site.measure]]
+  label = "format x86_64-v3"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 6
+  require_mnemonics = ["vpmuludq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `format` measured v8 (`vpmuludq`x2, `vpermi2d`x1, `vpmulld`x1).
+  [[site.measure]]
+  label = "format x86_64-v4"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 4
+  require_mnemonics = ["vpmuludq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `format` measured v15 on aarch64 (`umull`x9, `umull2`x2, `mul`x11, `mls`x2,
+  # `shrn`x1, `ushr`x1, `uzp2`x2, `xtn`x1); `aarch64-neoverse-v1` cannot be built (see
+  # the `hash.*` site-block header, which this build shares).
+  [[site.measure]]
+  label = "format aarch64"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 7
+  require_mnemonics = ["umull"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # No SIMD ISA / no autovectorization of this shape on wasm: `format` measured v0 on
+  # both wasm32 and wasm32-simd128.
+  [[site.measure]]
+  label = "format portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::rfc3339::format"
+  min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
