@@ -1478,9 +1478,10 @@ const JSON_SCHEMA_LINKML_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "array-contains-validation-dropped",
-        "JSON Schema contains/minContains/maxContains assertions have no LinkML 1.11 slot \
-         expression. List item and cardinality constraints remain, while the contains predicate \
-         and its match-count bounds are omitted.",
+        "A JSON Schema contains is stated as a LinkML has_member, which requires one matching \
+         member; LinkML 1.11 has no expression for a minContains above 1 or a maxContains, so \
+         those match-count bounds are omitted, as is a contains on a schema the projection \
+         renders as no slot expression.",
     ),
     (
         "conditional-validation-dropped",

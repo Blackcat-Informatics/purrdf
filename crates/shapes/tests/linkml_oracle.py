@@ -5,18 +5,21 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.metadata
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import yaml
 from jsonschema.validators import validator_for
 from linkml.generators.jsonschemagen import JsonSchemaGenerator
+from linkml.validator.validation_context import ValidationContext
 from linkml_runtime.linkml_model.meta import SchemaDefinition
 from linkml_runtime.loaders import yaml_loader
 from linkml_runtime.utils.schemaview import SchemaView
-
 
 REPO = Path(__file__).resolve().parents[3]
 LINKML_PACKAGE_VERSION = "1.11.1"
@@ -289,6 +292,12 @@ def _assert_lossy(payload: dict[str, Any]) -> None:
         raise AssertionError("representable numeric carrier was widened unexpectedly")
     if not _is_valid(generated, "Lossy", {"ex:array": ["text", 7]}):
         raise AssertionError("representable homogeneous tuple union was rejected")
+    if array.has_member is None or array.has_member.equals_number != 7:
+        raise AssertionError(f"the contains has_member drifted: {array!r}")
+    if generated["$defs"]["Lossy"]["properties"]["ex:array"].get("contains") != {"const": 7}:
+        raise AssertionError("the generator no longer states a scalar has_member")
+    if _is_valid(generated, "Lossy", {"ex:array": ["text", 8]}):
+        raise AssertionError("the has_member did not reject an array without its member")
     if _is_valid(generated, "Lossy", {"ex:array": [{"bad": True}]}):
         raise AssertionError("representable tuple item union accepted an object")
     if not _is_valid(generated, "Lossy", {"ex:choice": "ex:open"}):
@@ -477,16 +486,49 @@ def _assert_temporal(payload: dict[str, Any]) -> None:
             )
 
 
-def _assert_value_shapes(payload: dict[str, Any]) -> None:
-    """The value-position shape constraints through the official LinkML generator.
+def _has_members(slot: dict[str, Any]) -> list[dict[str, Any]]:
+    """The has_member expressions a slot states, on itself or an any_of branch."""
+    found = []
+    for expression in [slot, *slot.get("any_of", [])]:
+        if "has_member" in expression:
+            if not expression.get("multivalued"):
+                raise AssertionError(f"has_member on a single-valued expression: {expression!r}")
+            found.append(expression["has_member"])
+    return found
 
-    sh:node and sh:and are all_of, sh:or any_of, sh:xone exactly_one_of and
-    sh:not none_of, so the generated JSON Schema must agree with the SHACL
-    verdict of every projected instance but one: sh:someValue's contains, which
-    the official 1.11.1 generator states only for a has_member of scalar
-    constraints, not for the member expression a value schema is, and which is
-    recorded where it sits. The one probe it decides — an array with no
-    conforming member — must therefore diverge, and only it.
+
+def _member_judge(document: dict[str, Any], member: dict[str, Any]) -> Callable[[Any], bool]:
+    """Judges one list member against a has_member expression.
+
+    The expression becomes the whole range of a required single-valued slot on a
+    probe class, so the official generator states every field of it — the class
+    ranges and the any_of included — as the slot's own schema.
+    """
+    probe_class = "HasMemberProbe"
+    if probe_class in document["classes"]:
+        raise AssertionError("the has_member probe class name is taken")
+    extended = copy.deepcopy(document)
+    extended["classes"][probe_class] = {
+        "attributes": {"member": {**member, "required": True}},
+        "extra_slots": {"allowed": True},
+    }
+    generated = _generate(_load(yaml.safe_dump(extended, sort_keys=True)))
+    return lambda value: _is_valid(generated, probe_class, {"member": value})
+
+
+def _assert_value_shapes(payload: dict[str, Any]) -> None:
+    """The value-position shape constraints through the official LinkML toolchain.
+
+    sh:node and sh:and are all_of, sh:or any_of, sh:xone exactly_one_of, sh:not
+    none_of and sh:someValue has_member, so no loss is located on the Holder and
+    the emitted LinkML must agree with the SHACL verdict of every projected
+    instance. The official 1.11.1 JSON Schema generator (and the linkml
+    validator, whose JSON Schema plugin runs it) states a has_member only as far
+    as its scalar fields: a has_member whose expression is a range or an any_of
+    generates no contains. That drop is the generator's, proved here: its output
+    alone accepts exactly the one probe that has no conforming member, while the
+    has_member expression — judged by the same generator as a slot's own range —
+    rejects it.
     """
     losses = payload["losses"]["losses"]
     if not all(entry["intentional"] for entry in losses):
@@ -494,26 +536,48 @@ def _assert_value_shapes(payload: dict[str, Any]) -> None:
     holder_losses = {
         entry["code"] for entry in losses if "#/$defs/Holder" in entry["location"]
     }
-    if "array-contains-validation-dropped" not in holder_losses:
-        raise AssertionError(f"the contains loss is not recorded: {sorted(holder_losses)}")
-    for code in ("one-of-validation-widened", "negation-validation-dropped"):
-        if code in holder_losses:
-            raise AssertionError(f"value-shape fixture recorded {code}")
+    if holder_losses:
+        raise AssertionError(f"value-shape fixture recorded {sorted(holder_losses)}")
+    document = yaml.safe_load(payload["yaml"])
+    holder = payload["element_names"]["Holder"]
+    attributes = document["classes"][holder]["attributes"]
+    stated = {name: _has_members(slot) for name, slot in attributes.items()}
+    stated = {name: members for name, members in stated.items() if members}
+    if list(stated) != ["ex:some"] or len(stated["ex:some"]) != 1:
+        raise AssertionError(f"the sh:someValue has_member drifted: {stated!r}")
+    member = stated["ex:some"][0]
+    ranges = [branch.get("range") for branch in member.get("any_of", [])]
+    if len(ranges) != 2 or ranges[0] != "integer" or ranges[1] not in document["classes"]:
+        raise AssertionError(f"the has_member expression lost its ranges: {member!r}")
     schema = _load(payload["yaml"])
+    loaded = schema.classes[holder].attributes["ex:some"].any_of[1].has_member
+    if loaded is None or len(loaded.any_of) != 2:
+        raise AssertionError(f"the official loader did not read has_member: {loaded!r}")
     generated = _generate(schema)
     _assert_reference_closure(generated)
-    holder = payload["element_names"]["Holder"]
+    array_branch = generated["$defs"][holder]["properties"]["ex:some"]["anyOf"][1]
+    if array_branch.get("type") != "array" or "contains" in array_branch:
+        raise AssertionError(f"the generator's has_member drop drifted: {array_branch!r}")
+    context = ValidationContext(schema, holder)
+    validator = context.json_schema_validator(closed=False, include_range_class_descendants=True)
+    if "contains" in json.dumps(validator.schema):
+        raise AssertionError("the linkml validator's JSON Schema now states a contains")
+    is_member = _member_judge(document, member)
     for probe in payload["probes"]:
-        actual = _is_valid(generated, holder, probe["value"])
-        if probe["label"] == "some-none":
-            if actual is not True or probe["conforms"] is not False:
-                raise AssertionError("the located contains divergence drifted")
-            continue
+        generated_verdict = _is_valid(generated, holder, probe["value"])
+        values = probe["value"].get("ex:some")
+        members_verdict = not isinstance(values, list) or any(map(is_member, values))
+        actual = generated_verdict and members_verdict
         if actual != probe["conforms"]:
             raise AssertionError(
                 f"value-shape probe {probe['label']!r}: SHACL={probe['conforms']}, "
                 f"LinkML={actual}\n"
                 f"generated={json.dumps(generated['$defs'][holder], indent=2, sort_keys=True)}"
+            )
+        generator_diverges = generated_verdict != probe["conforms"]
+        if generator_diverges != (probe["label"] == "some-none"):
+            raise AssertionError(
+                f"the generator's has_member drop is not located on some-none: {probe['label']!r}"
             )
 
 
@@ -537,7 +601,7 @@ def main() -> None:
         f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
         f"{len(payload['temporal']['probes'])} temporal range-bound probes agree; "
         f"{len(payload['value_shapes']['probes'])} SHACL value-shape probes agree "
-        "but for 1 located contains loss"
+        "through has_member, whose non-scalar drop the generator alone makes on 1"
     )
 
 

@@ -2268,9 +2268,9 @@ fn graphql_projects_some_value() {
     assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
-/// LinkML states the lone value's `all_of`; a `has_member` would carry the
-/// array's `contains` only as far as its scalar fields, which the member's value
-/// schema is not, so the `contains` is recorded where it sits.
+/// LinkML states the lone value's `all_of` and the array's `contains` as a
+/// `has_member` carrying the member's whole value expression — here the two
+/// inline classes of an IRI node — so nothing is recorded for it.
 #[test]
 fn linkml_projects_some_value() {
     let emitted = emit(SOME_VALUE);
@@ -2278,11 +2278,33 @@ fn linkml_projects_some_value() {
     assert_eq!(subject["required"], true);
     assert!(subject["any_of"][0]["all_of"].is_array(), "{subject}");
     assert_eq!(subject["any_of"][1]["minimum_cardinality"], 1);
+    let member = &subject["any_of"][1]["has_member"];
+    assert_eq!(
+        member,
+        &json(
+            r#"{"any_of":[
+                {"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf0Object"},
+                {"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf1Object"}
+            ]}"#
+        ),
+        "{subject}"
+    );
+    let classes = &emitted.linkml["classes"];
+    assert_eq!(
+        classes["InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf0Object"]["attributes"]["@id"],
+        json(
+            r#"{"alias":"@id","pattern":"^(?:[^_]|_(?:[^:]|$))","range":"string","required":true}"#
+        )
+    );
+    assert_eq!(
+        classes["InlineDefsHolderPropertiesExSubjectAnyOf1ContainsAnyOf1Object"]["attributes"]["@list"]
+            ["maximum_cardinality"],
+        0
+    );
     assert!(
-        holder_losses(&emitted.linkml_losses).contains(&(
-            "array-contains-validation-dropped".to_owned(),
-            "#/$defs/Holder/properties/ex:subject/anyOf/1/contains".to_owned()
-        )),
+        holder_losses(&emitted.linkml_losses)
+            .iter()
+            .all(|(_, pointer)| !pointer.starts_with("#/$defs/Holder/properties/ex:subject")),
         "{:?}",
         holder_losses(&emitted.linkml_losses)
     );

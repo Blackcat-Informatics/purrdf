@@ -809,8 +809,10 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   array, so an array of values can no longer bypass a per-value constraint
   (`sh:pattern`, a length, `sh:not`) or `sh:maxCount`. The Pydantic emitter
   enforces `allOf`, `oneOf` and `contains` with its runtime check (the new
-  `_purrdf_requires` helper) where that check evaluates them. Each emitter
-  oracle runs a value-shape fixture.
+  `_purrdf_requires` helper) where that check evaluates them. The LinkML
+  emitter states `contains` as a `has_member` carrying the whole value
+  expression, and the LinkML importer reads a `has_member` back as `contains`.
+  Each emitter oracle runs a value-shape fixture.
 - **validate, shapes, python, wasm, capi, cli:** a SPARQL 1.2 RL rule set's
   `IMPORTS` now resolve from the rules tool's import table on every host. The
   Python `apply_rules(srl=..., imports=...)`, WebAssembly `shaclApplyRules` and

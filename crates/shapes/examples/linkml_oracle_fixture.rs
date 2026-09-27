@@ -172,7 +172,7 @@ fn lossy_schema() -> Value {
                             { "type": "integer" }
                         ],
                         "contains": { "const": 7 },
-                        "minContains": 1,
+                        "minContains": 2,
                         "unevaluatedItems": false
                     },
                     "ex:choice": {
@@ -262,7 +262,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let expected_losses = BTreeSet::from([
         (
             "array-contains-validation-dropped",
-            "#/$defs/Lossy/properties/ex:array/contains",
+            "#/$defs/Lossy/properties/ex:array/minContains",
         ),
         ("conditional-validation-dropped", "#/$defs/Lossy/if"),
         (
