@@ -1057,7 +1057,7 @@ export function configureAsync(options) {
  * `.wasm`); in a Worker, pass the compiled `WebAssembly.Module` its bundler imports from
  * `@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm`. Must be awaited once before any
  * other API is used. There is one instance per JavaScript realm: once a trap has poisoned
- * it, this rejects with the poison error like every other entry point, and only a fresh
+ * it, this rejects with the poison error like every asynchronous entry point, and only a fresh
  * realm (a new page, Worker isolate or process) can load the package again.
  */
 export async function ready(wasmBytesOrUrl) {

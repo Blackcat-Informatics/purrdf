@@ -6,11 +6,9 @@
 //
 // The wasm-bindgen glue imports this module by relative path (`./purrdf_jspi.mjs`) and
 // hands `purrdf_jspi_suspend` (and `purrdf_jspi_panicked`, which the panic hook calls)
-// to the instance as raw imports, so this file ships next to the glue in `pkg/`. It imports nothing: the package root passes the instance's
-// exports in through `installAsync` once `ready()` has instantiated it. The glue itself
-// hands this module its handle on those exports (`purrdf_jspi_bind_glue`, which
-// `make wasm-pkg` wires into the glue), so a trap or a panic can bar every entry point
-// at once.
+// to the instance as raw imports, so this file ships next to the glue in `pkg/`. It
+// imports nothing: the package root passes the instance's exports in through
+// `installAsync` once `ready()` has instantiated it.
 //
 // # The protocol (the Rust side is `crates/rdf-wasm/src/async_query.rs`)
 //
@@ -47,32 +45,37 @@
 // ticket, an exchange no call is answering, a delivery the job refuses — is latched on the
 // job with `job.fault(...)`, which no clause can absorb.
 //
-// # Stack regions
+// # The linked module
 //
-// A suspended job's frames stay live in linear memory, so every job runs on its own
-// region and the shadow-stack pointer (`__stack_pointer`, reached through the exported
-// `__wbindgen_add_to_stack_pointer`) is switched by these rules:
+// The module `make wasm-pkg` ships is rewritten after `wasm-opt` by `crates/wasm-link`,
+// which makes two obligations of this lane properties of the wasm itself. This module
+// never moves the shadow-stack pointer and never wraps an export:
 //
-// 1. At the start of a run, the context's pointer is captured as the job's `outer`, the
-//    pointer is set to the job's region top, and the promising export is called.
-// 2. At every suspension, before anything else, the pointer is switched back to `outer`.
-// 3. Just before returning into wasm after every resumption, `outer` is captured again:
-//    a resumption runs in the resumer's context, not the starter's.
-// 4. When a run settles, a pointer the run left inside its region is put back to
-//    `outer`.
+// - `purrdf_jspi_run(job, regionTop)` runs a job on the region whose top is its last
+//   argument. The linked wrapper records the caller's stack pointer as the idle one, sets
+//   the pointer to the region top, and puts the idle pointer back before returning; the
+//   linked `$suspend`, which every call of the suspending import goes through, parks the
+//   job on the idle pointer and restores the job's own pointer when the import returns.
+//   A suspended job's frames stay live in linear memory on its region, and every other
+//   call — a synchronous one between resumptions, a job started from inside a sink
+//   callback — runs on the pointer it found.
+// - Every exported function stands behind the poison gate. Its `WebAssembly.Global`s are
+//   exported and this module reads them: `purrdf_poisoned` (non-zero once the instance
+//   may not be entered again), `purrdf_active` (entries that have not returned),
+//   `purrdf_parked` (suspensions waiting on this module) and `purrdf_outbound` (import
+//   calls, a sink callback's included, waiting to return), beside `purrdf_stack_pointer`
+//   and `purrdf_idle`. Whenever JavaScript runs with no wasm frame unwound,
+//   `active − parked = outbound`. A trap, or a JavaScript exception thrown through wasm
+//   frames, unwinds an entry without its exit, so the next entry sees the imbalance,
+//   sets `purrdf_poisoned` and traps; from then on every entry traps. A call the glue or
+//   a sink callback makes back into the instance from inside an import passes, because
+//   the import's trampoline counted it in `purrdf_outbound`.
 //
-// The resumed job restores its *own* pointer from its `suspend` frame's epilogue — the
-// build gate `scripts/check-wasm-jspi-frame.py` proves that restore is the first
-// stack-relevant instruction after the import returns — so the host's restores only have
-// to keep the pointer out of regions while JavaScript runs.
-//
-// A run that finishes after a resumption returns from wasm with the pointer at its
-// region's top, and the reaction that applies rule 4 is a microtask later; another job
-// resumed in between would otherwise capture that stale pointer as its own `outer` and,
-// after the first region is freed, run synchronous calls on freed memory. So every
-// capture first checks whether the pointer lies inside a live job's region and, if it
-// does, puts it back to that job's `outer` — inside a region is never a legitimate place
-// for the pointer while JavaScript runs.
+// This module's part: it passes the region top; it sets `purrdf_poisoned` when it learns
+// of a fault first (a Rust panic's hook, a run whose promise rejected); it treats a
+// `WebAssembly.RuntimeError` out of an export while the gate is closed as the gate's
+// refusal and answers with the poison error; and it never resumes a suspended run of a
+// poisoned instance.
 
 /** Thrown by every asynchronous method on an engine without JSPI. */
 export const NO_JSPI_MESSAGE =
@@ -94,27 +97,30 @@ const HAS_JSPI =
   typeof WebAssembly.Suspending === "function" &&
   typeof WebAssembly.promising === "function";
 
-// A poisoned instance's release functions (`__wbg_<class>_free`) do nothing: the glue calls
-// them from `free()`, `[Symbol.dispose]()` and its finalization registries, and a
-// finalization callback has no caller to report an error to. The instance's memory is
-// abandoned whole, so there is nothing left for them to release.
-const RELEASE_EXPORT = /^__wbg_[a-z0-9_]+_free$/;
+// The `WebAssembly.Global`s the linker exports; `installAsync` requires every one.
+const GATE_GLOBALS = [
+  "purrdf_stack_pointer",
+  "purrdf_idle",
+  "purrdf_poisoned",
+  "purrdf_active",
+  "purrdf_parked",
+  "purrdf_outbound",
+];
 
-// Exports the trap guard leaves as the instance's own functions. `purrdf_jspi_run` is
-// handed to `WebAssembly.promising`, which accepts only a wasm function, and its run's
-// trap is already seen — and poisoned — where `startRun` settles the promise.
-const UNGUARDED_EXPORTS = new Set(["purrdf_jspi_run"]);
+// The poison reason when this module learns of the poisoning from the gate's globals
+// rather than from an error in its hands: some earlier entry was unwound and never
+// returned.
+const GATE_CLOSED_REASON =
+  "a call into the instance was unwound by a trap or a thrown exception, and its poison gate closed";
 
 // ---------------------------------------------------------------------------
 // Instance state (one module instance per wasm instance: the glue imports this module
 // once, and the package root instantiates the wasm once)
 // ---------------------------------------------------------------------------
 
-let glue = null; // { exports, retarget }: the glue's handle on the instance's exports
-// { exports, promisingRun, addToStackPointer, AsyncJob, RunStatus, SuspendStatus,
-//   DeliveryStatus, EffectKind }: the instance and the protocol's classes and statuses
+// { exports, promisingRun, AsyncJob, RunStatus, SuspendStatus, DeliveryStatus,
+//   EffectKind }: the instance and the protocol's classes and statuses
 let installed = null;
-let idleTop = 0;
 let poisonReason = null;
 let maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS;
 const records = new Map(); // job id -> record
@@ -146,48 +152,13 @@ function yieldOnce() {
 // ---------------------------------------------------------------------------
 
 /**
- * Bind the wasm-bindgen glue's handle on the instance's exports to the poison gate.
- *
- * `make wasm-pkg` rewrites the glue's `wasm = instance.exports;` into a call of this
- * function, so every call the glue makes into the instance — a constructor, a method, a
- * getter, a static, a free function, a finalizer — reads the exports through the one
- * variable `retarget` reassigns. Poisoning retargets it at an object that refuses every
- * call, which bars the whole package surface at once, synchronous calls and objects
- * created before the trap included.
- *
- * Returns what the glue keeps as its handle: a frozen copy of `exports` in which every
- * exported function except the asynchronous runner is guarded (see `guardTrap`), so a
- * trap out of any synchronous call poisons the instance too. The copy is built by
- * enumerating the exports, so an export added later is guarded without being named here;
- * memory, globals and tables are copied as they are.
- */
-export function purrdf_jspi_bind_glue(exports, retarget) {
-  if (glue !== null) {
-    throw new Error("the wasm-bindgen glue bound a second instance; one module instance drives one wasm instance");
-  }
-  if (exports == null || typeof exports !== "object") {
-    throw new TypeError("purrdf_jspi_bind_glue expects the wasm instance's exports");
-  }
-  if (typeof retarget !== "function") {
-    throw new TypeError("purrdf_jspi_bind_glue expects a function that reassigns the glue's exports");
-  }
-  const live = Object.create(null);
-  for (const name of Object.keys(exports)) {
-    const value = exports[name];
-    live[name] = typeof value === "function" && !UNGUARDED_EXPORTS.has(name) ? guardTrap(value) : value;
-  }
-  Object.freeze(live);
-  glue = { exports: live, retarget };
-  return live;
-}
-
-/**
  * The raw import the instance's panic hook calls (`crates/rdf-wasm/src/panic_poison.rs`)
  * before a Rust panic aborts: `reason` points at `len` bytes of UTF-8 describing the
  * panic. The panic's trap is about to unwind the call — a synchronous call as much as an
  * asynchronous job — and leave the instance's state half-changed, so the instance is
  * poisoned here, naming the panic, before the trap reaches any JavaScript that could call
- * in again.
+ * in again: `purrdf_poisoned` is set, every job in flight rejects, and the gate refuses
+ * every later entry.
  *
  * This runs inside the panicking wasm frame, so it never calls into the instance and
  * never throws: an exception thrown into that frame would unwind it instead of the trap,
@@ -196,7 +167,7 @@ export function purrdf_jspi_bind_glue(exports, retarget) {
 export function purrdf_jspi_panicked(reason, len) {
   let text = "a Rust panic";
   try {
-    const memory = glue?.exports.memory;
+    const memory = installed?.exports.memory;
     if (memory instanceof WebAssembly.Memory) {
       text = new TextDecoder().decode(new Uint8Array(memory.buffer, reason >>> 0, len >>> 0).slice());
     }
@@ -204,7 +175,7 @@ export function purrdf_jspi_panicked(reason, len) {
     // Keep the generic reason: the poisoning is what matters.
   }
   try {
-    if (glue !== null) poison(text);
+    poison(text);
   } catch {
     // Nothing may cross the panicking frame; the trap that follows still reaches the
     // caller.
@@ -215,9 +186,9 @@ export function purrdf_jspi_panicked(reason, len) {
  * Install the scheduler over the instance's raw exports (the object the glue's `init`
  * returns) and the protocol's glue classes — `{ AsyncJob, RunStatus, SuspendStatus,
  * DeliveryStatus, EffectKind }`, the statuses the Rust side exports. Called once by
- * `ready()`. Throws when the exports lack the runtime's entry points — an artifact built
- * without the asynchronous lane is a build defect, not a mode — when the glue did not
- * bind them to the poison gate, or when a protocol class is missing.
+ * `ready()`. Throws when the exports lack the runtime's entry points or any of the
+ * linker's globals — an artifact built without the asynchronous lane, or not linked by
+ * `wasm-link`, is a build defect, not a mode — or when a protocol class is missing.
  */
 export function installAsync(exports, protocol) {
   if (installed !== null) {
@@ -227,15 +198,17 @@ export function installAsync(exports, protocol) {
   if (exports == null || typeof exports !== "object") {
     throw new TypeError("installAsync expects the wasm instance's exports");
   }
-  if (glue === null || glue.exports !== exports) {
-    throw new Error(
-      "the wasm-bindgen glue did not bind these exports to the poison gate " +
-        "(purrdf_jspi_bind_glue); the package artifact was not built by make wasm-pkg",
-    );
-  }
-  for (const name of ["memory", "__wbindgen_add_to_stack_pointer", "purrdf_jspi_run"]) {
+  for (const name of ["memory", "purrdf_jspi_run"]) {
     if (!(name in exports)) {
       throw new Error(`the wasm instance does not export ${name}; the package artifact is incomplete`);
+    }
+  }
+  for (const name of GATE_GLOBALS) {
+    if (!(exports[name] instanceof WebAssembly.Global)) {
+      throw new Error(
+        `the wasm instance does not export the WebAssembly.Global ${name}; ` +
+          "the package artifact was not linked by wasm-link (make wasm-pkg)",
+      );
     }
   }
   for (const name of ["AsyncJob", "RunStatus", "SuspendStatus", "DeliveryStatus", "EffectKind"]) {
@@ -245,7 +218,6 @@ export function installAsync(exports, protocol) {
   }
   installed = {
     exports,
-    addToStackPointer: exports.__wbindgen_add_to_stack_pointer,
     promisingRun: HAS_JSPI ? WebAssembly.promising(exports.purrdf_jspi_run) : null,
     AsyncJob: protocol.AsyncJob,
     RunStatus: protocol.RunStatus,
@@ -253,7 +225,8 @@ export function installAsync(exports, protocol) {
     DeliveryStatus: protocol.DeliveryStatus,
     EffectKind: protocol.EffectKind,
   };
-  idleTop = sp();
+  // A panic reported before the exports were installed is written to the gate now.
+  if (poisonReason !== null) exports.purrdf_poisoned.value = 1;
 }
 
 /** Whether this engine can run asynchronous jobs: JSPI and `setTimeout` exist. */
@@ -269,15 +242,20 @@ export function assertAsyncQueries() {
   if (!HAS_JSPI) throw new Error(NO_JSPI_MESSAGE);
   if (setTimeoutImpl === null) throw new Error(NO_YIELD_MESSAGE);
   if (installed === null) throw new Error(NOT_INSTALLED_MESSAGE);
-  if (poisonReason !== null) throw poisonError();
+  assertNotPoisoned();
 }
 
 /**
- * Throw the poison error when a trap has poisoned the instance, or return. The package
- * root's own entry points that reach no wasm export call this first; every other entry
- * point is barred by the glue's retargeted exports.
+ * Throw the poison error when the instance is poisoned, or return. The package root's
+ * entry points call this first, so an asynchronous twin, `ready()` or `configureAsync`
+ * answers a poisoned instance with the poison error rather than the gate's trap; a
+ * synchronous call into the instance meets the gate itself. The gate's globals are read
+ * here, so a trap out of a synchronous call that no JavaScript of this module saw is
+ * learnt of at the next call: the instance is poisoned, every job in flight rejects, and
+ * the reason names the gate.
  */
 export function assertNotPoisoned() {
+  if (poisonReason === null && gateClosed()) poison(GATE_CLOSED_REASON);
   if (poisonReason !== null) throw poisonError();
 }
 
@@ -387,11 +365,10 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
   const record = records.get(jobId);
   if (record === undefined) {
     // A run the scheduler did not start (or one abandoned by a poisoning): nothing can
-    // be trusted about its stack, so it is never resumed.
+    // be trusted about its state, so it is never resumed.
     if (poisonReason === null) {
       poison(`purrdf_jspi_suspend named job ${jobId}, which the scheduler is not running`);
     }
-    setSp(idleTop);
     return never();
   }
   let status;
@@ -400,14 +377,15 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
   } catch (error) {
     // A poisoned instance refuses every call, `job.fault` included, and its suspended
     // runs are never resumed.
-    if (poisonReason !== null) return never();
+    if (poisonedBy(error) || poisonReason !== null) return never();
     // `answer` catches everything itself; this is the last line that keeps a rejection
     // out of the suspended frame.
     status = latchFault(record, `the asynchronous bridge failed: ${describe(error)}`);
   }
+  // A trap out of a synchronous call while this job was parked closed the gate without
+  // this module seeing it: the run is never resumed, and the job rejects with the poison.
+  if (poisonReason === null && gateClosed()) poison(GATE_CLOSED_REASON);
   if (poisonReason !== null) return never();
-  // Rule 3: the resumer's context is this job's outer context from now on.
-  record.outer = captureOuter();
   new DataView(installed.exports.memory.buffer).setUint32(outPtr, 0, true);
   return status;
 }
@@ -416,19 +394,9 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
 async function answer(record, seq) {
   const { job } = record;
   const { SuspendStatus, EffectKind } = installed;
-  // Rule 2, preceded by the region check, both before any await or wasm call.
-  const here = sp();
+  // The canary at the region's base, read before any await or wasm call.
   const memory = new DataView(installed.exports.memory.buffer);
-  const inRegion = here > record.base && here <= record.top;
   const canaryIntact = memory.getUint32(record.base, true) === record.canary;
-  setSp(record.outer);
-  if (!inRegion) {
-    return latchFault(
-      record,
-      `asynchronous job ${record.id} suspended outside its stack region ` +
-        `(stack pointer ${here}, region (${record.base}, ${record.top}])`,
-    );
-  }
   if (!canaryIntact) {
     const reason = `asynchronous job ${record.id} overwrote the canary at the base of its stack region`;
     latchFault(record, reason);
@@ -572,7 +540,8 @@ function settleExchange(id, entry, settled) {
     }
   } catch (error) {
     // A poisoned instance refuses every call; the poisoning already rejected every job.
-    if (poisonReason === null) throw error;
+    if (poisonedBy(error) || poisonReason !== null) return SETTLED;
+    throw error;
   }
   return SETTLED;
 }
@@ -891,7 +860,6 @@ function newRecord(job, handlers) {
     top: job.stackTop,
     base: job.stackBase,
     canary: job.stackCanary,
-    outer: 0,
     controller: new AbortController(),
     stop: { fired: false, promise: undefined, resolve: undefined },
     reject: undefined,
@@ -910,7 +878,12 @@ function newRecord(job, handlers) {
   let onAbort;
   if (signal !== undefined) {
     onAbort = () => {
-      record.job.cancel();
+      try {
+        record.job.cancel();
+      } catch (error) {
+        // The gate refusing a poisoned instance: the poisoning already rejected the job.
+        if (!poisonedBy(error) && poisonReason === null) throw error;
+      }
       fire(signal.reason);
     };
     if (signal.aborted) onAbort();
@@ -929,21 +902,17 @@ function newRecord(job, handlers) {
 function startRun(record) {
   return new Promise((resolve, reject) => {
     record.reject = reject;
-    // Rule 1.
-    record.outer = captureOuter();
-    setSp(record.top);
     let pending;
     try {
-      pending = installed.promisingRun(record.id);
+      // The linked run wrapper takes the region top as its last argument: it sets the
+      // stack pointer to it for the run and puts the idle pointer back when the run
+      // returns, suspended, finished or unwound.
+      pending = installed.promisingRun(record.id, record.top);
     } catch (error) {
       pending = Promise.reject(error);
     }
-    // The promising call returns once the job has suspended (the pointer is already
-    // back at `outer`), finished (it is at the region's top) or trapped (it is anywhere).
-    if (sp() !== record.outer) setSp(record.outer);
     pending.then(
       (status) => {
-        leaveRegion(record);
         if (status >>> 0 === installed.RunStatus.Overran) {
           poison(record.job.errorMessage ?? `asynchronous job ${record.id} overran its stack region`);
           reject(poisonError());
@@ -952,42 +921,19 @@ function startRun(record) {
         resolve(status >>> 0);
       },
       (error) => {
-        leaveRegion(record);
-        const reason = describe(error);
-        poison(reason);
+        // A run that rejected was unwound — a trap, or a JavaScript exception thrown
+        // through its frames — and left its gate entry without an exit, which the gate
+        // records. A rejection that left the gate balanced never entered the instance
+        // (the promising call itself refused) and is the caller's error as it stands.
+        if (poisonReason === null && !gateClosed()) {
+          reject(error);
+          return;
+        }
+        poison(describe(error));
         reject(poisonError());
       },
     );
   });
-}
-
-/** Rule 4: put back a pointer the settled run left inside its region. */
-function leaveRegion(record) {
-  const here = sp();
-  if (here >= record.base && here <= record.top) setSp(record.outer);
-}
-
-/**
- * The stack pointer of the running JavaScript context, with any pointer a settled run
- * left inside its region put back first.
- */
-function captureOuter() {
-  const here = sp();
-  for (const record of records.values()) {
-    if (here >= record.base && here <= record.top) {
-      setSp(record.outer);
-      return record.outer;
-    }
-  }
-  return here;
-}
-
-function sp() {
-  return installed.addToStackPointer(0) >>> 0;
-}
-
-function setSp(value) {
-  installed.addToStackPointer((value - sp()) | 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -995,20 +941,22 @@ function setSp(value) {
 // ---------------------------------------------------------------------------
 
 /**
- * A trap out of a run leaves the instance in an unknown state: the job's stack context is
- * still in place of the caller's, every `RefCell` its frames borrowed stays borrowed, and
- * linear memory may hold a half-applied mutation. A trap out of a synchronous call leaves
- * the same state behind it and is poisoned by the export's guard (`guardTrap`); a Rust
- * panic in any call — synchronous or asynchronous — poisons from its hook, before its trap
- * unwinds (`purrdf_jspi_panicked`). Nothing repairs that, so the instance is dead: the glue's exports are retargeted at an object that refuses every call —
- * synchronous calls, constructors, and objects created before the trap included — every
- * in-flight job is rejected, and every later call refuses with the same error. Suspended
- * runs are never resumed.
+ * A trap out of a run leaves the instance in an unknown state: every `RefCell` its
+ * frames borrowed stays borrowed, and linear memory may hold a half-applied mutation. A
+ * trap out of a synchronous call, or a JavaScript exception thrown through wasm frames,
+ * leaves the same state behind it; a Rust panic in any call — synchronous or
+ * asynchronous — poisons from its hook, before its trap unwinds (`purrdf_jspi_panicked`).
+ * Nothing repairs that, so the instance is dead: `purrdf_poisoned` is set, so the gate
+ * linked into the module traps every later entry — synchronous calls, constructors, and
+ * objects created before the trap included — every in-flight job is rejected with the
+ * poison error, every later asynchronous call refuses with it, and suspended runs are
+ * never resumed. The first reason is kept: a panic's trap, arriving after its hook, stays
+ * named as the panic.
  */
 function poison(reason) {
   if (poisonReason !== null) return;
   poisonReason = reason;
-  glue.retarget(poisonedExports());
+  if (installed !== null) installed.exports.purrdf_poisoned.value = 1;
   const error = poisonError();
   for (const record of records.values()) {
     record.reject?.(error);
@@ -1023,133 +971,27 @@ function poisonError() {
 }
 
 /**
- * What the glue reads the instance's exports through once it is poisoned: reading any
- * export throws the poison error, so no call reaches the instance, except the release
- * functions (see `RELEASE_EXPORT`), which do nothing.
+ * Whether the gate's globals say the instance may not be entered again: it is marked
+ * poisoned, or an entry was unwound without its exit (`active − parked ≠ outbound`).
+ * Read only while JavaScript runs with no wasm frame unwound by this module's own doing,
+ * which is every point this module reads it at.
  */
-function poisonedExports() {
-  const releaseNothing = () => undefined;
-  return new Proxy(Object.freeze(Object.create(null)), {
-    get(_target, name) {
-      if (typeof name === "string" && RELEASE_EXPORT.test(name)) return releaseNothing;
-      throw poisonError();
-    },
-  });
+function gateClosed() {
+  if (installed === null) return false;
+  const { purrdf_poisoned, purrdf_active, purrdf_parked, purrdf_outbound } = installed.exports;
+  return purrdf_poisoned.value !== 0 || purrdf_active.value - purrdf_parked.value !== purrdf_outbound.value;
 }
 
 /**
- * Wrap an exported function so that a trap out of it poisons the instance.
- *
- * A trap — allocation failure, an `unreachable`, any fault the engine raises as a
- * `WebAssembly.RuntimeError` — unwinds every wasm frame of the call without restoring
- * anything, leaving the instance in the same state a trapped job leaves it in. The
- * wrapper catches it, poisons the instance naming the trap, and throws the poison error
- * in its place. Every other throw passes through untouched: a typed PurRDF error is
- * thrown by the glue after the export has returned and never reaches here, and an error
- * that does cross the export (the poison error of a nested call, an exception a host
- * callback raised) is not a trap. A panic's trap arrives here after its hook already
- * poisoned the instance; `poison` keeps the first reason, so the panic stays named.
- *
- * The success path costs one extra JavaScript call frame and a `try` block, which V8
- * enters for free: the wrapper allocates nothing (no rest-parameter array, no closure
- * per call) because it is picked by the export's own arity, and it forwards exactly the
- * arguments a wasm export reads — the first `length` of them, the rest being ignored by
- * the export anyway. Only an export of more than eight parameters takes the generic
- * rest-parameter wrapper.
+ * Whether `error`, thrown out of an export this module called, is the gate refusing a
+ * poisoned instance — a `WebAssembly.RuntimeError` while the gate is closed — or the very
+ * trap that closed it. Either poisons the instance (naming the trap, unless a reason is
+ * already kept) and returns `true`; any other error returns `false` untouched.
  */
-function guardTrap(fn) {
-  switch (fn.length) {
-    case 0:
-      return function guarded() {
-        try {
-          return fn();
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 1:
-      return function guarded(a) {
-        try {
-          return fn(a);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 2:
-      return function guarded(a, b) {
-        try {
-          return fn(a, b);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 3:
-      return function guarded(a, b, c) {
-        try {
-          return fn(a, b, c);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 4:
-      return function guarded(a, b, c, d) {
-        try {
-          return fn(a, b, c, d);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 5:
-      return function guarded(a, b, c, d, e) {
-        try {
-          return fn(a, b, c, d, e);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 6:
-      return function guarded(a, b, c, d, e, f) {
-        try {
-          return fn(a, b, c, d, e, f);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 7:
-      return function guarded(a, b, c, d, e, f, g) {
-        try {
-          return fn(a, b, c, d, e, f, g);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    case 8:
-      return function guarded(a, b, c, d, e, f, g, h) {
-        try {
-          return fn(a, b, c, d, e, f, g, h);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-    default: {
-      const guarded = function guarded(...args) {
-        try {
-          return fn(...args);
-        } catch (error) {
-          throw trapped(error);
-        }
-      };
-      Object.defineProperty(guarded, "length", { value: fn.length });
-      return guarded;
-    }
-  }
-}
-
-/** What a guarded export throws in place of `error`: the poison error for a trap. */
-function trapped(error) {
-  if (!(error instanceof WebAssembly.RuntimeError)) return error;
+function poisonedBy(error) {
+  if (!(error instanceof WebAssembly.RuntimeError) || !gateClosed()) return false;
   poison(describe(error));
-  return poisonError();
+  return true;
 }
 
 function never() {

@@ -640,35 +640,37 @@ band of 32 KiB, which only work no check guards can reach; it fails the job with
 `asynchronous job stack region exhausted (<bytes> bytes); raise stackBytes`. Either way
 the job fails and the instance stays usable. If a job traps, or its frames ever run past
 the overrun zone below its region, the instance's state can no longer be trusted: the
-trap leaves the job's stack context in place of the caller's and anything the job was
-mutating half-changed, and an overrun may have overwritten memory outside the job. The instance is then
-*poisoned*, and it cannot be used again: every in-flight job rejects, and every later
-call — synchronous or asynchronous, a constructor, a static, a free function, or a
-method of an object created before the trap — throws the same error. `ready()` rejects
-with it too, because there is one instance per JavaScript realm; only a fresh realm (a
-new page, Worker isolate or process) can load the package again. `free()` is the one
-call that does not throw: it releases nothing, because the instance's memory is
-abandoned whole.
+trap leaves anything the job was mutating half-changed, and an overrun may have
+overwritten memory outside the job. The instance is then *poisoned*, and it cannot be
+used again. Every in-flight job rejects with the poison error, and so does every later
+asynchronous twin, `hasAsyncQueries()`, `configureAsync()` and `ready()` — because there
+is one instance per JavaScript realm. Every later synchronous call into the instance — a
+constructor, a static, a free function, a method or getter of an object created before
+the trap, `free()` too — traps at the instance's own entry with a
+`WebAssembly.RuntimeError`: the package build links a poison gate into the wasm module
+itself, so no JavaScript stands between a caller and the refusal. Only a fresh realm (a
+new page, Worker isolate or process) can load the package again.
 
 A trap poisons the instance the same way when it comes out of a synchronous call. The
-glue calls every export through a thin guard that recognizes the engine's
-`WebAssembly.RuntimeError`, the error a trap raises, and poisons the instance naming it
-before the error reaches the caller. The trapping call throws the poison error in the
-trap's place, and every call after it throws the same error. Every other error passes
-through the guard untouched: a typed PurRDF error, a parse error for instance, never
-poisons anything. Out of PurRDF's own code, the traps left are memory exhaustion, which
-aborts without running the panic hook, and a Rust panic. V8 reports running out of its
-own native stack as a `RangeError`, which the guard cannot tell apart from a `RangeError`
-the caller's code throws, so it passes one through; PurRDF's parser and evaluator refuse
-nesting before either stack runs out (the host-stack budget above keeps V8's).
+trapping call throws the trap itself, the engine's `WebAssembly.RuntimeError`; the entry
+it unwound never returned through the gate, so the next entry finds the instance
+poisoned and traps, and so does every entry after it. A typed PurRDF error, a parse
+error for instance, is thrown after the call has returned and never poisons anything. A
+JavaScript exception thrown through wasm frames — a sink callback that throws, or V8
+reporting its own native stack exhausted as a `RangeError` inside a call — unwinds the
+instance the same way and poisons it too; the same exception thrown by the caller's own
+code, outside any call into the instance, does not. Out of PurRDF's own code, the traps
+left are memory exhaustion, which aborts without running the panic hook, and a Rust
+panic; PurRDF's parser and evaluator refuse nesting before either stack runs out (the
+host-stack budget above keeps V8's).
 
 A Rust panic poisons the instance too, in an asynchronous job or in a synchronous call
 alike. A panic aborts on wasm32 and leaves whatever it interrupted half-changed, so the
 panic hook PurRDF installs when the instance starts poisons the instance, naming the
 panic's location and message, before the panic's trap unwinds. The call that panicked
-throws the poison error, which names the panic rather than the trap that followed it.
-PurRDF is written not to panic on any input, so a poison that names a panic is a PurRDF
-defect to report.
+throws that trap; every asynchronous entry afterwards rejects with the poison error,
+which names the panic rather than the trap that followed it. PurRDF is written not to
+panic on any input, so a poison that names a panic is a PurRDF defect to report.
 
 ### The Cloudflare adapter
 

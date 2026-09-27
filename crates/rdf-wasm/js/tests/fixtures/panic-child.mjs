@@ -6,7 +6,8 @@
 // A Rust panic aborts on wasm32: the panic hook runs, then the module traps. The hook
 // PurRDF installs at start-up poisons the instance, naming the panic, before that trap
 // unwinds — whether the panicking call was an asynchronous job or an ordinary
-// synchronous export. No PurRDF entry point panics on any input, so the panic comes from
+// synchronous export: the runtime sets the gate's poisoned flag and rejects every job in
+// flight. No PurRDF entry point panics on any input, so the panic comes from
 // `__purrdf_test_panic`, a raw export of the instance (never exported by the package
 // root) that panics only while `globalThis.__purrdfArmTestPanic` is `true` — the flag
 // this fixture, and only this fixture, sets.
@@ -14,8 +15,9 @@
 // Before the panic, the valid neighbours on the very objects the panic later poisons:
 // the unarmed test export does nothing, and synchronous calls that throw typed errors —
 // a parse error, a query's syntax error — leave the instance serving every lane exactly.
-// After it, every entry point must refuse with the poison naming the panic, a job that
-// was in flight when the panic happened included.
+// After it, the panicking call throws the panic's trap, every synchronous entry traps at
+// the gate, and every asynchronous entry — a job that was in flight when the panic
+// happened included — rejects with the poison naming the panic.
 //
 // Prints one JSON line; the parent test asserts on it.
 
@@ -71,12 +73,22 @@ const inFlight = settle(() =>
 );
 await asked;
 
-// The panic, out of a synchronous call.
+/** The gate's globals: its flag, and whether its counters balance. */
+const gate = () => ({
+  poisoned: raw.purrdf_poisoned.value,
+  balanced: raw.purrdf_active.value - raw.purrdf_parked.value === raw.purrdf_outbound.value,
+});
+report.gateBefore = gate();
+
+// The panic, out of a synchronous call: the hook poisons, then the trap reaches the
+// caller.
 globalThis.__purrdfArmTestPanic = true;
 report.panicked = settleSync(() => raw.__purrdf_test_panic());
+report.gateAfter = gate();
 report.inFlight = await inFlight;
 
-// Every later call refuses with the poison naming the panic.
+// Every asynchronous call refuses with the poison naming the panic; every synchronous
+// entry traps at the gate.
 report.asyncAfter = await settle(() => engine.queryAsync(data, SHALLOW));
 report.syncAfter = settleSync(() => engine.query(data, SHALLOW));
 report.parseErrorAfter = settleSync(() => Dataset.parse(`<${EX}a> <${EX}p> .\n`, "nquads"));

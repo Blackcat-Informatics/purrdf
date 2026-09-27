@@ -21,7 +21,7 @@ import { DATASETS, QUERIES } from "./fixtures/async-differential.mjs";
 
 await ready();
 const exports = await init();
-const stackPointer = () => exports.__wbindgen_add_to_stack_pointer(0) >>> 0;
+const stackPointer = () => exports.purrdf_stack_pointer.value >>> 0;
 
 const CONCURRENCY = 8;
 

@@ -47,7 +47,7 @@ import init from "../pkg/purrdf_wasm.js";
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
 const exports = await init();
-const stackPointer = () => exports.__wbindgen_add_to_stack_pointer(0) >>> 0;
+const stackPointer = () => exports.purrdf_stack_pointer.value >>> 0;
 const IDLE = stackPointer();
 
 const EX = "http://example.org/";

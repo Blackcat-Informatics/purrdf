@@ -11,11 +11,13 @@
 // `RangeError` trap out of the promising call — while the synchronous run of the very
 // same query, on the full main stack, reports the parser's own refusal.
 //
-// Before the trap, the same objects serve every lane through jobs that finish, jobs that
-// fault and jobs whose host reports a typed failure — none of which may poison anything.
-// After it, every entry point of the package must refuse: the objects created before
-// the trap, new ones, statics and free functions, enumerated from the package root's
-// own exports rather than listed by hand.
+// Before the trap, the same objects serve every lane through jobs that finish, jobs
+// whose host rejects and jobs whose host reports a typed failure — none of which may
+// poison anything. After it, every entry point of the package must refuse: the
+// asynchronous ones with the poison error naming the trap, the synchronous ones at the
+// poison gate linked into the module — on the objects created before the trap, new
+// ones, statics and free functions, enumerated from the package root's own exports
+// rather than listed by hand.
 //
 // Prints one JSON line; the parent test asserts on it.
 
@@ -94,9 +96,9 @@ await asked;
 report.trapped = await settle(() => engine.queryAsync(data, TOO_DEEP));
 report.inFlight = await inFlight;
 
-// Every later call refuses with the same poison: asynchronous ones, synchronous calls and
-// getters on objects created before the trap, new objects, statics, free functions, and
-// `ready()` itself.
+// Every later call refuses: asynchronous ones and `ready()` with the poison; synchronous
+// calls and getters on objects created before the trap, new objects, statics and free
+// functions at the gate.
 report.asyncAfter = await settle(() => engine.queryAsync(data, SHALLOW));
 report.updateAfter = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}d> <${EX}p> <${EX}o> }`));
 report.syncAfter = settleSync(() => engine.query(data, SHALLOW));
@@ -110,9 +112,15 @@ report.newDatasetAfter = settleSync(() => new Dataset());
 report.parseAfter = settleSync(() => Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"));
 report.versionAfter = settleSync(() => version());
 report.readyAfter = await settle(() => ready());
-// Releasing an object is the one call that does not throw: the instance's memory is
-// abandoned whole, and a finalizer has no caller to report an error to.
+// Releasing an object reaches the instance too, so it traps at the gate like every
+// other entry.
 report.freeAfter = settleSync(() => data.free());
+// The gate's globals: the trapped run's entry never returned, and the flag is set.
+const raw = await init();
+report.gateAfter = {
+  poisoned: raw.purrdf_poisoned.value,
+  balanced: raw.purrdf_active.value - raw.purrdf_parked.value === raw.purrdf_outbound.value,
+};
 
 // The whole package root, enumerated, and every method and getter of the objects created
 // before the trap.

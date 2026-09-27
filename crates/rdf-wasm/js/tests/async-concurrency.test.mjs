@@ -20,12 +20,12 @@ import * as packageRoot from "../index.mjs";
 import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
 import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
-import { assertSurfacePoisoned } from "./fixtures/poisoned-surface.mjs";
+import { assertSurfacePoisoned, threwAtGate } from "./fixtures/poisoned-surface.mjs";
 
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
 const exports = await init();
-const stackPointer = () => exports.__wbindgen_add_to_stack_pointer(0) >>> 0;
+const stackPointer = () => exports.purrdf_stack_pointer.value >>> 0;
 const IDLE = stackPointer();
 
 const EX = "http://example.org/";
@@ -577,7 +577,6 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
     "the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; " +
     "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
   const REJECTED = { settled: "rejected", name: "Error", message: POISON };
-  const THREW = { settled: "threw", name: "Error", message: POISON };
 
   // The valid neighbours, on the very objects the trap later poisons: a job that
   // finishes, one whose host rejects (its invocation fails as the host's fault) and one
@@ -611,11 +610,14 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   }
 
   // The trap: the job and the one in flight reject with the poison, and so does every
-  // later call — asynchronous, synchronous, on objects created before the trap, new
-  // objects, statics, free functions and `ready()` itself.
+  // later asynchronous call and `ready()` itself. The run's gate entry never returned, so
+  // the gate's counters no longer balance and its flag is set.
   for (const name of ["trapped", "inFlight", "asyncAfter", "updateAfter", "readyAfter"]) {
     assert.deepEqual(report[name], REJECTED, name);
   }
+  assert.deepEqual(report.gateAfter, { poisoned: 1, balanced: false });
+  // Every synchronous entry — on objects created before the trap, new objects, statics,
+  // free functions, `free()` too — traps at the gate linked into the module.
   for (const name of [
     "syncAfter",
     "syncDeepAfter",
@@ -627,14 +629,14 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
     "newDatasetAfter",
     "parseAfter",
     "versionAfter",
+    "freeAfter",
   ]) {
-    assert.deepEqual(report[name], THREW, name);
+    assert.deepEqual(report[name], threwAtGate, name);
   }
-  // Releasing is the one call that does not throw: it releases nothing.
-  assert.deepEqual(report.freeAfter, { settled: "returned" });
 
-  // The enumerated surface: every entry refuses with the poison, and the enumeration
-  // reached every function the package root exports, so it cannot pass by being empty.
+  // The enumerated surface: every entry refuses — with the poison or at the gate — and
+  // the enumeration reached every function the package root exports, so it cannot pass
+  // by being empty.
   assertSurfacePoisoned(report.surface, packageRoot, POISON);
 });
 

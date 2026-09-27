@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // A trap that is not a panic, out of a SYNCHRONOUS call, poisons the instance — exactly
-// as a trap out of an asynchronous job and a panic in any call do. The real trap runs in
-// a child process (`fixtures/sync-trap-child.mjs`), because poisoning is permanent for
-// the JavaScript realm. The guard itself (`purrdf_jspi_bind_glue`) is also exercised on
-// a fresh instance of the runtime module over hand-built exports, where every kind of
-// throw can be raised on demand and told apart.
+// as a trap out of an asynchronous job and a panic in any call do. The poison gate is
+// linked into the module itself (`crates/wasm-link`): after the trap every entry into the
+// instance traps at its gate, synchronous calls and objects created before the trap
+// included, while the asynchronous twins and `ready()` reject with the poison error the
+// runtime builds from the gate's globals. The real trap runs in a child process
+// (`fixtures/sync-trap-child.mjs`), because poisoning is permanent for the JavaScript
+// realm. The runtime's reading of the gate is also exercised on a fresh instance of the
+// runtime module over a hand-built module of the linked shape, where every state of the
+// globals can be set on demand.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,9 +18,17 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import * as packageRoot from "../index.mjs";
-import { assertSurfacePoisoned } from "./fixtures/poisoned-surface.mjs";
+import { assertSurfacePoisoned, threwAtGate } from "./fixtures/poisoned-surface.mjs";
 
 const EX = "http://example.org/";
+
+// The reason the runtime names when it learns of the poisoning from the gate's globals
+// rather than from an error in its hands.
+const GATE_CLOSED_REASON =
+  "a call into the instance was unwound by a trap or a thrown exception, and its poison gate closed";
+const poisonMessage = (reason) =>
+  `the wasm instance trapped (${reason}) and cannot be used again; ` +
+  "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
 
 test("a trap that is not a panic, in a synchronous call, poisons every entry point", () => {
   const child = spawnSync(process.execPath, [fileURLToPath(new URL("./fixtures/sync-trap-child.mjs", import.meta.url))], {
@@ -27,8 +39,9 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
   const report = JSON.parse(child.stdout.trim());
 
   // The valid neighbours, on the very objects the trap later poisons: the unarmed export
-  // does nothing, typed errors are thrown again (not the poison) on the second call, and
-  // afterwards every lane — the asynchronous one included — answers exactly.
+  // does nothing, typed errors are thrown again (not the poison) on the second call, a
+  // job started from inside a synchronous sink callback answers, and afterwards every
+  // lane — the asynchronous one included — answers exactly.
   assert.deepEqual(report.unarmed, { settled: "returned", value: 0 });
   const PARSE_ERROR = {
     settled: "threw",
@@ -46,20 +59,33 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
   assert.deepEqual(report.asyncBefore, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
   assert.deepEqual(report.asyncUpdateBefore, { settled: "resolved" });
   assert.deepEqual(report.asyncAfterUpdate, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`, `${EX}c`] });
+  assert.deepEqual(
+    report.asyncFromCallback,
+    { settled: "resolved", subjects: [`${EX}a`, `${EX}b`, `${EX}c`] },
+    "a job started from inside a serializeToSink callback answers",
+  );
+  assert.equal(report.serializedInCallback, true, "the callback's own serialization finished intact");
+  assert.deepEqual(report.gateBefore, { poisoned: 0, balanced: true }, "the gate is open and balanced before the trap");
   assert.deepEqual(report.sizeBefore, { settled: "returned", value: 3 });
   assert.equal(report.versionBefore.settled, "returned");
 
-  // The trapping call throws the poison, which names the trap — no panic ran.
-  const POISON =
-    "the wasm instance trapped (RuntimeError: unreachable) and cannot be used again; " +
-    "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
-  const REJECTED = { settled: "rejected", name: "Error", message: POISON };
-  const THREW = { settled: "threw", name: "Error", message: POISON };
-  assert.deepEqual(report.trapped, THREW);
+  // The trapping call throws the trap itself: no JavaScript stands between the caller and
+  // the instance, and no panic ran.
+  assert.deepEqual(report.trapped, { settled: "threw", name: "RuntimeError", message: "unreachable" });
 
-  for (const name of ["inFlight", "asyncAfter", "readyAfter"]) {
+  // The runtime learns of the trap at the next call it takes part in, from the gate's
+  // globals: that call, the job that was in flight and every later asynchronous call —
+  // `ready()` included — reject with the poison error naming the gate.
+  const REJECTED = { settled: "rejected", name: "Error", message: poisonMessage(GATE_CLOSED_REASON) };
+  for (const name of ["asyncAfter", "inFlight", "readyAfter"]) {
     assert.deepEqual(report[name], REJECTED, name);
   }
+  // The gate itself: the trapped entry never returned, so the counters no longer balance,
+  // and the first entry after it marked the instance poisoned.
+  assert.deepEqual(report.gateAfter, { poisoned: 1, balanced: false });
+
+  // Every synchronous entry into the instance — on objects created before the trap, new
+  // objects, statics, free functions, `free()` too — traps at the gate.
   for (const name of [
     "syncAfter",
     "parseErrorAfter",
@@ -70,90 +96,131 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
     "newEngineAfter",
     "newDatasetAfter",
     "versionAfter",
+    "freeAfter",
   ]) {
-    assert.deepEqual(report[name], THREW, name);
+    assert.deepEqual(report[name], threwAtGate, name);
   }
-  assert.deepEqual(report.freeAfter, { settled: "returned" });
-  assertSurfacePoisoned(report.surface, packageRoot, POISON);
+  assertSurfacePoisoned(report.surface, packageRoot, poisonMessage(GATE_CLOSED_REASON));
 });
 
-test("the guard poisons on a trap only, and forwards every argument and value", async () => {
+// The exports the linker adds to the module, in the order the hand-built module below
+// defines its globals.
+const GATE_GLOBALS = [
+  "purrdf_stack_pointer",
+  "purrdf_idle",
+  "purrdf_poisoned",
+  "purrdf_active",
+  "purrdf_parked",
+  "purrdf_outbound",
+];
+
+/**
+ * A wasm module of the linked shape the runtime installs over: a memory, an exported
+ * function `purrdf_jspi_run (i32, i32) -> i32` (a real wasm function, which
+ * `WebAssembly.promising` requires) and one mutable `i32` global per linker export, each
+ * exported under its name except `omit`.
+ */
+function linkedShapeModule({ omit } = {}) {
+  const encoder = new TextEncoder();
+  const leb = (value) => {
+    const out = [];
+    let rest = value;
+    do {
+      let byte = rest & 0x7f;
+      rest >>>= 7;
+      if (rest !== 0) byte |= 0x80;
+      out.push(byte);
+    } while (rest !== 0);
+    return out;
+  };
+  const vec = (items) => [...leb(items.length), ...items.flat()];
+  const name = (text) => {
+    const bytes = [...encoder.encode(text)];
+    return [...leb(bytes.length), ...bytes];
+  };
+  const section = (id, body) => [id, ...leb(body.length), ...body];
+  const I32 = 0x7f;
+  const types = section(1, vec([[0x60, ...vec([[I32], [I32]]), ...vec([[I32]])]]));
+  const functions = section(3, vec([[0]]));
+  const memories = section(5, vec([[0x00, 0x01]]));
+  // Each global: i32, mutable, initialized by `i32.const 0; end`.
+  const globals = section(6, vec(GATE_GLOBALS.map(() => [I32, 0x01, 0x41, 0x00, 0x0b])));
+  const exported = section(
+    7,
+    vec([
+      [...name("memory"), 0x02, 0x00],
+      [...name("purrdf_jspi_run"), 0x00, 0x00],
+      ...GATE_GLOBALS.filter((global) => global !== omit).map((global) => [
+        ...name(global),
+        0x03,
+        ...leb(GATE_GLOBALS.indexOf(global)),
+      ]),
+    ]),
+  );
+  // One body: no locals; `local.get 0; end`.
+  const code = section(10, vec([[...leb(4), 0x00, 0x20, 0x00, 0x0b]]));
+  return new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...types, ...functions, ...memories, ...globals, ...exported, ...code,
+  ]);
+}
+
+const PROTOCOL = { AsyncJob: class AsyncJob {}, RunStatus: {}, SuspendStatus: {}, DeliveryStatus: {}, EffectKind: {} };
+
+const instantiate = (options) => new WebAssembly.Instance(new WebAssembly.Module(linkedShapeModule(options))).exports;
+
+test("installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it", async () => {
   // A module instance of its own: this one's poisoning reaches nothing else.
-  const runtime = await import(`../src/purrdf_jspi.mjs?guard-unit-${process.pid}`);
-  const memory = new WebAssembly.Memory({ initial: 1 });
-  const global = new WebAssembly.Global({ value: "i32", mutable: true }, 7);
-  const table = new WebAssembly.Table({ element: "anyfunc", initial: 1 });
-  const run = () => 0;
-  const typeError = new TypeError("a host callback refused");
-  const hostError = new Error("the example.org host failed");
-  const exports = Object.freeze({
-    memory,
-    global,
-    table,
-    purrdf_jspi_run: run,
-    zero: () => 42,
-    sum2: (a, b) => a + b,
-    sum10: (a, b, c, d, e, f, g, h, i, j) => [a, b, c, d, e, f, g, h, i, j].join(","),
-    returnsError: () => typeError,
-    throwsType: () => {
-      throw typeError;
-    },
-    throwsHost: () => {
-      throw hostError;
-    },
-    throwsString: () => {
-      throw "a thrown string";
-    },
-    traps: () => {
-      throw new WebAssembly.RuntimeError("memory access out of bounds");
-    },
-    trapsOther: () => {
-      throw new WebAssembly.RuntimeError("unreachable");
-    },
-  });
-  let retargeted;
-  const live = runtime.purrdf_jspi_bind_glue(exports, (gated) => {
-    retargeted = gated;
-  });
+  const runtime = await import(`../src/purrdf_jspi.mjs?gate-unit-${process.pid}`);
 
-  // Every export is there; non-functions and the asynchronous runner are the instance's
-  // own objects, every other function is a guard of the same arity.
-  assert.deepEqual(Object.keys(live), Object.keys(exports));
-  assert.ok(Object.isFrozen(live));
-  assert.equal(live.memory, memory);
-  assert.equal(live.global, global);
-  assert.equal(live.table, table);
-  assert.equal(live.purrdf_jspi_run, run);
-  for (const name of ["zero", "sum2", "sum10", "returnsError", "throwsType", "throwsHost", "throwsString", "traps", "trapsOther"]) {
-    assert.notEqual(live[name], exports[name], name);
-    assert.equal(live[name].length, exports[name].length, name);
+  // Each global missing in turn: refused, naming it, and nothing is installed.
+  for (const omit of GATE_GLOBALS) {
+    const exports = instantiate({ omit });
+    assert.equal(exports[omit], undefined);
+    assert.throws(
+      () => runtime.installAsync(exports, PROTOCOL),
+      { message: new RegExp(`does not export the WebAssembly.Global ${omit}; .*wasm-link`) },
+      omit,
+    );
   }
-
-  // Values and arguments pass through exactly, the rest-parameter path included.
-  assert.equal(live.zero(), 42);
-  assert.equal(live.sum2(2, 3), 5);
-  assert.equal(live.sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), "1,2,3,4,5,6,7,8,9,10");
-  assert.equal(live.returnsError(), typeError);
-
-  // Every throw that is not a trap passes through as the very same value, twice, and
-  // poisons nothing.
-  for (let round = 0; round < 2; round += 1) {
-    assert.throws(() => live.throwsType(), (error) => error === typeError);
-    assert.throws(() => live.throwsHost(), (error) => error === hostError);
-    assert.throws(() => live.throwsString(), (error) => error === "a thrown string");
-  }
+  // The neighbour: every global present installs.
+  const exports = instantiate();
+  runtime.installAsync(exports, PROTOCOL);
+  assert.equal(runtime.hasAsyncQueries(), true);
   assert.doesNotThrow(() => runtime.assertNotPoisoned());
-  assert.equal(retargeted, undefined);
-  assert.equal(live.sum2(4, 5), 9);
 
-  // A trap poisons, naming it, and the call throws the poison error in its place.
-  const POISON =
-    "the wasm instance trapped (RuntimeError: memory access out of bounds) and cannot be used again; " +
-    "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
-  assert.throws(() => live.traps(), (error) => error.constructor === Error && error.message === POISON);
+  // Balanced shapes the gate's invariant allows are not a poisoning: a call from inside
+  // an import (a sink callback, the glue's allocator) — active 1, outbound 1 — and a job
+  // parked in the suspending import — active 1, parked 1.
+  exports.purrdf_active.value = 1;
+  exports.purrdf_outbound.value = 1;
+  assert.doesNotThrow(() => runtime.assertNotPoisoned(), "an entry waiting inside an import call");
+  exports.purrdf_outbound.value = 0;
+  exports.purrdf_parked.value = 1;
+  assert.doesNotThrow(() => runtime.assertNotPoisoned(), "an entry parked in the suspending import");
+  exports.purrdf_parked.value = 0;
+  exports.purrdf_active.value = 0;
+  assert.doesNotThrow(() => runtime.assertNotPoisoned());
+  assert.equal(exports.purrdf_poisoned.value, 0, "reading the gate marks nothing");
+
+  // An entry that never returned — active 1, nothing parked, nothing outbound — is the
+  // gate's condition: the runtime poisons, naming the gate, and sets the flag the gate
+  // traps on.
+  exports.purrdf_active.value = 1;
+  const POISON = poisonMessage(GATE_CLOSED_REASON);
+  assert.throws(() => runtime.assertNotPoisoned(), { constructor: Error, message: POISON });
+  assert.equal(exports.purrdf_poisoned.value, 1, "the runtime wrote the poisoned flag");
+  // Poisoning is permanent: counters put back in balance change nothing.
+  exports.purrdf_active.value = 0;
   assert.throws(() => runtime.assertNotPoisoned(), { message: POISON });
-  assert.notEqual(retargeted, undefined);
-  assert.throws(() => retargeted.zero, { message: POISON });
-  // A second, different trap keeps the first reason.
-  assert.throws(() => live.trapsOther(), (error) => error.message === POISON);
+  assert.throws(() => runtime.assertAsyncQueries(), { message: POISON });
+
+  // A second instance of the runtime over a module the gate already marked: the flag
+  // alone, with balanced counters, is the poisoning.
+  const marked = await import(`../src/purrdf_jspi.mjs?gate-unit-marked-${process.pid}`);
+  const markedExports = instantiate();
+  marked.installAsync(markedExports, PROTOCOL);
+  assert.doesNotThrow(() => marked.assertNotPoisoned());
+  markedExports.purrdf_poisoned.value = 1;
+  assert.throws(() => marked.assertNotPoisoned(), { message: POISON });
 });

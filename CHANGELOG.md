@@ -617,12 +617,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   code everywhere but that platform module, where each block carries its own
   safety argument.
 
-- **build:** `scripts/check-wasm-jspi-frame.py`, run by `make wasm-pkg` on the
-  optimized artifact. Every function that calls the suspending import must restore
-  the stack pointer from its own frame before any call, branch or read of the
-  pointer, which is what makes resuming a job safe. The check is structural, because
-  `wasm-opt` inlines the frame function. The pack checks now fail when the tarball
-  lacks a path `package.json` promises.
+- **build, wasm:** `crates/wasm-link`, the post-link tool `make wasm-pkg` runs last on
+  the optimized artifact, makes the asynchronous lane's suspend, run and poison
+  guarantees properties of the wasm module itself. It exports the shadow-stack pointer
+  as `purrdf_stack_pointer`; routes every call of the suspending import through an
+  injected `$suspend` that parks the job on the idle pointer and restores the job's own
+  pointer when the import returns; wraps `purrdf_jspi_run`, which now takes the region
+  top as its last argument and returns with the idle pointer restored; and puts every
+  exported function behind a poison gate whose `WebAssembly.Global`s are exported
+  (`purrdf_idle`, `purrdf_poisoned`, `purrdf_active`, `purrdf_parked`,
+  `purrdf_outbound`). The JavaScript runtime passes the region top, reads those globals
+  and never moves the stack pointer; `scripts/bind-wasm-glue.py` and
+  `scripts/check-wasm-jspi-frame.py`, which rewrote the wasm-bindgen glue and text-checked
+  the frame function, are deleted. A JavaScript exception thrown through wasm frames now
+  poisons the instance as a trap does; the trapping call throws the trap itself, every
+  later synchronous entry — `free()` included — traps at the gate, and the asynchronous
+  twins and `ready()` reject with the poison error. A job started from inside a
+  synchronous sink callback is counted by the import's trampoline and runs as before.
+  The pack checks now fail when the tarball lacks a path `package.json` promises.
 
 ### Measured
 

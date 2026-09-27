@@ -79,14 +79,24 @@ export async function enumerateSurface(purrdf, dataset, engine) {
 }
 
 /**
- * Assert every entry of an enumerated `surface` refused with `message`, and that the
+ * What a synchronous entry into a poisoned instance settles as: the trap of the poison
+ * gate linked into the module, which refuses the entry with `unreachable`.
+ */
+export const threwAtGate = { settled: "threw", name: "RuntimeError", message: "unreachable" };
+export const rejectedAtGate = { settled: "rejected", name: "RuntimeError", message: "unreachable" };
+
+/**
+ * Assert every entry of an enumerated `surface` refused — either with the poison error
+ * carrying `message` (an entry the runtime answers: an asynchronous twin, `ready()`,
+ * `configureAsync`) or at the gate (an entry that reaches the instance) — and that the
  * enumeration reached every function `packageRoot` exports, so it cannot pass by being
  * empty.
  */
 export function assertSurfacePoisoned(surface, packageRoot, message) {
   const rejected = { settled: "rejected", name: "Error", message };
   for (const [name, outcome] of Object.entries(surface)) {
-    assert.deepEqual(outcome, rejected, name);
+    if (outcome.name === "RuntimeError") assert.deepEqual(outcome, rejectedAtGate, name);
+    else assert.deepEqual(outcome, rejected, name);
   }
   for (const [name, value] of Object.entries(packageRoot)) {
     if (typeof value !== "function") continue;
