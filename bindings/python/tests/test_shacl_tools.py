@@ -233,8 +233,8 @@ def test_py_lint_shapes() -> None:
         "owner": "sh:rule on <http://example.org/ns#Tagger>",
     } in clean["calls"]
     assert clean["alternatives"] == []
-    assert clean["inert"] == []
-    assert clean["report"].endswith("validators 0\ninert 0\nfindings 0\nclean true\n")
+    assert clean["unexecuted"] == []
+    assert clean["report"].endswith("validators 0\nunexecuted 0\nfindings 0\nclean true\n")
 
     malformed = purrdf.shapes.lint_shapes(
         _PREFIXES + _SNIPPET + 'ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount "one" ] .\n'
@@ -244,7 +244,7 @@ def test_py_lint_shapes() -> None:
     assert isinstance(malformed["load_error"], str)
     assert malformed["calls"] is None
     assert malformed["alternatives"] is None
-    assert malformed["inert"] is None
+    assert malformed["unexecuted"] is None
     assert any(
         result["path"] == "<http://www.w3.org/ns/shacl#minCount>" and result["superseded"] is None
         for result in malformed["shacl_shacl"]

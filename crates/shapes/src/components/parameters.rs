@@ -3,7 +3,10 @@
 
 //! Parameter declarations and distinct constraint instances.
 
-use super::{Component, Parameter, is_valid_varname, objects_of, sparql_local_name};
+use super::{
+    Component, Parameter, is_reserved_parameter_name, is_valid_varname, objects_of,
+    sparql_local_name,
+};
 use crate::model::{sh, xsd};
 use crate::term::{Term, sort_terms_canonical};
 
@@ -60,21 +63,43 @@ impl Component {
 }
 
 /// Parse one declaration without filtering away malformed competing values.
+///
+/// # Errors
+///
+/// The violated syntax rule of SHACL 1.2 SPARQL Extensions ("Summary of Syntax Rules")
+/// and the diagnostic: `Parameter-predicate-count` / `Parameter` for the `sh:path`,
+/// `parameter-name-not-in` / `parameter-name-VARNAME` for the name it yields,
+/// `optional-maxCount` / `optional-datatype` for `sh:optional`.
 pub(super) fn parse_parameter(
     data: &purrdf::RdfDataset,
     param_node: &Term,
     component_iri: &str,
-) -> Result<Parameter, String> {
+) -> Result<Parameter, (&'static str, String)> {
     let paths = objects_of(data, param_node, sh::PATH);
     let [Term::NamedNode(path)] = paths.as_slice() else {
-        return Err(format!(
-            "component {component_iri} parameter {param_node} must have exactly one sh:path IRI"
+        return Err((
+            if paths.len() == 1 {
+                "Parameter"
+            } else {
+                "Parameter-predicate-count"
+            },
+            format!(
+                "component {component_iri} parameter {param_node} must have exactly one sh:path IRI"
+            ),
         ));
     };
     let name = sparql_local_name(path.as_str());
     if !is_valid_varname(&name) {
-        return Err(format!(
-            "component {component_iri} parameter path {path} yields invalid SPARQL variable name {name:?}"
+        return Err((
+            if is_reserved_parameter_name(&name) {
+                "parameter-name-not-in"
+            } else {
+                "parameter-name-VARNAME"
+            },
+            format!(
+                "component {component_iri} parameter path {path} yields invalid SPARQL variable \
+                 name {name:?}"
+            ),
         ));
     }
     let values = objects_of(data, param_node, sh::OPTIONAL);
@@ -84,10 +109,26 @@ pub(super) fn parse_parameter(
             match literal.value() {
                 "true" | "1" => true,
                 "false" | "0" => false,
-                _ => return Err(optional_error(component_iri, param_node)),
+                _ => {
+                    return Err((
+                        "optional-datatype",
+                        optional_error(component_iri, param_node),
+                    ));
+                }
             }
         }
-        _ => return Err(optional_error(component_iri, param_node)),
+        [_] => {
+            return Err((
+                "optional-datatype",
+                optional_error(component_iri, param_node),
+            ));
+        }
+        _ => {
+            return Err((
+                "optional-maxCount",
+                optional_error(component_iri, param_node),
+            ));
+        }
     };
     Ok(Parameter {
         path: path.clone(),

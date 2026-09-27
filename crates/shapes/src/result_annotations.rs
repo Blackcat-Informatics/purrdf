@@ -64,12 +64,30 @@ const ANNOTATION_TERMS: [&str; 3] = [
 /// variable, an annotation property of the SHACL report vocabulary, or a SHACL term
 /// on the annotation node that is none of the three annotation properties.
 pub(crate) fn parse(data: &RdfDataset, executable: &Term) -> Result<Vec<ResultAnnotation>, String> {
+    parse_with_rule(data, executable).map_err(|(_, message)| message)
+}
+
+/// [`parse`], with each refusal paired with the id of the syntax rule it enforces
+/// (`resultAnnotation-nodeKind`, `annotationProperty`, `annotationVarName` — SHACL 1.2
+/// SPARQL Extensions, "Summary of Syntax Rules"), or `None` for a refusal no numbered
+/// rule states.
+///
+/// # Errors
+///
+/// As [`parse`].
+pub(crate) fn parse_with_rule(
+    data: &RdfDataset,
+    executable: &Term,
+) -> Result<Vec<ResultAnnotation>, crate::error::RuleViolation> {
     let mut out = Vec::new();
     for (_, _, node) in objects(data, executable, sh::RESULT_ANNOTATION) {
         if !matches!(node, Term::NamedNode(_) | Term::BlankNode(_)) {
-            return Err(format!(
-                "sh:resultAnnotation on {executable} is {node}; SHACL 1.2 SPARQL Extensions: \
-                 result annotations \"are either IRIs or blank nodes\""
+            return Err((
+                Some("resultAnnotation-nodeKind"),
+                format!(
+                    "sh:resultAnnotation on {executable} is {node}; SHACL 1.2 SPARQL Extensions: \
+                     result annotations \"are either IRIs or blank nodes\""
+                ),
             ));
         }
         out.push(parse_one(data, &node)?);
@@ -99,7 +117,10 @@ pub(crate) fn sort(annotations: &mut Vec<ResultAnnotation>) {
 }
 
 /// One result-annotation node.
-fn parse_one(data: &RdfDataset, node: &Term) -> Result<ResultAnnotation, String> {
+fn parse_one(
+    data: &RdfDataset,
+    node: &Term,
+) -> Result<ResultAnnotation, crate::error::RuleViolation> {
     for (_, predicate, _) in native_quads(data, Some(node), None, None, GraphFilter::AnyGraph) {
         let p = predicate.as_str();
         if !census::is_census_namespace(p) || ANNOTATION_TERMS.contains(&p) {
@@ -108,10 +129,13 @@ fn parse_one(data: &RdfDataset, node: &Term) -> Result<ResultAnnotation, String>
         if census::classify(p).is_some_and(|row| row.class == TermClass::NonValidating) {
             continue;
         }
-        return Err(format!(
-            "result annotation {node} carries <{p}>, which is not sh:annotationProperty, \
-             sh:annotationVarName or sh:annotationValue; it is refused rather than silently \
-             ignored"
+        return Err((
+            None,
+            format!(
+                "result annotation {node} carries <{p}>, which is not sh:annotationProperty, \
+                 sh:annotationVarName or sh:annotationValue; it is refused rather than \
+                 silently ignored"
+            ),
         ));
     }
     let properties: Vec<Term> = objects(data, node, sh::ANNOTATION_PROPERTY)
@@ -121,22 +145,28 @@ fn parse_one(data: &RdfDataset, node: &Term) -> Result<ResultAnnotation, String>
     let property = match properties.as_slice() {
         [Term::NamedNode(property)] => property.clone(),
         _ => {
-            return Err(format!(
-                "result annotation {node} has {} sh:annotationProperty value(s); SHACL 1.2 SPARQL \
-                 Extensions: \"Each result annotation has exactly one value for the property \
-                 sh:annotationProperty and this value is an IRI\"",
-                properties.len()
+            return Err((
+                Some("annotationProperty"),
+                format!(
+                    "result annotation {node} has {} sh:annotationProperty value(s); SHACL 1.2 \
+                     SPARQL Extensions: \"Each result annotation has exactly one value for the \
+                     property sh:annotationProperty and this value is an IRI\"",
+                    properties.len()
+                ),
             ));
         }
     };
     if let Some(row) = census::classify(property.as_str())
         && row.class == TermClass::Structural(Role::Report)
     {
-        return Err(format!(
-            "result annotation {node} names <{}> as its sh:annotationProperty, a property of the \
-             SHACL validation-report vocabulary; injecting it would make every result state a \
-             report fact no constraint produced",
-            property.as_str()
+        return Err((
+            None,
+            format!(
+                "result annotation {node} names <{}> as its sh:annotationProperty, a property of \
+                 the SHACL validation-report vocabulary; injecting it would make every result \
+                 state a report fact no constraint produced",
+                property.as_str()
+            ),
         ));
     }
     let names: Vec<Term> = objects(data, node, sh::ANNOTATION_VAR_NAME)
@@ -159,18 +189,24 @@ fn parse_one(data: &RdfDataset, node: &Term) -> Result<ResultAnnotation, String>
             Some(name.value().to_owned())
         }
         [single] => {
-            return Err(format!(
-                "sh:annotationVarName on result annotation {node} is {single}; it must be an \
-                 xsd:string literal that is a SPARQL variable name (without its ? or $ sigil), \
-                 or no solution could ever bind it"
+            return Err((
+                Some("annotationVarName"),
+                format!(
+                    "sh:annotationVarName on result annotation {node} is {single}; it must be an \
+                     xsd:string literal that is a SPARQL variable name (without its ? or $ \
+                     sigil), or no solution could ever bind it"
+                ),
             ));
         }
         _ => {
-            return Err(format!(
-                "result annotation {node} has {} sh:annotationVarName values; SHACL 1.2 SPARQL \
-                 Extensions: \"Each result annotation has at most 1 value for the property \
-                 sh:annotationVarName\"",
-                names.len()
+            return Err((
+                Some("annotationVarName"),
+                format!(
+                    "result annotation {node} has {} sh:annotationVarName values; SHACL 1.2 \
+                     SPARQL Extensions: \"Each result annotation has at most 1 value for the \
+                     property sh:annotationVarName\"",
+                    names.len()
+                ),
             ));
         }
     };

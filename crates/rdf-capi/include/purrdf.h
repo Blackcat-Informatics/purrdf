@@ -2881,13 +2881,13 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed),
  * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
  * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
- * declared for a built-in component) and `inert` (`defect DECLARATION`, one per
- * defect of a declaration no shape reaches) sections, then `findings N` and
- * `clean true|false`.
+ * declared for a built-in component) and `unexecuted` (`violation DECLARATION`, one
+ * per query that violates a pre-binding restriction and that nothing executes)
+ * sections, then `findings N` and `clean true|false`.
  *
  * `*out_clean` receives 1 when the report carries no finding — the loader accepted the
- * graph, every `shacl-shacl.ttl` result is superseded and no unreached declaration is
- * defective — and 0 otherwise;
+ * graph, every `shacl-shacl.ttl` result is superseded and no unexecuted query violates a
+ * pre-binding restriction — and 0 otherwise;
  * `*out_findings` receives the finding count. A malformed shapes graph is a report with
  * findings and status `Ok`; only a document that is not Turtle is a `ParseError`.
  *

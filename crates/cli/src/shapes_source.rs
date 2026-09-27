@@ -216,6 +216,12 @@ pub(crate) fn shapes_error(
         ShapesError::ShaclJs(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
         }
+        ShapesError::IllFormed(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
+        ShapesError::Prebinding(violation) => {
+            return CliError::Runtime(format!("{context}: {violation}"));
+        }
     };
     match error {
         ShapesImportError::Unresolved { iris } => {

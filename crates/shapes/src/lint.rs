@@ -22,11 +22,16 @@
 //!    constraint component, which the native implementation supersedes and never runs
 //!    ([`crate::validator_alternatives`]), when the load succeeded. They are reported,
 //!    never findings: the component's semantics are the specification's either way.
-//! 5. **inert** — every defect of a declaration no shape reaches ([`crate::inert`]):
-//!    an ill-formed validator of a built-in component or of a custom component no
-//!    shape uses, an ill-formed `sh:SPARQLFunction` nothing calls. The load accepts
-//!    them, because nothing it runs is ill-formed; each is a FINDING here, so the
-//!    defect is not silenced — it is certified rather than refused.
+//! 5. **unexecuted** — every query the shapes graph declares that violates a pre-binding
+//!    restriction (SHACL 1.2 SPARQL Extensions, Appendix A) and that nothing executes,
+//!    when the load succeeded: a validator of a built-in component, a validator of a
+//!    custom component no use selects, a `sh:SPARQLFunction` nothing calls. Appendix A
+//!    requires a failure only for a query "executed with pre-bound variables", so the
+//!    load accepts these, and one that does execute refuses the load
+//!    ([`ShapesError::Prebinding`]); each unexecuted one is a FINDING here, so the
+//!    violation is not silenced. A declaration that violates a SYNTAX rule is never
+//!    listed here: it refuses the load ([`ShapesError::IllFormed`]), and the report
+//!    carries that refusal in `load`.
 //!
 //! # Where `shacl-shacl.ttl` lags SHACL 1.2 Core
 //!
@@ -42,7 +47,7 @@
 //! graph and hundreds of mutants); over a graph the loader refused, every result counts.
 //!
 //! A report is CLEAN exactly when the loader accepted the graph, every `shacl-shacl`
-//! result is superseded, and no unreached declaration is defective.
+//! result is superseded, and no unexecuted query violates a pre-binding restriction.
 //!
 //! # An incomplete `owl:imports` closure is not a report
 //!
@@ -61,13 +66,12 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 
 use crate::engine::validate_dataset_with_shapes_graph;
-use crate::error::ShapesError;
+use crate::error::{PrebindingViolation, ShapesError};
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
-use crate::inert::InertDefect;
 use crate::model::BoxRoleVocab;
 use crate::shapes::{
-    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_inert,
+    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_unexecuted,
 };
 use crate::term::Term;
 use crate::validator_alternatives::AlternativeValidator;
@@ -243,9 +247,9 @@ pub struct LintReport {
     functions: Option<FunctionResolution>,
     /// The validators declared for built-ins, when the loader accepted the graph.
     alternatives: Option<Vec<AlternativeValidator>>,
-    /// The defects of declarations no shape reaches, when the loader accepted the
-    /// graph.
-    inert: Option<Vec<InertDefect>>,
+    /// The pre-binding violations of the queries nothing executes, when the loader
+    /// accepted the graph.
+    unexecuted: Option<Vec<PrebindingViolation>>,
 }
 
 impl LintReport {
@@ -277,16 +281,16 @@ impl LintReport {
         self.alternatives.as_deref()
     }
 
-    /// Every defect of a declaration no shape reaches, sorted, or `None` when the
-    /// loader refused the graph. Each is a finding; see the [module docs](self).
+    /// Every pre-binding violation of a query nothing executes, sorted, or `None` when
+    /// the loader refused the graph. Each is a finding; see the [module docs](self).
     #[must_use]
-    pub fn inert_defects(&self) -> Option<&[InertDefect]> {
-        self.inert.as_deref()
+    pub fn unexecuted(&self) -> Option<&[PrebindingViolation]> {
+        self.unexecuted.as_deref()
     }
 
     /// How many findings the report carries: one for a load refusal, plus every
-    /// `shacl-shacl.ttl` result no [`Supersession`] covers, plus every defect of a
-    /// declaration no shape reaches.
+    /// `shacl-shacl.ttl` result no [`Supersession`] covers, plus every unexecuted query
+    /// that violates a pre-binding restriction.
     #[must_use]
     pub fn findings(&self) -> usize {
         usize::from(self.load_error.is_some())
@@ -295,7 +299,7 @@ impl LintReport {
                 .iter()
                 .filter(|result| result.superseded.is_none())
                 .count()
-            + self.inert.as_ref().map_or(0, Vec::len)
+            + self.unexecuted.as_ref().map_or(0, Vec::len)
     }
 
     /// Whether the report carries no finding.
@@ -317,9 +321,9 @@ impl LintReport {
     /// call BINDING FUNCTION in OWNER
     /// validators N|unavailable
     /// alternative COMPONENT ATTACHMENT VALIDATOR LANGUAGE superseded-by-native
-    /// inert N|unavailable
-    /// defect DECLARATION
-    ///   error LINE                     (one per line of the defect's refusal)
+    /// unexecuted N|unavailable
+    /// violation DECLARATION
+    ///   error LINE                     (one per line of the violated restriction)
     /// findings N
     /// clean true|false
     /// ```
@@ -328,8 +332,8 @@ impl LintReport {
     /// [`FunctionBinding::label`](crate::function_resolution::FunctionBinding::label);
     /// `functions unavailable` means the loader refused the graph. `LANGUAGE` is
     /// [`ValidatorLanguage::label`](crate::validator_alternatives::ValidatorLanguage::label);
-    /// `validators unavailable` means the loader refused the graph, and so does `inert
-    /// unavailable`. Every list is in the
+    /// `validators unavailable` means the loader refused the graph, and so does
+    /// `unexecuted unavailable`. Every list is in the
     /// order its accessor documents, so the text is a pure function of the shapes graph.
     #[must_use]
     pub fn render(&self) -> String {
@@ -396,13 +400,13 @@ impl LintReport {
                 }
             }
         }
-        match &self.inert {
-            None => out.push_str("inert unavailable\n"),
-            Some(inert) => {
-                let _ = writeln!(out, "inert {}", inert.len());
-                for defect in inert {
-                    let _ = writeln!(out, "defect {}", defect.declaration);
-                    for line in defect.message.lines() {
+        match &self.unexecuted {
+            None => out.push_str("unexecuted unavailable\n"),
+            Some(unexecuted) => {
+                let _ = writeln!(out, "unexecuted {}", unexecuted.len());
+                for violation in unexecuted {
+                    let _ = writeln!(out, "violation {}", violation.declaration());
+                    for line in violation.message().lines() {
                         let _ = writeln!(out, "  error {line}");
                     }
                 }
@@ -437,7 +441,7 @@ pub fn lint(
 ) -> Result<LintReport, ShapesError> {
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
     let dataset = &resolved.dataset;
-    let loaded = from_resolved_dataset_with_inert(
+    let loaded = from_resolved_dataset_with_unexecuted(
         dataset,
         None,
         &resolved.prefixes,
@@ -491,8 +495,8 @@ pub fn lint(
         )
     });
     shacl_shacl.dedup();
-    let (load_error, functions, alternatives, inert) = match loaded {
-        Ok((shapes, inert)) => {
+    let (load_error, functions, alternatives, unexecuted) = match loaded {
+        Ok((shapes, unexecuted)) => {
             // The load that just succeeded parsed the same registry, so this cannot
             // refuse; were it to, the report says so rather than listing nothing.
             match alternative_validators(dataset, &resolved.prefixes) {
@@ -500,7 +504,7 @@ pub fn lint(
                     None,
                     Some(shapes.function_resolution()),
                     Some(alternatives),
-                    Some(inert),
+                    Some(unexecuted),
                 ),
                 Err(error) => (Some(error), None, None, None),
             }
@@ -512,7 +516,7 @@ pub fn lint(
         shacl_shacl,
         functions,
         alternatives,
-        inert,
+        unexecuted,
     })
 }
 

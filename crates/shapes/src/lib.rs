@@ -42,7 +42,6 @@ pub mod free_expression;
 pub mod function_resolution;
 pub mod graphql;
 pub mod imports;
-pub mod inert;
 pub mod instance;
 pub mod json_schema;
 pub mod linkml;
@@ -73,7 +72,9 @@ pub mod typescript;
 pub(crate) mod unique_values;
 pub mod validator_alternatives;
 
-pub use error::{ShaclJsRefusal, ShapesError};
+pub use error::{
+    IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
+};
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,

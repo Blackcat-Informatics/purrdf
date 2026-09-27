@@ -564,7 +564,7 @@ fn cli_shapes_lint() {
         "{report}"
     );
     assert!(
-        report.ends_with("validators 0\ninert 0\nfindings 0\nclean true\n"),
+        report.ends_with("validators 0\nunexecuted 0\nfindings 0\nclean true\n"),
         "{report}"
     );
     assert!(stderr(&out).contains("shapes lint clean true\n"));
@@ -590,7 +590,10 @@ fn cli_shapes_lint() {
         "{report}"
     );
     assert!(report.contains("functions unavailable\n"), "{report}");
-    assert!(report.contains("validators unavailable\n"), "{report}");
+    assert!(
+        report.contains("validators unavailable\nunexecuted unavailable\n"),
+        "{report}"
+    );
     assert!(report.ends_with("clean false\n"), "{report}");
     assert!(stderr(&bad).contains("shapes lint clean false\n"));
 

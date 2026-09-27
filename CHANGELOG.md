@@ -47,8 +47,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
   `sh:JSFunction` from a node expression or from SPARQL the shape runs,
   directly or through a `sh:SPARQLFunction`. SHACL-JS is a 2017 Working Group
-  Note, not SHACL 1.2. A shapes graph that only declares SHACL-JS, as the DASH
-  library does, now loads with those declarations inert: `sh:JSLibrary`s,
+  Note, not SHACL 1.2. A shapes graph that only declares SHACL-JS now loads
+  with those declarations inert: `sh:JSLibrary`s,
   `sh:JSFunction`s nothing calls, `sh:JSValidator`s of components no shape
   uses or beside a SPARQL validator SHACL selects instead, and `sh:JSValidator`
   alternatives on built-in components, which the lint report lists with the
@@ -58,19 +58,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   command-line hosts report it with the same message as before.
 - **sparql-algebra:** `Query::custom_function_calls` lists the IRI of every
   extension function a query calls, anywhere in its algebra.
-- **shapes:** a declaration no shape reaches is judged by `lint`, not by the load.
-  An ill-formed validator of a built-in component (never run), an ill-formed
-  validator of a custom component no shape uses, and an ill-formed
-  `sh:SPARQLFunction` nothing calls (a reserved parameter name, a missing or
-  unparsable body) no longer refuse the load: each is an `inert::InertDefect`,
-  and `purrdf shapes lint` gains a fifth section, `inert N` (`inert unavailable`
-  over a refused graph), listing each as `defect DECLARATION` with its error
-  lines and counting it as a finding. Where a shape uses the component, or a
-  node expression or a query a shape reaches calls the function (directly or
-  through another function's body), the load refuses it as before.
-  `LintReport::inert_defects` returns them, and the Python lint dictionary gains
-  `inert`. A shapes graph importing DASH, whose unused declarations include
-  such defects, now loads.
 - **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
   onto a list value's `@list` array: `sh:minListLength` as `minItems`,
   `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,
@@ -2625,21 +2612,59 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   values" of `sh:nodeValidator`, `sh:propertyValidator` or `sh:validator` as a
   constraint's validator, so each declared validator is an alternative implementation
   of the same component; the native implementation is the one that runs, and the
-  declared ones are checked for well-formedness (query grammar and pre-binding) and
-  never executed, so their queries may call functions the engine does not have. Such
+  declared ones are checked against the syntax rules (type, query form and grammar)
+  and never executed, so their queries may call functions the engine does not have.
+  A pre-binding violation in one refuses nothing, because it never executes; the lint
+  report lists it under `unexecuted` (see below). Such
   a declaration used to be refused as a duplicate definition. A body, an `sh:ask` or
   an `sh:select` stated on the component itself is still a duplicate definition, a
-  contradicting signature is still a mismatch. A validator that is not a
+  contradicting signature is still a mismatch, and a validator that is not a
   well-formed SPARQL validator of its attachment — an untyped node, an ASK validator
   under `sh:nodeValidator` or `sh:propertyValidator`, a SELECT validator under
-  `sh:validator`, an unparsable query — is never run either, so it is an inert
-  defect `purrdf shapes lint` reports as a finding, not a load refusal. A SHACL-JS
-  `sh:JSValidator` is an inert alternative, never parsed and never run. Newly refused: an `sh:`
+  `sh:validator`, an unparsable query — is refused. A SHACL-JS `sh:JSValidator` is
+  an inert alternative, never parsed and never run. Newly refused: an `sh:`
   statement on a built-in's declaration other than its signature, its validators,
   `sh:message`, `sh:labelTemplate` or a non-validating characteristic (`sh:severity`
   on `sh:MinCountConstraintComponent`, for one), which the native implementation
   would not honour. A `sh:JSValidator` of a custom component is refused with the
   SHACL-JS reason only where a shape uses the component and SHACL selects it.
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** a SHACL-SPARQL or SHACL-AF
+  declaration that violates a syntax rule refuses the load whether or not any shape
+  reaches it. SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs", says "A SHACL
+  processor SHOULD produce a failure in this case" with no reachability qualifier.
+  Refused: a non-SELECT value of `sh:nodeValidator` or `sh:propertyValidator` and a
+  non-ASK value of `sh:validator`, on a built-in or a custom component
+  (`nodeValidator-class`, `propertyValidator-class`, `validator-class`); a validator
+  without exactly one `xsd:string` query, or with a query that does not parse to its
+  form (`ask-count`, `ask-datatype`, `ask-sparql`, `SPARQLSelectValidator-select-count`,
+  `select-query-valid`); an ill-formed result annotation or prefix declaration on a
+  validator; a component parameter named `this`, `path`, `PATH` or `value`
+  (`parameter-name-not-in`) and the other parameter rules; a `sh:SPARQLFunction`
+  parameter named one of those or `shapesGraph` or `currentShape`, which SHACL
+  Advanced Features takes from the SHACL-SPARQL parameter rules; a `sh:SPARQLFunction`
+  without exactly one `sh:ask` or `sh:select`, with an unparsable body, or with a
+  SELECT body that does not project exactly one variable (`SPARQLFunction-query`).
+  The refusal is the new `ShapesError::IllFormed(IllFormedShapesGraph)`, which lists
+  every violation in the graph as an `IllFormedDeclaration` naming the declaration and
+  the rule id (`[syntax rule nodeValidator-class]` in the message).
+  A pre-binding violation (a `MINUS`, a `VALUES`, an `AS ?var` for a pre-bound
+  variable) is not a syntax violation: SHACL 1.2 SPARQL Extensions, Appendix A,
+  requires a failure for a query "executed with pre-bound variables". It refuses the
+  load, as the new `ShapesError::Prebinding(PrebindingViolation)`, only where a query
+  executes: the validator a use of a custom component selects, or a
+  `sh:SPARQLFunction` that a node expression or reachable SPARQL calls, directly or
+  through another function's body. A function body is now checked against Appendix
+  A's three rules over its parameter variables. A function with no parameters binds
+  nothing, so none of them applies to it. A validator of a built-in component never
+  executes, and neither does a validator no use selects or a function nothing calls.
+  Those load, and the lint report gains a fifth section, `unexecuted N`
+  (`unexecuted unavailable` over a refused graph), with one `violation DECLARATION`
+  line and its `error` lines for each. Each is a finding.
+  `LintReport::unexecuted` carries them, and Python's `lint_shapes` dict gains
+  `"unexecuted"`. SHACL-JS reachability is unchanged. A shapes graph that imports a
+  library whose unused declarations violate syntax rules, as DASH's do, is refused
+  until those declarations are repaired.
 
 - **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report gains a
   fourth section, `validators N` (`validators unavailable` over a refused graph), with

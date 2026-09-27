@@ -742,6 +742,29 @@ impl Parser<'_> {
                 }
                 continue;
             };
+            // The selected validator is the query this use executes, with `$this`, the
+            // parameters and (for ASK) `$value` pre-bound: a pre-binding violation in it
+            // is the failure SHACL 1.2 SPARQL Extensions, Appendix A requires ("MUST
+            // report a failure when it is operating on a shapes graph that contains
+            // SHACL-SPARQL queries ... that are executed with pre-bound variables and
+            // violate any of these MUST restrictions"). A violating validator no use
+            // selects never executes and does not refuse; `lint` lists it.
+            if let Some(message) = &validator.prebinding {
+                return Err(
+                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
+                        format!(
+                            "{}, which shape {id} executes on a {} shape",
+                            validator.declaration(component.id.as_str()),
+                            if is_property_shape {
+                                "property"
+                            } else {
+                                "node"
+                            },
+                        ),
+                        message.clone(),
+                    )),
+                );
+            }
 
             for bindings in instances {
                 let component_validator = match &validator.kind {

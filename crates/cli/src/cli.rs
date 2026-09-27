@@ -1381,7 +1381,10 @@ pub(crate) enum ShapesCommand {
     /// validated, in one deterministic report.
     ///
     /// Five sections. `load`: the loader's own verdict — accepted, or the refusal it
-    /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, …).
+    /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, a
+    /// SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule — every such
+    /// violation, each with its rule id, whether or not a shape reaches it — or a
+    /// pre-binding violation in a query a shape executes, …).
     /// `shacl-shacl`: every result of validating the shapes graph, as data, against the
     /// W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs; a result SHACL 1.2
     /// Core makes well-formed where that file still flags it (`sh:closed sh:ByTypes`, a
@@ -1390,17 +1393,18 @@ pub(crate) enum ShapesCommand {
     /// `native`, `custom`, `sparql-registered` or `host-extension`. `validators`: every
     /// validator the graph declares for a built-in constraint component (a vocabulary
     /// such as DASH gives SHACL Core components SPARQL validators), which the native
-    /// implementation supersedes and never runs; never a finding. `inert`: every defect of
-    /// a declaration no shape reaches — an ill-formed validator of a built-in component or
-    /// of a component no shape uses, an ill-formed `sh:SPARQLFunction` nothing calls —
-    /// which the load accepts; each is a finding.
+    /// implementation supersedes and never runs; never a finding. `unexecuted`: every
+    /// query that violates a pre-binding restriction (a `MINUS`, a `VALUES`, an `AS ?var`
+    /// for a pre-bound variable) and that nothing executes — a validator of a built-in
+    /// component, a validator no use of its component selects, a `sh:SPARQLFunction`
+    /// nothing calls — which the load accepts; each is a finding.
     ///
     /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
     /// on request.
     ///
     /// Exit codes follow `shacl verify`, the other certify verb: **0** when the report is
     /// clean — the loader accepted the graph, every `shacl-shacl` result is superseded and
-    /// no unreached declaration is defective.
+    /// no unexecuted query violates a pre-binding restriction.
     /// **1** when it carries a finding, and for a document that does not parse or an
     /// `owl:imports` no `--import` resolves; the report is still written when there is one.
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`

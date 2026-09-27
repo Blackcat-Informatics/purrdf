@@ -884,14 +884,21 @@ functions 1
 call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
 validators 1
 alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
-inert 0
+unexecuted 0
 findings 0
 clean true
 ```
 
 - **`load`** is the loader's own verdict: `accepted`, or `refused` followed by
   the refusal (an unknown `sh:` term, an ill-typed parameter, an unresolved or
-  duplicate function definition, and so on).
+  duplicate function definition, and so on). A SHACL-SPARQL or SHACL-AF
+  declaration that violates a syntax rule — an ASK validator under
+  `sh:nodeValidator`, a parameter named `value`, a `sh:SPARQLFunction` without
+  exactly one `sh:ask`/`sh:select` — is refused here whether or not any shape
+  reaches it, and the refusal lists every such violation in the graph, each
+  with its rule id (`[syntax rule nodeValidator-class]`). So is a query a shape
+  executes that violates a pre-binding restriction (`[syntax rule
+  pre-binding-limitations]`).
 - **`shacl-shacl`** lists every result of validating the shapes graph, as data,
   against the W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs. The
   vendored file predates some SHACL 1.2 Core relaxations (`sh:closed
@@ -912,16 +919,20 @@ clean true
   runs, so each declared validator is `superseded-by-native` and is never
   executed. These lines are not findings. It reads `validators unavailable`
   when the loader refused the graph.
-- **`inert`** lists every defect of a declaration no shape reaches: an
-  ill-formed validator of a built-in component or of a custom component no
-  shape uses, or an ill-formed `sh:SPARQLFunction` nothing calls. Each is a
-  `defect` line naming the declaration, followed by its `error` lines. The
-  loader accepts such a declaration, because nothing runs it, and each defect
-  is a finding here. It reads `inert unavailable` when the loader refused the
-  graph.
+- **`unexecuted`** lists every query the graph declares that violates a
+  pre-binding restriction of SHACL 1.2 SPARQL Extensions, Appendix A (a
+  `MINUS`, a `VALUES`, an `AS ?var` for a pre-bound variable) and that nothing
+  executes: a validator of a built-in component, a validator of a custom
+  component no use selects, or a `sh:SPARQLFunction` nothing calls. Appendix A
+  requires a failure only for a query "executed with pre-bound variables", so
+  the loader accepts these; each is a `violation` line naming the declaration,
+  followed by its `error` lines, and each is a finding here. A declaration
+  that violates a syntax rule never appears here: it refuses the load. It
+  reads `unexecuted unavailable` when the loader refused the graph.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded and no unreached declaration is defective.
+result is superseded and no unexecuted query violates a pre-binding
+restriction.
 
 The report goes to `OUT` either way, and `shapes lint clean true|false` and
 `shapes lint findings N` always go to stderr.

@@ -70,6 +70,12 @@ impl PurrdfError {
             purrdf_validate::ShapesError::ShaclJs(refusal) => {
                 Self::new(PurrdfStatus::ParseError, refusal.to_string())
             }
+            purrdf_validate::ShapesError::IllFormed(refusal) => {
+                Self::new(PurrdfStatus::ParseError, refusal.to_string())
+            }
+            purrdf_validate::ShapesError::Prebinding(violation) => {
+                Self::new(PurrdfStatus::ParseError, violation.to_string())
+            }
         }
     }
 

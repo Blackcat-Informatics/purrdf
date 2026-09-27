@@ -382,8 +382,9 @@ fn eval_node_expr(
 /// it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
 /// function call binds to. Returns a dict:
 ///
-/// - `"clean"` — no finding: the loader accepted the graph and every `shacl-shacl`
-///   result is superseded (flagged by `shacl-shacl.ttl` but well-formed SHACL 1.2 Core);
+/// - `"clean"` — no finding: the loader accepted the graph, every `shacl-shacl` result is
+///   superseded (flagged by `shacl-shacl.ttl` but well-formed SHACL 1.2 Core) and no
+///   unexecuted query violates a pre-binding restriction;
 /// - `"findings"` — the finding count;
 /// - `"load_error"` — the loader's refusal, or `None`;
 /// - `"shacl_shacl"` — one dict per result: `"focus"`, `"path"`, `"value"`,
@@ -396,6 +397,11 @@ fn eval_node_expr(
 ///   constraint component, which the native implementation supersedes and never runs:
 ///   `"component"`, `"attachment"`, `"validator"`, `"language"` (`sparql-ask`,
 ///   `sparql-select`); never findings; `None` when the loader refused the graph;
+/// - `"unexecuted"` — one dict per query the graph declares that violates a pre-binding
+///   restriction and that nothing executes (a validator of a built-in component, a
+///   validator no use of its component selects, a `sh:SPARQLFunction` nothing calls),
+///   which the load accepts: `"declaration"`, `"message"`; each is a finding; `None`
+///   when the loader refused the graph;
 /// - `"report"` — the deterministic text every PurRDF host prints.
 ///
 /// The report certifies the shapes graph's whole `owl:imports` closure, resolved against
@@ -465,17 +471,17 @@ fn lint_shapes(
             out.set_item("alternatives", alternatives)?;
         }
     }
-    match report.inert_defects() {
-        None => out.set_item("inert", py.None())?,
-        Some(defects) => {
-            let inert = PyList::empty(py);
-            for defect in defects {
+    match report.unexecuted() {
+        None => out.set_item("unexecuted", py.None())?,
+        Some(violations) => {
+            let unexecuted = PyList::empty(py);
+            for violation in violations {
                 let d = PyDict::new(py);
-                d.set_item("declaration", &defect.declaration)?;
-                d.set_item("message", &defect.message)?;
-                inert.append(d)?;
+                d.set_item("declaration", violation.declaration())?;
+                d.set_item("message", violation.message())?;
+                unexecuted.append(d)?;
             }
-            out.set_item("inert", inert)?;
+            out.set_item("unexecuted", unexecuted)?;
         }
     }
     out.set_item("report", report.render())?;
@@ -1363,6 +1369,12 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
         }
         purrdf_validate::ShapesError::ShaclJs(refusal) => {
             pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
+        purrdf_validate::ShapesError::IllFormed(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
+        purrdf_validate::ShapesError::Prebinding(violation) => {
+            pyo3::exceptions::PyValueError::new_err(violation.to_string())
         }
     }
 }

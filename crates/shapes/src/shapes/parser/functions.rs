@@ -166,15 +166,18 @@ impl Parser<'_> {
     /// parameter predicate's local name), the required-arity count, the
     /// `sh:select`/`sh:ask` body, and the `sh:returnType` constraint.
     ///
-    /// A malformed declaration — a parameter without a predicate or with a reserved
-    /// name, two parameters whose derived variable names collide, a missing/ambiguous
-    /// body, or an unparsable body query — is not registered and not an error here: it
-    /// is recorded in `function_defects`, refused where a reachable call reaches it
-    /// and otherwise an inert defect (see [`crate::inert`]).
-    ///
     /// # Errors
     ///
-    /// Hard-fails on a blank-node declaration and on a SPARQL body for a built-in.
+    /// Hard-fails on a malformed declaration — a parameter without a predicate or
+    /// with a reserved name, two parameters whose derived variable names collide, a
+    /// missing/ambiguous body, or an unparsable body query. A parse of a shapes graph
+    /// has already refused every such declaration, all of them at once, before any
+    /// shape was read ([`Self::check_sparql_function_declarations`]); this refusal is
+    /// the one a restore meets for a dataset that is not the shapes graph it claims.
+    ///
+    /// A body that violates a pre-binding restriction is registered: it is not
+    /// ill-formed, and whether it is refused depends on whether anything calls it (see
+    /// `Parser::refuse_reached_calls`).
     ///
     /// What this adds to `registry` is INCOMPLETE on purpose: the custom
     /// node-expression functions SHACL 1.2 SPARQL Extensions §7.3 also asks for are
@@ -193,16 +196,7 @@ impl Parser<'_> {
         &self,
         registry: &mut UserFunctionRegistry,
     ) -> Result<(), String> {
-        let mut fn_ids: Vec<Term> = self
-            .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
-            .into_iter()
-            .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
-            .map(|(subject, _, _)| subject)
-            .collect();
-        crate::term::sort_terms_canonical(&mut fn_ids);
-        fn_ids.dedup();
-
-        for id in fn_ids {
+        for id in self.sparql_function_ids() {
             // Only IRI-named functions are callable (the call site is an IRI), so a
             // blank-node declaration declares nothing any query could call: a
             // malformed declaration, refused rather than skipped.
@@ -231,23 +225,99 @@ impl Parser<'_> {
                     iri.as_str()
                 ));
             }
-            // An ill-formed declaration is refused where a reachable call reaches it
-            // (see `Parser::refuse_reached_calls`); nothing calls the rest, which are
-            // inert defects `lint` reports.
-            match self.parse_one_sparql_function(&id) {
-                Ok(func) => registry.insert(iri.as_str().to_owned(), func),
-                Err(message) => {
-                    self.function_defects
-                        .borrow_mut()
-                        .insert(iri.as_str().to_owned(), message);
-                }
-            }
+            let (func, _) = self
+                .parse_one_sparql_function(&id)
+                .map_err(|(rule, message)| {
+                    crate::error::IllFormedDeclaration::new(
+                        format!("the sh:SPARQLFunction <{}>", iri.as_str()),
+                        rule,
+                        message,
+                    )
+                    .to_string()
+                })?;
+            registry.insert(iri.as_str().to_owned(), func);
         }
         Ok(())
     }
 
-    /// Parse a single `sh:SPARQLFunction` declaration node into a [`UserFunction`].
-    fn parse_one_sparql_function(&self, id: &Term) -> Result<UserFunction, String> {
+    /// Every node typed `sh:SPARQLFunction` or `sh:Function`, in canonical order.
+    fn sparql_function_ids(&self) -> Vec<Term> {
+        let mut fn_ids: Vec<Term> = self
+            .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
+            .into_iter()
+            .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
+            .map(|(subject, _, _)| subject)
+            .collect();
+        crate::term::sort_terms_canonical(&mut fn_ids);
+        fn_ids.dedup();
+        fn_ids
+    }
+
+    /// Judge every `sh:SPARQLFunction` declaration of the shapes graph against the syntax
+    /// rules, before any shape is read and whether or not anything calls it, returning
+    /// every violation (SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs"; SHACL
+    /// Advanced Features, "Function Parameters" and "SPARQL-based Functions"). The
+    /// pre-binding violation of each well-formed body is recorded in
+    /// `function_prebinding`, keyed by IRI, to be judged where a call executes it.
+    ///
+    /// The declarations judged are the ones [`Self::parse_sparql_functions`] would
+    /// register. A node that is also typed with a custom node-expression function class
+    /// is that declaration, judged where it is parsed, and a declaration naming a
+    /// built-in or a blank node is refused by `parse_sparql_functions` itself.
+    pub(crate) fn check_sparql_function_declarations(
+        &self,
+    ) -> Vec<crate::error::IllFormedDeclaration> {
+        let mut violations = Vec::new();
+        for id in self.sparql_function_ids() {
+            let Term::NamedNode(iri) = &id else {
+                continue;
+            };
+            if crate::spec::native_function(iri.as_str()).is_some()
+                || [
+                    sh::LIST_PARAMETER_EXPRESSION_FUNCTION,
+                    sh::NAMED_PARAMETER_EXPRESSION_FUNCTION,
+                ]
+                .into_iter()
+                .any(|class| {
+                    !self
+                        .quads_with(Some(iri.as_str()), Some(rdf::TYPE), Some(class))
+                        .is_empty()
+                })
+            {
+                continue;
+            }
+            match self.parse_one_sparql_function(&id) {
+                Ok((_, None)) => {}
+                Ok((_, Some(prebinding))) => {
+                    self.function_prebinding
+                        .borrow_mut()
+                        .insert(iri.as_str().to_owned(), prebinding);
+                }
+                Err((rule, message)) => violations.push(crate::error::IllFormedDeclaration::new(
+                    format!("the sh:SPARQLFunction <{}>", iri.as_str()),
+                    rule,
+                    message,
+                )),
+            }
+        }
+        violations
+    }
+
+    /// Parse a single `sh:SPARQLFunction` declaration node into a [`UserFunction`],
+    /// with the pre-binding restriction its body violates, if any (see
+    /// [`crate::prebinding::check_function_body`]).
+    ///
+    /// # Errors
+    ///
+    /// The syntax rule the declaration violates, when a numbered rule states it, and
+    /// the diagnostic. The parameter rules are SHACL-SPARQL's, which SHACL Advanced
+    /// Features, "Function Parameters", applies to functions ("the same syntax rules
+    /// apply") — with the reserved names of the SHACL version it links, which adds
+    /// `shapesGraph` and `currentShape`; the body rule is `SPARQLFunction-query`.
+    fn parse_one_sparql_function(
+        &self,
+        id: &Term,
+    ) -> Result<(UserFunction, Option<String>), crate::error::RuleViolation> {
         // ── Parameters, ordered by (sh:order, predicate IRI) ──────────────────
         struct RawParam {
             order: f64,
@@ -259,20 +329,33 @@ impl Parser<'_> {
         let mut raw: Vec<RawParam> = Vec::new();
         for p_node in self.objects_of(id, sh::PARAMETER_PROPERTY) {
             // The parameter predicate: sh:path (a predicate IRI) or sh:predicate.
-            let predicate = self
+            let predicate = match self
                 .first_object_of(&p_node, sh::PATH)
                 .or_else(|| self.first_object_of(&p_node, sh::PREDICATE))
-                .and_then(|t| match t {
-                    Term::NamedNode(n) => Some(n.as_str().to_owned()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!("sh:SPARQLFunction <{id}> has a sh:parameter without an IRI sh:path/sh:predicate")
-                })?;
+            {
+                Some(Term::NamedNode(n)) => n.as_str().to_owned(),
+                other => {
+                    return Err((
+                        Some(if other.is_some() {
+                            "Parameter"
+                        } else {
+                            "Parameter-predicate-count"
+                        }),
+                        format!(
+                            "sh:SPARQLFunction <{id}> has a sh:parameter without an IRI \
+                             sh:path/sh:predicate"
+                        ),
+                    ));
+                }
+            };
             let var = crate::shapes::local_name(&predicate).to_owned();
             if var.is_empty() {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> has a sh:parameter whose predicate <{predicate}> has an empty local name and yields no usable variable"
+                return Err((
+                    Some("parameter-name-VARNAME"),
+                    format!(
+                        "sh:SPARQLFunction <{id}> has a sh:parameter whose predicate \
+                         <{predicate}> has an empty local name and yields no usable variable"
+                    ),
                 ));
             }
             // A parameter must not shadow a SHACL/SHACL-AF pre-bound or reserved
@@ -287,21 +370,36 @@ impl Parser<'_> {
                 "currentShape",
             ];
             if RESERVED_VARS.contains(&var.as_str()) {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> parameter variable ?{var} is a SHACL/SHACL-AF reserved name"
+                return Err((
+                    Some("parameter-name-not-in"),
+                    format!(
+                        "sh:SPARQLFunction <{id}> parameter variable ?{var} is a SHACL/SHACL-AF \
+                         reserved name"
+                    ),
                 ));
             }
+            // SHACL Advanced Features orders parameters by "the parameters' numeric
+            // values of sh:order"; no numbered rule states the datatype, so these two
+            // refusals name none.
             let order = match self.first_object_of(&p_node, sh::ORDER) {
                 None => f64::INFINITY,
                 Some(Term::Literal(lit)) => lit.value().parse::<f64>().map_err(|_| {
-                    format!(
-                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-numeric sh:order '{}'",
-                        lit.value()
+                    (
+                        None,
+                        format!(
+                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-numeric \
+                             sh:order '{}'",
+                            lit.value()
+                        ),
                     )
                 })?,
                 Some(other) => {
-                    return Err(format!(
-                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:order {other}"
+                    return Err((
+                        None,
+                        format!(
+                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal \
+                             sh:order {other}"
+                        ),
                     ));
                 }
             };
@@ -311,14 +409,22 @@ impl Parser<'_> {
                     "true" | "1" => true,
                     "false" | "0" => false,
                     other => {
-                        return Err(format!(
-                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-boolean sh:optional '{other}'"
+                        return Err((
+                            Some("optional-datatype"),
+                            format!(
+                                "sh:SPARQLFunction <{id}> parameter ?{var} has a non-boolean \
+                                 sh:optional '{other}'"
+                            ),
                         ));
                     }
                 },
                 Some(other) => {
-                    return Err(format!(
-                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:optional {other}"
+                    return Err((
+                        Some("optional-datatype"),
+                        format!(
+                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal \
+                             sh:optional {other}"
+                        ),
                     ));
                 }
             };
@@ -345,9 +451,13 @@ impl Parser<'_> {
         let mut seen: FastSet<&str> = FastSet::default();
         for p in &raw {
             if !seen.insert(p.var.as_str()) {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> has two parameters whose variable name ?{} collides",
-                    p.var
+                return Err((
+                    Some("parameter-name-unique"),
+                    format!(
+                        "sh:SPARQLFunction <{id}> has two parameters whose variable name ?{} \
+                         collides",
+                        p.var
+                    ),
                 ));
             }
         }
@@ -359,9 +469,14 @@ impl Parser<'_> {
             if p.optional {
                 seen_optional = true;
             } else if seen_optional {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> declares a required parameter ?{} after an optional one",
-                    p.var
+                // No numbered rule; the arity of a call would be ambiguous.
+                return Err((
+                    None,
+                    format!(
+                        "sh:SPARQLFunction <{id}> declares a required parameter ?{} after an \
+                         optional one",
+                        p.var
+                    ),
                 ));
             }
         }
@@ -388,34 +503,54 @@ impl Parser<'_> {
         let select = self.first_string_object(id, sh::SELECT);
         let ask = self.first_string_object(id, sh::ASK);
         let body_expression = self.first_object_of(id, sh::BODY_EXPRESSION);
+        // SHACL Advanced Features, "SPARQL-based Functions": "SPARQL-based functions have
+        // exactly one value for either sh:ask or sh:select" (`SPARQLFunction-query`).
+        const BODY_RULE: Option<&str> = Some("SPARQLFunction-query");
         if let Some(body) = &body_expression {
             if select.is_some() || ask.is_some() {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> declares a sh:bodyExpression alongside a \
-                     sh:select/sh:ask body; exactly one body is required"
+                return Err((
+                    BODY_RULE,
+                    format!(
+                        "sh:SPARQLFunction <{id}> declares a sh:bodyExpression alongside a \
+                         sh:select/sh:ask body; exactly one body is required"
+                    ),
                 ));
             }
-            return Err(format!(
-                "<{id}> declares the sh:bodyExpression {body} but is not typed \
-                 sh:ListParameterExpressionFunction or sh:NamedParameterExpressionFunction, so \
-                 nothing would ever evaluate that body"
+            return Err((
+                BODY_RULE,
+                format!(
+                    "<{id}> declares the sh:bodyExpression {body} but is not typed \
+                     sh:ListParameterExpressionFunction or sh:NamedParameterExpressionFunction, \
+                     so nothing would ever evaluate that body"
+                ),
             ));
         }
         let (raw_body, kind) = match (select, ask) {
             (Some(s), None) => (s, UserFnBody::Select),
             (None, Some(a)) => (a, UserFnBody::Ask),
             (Some(_), Some(_)) => {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> declares both sh:select and sh:ask (exactly one is required)"
+                return Err((
+                    BODY_RULE,
+                    format!(
+                        "sh:SPARQLFunction <{id}> declares both sh:select and sh:ask (exactly one \
+                         is required)"
+                    ),
                 ));
             }
             (None, None) => {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> is missing its sh:select/sh:ask/sh:bodyExpression body"
+                return Err((
+                    BODY_RULE,
+                    format!(
+                        "sh:SPARQLFunction <{id}> is missing its sh:select/sh:ask/sh:bodyExpression \
+                         body"
+                    ),
                 ));
             }
         };
-        let body_text = format!("{}{raw_body}", self.prefix_header(&[id])?);
+        let header = self
+            .prefix_header(&[id])
+            .map_err(crate::shapes::prefixes::split_syntax_rule)?;
+        let body_text = format!("{header}{raw_body}");
         // A GRAMMAR check, and deliberately only that.
         //
         // This parse runs under default options — no registered relation IRIs —
@@ -432,30 +567,63 @@ impl Parser<'_> {
         // the algebra is discarded — the same division
         // `purrdf-retrieval`'s `hoistable_clauses` documents: the blind parse is
         // about grammar, and the registry-aware parse stays the authority.
-        let form = SparqlParser::new()
-            .parse_query(&body_text)
-            .map_err(|e| format!("sh:SPARQLFunction <{id}> has an unparsable body query: {e}"))?;
+        let form = SparqlParser::new().parse_query(&body_text).map_err(|e| {
+            (
+                BODY_RULE,
+                format!("sh:SPARQLFunction <{id}> has an unparsable body query: {e}"),
+            )
+        })?;
         match (&form, kind) {
-            (Query::Select { .. }, UserFnBody::Select) | (Query::Ask { .. }, UserFnBody::Ask) => {}
+            (Query::Select { pattern, .. }, UserFnBody::Select) => {
+                // "SELECT queries return exactly one result variable": the value a call
+                // answers is that variable's binding, so a body projecting more or fewer
+                // has no return value to give.
+                if let Some(projected) = projected_variables(pattern)
+                    && projected != 1
+                {
+                    return Err((
+                        BODY_RULE,
+                        format!(
+                            "sh:SPARQLFunction <{id}> has a SELECT body that projects \
+                             {projected} variables; a SPARQL-based function's SELECT query \
+                             returns exactly one result variable"
+                        ),
+                    ));
+                }
+            }
+            (Query::Ask { .. }, UserFnBody::Ask) => {}
             _ => {
-                return Err(format!(
-                    "sh:SPARQLFunction <{id}> body form does not match its sh:select/sh:ask declaration"
+                return Err((
+                    BODY_RULE,
+                    format!(
+                        "sh:SPARQLFunction <{id}> body form does not match its sh:select/sh:ask \
+                         declaration"
+                    ),
                 ));
             }
         }
+        // The pre-binding restrictions, over the parameter variables the call pre-binds.
+        // A violation is not a syntax error: it is judged where a call executes the body.
+        let parameters: Vec<&str> = params.iter().map(|param| param.var.as_str()).collect();
+        let prebinding = crate::prebinding::check_function_body(&form, &parameters)
+            .err()
+            .map(|e| format!("sh:SPARQLFunction <{id}> violates pre-binding restrictions: {e}"));
 
         let return_constraint = TypeConstraint {
             datatype: self.first_iri_object(id, sh::RETURN_TYPE),
             node_kind: None,
         };
 
-        Ok(UserFunction {
-            params,
-            required,
-            body: Arc::from(body_text),
-            kind,
-            return_constraint,
-        })
+        Ok((
+            UserFunction {
+                params,
+                required,
+                body: Arc::from(body_text),
+                kind,
+                return_constraint,
+            },
+            prebinding,
+        ))
     }
 
     /// The `sh:datatype`/`sh:nodeKind` type constraint declared on a parameter node.
@@ -639,5 +807,22 @@ fn node_kind_from_iri(iri: &str) -> Option<EvalNodeKind> {
         sh::BLANK_NODE_OR_LITERAL => Some(EvalNodeKind::BlankNodeOrLiteral),
         sh::IRI_OR_LITERAL => Some(EvalNodeKind::IriOrLiteral),
         _ => None,
+    }
+}
+
+/// How many variables the outermost projection of a SELECT query's algebra projects, or
+/// `None` when no projection wraps it.
+fn projected_variables(pattern: &purrdf_sparql_algebra::GraphPattern) -> Option<usize> {
+    use purrdf_sparql_algebra::GraphPattern;
+    let mut node = pattern;
+    loop {
+        match node {
+            GraphPattern::Slice { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. } => node = inner,
+            GraphPattern::Project { variables, .. } => return Some(variables.len()),
+            _ => return None,
+        }
     }
 }

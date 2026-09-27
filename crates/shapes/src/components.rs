@@ -22,7 +22,7 @@ use ::purrdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads};
-use crate::inert::InertDefect;
+use crate::error::{IllFormedDeclaration, PrebindingViolation, RuleViolation as Violation};
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
@@ -71,6 +71,36 @@ pub(crate) struct Validator {
     pub severity: Option<Severity>,
     /// The result annotations declared on the validator node.
     pub annotations: Vec<crate::shapes::ResultAnnotation>,
+    /// The validator node itself.
+    pub node: Term,
+    /// The attachment it is declared under (`sh:nodeValidator`, `sh:propertyValidator`
+    /// or `sh:validator`).
+    pub attachment: &'static str,
+    /// The pre-binding restriction its query violates, when it violates one. A
+    /// violation is not a syntax error of the declaration: SHACL 1.2 SPARQL Extensions,
+    /// Appendix A requires a failure only for a query "executed with pre-bound
+    /// variables", so it is refused where a shape selects the validator (see
+    /// `Parser::parse_constraints`) and listed by `lint` otherwise.
+    pub prebinding: Option<String>,
+}
+
+impl Validator {
+    /// The declaration this validator is, as refusals and `lint` render it.
+    pub(crate) fn declaration(&self, component: &str) -> String {
+        custom_validator_declaration(&self.node, component, self.attachment)
+    }
+}
+
+/// How a validator of the custom component `component` declared under `attachment` is
+/// named in a refusal or a `lint` entry.
+fn custom_validator_declaration(node: &Term, component: &str, attachment: &str) -> String {
+    format!("validator {node} of the constraint component <{component}>, via <{attachment}>")
+}
+
+/// How a validator of the built-in component `component` declared under `attachment` is
+/// named in a refusal or a `lint` entry.
+fn builtin_validator_declaration(node: &Term, component: &str, attachment: &str) -> String {
+    format!("validator {node} of the built-in component <{component}>, via <{attachment}>")
 }
 
 /// Declaration of a single `sh:Parameter` for a constraint component.
@@ -103,11 +133,6 @@ pub(crate) struct Component {
     /// and only a use whose selected attachment offers nothing but these is refused
     /// (see [`Self::javascript_only`]).
     pub javascript: Vec<(&'static str, Term)>,
-    /// The first ill-formed validator the component declares, as the refusal the
-    /// loader raises where a shape uses the component. A component no shape uses loads
-    /// with it as an inert defect (see [`crate::inert`]); its validator lists are then
-    /// empty.
-    pub defect: Option<String>,
     /// The `sh:message` values declared on the component node.
     pub messages: Vec<Literal>,
     /// Optional severity declared on the component node.
@@ -161,9 +186,15 @@ pub(crate) struct ComponentRegistry {
     /// Every validator declared for a built-in component — an alternative its native
     /// implementation supersedes — sorted. See [`crate::validator_alternatives`].
     pub alternatives: Vec<AlternativeValidator>,
-    /// The ill-formed validators declared for built-in components: never reached, so
-    /// inert defects rather than load refusals (see [`crate::inert`]).
-    pub defects: Vec<InertDefect>,
+    /// Every syntax-rule violation of a component declaration, of its parameters or of
+    /// its validators, built-in and custom alike. Collected rather than raised one at a
+    /// time, so the refusal names every violation in the graph (see
+    /// [`crate::error::IllFormedShapesGraph`]).
+    pub ill_formed: Vec<IllFormedDeclaration>,
+    /// The pre-binding violations of the validators declared for built-in components.
+    /// The native implementation supersedes every such validator, so none of them ever
+    /// executes and none refuses anything: `lint` lists them as unexecuted.
+    pub alternative_prebinding: Vec<PrebindingViolation>,
 }
 
 impl ComponentRegistry {
@@ -174,27 +205,36 @@ impl ComponentRegistry {
     /// class is `sh:ConstraintComponent` or a subclass thereof. Each discovered
     /// component's `sh:parameter` declarations and `sh:nodeValidator` /
     /// `sh:propertyValidator` / `sh:validator` SPARQL validators are parsed and
-    /// validated (query must parse to the declared form and satisfy SHACL-SPARQL
-    /// pre-binding restrictions). An ill-formed validator is not an error here: a
-    /// custom component carries it as [`Component::defect`], refused where a shape uses
-    /// the component, and a built-in's is an inert defect in [`Self::defects`].
+    /// checked against the syntax rules of SHACL 1.2 SPARQL Extensions. Every violation,
+    /// on a built-in or a custom component, used by a shape or not, is collected into
+    /// [`Self::ill_formed`]; the caller refuses the shapes graph with all of them (see
+    /// [`Self::parse`]). A validator query that violates a pre-binding restriction is
+    /// NOT ill-formed: the violation is recorded on the validator
+    /// ([`Validator::prebinding`]) or, for a built-in's, in
+    /// [`Self::alternative_prebinding`], and judged where the query would execute.
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` when a component's declaration or parameters are
-    /// malformed.
+    /// Returns `Err(String)` for a refusal that is not a syntax-rule violation of a
+    /// declaration: a component declaration naming a built-in function, a declaration
+    /// of a built-in component that contradicts its signature, a malformed
+    /// `sh:message`.
     ///
     /// A SHACL-JS `sh:JSValidator` is declared vocabulary, not a load error: a
     /// built-in's is an alternative like any other, and a custom component's is
     /// recorded in [`Component::javascript`] and refused only where a shape would run
     /// it.
-    pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
+    pub(crate) fn parse_collecting(
+        data: &RdfDataset,
+        prefixes: &PrefixResolver,
+    ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
         let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
         let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
-        let mut defects: Vec<InertDefect> = Vec::new();
+        let mut ill_formed: Vec<IllFormedDeclaration> = Vec::new();
+        let mut alternative_prebinding: Vec<PrebindingViolation> = Vec::new();
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -232,9 +272,12 @@ impl ComponentRegistry {
                 // An alternative is never run, but it must still be a well-formed
                 // validator: "The value of sh:ask must be a valid SPARQL ASK query"
                 // (likewise sh:select), under the parameter names the built-in's
-                // signature pre-binds. The parse is the grammar and pre-binding
-                // check only; it resolves no function, so a query calling a function
-                // this engine does not have is well-formed and loads.
+                // signature pre-binds. The syntax rules hold whether or not anything
+                // runs the validator, so a violation is collected like a custom
+                // component's. A pre-binding violation is not a syntax violation, and
+                // an alternative never executes, so it is recorded for `lint` and
+                // refuses nothing. The parse resolves no function, so a query calling
+                // a function this engine does not have is well-formed and loads.
                 let param_names: Vec<String> = row
                     .params
                     .iter()
@@ -243,28 +286,35 @@ impl ComponentRegistry {
                 for (attachment, validator, kind) in
                     declared_validators(data, &component_term, &mut subclass_memo)
                 {
-                    // An alternative is never reached, so an ill-formed one is an inert
-                    // defect, reported by `lint`, rather than a load refusal.
-                    let mut defect = |message: String| {
-                        defects.push(InertDefect {
-                            declaration: format!(
-                                "validator {validator} of the built-in component <{}>",
-                                component.as_str()
-                            ),
-                            message,
-                        });
-                    };
+                    let declaration =
+                        builtin_validator_declaration(&validator, component.as_str(), attachment);
                     let language = match kind {
                         Ok(DeclaredKind::Sparql(kind)) => {
-                            if let Err(message) = parse_validator(
+                            match parse_validator(
                                 data,
                                 prefixes,
                                 &component_term,
                                 &validator,
+                                attachment,
                                 &param_names,
                                 kind,
                             ) {
-                                defect(message);
+                                Ok(parsed) => {
+                                    if let Some(message) = parsed.prebinding {
+                                        alternative_prebinding.push(PrebindingViolation::new(
+                                            format!(
+                                                "{declaration}, which never executes: the \
+                                                 native implementation supersedes it"
+                                            ),
+                                            message,
+                                        ));
+                                    }
+                                }
+                                Err((rule, message)) => ill_formed.push(IllFormedDeclaration::new(
+                                    declaration,
+                                    rule,
+                                    message,
+                                )),
                             }
                             match kind {
                                 ValidatorKind::Ask => ValidatorLanguage::SparqlAsk,
@@ -274,8 +324,8 @@ impl ComponentRegistry {
                         // Never run, and never parsed: this engine has no JavaScript
                         // engine, and the native implementation is the one that runs.
                         Ok(DeclaredKind::JavaScript) => ValidatorLanguage::JavaScript,
-                        Err(message) => {
-                            defect(message);
+                        Err((rule, message)) => {
+                            ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
                             continue;
                         }
                     };
@@ -294,7 +344,7 @@ impl ComponentRegistry {
 
         let mut registry = Self {
             alternatives: builtin_alternatives,
-            defects,
+            alternative_prebinding,
             ..Self::default()
         };
         for component_iri in component_iris {
@@ -305,6 +355,7 @@ impl ComponentRegistry {
                 &component_term,
                 &component_iri,
                 &mut subclass_memo,
+                &mut ill_formed,
             )?;
             for param in &component.parameters {
                 registry
@@ -315,7 +366,27 @@ impl ComponentRegistry {
             registry.components.insert(id, component);
         }
         registry.alternatives.sort();
+        registry.alternative_prebinding.sort();
+        registry.alternative_prebinding.dedup();
+        registry.ill_formed = ill_formed;
         Ok(registry)
+    }
+
+    /// [`Self::parse_collecting`], refusing the registry when any declaration in it
+    /// violates a syntax rule — for a caller that reads the registry alone. A parse of
+    /// the whole shapes graph instead joins [`Self::ill_formed`] with the violations of
+    /// the rest of its declarations before refusing (see `Parser::parse_with_expressions`).
+    ///
+    /// # Errors
+    ///
+    /// [`Self::parse_collecting`]'s own, and every syntax-rule violation, as the
+    /// rendered [`crate::error::IllFormedShapesGraph`].
+    pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
+        let registry = Self::parse_collecting(data, prefixes)?;
+        match crate::error::IllFormedShapesGraph::from_violations(registry.ill_formed.clone()) {
+            Some(refusal) => Err(refusal.to_string()),
+            None => Ok(registry),
+        }
     }
 }
 
@@ -889,22 +960,33 @@ pub(crate) fn is_javascript_validator(data: &RdfDataset, validator: &Term) -> bo
     )
 }
 
+/// The syntax rule that makes the values of `attachment` validators of one form:
+/// `nodeValidator-class`, `propertyValidator-class` or `validator-class` (SHACL 1.2
+/// SPARQL Extensions, "Summary of Syntax Rules").
+fn class_rule(attachment: &str) -> &'static str {
+    match attachment {
+        sh::NODE_VALIDATOR => "nodeValidator-class",
+        sh::PROPERTY_VALIDATOR => "propertyValidator-class",
+        _ => "validator-class",
+    }
+}
+
 /// Every validator `component` declares, as `(attachment, validator, kind)` in
-/// attachment order and canonical term order within one. Each kind is the validator's
-/// own verdict, so a caller decides whether an ill-formed one refuses the load (a
-/// reached custom component) or is an inert defect (a built-in's alternative, an
-/// unused component).
+/// attachment order and canonical term order within one.
 ///
-/// A kind is an error for a validator [`validator_kind`] refuses, and for a SPARQL
-/// validator whose query form is not the one its attachment takes: "The values of
-/// sh:nodeValidator must be SELECT-based validators. The values of sh:propertyValidator
-/// must be SELECT-based validators", "The values of sh:validator must be ASK-based
-/// validators" (SHACL 1.2 SPARQL Extensions).
+/// A kind is a [`Violation`] of the attachment's class rule for a validator
+/// [`validator_kind`] refuses, and for a SPARQL validator whose query form is not the
+/// one its attachment takes: "The values of sh:nodeValidator must be SELECT-based
+/// validators", "The values of sh:propertyValidator must be SELECT-based validators",
+/// "The values of sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL
+/// Extensions). A SHACL-JS `sh:JSValidator` is not judged by those rules here: SHACL-JS
+/// extends the attachments with its own validator class, and a use that would run one is
+/// refused where the shape is read (see [`Component::javascript_only`]).
 fn declared_validators(
     data: &RdfDataset,
     component: &Term,
     memo: &mut FastMap<(String, String), bool>,
-) -> Vec<(&'static str, Term, Result<DeclaredKind, String>)> {
+) -> Vec<(&'static str, Term, Result<DeclaredKind, Violation>)> {
     let mut out = Vec::new();
     for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
         let mut nodes = objects_of(data, component, attachment);
@@ -912,15 +994,23 @@ fn declared_validators(
         let expects_ask = attachment == sh::VALIDATOR;
         for node in nodes {
             let kind = validator_kind(data, &node, memo)
-                .map_err(|e| format!("component {component} validator {node}: {e}"))
+                .map_err(|e| {
+                    (
+                        Some(class_rule(attachment)),
+                        format!("component {component} validator {node}: {e}"),
+                    )
+                })
                 .and_then(|kind| match kind {
                     DeclaredKind::Sparql(form)
                         if matches!(form, ValidatorKind::Ask) != expects_ask =>
                     {
-                        Err(format!(
-                            "component {component} {attachment} requires {} validators, and \
-                             {node} is {form:?}",
-                            if expects_ask { "ASK" } else { "SELECT" },
+                        Err((
+                            Some(class_rule(attachment)),
+                            format!(
+                                "component {component} {attachment} requires {} validators, \
+                                 and {node} is {form:?}",
+                                if expects_ask { "ASK" } else { "SELECT" },
+                            ),
                         ))
                     }
                     kind => Ok(kind),
@@ -937,23 +1027,43 @@ fn declared_validators(
 /// `VARNAME` is the grammar's production, Unicode included — `ex:größe` binds
 /// `?größe` and `ex:2d` binds `?2d` — so the answer is the SPARQL lexer's own.
 fn is_valid_varname(name: &str) -> bool {
-    const BANNED: &[&str] = &["this", "path", "PATH", "value"];
-    !BANNED.contains(&name) && purrdf_sparql_algebra::lexer::is_varname(name)
+    !is_reserved_parameter_name(name) && purrdf_sparql_algebra::lexer::is_varname(name)
 }
 
-/// Parse a single SPARQL validator node, of query form `kind`, attached to a
-/// component.
+/// Whether `name` is one SHACL 1.2 SPARQL Extensions reserves: "Parameter names must not
+/// be one of the following: this, path, PATH, value." (`parameter-name-not-in`).
+fn is_reserved_parameter_name(name: &str) -> bool {
+    const RESERVED: &[&str] = &["this", "path", "PATH", "value"];
+    RESERVED.contains(&name)
+}
+
+/// Parse a single SPARQL validator node, of query form `kind`, declared under
+/// `attachment` of a component.
+///
+/// # Errors
+///
+/// The syntax-rule [`Violation`] of the declaration. A pre-binding violation is not
+/// one: it is returned on the parsed validator ([`Validator::prebinding`]).
 fn parse_validator(
     data: &RdfDataset,
     prefixes: &PrefixResolver,
     component: &Term,
     validator: &Term,
+    attachment: &'static str,
     param_names: &[String],
     kind: ValidatorKind,
-) -> Result<Validator, String> {
+) -> Result<Validator, Violation> {
     let component_iri = match component {
         Term::NamedNode(n) => n.as_str(),
-        _ => return Err(format!("component {component} is not a named node")),
+        _ => return Err((None, format!("component {component} is not a named node"))),
+    };
+    let (query_rule, count_rule, datatype_rule) = match kind {
+        ValidatorKind::Ask => ("ask-sparql", "ask-count", "ask-datatype"),
+        ValidatorKind::Select => (
+            "select-query-valid",
+            "SPARQLSelectValidator-select-count",
+            "select-query-valid",
+        ),
     };
 
     let query_pred = match kind {
@@ -967,34 +1077,50 @@ fn parse_validator(
         ValidatorKind::Select => sh::ASK,
     };
     if !objects_of(data, validator, other_pred).is_empty() {
-        return Err(format!(
-            "component {component_iri} validator {validator} is declared as {kind:?} but also \
-             carries <{other_pred}>, which a {kind:?} validator never runs"
+        // No numbered rule forbids the second query; it is refused because a
+        // validator of this form would silently never run it.
+        return Err((
+            None,
+            format!(
+                "component {component_iri} validator {validator} is declared as {kind:?} but \
+                 also carries <{other_pred}>, which a {kind:?} validator never runs"
+            ),
         ));
     }
     let raw_queries = objects_of(data, validator, query_pred);
     let raw_query = match raw_queries.as_slice() {
         [Term::Literal(literal)] if literal.datatype_str() == xsd::STRING => literal.value(),
-        _ => {
-            return Err(format!(
-                "component {component_iri} validator {validator} must have exactly one {} xsd:string literal",
-                match kind {
-                    ValidatorKind::Ask => "sh:ask",
-                    ValidatorKind::Select => "sh:select",
-                }
+        values => {
+            return Err((
+                Some(if values.len() == 1 {
+                    datatype_rule
+                } else {
+                    count_rule
+                }),
+                format!(
+                    "component {component_iri} validator {validator} must have exactly one {} \
+                     xsd:string literal",
+                    match kind {
+                        ValidatorKind::Ask => "sh:ask",
+                        ValidatorKind::Select => "sh:select",
+                    }
+                ),
             ));
         }
     };
-    let query_text = format!(
-        "{}{raw_query}",
-        prefixes.header(data, &[component, validator])?
-    );
+    let header = prefixes
+        .header(data, &[component, validator])
+        .map_err(crate::shapes::prefixes::split_syntax_rule)?;
+    let query_text = format!("{header}{raw_query}");
 
     let query = match purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text) {
         Ok(q) => q,
         Err(e) => {
-            return Err(format!(
-                "component {component_iri} validator {validator} has an unparsable query: {e}"
+            return Err((
+                Some(query_rule),
+                format!(
+                    "component {component_iri} validator {validator} has an unparsable query: {e}"
+                ),
             ));
         }
     };
@@ -1009,9 +1135,12 @@ fn parse_validator(
         ValidatorKind::Select => "SELECT",
     };
     if got_form != expected_form {
-        return Err(format!(
-            "component {component_iri} validator {validator} is declared as {kind:?} but the \
-             query text parses to a {got_form} query"
+        return Err((
+            Some(query_rule),
+            format!(
+                "component {component_iri} validator {validator} is declared as {kind:?} but \
+                 the query text parses to a {got_form} query"
+            ),
         ));
     }
 
@@ -1024,19 +1153,19 @@ fn parse_validator(
         ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
         ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
     };
-    prebinding_result.map_err(|e| {
+    let prebinding = prebinding_result.err().map(|e| {
         format!(
             "component {component_iri} validator {validator} violates pre-binding restrictions: \
              {e}"
         )
-    })?;
+    });
 
-    let messages = declared_messages(data, validator)?;
+    let messages = declared_messages(data, validator).map_err(|message| (None, message))?;
     let severity =
         first_object_of(data, validator, sh::SEVERITY).and_then(|t| severity_from_term(&t));
     // SHACL 1.2 SPARQL Extensions: result annotations are declared "at the subject
     // of the sh:select or sh:ask triple", which is this validator node.
-    let annotations = crate::result_annotations::parse(data, validator)?;
+    let annotations = crate::result_annotations::parse_with_rule(data, validator)?;
 
     Ok(Validator {
         kind,
@@ -1044,6 +1173,9 @@ fn parse_validator(
         messages,
         severity,
         annotations,
+        node: validator.clone(),
+        attachment,
+        prebinding,
     })
 }
 
@@ -1054,24 +1186,45 @@ fn parse_component(
     component: &Term,
     component_iri: &str,
     subclass_memo: &mut FastMap<(String, String), bool>,
+    ill_formed: &mut Vec<IllFormedDeclaration>,
 ) -> Result<Component, String> {
+    let component_declaration = format!("the constraint component <{component_iri}>");
     let param_nodes: Vec<Term> = objects_of(data, component, sh::PARAMETER_PROPERTY);
     let mut parameters = Vec::with_capacity(param_nodes.len());
+    let mut parameters_ill_formed = false;
     for param_node in param_nodes {
-        parameters.push(parse_parameter(data, &param_node, component_iri)?);
+        match parse_parameter(data, &param_node, component_iri) {
+            Ok(parameter) => parameters.push(parameter),
+            Err((rule, message)) => {
+                parameters_ill_formed = true;
+                ill_formed.push(IllFormedDeclaration::new(
+                    format!("parameter {param_node} of the constraint component <{component_iri}>"),
+                    Some(rule),
+                    message,
+                ));
+            }
+        }
     }
     parameters.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
-    if parameters.iter().all(|parameter| parameter.optional) {
-        return Err(format!(
-            "component {component_iri} must declare at least one non-optional parameter"
+    // A parameter that did not parse may be the non-optional one, so the rule is judged
+    // only over a complete parameter list.
+    if !parameters_ill_formed && parameters.iter().all(|parameter| parameter.optional) {
+        ill_formed.push(IllFormedDeclaration::new(
+            component_declaration.clone(),
+            Some("ConstraintComponent-parameter"),
+            format!("component {component_iri} must declare at least one non-optional parameter"),
         ));
     }
     let mut names = FastSet::default();
     for parameter in &parameters {
         if !names.insert(parameter.name.as_str()) {
-            return Err(format!(
-                "component {component_iri} declares duplicate parameter name ?{}",
-                parameter.name,
+            ill_formed.push(IllFormedDeclaration::new(
+                component_declaration.clone(),
+                Some("parameter-name-unique"),
+                format!(
+                    "component {component_iri} declares duplicate parameter name ?{}",
+                    parameter.name,
+                ),
             ));
         }
     }
@@ -1081,38 +1234,37 @@ fn parse_component(
     let mut property_validators = Vec::new();
     let mut validators = Vec::new();
     let mut javascript = Vec::new();
-    // The first ill-formed validator, in attachment and canonical order. It refuses the
-    // load only where a shape uses the component; see [`Component::defect`].
-    let mut defect: Option<String> = None;
     for (attachment, node, kind) in declared_validators(data, component, subclass_memo) {
-        let parsed = match kind {
+        let declaration = custom_validator_declaration(&node, component_iri, attachment);
+        let kind = match kind {
+            Ok(DeclaredKind::Sparql(kind)) => kind,
             Ok(DeclaredKind::JavaScript) => {
                 javascript.push((attachment, node));
                 continue;
             }
-            Ok(DeclaredKind::Sparql(kind)) => {
-                parse_validator(data, prefixes, component, &node, &param_names, kind)
+            Err((rule, message)) => {
+                ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
+                continue;
             }
-            Err(message) => Err(message),
         };
-        match parsed {
+        match parse_validator(
+            data,
+            prefixes,
+            component,
+            &node,
+            attachment,
+            &param_names,
+            kind,
+        ) {
             Ok(parsed) => match attachment {
                 sh::NODE_VALIDATOR => node_validators.push(parsed),
                 sh::PROPERTY_VALIDATOR => property_validators.push(parsed),
                 _ => validators.push(parsed),
             },
-            Err(message) => {
-                defect.get_or_insert(message);
+            Err((rule, message)) => {
+                ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
             }
         }
-    }
-    if defect.is_some() {
-        // A defective component has no validator a use could run: a use is refused
-        // with the defect before any constraint is built from it.
-        node_validators.clear();
-        property_validators.clear();
-        validators.clear();
-        javascript.clear();
     }
 
     let messages = declared_messages(data, component)?;
@@ -1126,7 +1278,6 @@ fn parse_component(
         property_validators,
         validators,
         javascript,
-        defect,
         messages,
         severity,
     })
@@ -1195,11 +1346,13 @@ mod tests {
                 messages: vec![],
                 severity: None,
                 annotations: vec![],
+                node: Term::NamedNode(NamedNode::from("http://example.org/ns#validator")),
+                attachment: sh::NODE_VALIDATOR,
+                prebinding: None,
             }],
             property_validators: vec![],
             validators: vec![],
             javascript: vec![],
-            defect: None,
             messages: vec![],
             severity: None,
         };

@@ -139,6 +139,8 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
         ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
         ShapesError::Invalid(message) => JsError::new(&message).into(),
         ShapesError::ShaclJs(refusal) => JsError::new(refusal.message()).into(),
+        ShapesError::IllFormed(refusal) => JsError::new(&refusal.to_string()).into(),
+        ShapesError::Prebinding(violation) => JsError::new(&violation.to_string()).into(),
     }
 }
 
@@ -677,7 +679,7 @@ pub struct ShaclLintReport {
 impl ShaclLintReport {
     /// Whether the report carries no finding: the loader accepted the graph, every
     /// `shacl-shacl.ttl` result is superseded (flagged there, well-formed SHACL 1.2 Core)
-    /// and no declaration no shape reaches is defective.
+    /// and no unexecuted query violates a pre-binding restriction.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn clean(&self) -> bool {
@@ -685,7 +687,8 @@ impl ShaclLintReport {
     }
 
     /// The finding count: one for a load refusal, plus every `shacl-shacl.ttl` result no
-    /// supersession covers, plus every defect of a declaration no shape reaches.
+    /// supersession covers, plus every unexecuted query that violates a pre-binding
+    /// restriction.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn findings(&self) -> usize {
@@ -704,8 +707,9 @@ impl ShaclLintReport {
     /// flagged graph well-formed), `functions` (`call BINDING <IRI> in OWNER`),
     /// `validators` (`alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE
     /// superseded-by-native`, one per validator declared for a built-in component) and
-    /// `inert` (`defect DECLARATION`, one per defect of a declaration no shape reaches)
-    /// sections, then `findings N` and `clean true|false`.
+    /// `unexecuted` (`violation DECLARATION`, one per query that violates a pre-binding
+    /// restriction and that nothing executes) sections, then `findings N` and
+    /// `clean true|false`.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn report(&self) -> String {

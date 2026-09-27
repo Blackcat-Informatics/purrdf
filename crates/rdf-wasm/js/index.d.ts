@@ -1538,13 +1538,13 @@ export class ShaclLintReport {
   free(): void;
   /**
    * No finding: the loader accepted the graph, every `shacl-shacl.ttl` result is
-   * superseded (flagged there, well-formed SHACL 1.2 Core) and no declaration no shape
-   * reaches is defective.
+   * superseded (flagged there, well-formed SHACL 1.2 Core) and no unexecuted query
+   * violates a pre-binding restriction.
    */
   readonly clean: boolean;
   /**
    * One for a load refusal, plus every `shacl-shacl.ttl` result no supersession covers,
-   * plus every defect of a declaration no shape reaches.
+   * plus every unexecuted query that violates a pre-binding restriction.
    */
   readonly findings: number;
   /** The loader's refusal, or `undefined` when it accepted the graph. */
@@ -1553,8 +1553,9 @@ export class ShaclLintReport {
    * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl`,
    * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
    * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
-   * declared for a built-in component) and `inert` (`defect DECLARATION`, one per defect
-   * of a declaration no shape reaches) sections, then `findings N` and `clean true|false`.
+   * declared for a built-in component) and `unexecuted` (`violation DECLARATION`, one per
+   * query that violates a pre-binding restriction and that nothing executes) sections,
+   * then `findings N` and `clean true|false`.
    */
   readonly report: string;
 }

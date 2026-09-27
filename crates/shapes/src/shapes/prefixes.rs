@@ -153,7 +153,8 @@ impl PrefixResolver {
                 return Err(format!(
                     "the shapes graph is ill-formed: {origin} has the sh:prefixes value {root}, \
                      which is not an IRI or a blank node (SHACL 1.2 SPARQL Extensions: \"The \
-                     values of sh:prefixes are either IRIs or blank nodes\")"
+                     values of sh:prefixes are either IRIs or blank nodes\") [syntax rule \
+                     prefixes-nodeKind]"
                 ));
             }
             for holder in reached_holders(data, &root) {
@@ -181,6 +182,32 @@ impl PrefixResolver {
         }
         header
     }
+}
+
+/// The ids of the prefix-handling syntax rules of SHACL 1.2 SPARQL Extensions, "Summary
+/// of Syntax Rules", which every refusal of this module names in a trailing `[syntax rule
+/// ID]`.
+const PREFIX_RULES: [&str; 7] = [
+    "prefixes-nodeKind",
+    "prefixes-duplicates",
+    "declare-nodeKind",
+    "prefix-datatype",
+    "prefix-count",
+    "namespace-datatype",
+    "namespace-count",
+];
+
+/// A refusal of [`PrefixResolver::header`] split into the syntax rule it names and the
+/// message without that trailer, for a caller that reports the rule as a field of its
+/// own. A message naming no prefix rule is returned whole, with `None`.
+pub(crate) fn split_syntax_rule(message: String) -> (Option<&'static str>, String) {
+    for rule in PREFIX_RULES {
+        let trailer = format!(" [syntax rule {rule}]");
+        if let Some(stripped) = message.strip_suffix(&trailer) {
+            return (Some(rule), stripped.to_owned());
+        }
+    }
+    (None, message)
 }
 
 /// Every node the path `(^owl:versionIRI?/owl:imports)*` reaches from `root`,
@@ -274,7 +301,8 @@ fn collect_declarations(
                      <{bound}> (declared by {by}) and <{namespace}> (declared by \
                      {declaration}); SHACL 1.2 SPARQL Extensions: \"If such a collection of \
                      prefix declarations contains multiple different namespaces for the same \
-                     value of sh:prefix, then the shapes graph is ill-formed\""
+                     value of sh:prefix, then the shapes graph is ill-formed\" [syntax rule \
+                     prefixes-duplicates]"
                 ));
             }
             None => {
@@ -291,17 +319,18 @@ fn declaration_mapping(
     holder: &Term,
     declaration: &Term,
 ) -> Result<(String, String), String> {
-    let ill_formed = |detail: String| {
+    let ill_formed = |detail: String, rule: &str| {
         format!(
             "the shapes graph is ill-formed: the sh:declare value {declaration} of {holder} \
              {detail} (SHACL 1.2 SPARQL Extensions, \"Prefix Declarations for SPARQL \
-             Queries\")"
+             Queries\") [syntax rule {rule}]"
         )
     };
     if !declaration.is_subject() {
         return Err(ill_formed(
             "is not a prefix declaration: a prefix declaration is an IRI or a blank node"
                 .to_owned(),
+            "declare-nodeKind",
         ));
     }
     let label = match objects_of(data, declaration, sh::PREFIX).as_slice() {
@@ -309,16 +338,22 @@ fn declaration_mapping(
             literal.value().to_owned()
         }
         [value] => {
-            return Err(ill_formed(format!(
-                "has the sh:prefix value {value}; the values of sh:prefix are literals of \
+            return Err(ill_formed(
+                format!(
+                    "has the sh:prefix value {value}; the values of sh:prefix are literals of \
                  datatype xsd:string"
-            )));
+                ),
+                "prefix-datatype",
+            ));
         }
         values => {
-            return Err(ill_formed(format!(
-                "has {} sh:prefix values; a prefix declaration has exactly one",
-                values.len()
-            )));
+            return Err(ill_formed(
+                format!(
+                    "has {} sh:prefix values; a prefix declaration has exactly one",
+                    values.len()
+                ),
+                "prefix-count",
+            ));
         }
     };
     let namespace = match objects_of(data, declaration, sh::NAMESPACE).as_slice() {
@@ -329,16 +364,22 @@ fn declaration_mapping(
         }
         [Term::NamedNode(node)] => node.as_str().to_owned(),
         [value] => {
-            return Err(ill_formed(format!(
-                "has the sh:namespace value {value}; the values of sh:namespace are literals \
+            return Err(ill_formed(
+                format!(
+                    "has the sh:namespace value {value}; the values of sh:namespace are literals \
                  of datatype xsd:anyURI or xsd:string"
-            )));
+                ),
+                "namespace-datatype",
+            ));
         }
         values => {
-            return Err(ill_formed(format!(
-                "has {} sh:namespace values; a prefix declaration has exactly one",
-                values.len()
-            )));
+            return Err(ill_formed(
+                format!(
+                    "has {} sh:namespace values; a prefix declaration has exactly one",
+                    values.len()
+                ),
+                "namespace-count",
+            ));
         }
     };
     Ok((label, namespace))

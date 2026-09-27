@@ -387,29 +387,66 @@ fn every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal() {
     }
 }
 
-/// Declarations a library ships that are NOT well-formed SHACL 1.2, the way DASH ships
-/// them: validators of a built-in component that are an ASK validator under
-/// `sh:nodeValidator` and a SELECT with `MINUS` in a pre-bound query, a custom component
-/// whose `sh:propertyValidator` is an ASK validator, and a `sh:SPARQLFunction` with a
-/// parameter named `value`.
+// ── SHACL-SPARQL / SHACL-AF declarations: syntax rules and pre-binding ───────
+
+/// Declarations a library ships that violate syntax rules, none of them reached by a
+/// shape: an ASK validator under `sh:nodeValidator` for a built-in component
+/// (`nodeValidator-class`), an ASK `sh:propertyValidator` of a custom component no
+/// shape uses (`propertyValidator-class`), a custom component parameter named `this`
+/// and `sh:SPARQLFunction` parameters named `value` and `shapesGraph`
+/// (`parameter-name-not-in`), and a function with two bodies (`SPARQLFunction-query`).
 const ILL_FORMED_LIBRARY: &str = r#"
 sh:MinLengthConstraintComponent a sh:ConstraintComponent ;
   sh:parameter [ sh:path sh:minLength ; sh:datatype xsd:integer ] ;
-  sh:nodeValidator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) >= $minLength) }" ] ;
-  sh:propertyValidator [ a sh:SPARQLSelectValidator ;
-    sh:select "SELECT $this ?value WHERE { $this $PATH ?value MINUS { $this $PATH ?value FILTER (STRLEN(STR(?value)) >= $minLength) } }" ] .
+  sh:nodeValidator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) >= $minLength) }" ] .
 ex:SubSetOfComponent a sh:ConstraintComponent ;
   sh:parameter [ sh:path ex:subSetOf ] ;
   sh:propertyValidator [ a sh:SPARQLAskValidator ; sh:ask "ASK { $this $subSetOf $value }" ] .
+ex:ReservedComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:this ] ;
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { }" ] .
 ex:uriTemplate a sh:SPARQLFunction ;
   sh:parameter [ sh:path ex:template ; sh:order 0 ] ;
   sh:parameter [ sh:path ex:value ; sh:order 1 ] ;
-  sh:returnType xsd:anyURI ;
   sh:select "SELECT (IRI(REPLACE($template, '[{][a-z]+[}]', STR($value))) AS ?result) WHERE { }" .
+ex:scoped a sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:shapesGraph ] ;
+  sh:ask "ASK { }" .
+ex:twoBodies a sh:SPARQLFunction ;
+  sh:ask "ASK { }" ;
+  sh:select "SELECT ?result WHERE { }" .
 "#;
 
-/// The shape the ill-formed library is validated with: `sh:minCount` and `sh:minLength`
-/// on `ex:p`, over `ex:a` and `ex:b`.
+/// The same library with every violation repaired: a SELECT node validator, a SELECT
+/// property validator, parameters named `v`, `x`, `graphName`, one body each, plus a
+/// function `ex:isB` a shape calls.
+const WELL_FORMED_LIBRARY: &str = r#"
+sh:MinLengthConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path sh:minLength ; sh:datatype xsd:integer ] ;
+  sh:nodeValidator [ a sh:SPARQLSelectValidator ; sh:select "SELECT $this WHERE { FILTER (STRLEN(STR($this)) < $minLength) }" ] .
+ex:SubSetOfComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:subSetOf ] ;
+  sh:propertyValidator [ a sh:SPARQLSelectValidator ;
+    sh:select "SELECT $this ?value WHERE { $this $PATH ?value FILTER NOT EXISTS { $this $subSetOf ?value } }" ] .
+ex:ReservedComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:x ] ;
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { }" ] .
+ex:uriTemplate a sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:template ; sh:order 0 ] ;
+  sh:parameter [ sh:path ex:v ; sh:order 1 ] ;
+  sh:select "SELECT (IRI(REPLACE($template, '[{][a-z]+[}]', STR($v))) AS ?result) WHERE { }" .
+ex:scoped a sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:graphName ] ;
+  sh:ask "ASK { }" .
+ex:twoBodies a sh:SPARQLFunction ;
+  sh:ask "ASK { }" .
+ex:isB a sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:v ] ;
+  sh:ask "ASK { FILTER ($v = <http://example.org/ns#b>) }" .
+"#;
+
+/// The shape the libraries are validated with: `sh:minCount` and `sh:minLength` on
+/// `ex:p`, over `ex:a` and `ex:b`.
 const LENGTH_SHAPE: &str = r"
 ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
   sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:minLength 2 ] .
@@ -430,98 +467,258 @@ fn lint_of(shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
     .expect("lint runs")
 }
 
-/// A shapes graph whose ill-formed declarations no shape reaches LOADS — those
-/// declarations are inert — and its own constraints are honoured. The oracle observes
-/// both: `ex:a` lacks `ex:p` (`sh:minCount`) and `ex:b`'s `"x"` is too short
-/// (`sh:minLength`, whose ill-formed alternatives did not replace the native
-/// implementation), while `"long"` passes; the report equals the one without the library.
-/// The defects are not silenced: `lint` reports each of the four as a finding.
-#[test]
-fn unreached_ill_formed_declarations_are_inert_at_load_and_findings_in_lint() {
-    let data = r#"ex:b ex:p "x", "long" ."#;
-    let with = validate(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"), data);
-    assert_eq!(
-        results(&with),
-        vec![
-            ("<http://example.org/ns#a>".to_owned(), String::new()),
-            ("<http://example.org/ns#b>".to_owned(), "\"x\"".to_owned()),
-        ]
-    );
-    let without = validate(LENGTH_SHAPE, data);
-    assert_eq!(results(&with), results(&without));
+/// The load error of `shapes_ttl`, typed.
+#[track_caller]
+fn load_error(shapes_ttl: &str) -> purrdf_shapes::ShapesError {
+    match parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None) {
+        Err(error) => error,
+        Ok(_) => panic!("the shapes graph must be refused at load"),
+    }
+}
 
-    let lint = lint_of(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
-    assert_eq!(lint.load_error(), None, "{}", lint.render());
-    let inert = lint.inert_defects().expect("the load accepted the graph");
-    let mut reasons: Vec<(String, bool)> = inert
+/// SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs": "A SHACL processor SHOULD
+/// produce a failure in this case" — with no reachability qualifier. So a library whose
+/// declarations violate syntax rules refuses the load although no shape reaches any of
+/// them, and the one refusal names EVERY violation with its declaration and rule. The
+/// repaired library loads, and every constraint in it is observed: `ex:a` lacks `ex:p`
+/// (`sh:minCount`), `ex:b`'s `"x"` is too short (`sh:minLength`, native) and is not among
+/// its `ex:q` values (the custom component), and `ex:isB` holds for `ex:b` alone.
+#[test]
+fn ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them() {
+    let error = load_error(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
+    let refusal = error
+        .as_ill_formed()
+        .unwrap_or_else(|| panic!("typed ShapesError::IllFormed: {error:?}"));
+    let mut named: Vec<(String, Option<&str>)> = refusal
+        .violations()
         .iter()
-        .map(|defect| {
+        .map(|violation| {
             (
-                defect
-                    .declaration
-                    .split_whitespace()
+                violation
+                    .declaration()
+                    .split(", via")
                     .next()
                     .unwrap_or_default()
+                    .split(" of the ")
+                    .last()
+                    .unwrap_or_default()
                     .to_owned(),
-                defect.message.contains("requires SELECT validators")
-                    || defect.message.contains("pre-binding")
-                    || defect.message.contains("reserved name"),
+                violation.rule(),
             )
         })
         .collect();
-    reasons.sort();
+    named.sort();
     assert_eq!(
-        reasons,
+        named,
         vec![
-            ("the".to_owned(), true),
-            ("the".to_owned(), true),
-            ("validator".to_owned(), true),
-            ("validator".to_owned(), true),
+            (
+                "built-in component <http://www.w3.org/ns/shacl#MinLengthConstraintComponent>"
+                    .to_owned(),
+                Some("nodeValidator-class")
+            ),
+            (
+                "constraint component <http://example.org/ns#ReservedComponent>".to_owned(),
+                Some("parameter-name-not-in")
+            ),
+            (
+                "constraint component <http://example.org/ns#SubSetOfComponent>".to_owned(),
+                Some("propertyValidator-class")
+            ),
+            (
+                "the sh:SPARQLFunction <http://example.org/ns#scoped>".to_owned(),
+                Some("parameter-name-not-in")
+            ),
+            (
+                "the sh:SPARQLFunction <http://example.org/ns#twoBodies>".to_owned(),
+                Some("SPARQLFunction-query")
+            ),
+            (
+                "the sh:SPARQLFunction <http://example.org/ns#uriTemplate>".to_owned(),
+                Some("parameter-name-not-in")
+            ),
         ],
+        "{refusal}"
+    );
+    let text = error.to_string();
+    assert!(
+        text.contains("6 declarations violate a syntax rule"),
+        "{text}"
+    );
+    // `lint` reports the same refusal in its `load` section, and nothing as unexecuted.
+    let lint = lint_of(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
+    assert!(
+        lint.load_error()
+            .is_some_and(|error| error.contains("[syntax rule nodeValidator-class]")),
         "{}",
         lint.render()
     );
-    let text = lint.render();
-    for needle in [
-        "defect the constraint component <http://example.org/ns#SubSetOfComponent>, which no shape uses",
-        "defect the sh:SPARQLFunction <http://example.org/ns#uriTemplate>, which nothing calls",
-        "of the built-in component <http://www.w3.org/ns/shacl#MinLengthConstraintComponent>",
-    ] {
-        assert!(text.contains(needle), "{needle}: {text}");
-    }
-    assert_eq!(lint.findings(), lint_of(LENGTH_SHAPE).findings() + 4);
+    assert_eq!(lint.unexecuted(), None);
+
+    let shapes = format!(
+        "{WELL_FORMED_LIBRARY}{LENGTH_SHAPE}
+         ex:T a sh:NodeShape ; sh:targetNode ex:b ; sh:property [ sh:path ex:p ; ex:subSetOf ex:q ] .
+         ex:U a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+           sh:sparql [ a sh:SPARQLConstraint ;
+             sh:select \"SELECT $this WHERE {{ FILTER (<http://example.org/ns#isB>($this)) }}\" ] ."
+    );
+    let report = validate(&shapes, r#"ex:b ex:p "x", "long" ; ex:q "long" ."#);
+    assert_eq!(
+        results(&report),
+        vec![
+            ("<http://example.org/ns#a>".to_owned(), String::new()),
+            ("<http://example.org/ns#b>".to_owned(), "\"x\"".to_owned()),
+            ("<http://example.org/ns#b>".to_owned(), "\"x\"".to_owned()),
+            (
+                "<http://example.org/ns#b>".to_owned(),
+                "<http://example.org/ns#b>".to_owned()
+            ),
+        ]
+    );
+    let lint = lint_of(&shapes);
+    assert_eq!(lint.load_error(), None, "{}", lint.render());
+    assert_eq!(
+        lint.unexecuted().map(<[_]>::len),
+        Some(0),
+        "{}",
+        lint.render()
+    );
 }
 
-/// The reached neighbours of the inert declarations are still refused at load: a shape
-/// using the component whose `sh:propertyValidator` is an ASK validator, a shape whose
-/// SPARQL calls the function with the reserved parameter name, and a node expression
-/// calling it.
+/// A function whose body violates a pre-binding restriction, called on `ex:a`, `ex:b` and
+/// `ex:c` by `ex:S`'s SPARQL constraint.
+fn function_and_caller(body: &str) -> String {
+    format!(
+        "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ; {body} .
+         ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b, ex:c ;
+           sh:sparql [ a sh:SPARQLConstraint ;
+             sh:select \"SELECT $this WHERE {{ FILTER (!<http://example.org/ns#f>($this)) }}\" ] ."
+    )
+}
+
+/// SHACL 1.2 SPARQL Extensions, Appendix A: "SHACL-SPARQL processors MUST report a
+/// failure when it is operating on a shapes graph that contains SHACL-SPARQL queries ...
+/// that are executed with pre-bound variables and violate any of these MUST
+/// restrictions" — and SHACL Advanced Features pre-binds a function's parameters when it
+/// executes. So each violating body (a `MINUS`, a `VALUES` naming the parameter, an
+/// `AS ?node`) refuses the load, typed, where a shape's SPARQL calls the function —
+/// directly, through another function's body, or from a node expression — and LOADS
+/// where nothing calls it, listed by `lint` under `unexecuted`. Each valid neighbour is
+/// called and observed: `FILTER NOT EXISTS` in place of `MINUS` reports `ex:b` (hidden)
+/// and `ex:c` (unlabelled) but not `ex:a`; a `VALUES` over a local variable reports all
+/// but `ex:a`; `BIND ($node AS ?result)` reports all but `ex:a`; and a function with no
+/// parameters pre-binds nothing, so its `MINUS` is executed and observed on two data
+/// graphs that answer differently.
 #[test]
-fn reached_ill_formed_declarations_are_still_refused() {
-    let cases: [(&str, &str); 3] = [
+fn a_function_body_violating_prebinding_is_refused_only_where_a_call_executes_it() {
+    let violating = [
         (
-            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
-               sh:property [ sh:path ex:p ; ex:subSetOf ex:q ] .",
-            "requires SELECT validators",
+            "sh:ask \"ASK { $node ex:label ?l MINUS { $node ex:hidden true } }\"",
+            "MINUS",
         ),
         (
-            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
-               sh:sparql [ a sh:SPARQLConstraint ;
-                 sh:select \"SELECT $this WHERE { FILTER (!ISIRI(<http://example.org/ns#uriTemplate>('x{y}', $this))) }\" ] .",
-            "reserved name",
+            "sh:ask \"ASK { VALUES $node { <http://example.org/ns#a> } }\"",
+            "?node",
         ),
         (
-            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
-               sh:property [ sh:path ex:q ; sh:values [ ex:uriTemplate ( \"x{y}\" sh:this ) ] ; sh:minCount 1 ] .",
-            "reserved name",
+            "sh:select \"SELECT ?result WHERE { BIND (<http://example.org/ns#a> AS ?node) BIND ($node AS ?result) }\"",
+            "AS ?node",
         ),
     ];
-    for (shape, reason) in cases {
-        refused(
-            &format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}{shape}"),
-            reason,
+    for (body, construct) in violating {
+        let error = load_error(&function_and_caller(body));
+        let violation = error
+            .as_prebinding()
+            .unwrap_or_else(|| panic!("typed ShapesError::Prebinding for {body}: {error:?}"));
+        assert!(violation.message().contains(construct), "{violation}");
+        assert!(
+            violation
+                .declaration()
+                .starts_with("the sh:SPARQLFunction <http://example.org/ns#f>, which "),
+            "{violation}"
         );
+        // Called only through another function's body: still executed, still refused.
+        let error = load_error(&format!(
+            "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ; {body} .
+             ex:outer a sh:SPARQLFunction ; sh:parameter [ sh:path ex:x ] ;
+               sh:ask \"ASK {{ FILTER (<http://example.org/ns#f>($x)) }}\" .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:sparql [ a sh:SPARQLConstraint ;
+                 sh:select \"SELECT $this WHERE {{ FILTER (!<http://example.org/ns#outer>($this)) }}\" ] ."
+        ));
+        assert!(error.as_prebinding().is_some(), "{error:?}");
+        // Called from a node expression: refused.
+        let error = load_error(&format!(
+            "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ; {body} .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:q ; sh:values [ ex:f ( sh:this ) ] ; sh:minCount 1 ] ."
+        ));
+        assert!(error.as_prebinding().is_some(), "{error:?}");
+        // Nothing calls it: loads, and `lint` lists it as unexecuted, a finding.
+        let uncalled = format!(
+            "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ; {body} .{LENGTH_SHAPE}"
+        );
+        let report = validate(&uncalled, r#"ex:b ex:p "long" ."#);
+        assert_eq!(
+            results(&report),
+            vec![("<http://example.org/ns#a>".to_owned(), String::new())]
+        );
+        let lint = lint_of(&uncalled);
+        let unexecuted = lint.unexecuted().expect("the load accepted the graph");
+        assert_eq!(unexecuted.len(), 1, "{}", lint.render());
+        assert_eq!(
+            unexecuted[0].declaration(),
+            "the sh:SPARQLFunction <http://example.org/ns#f>, which nothing calls"
+        );
+        assert_eq!(lint.findings(), lint_of(LENGTH_SHAPE).findings() + 1);
     }
+
+    let data = r#"ex:a ex:label "A" . ex:b ex:label "B" ; ex:hidden true ."#;
+    let everyone_but_a = vec![
+        (
+            "<http://example.org/ns#b>".to_owned(),
+            "<http://example.org/ns#b>".to_owned(),
+        ),
+        (
+            "<http://example.org/ns#c>".to_owned(),
+            "<http://example.org/ns#c>".to_owned(),
+        ),
+    ];
+    for neighbour in [
+        "sh:ask \"ASK { $node ex:label ?l FILTER NOT EXISTS { $node ex:hidden true } }\"",
+        "sh:ask \"ASK { VALUES ?allowed { <http://example.org/ns#a> } FILTER ($node = ?allowed) }\"",
+    ] {
+        let report = validate(&function_and_caller(neighbour), data);
+        assert_eq!(results(&report), everyone_but_a, "{neighbour}");
+    }
+    let report = validate(
+        "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ;
+           sh:select \"SELECT ?result WHERE { BIND ($node AS ?result) }\" .
+         ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b, ex:c ;
+           sh:sparql [ a sh:SPARQLConstraint ;
+             sh:select \"SELECT $this WHERE { FILTER (<http://example.org/ns#f>($this) != <http://example.org/ns#a>) }\" ] .",
+        data,
+    );
+    assert_eq!(results(&report), everyone_but_a);
+
+    let no_parameters = "ex:anyVisible a sh:SPARQLFunction ;
+           sh:ask \"ASK { ?s ex:label ?l MINUS { ?s ex:hidden true } }\" .
+         ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:sparql [ a sh:SPARQLConstraint ;
+             sh:select \"SELECT $this WHERE { FILTER (<http://example.org/ns#anyVisible>()) }\" ] .";
+    assert_eq!(
+        results(&validate(no_parameters, data)),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
+    );
+    assert_eq!(
+        results(&validate(
+            no_parameters,
+            r#"ex:b ex:label "B" ; ex:hidden true ."#
+        )),
+        Vec::<(String, String)>::new()
+    );
 }
 
 /// SHACL Advanced Features 1.1's minus expression — "exactly one value for the

@@ -603,7 +603,7 @@ Pinned by `a_builtin_component_given_validators_binds_natively`,
 (`tests/component_parameters.rs`) and
 `cli_shapes_lint_reports_superseded_builtin_validators`.
 
-### An ill-formed declaration refuses the load whether or not anything reaches it
+### A pre-binding violation refuses the load whether or not the query executes
 
 **Was stated in** `crates/shapes/src/validator_alternatives.rs`, `crates/shapes/README.md`,
 the "Built-in declarations and the W3C vocabularies" section of
@@ -613,42 +613,68 @@ the "Built-in declarations and the W3C vocabularies" section of
 `sparql_function_with_*_is_rejected` family:
 
 > A validator that is not a well-formed SPARQL validator of its attachment is refused
-> at load, on a built-in or a custom component, and a malformed `sh:SPARQLFunction`
-> declaration is refused at load — because SHACL 1.2 Core says a processor "SHOULD
-> produce a failure" for an ill-formed shapes graph.
+> at load, on a built-in or a custom component — its query grammar and its
+> pre-binding restrictions alike — and a malformed `sh:SPARQLFunction` declaration is
+> refused at load, because SHACL 1.2 Core says a processor "SHOULD produce a failure"
+> for an ill-formed shapes graph.
 
-**Why it was believed.** A load that accepted an ill-formed declaration looked like the
-silent-drop failure the census exists to close: something the author wrote would be
-walked past.
+**Why it was believed.** The pre-binding check ran in the same parse as the grammar
+check, and its refusal read like every other ill-formedness refusal, so the two were
+treated as one rule.
 
-**What changed.** A declaration nothing reaches is not walked past by validation — it
-is never evaluated at all, and no report can differ because of it. Libraries declare
-far more than a shapes graph uses: DASH (`<http://datashapes.org/dash>`) declares an
-ASK validator under `sh:nodeValidator` for `sh:HasValueConstraintComponent`, a `MINUS`
-in a pre-bound alternative for `sh:EqualsConstraintComponent`, an ASK
+**What changed.** They are two rules with two different scopes. SHACL 1.2 Core,
+"Handling of Ill-formed Shapes Graphs": "If the shapes graph contains ill-formed nodes,
+then the result of the validation process is undefined. A SHACL processor SHOULD
+produce a failure in this case." That sentence has no reachability qualifier, and the
+nodes it covers are the ones that violate a syntax rule — SHACL 1.2 SPARQL Extensions,
+"Summary of Syntax Rules": "Nodes that violate these rules in a shapes graph are
+ill-formed". SHACL 1.2 SPARQL Extensions, Appendix A, scopes the pre-binding failure
+differently: "SHACL-SPARQL processors MUST report a failure when it is operating on a
+shapes graph that contains SHACL-SPARQL queries (via sh:ask, sh:construct and
+sh:select) that are executed with pre-bound variables and violate any of these MUST
+restrictions." A `MINUS` in a validator that never runs is not in that scope.
+
+An intermediate reading went further, and is withdrawn. It judged every ill-formed
+declaration only where a shape reached it and reported the rest in a `shapes lint`
+section named `inert`, so that a shapes graph importing a library such as DASH
+(`<http://datashapes.org/dash>`) would load. DASH declares an ASK validator under
+`sh:nodeValidator` for `sh:HasValueConstraintComponent`, an ASK
 `sh:propertyValidator` for `dash:SubSetOfConstraintComponent` and a `sh:SPARQLFunction`
-parameter named `value`. (The approved W3C test `sparql/component/validator-001` names
-DASH in an `owl:imports` triple, but on a node that is not an import anchor, so under
-OWL 2 §3.1.2 and SHACL 1.2 Core that triple is data: the test imports nothing and passes
-with no import supplied — see the entry below.) Refusing the load of a shapes graph that
-imports such a library but reaches none of those declarations refused a validation
-nothing ill-formed takes part in: over-refusal. And the SHOULD is still honoured where it is paid for
-once — the cold certify surface.
+parameter named `value`. Those are syntax-rule violations, and Core's sentence covers
+them whether or not a shape reaches them. PurRDF treats that SHOULD as a MUST. Only
+the pre-binding part of that relaxation had a basis in the specification.
 
-**The rule now.** Loading (the hot admit) judges a declaration's well-formedness where
-a shape REACHES it, with the refusal unchanged there: a custom component's validators
-where a shape uses the component, a `sh:SPARQLFunction` where a node expression or a
-SPARQL text a shape reaches calls it (directly or through another function's body).
-A built-in component's validators are never reached. An unreached defect is an
-`InertDefect` (`crates/shapes/src/inert.rs`), and `purrdf shapes lint` reports every one
-as a finding in its `inert` section, so the report is not clean. Pinned by
-`an_ill_formed_alternative_on_a_builtin_is_refused` (`tests/spec_linker.rs`),
-`unreached_ill_formed_declarations_are_inert_at_load_and_findings_in_lint` and
-`reached_ill_formed_declarations_are_still_refused`
+**The rule now.** A SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule
+refuses the load whether or not anything reaches it. That covers a non-SELECT value of
+`sh:nodeValidator` or `sh:propertyValidator` and a non-ASK value of `sh:validator`
+(`nodeValidator-class`, `propertyValidator-class`, `validator-class`, "The values of
+sh:nodeValidator must be SELECT-based validators", "The values of sh:validator must be
+ASK-based validators") on built-in and custom components alike. It covers a component
+parameter name the rule `parameter-name-not-in` reserves ("Parameter names must not be
+one of the following: this, path, PATH, value"). It covers a `sh:SPARQLFunction`
+parameter named one of those or `shapesGraph` or `currentShape`: SHACL Advanced
+Features, "Function Parameters", says "the same syntax rules apply" and links the
+SHACL version whose list names those two. And it covers a `sh:SPARQLFunction`
+without exactly one `sh:ask` or `sh:select` (SHACL Advanced Features, "SPARQL-based
+Functions": "SPARQL-based functions have exactly one value for either sh:ask or
+sh:select"). The refusal is `ShapesError::IllFormed`, and it lists every violation in
+the graph with its declaration and rule id. A pre-binding violation refuses the load, as
+`ShapesError::Prebinding`, only where the query executes: the validator a use of a
+custom component selects, and a `sh:SPARQLFunction` that a node expression or reachable
+SPARQL calls. A validator declared for a built-in component never executes, because the
+native implementation supersedes it. A validator no use selects and a function nothing
+calls never execute either. Those load, and `purrdf shapes lint` lists each in its
+`unexecuted` section as a finding. SHACL-JS reachability is unchanged. Pinned by
+`an_ill_formed_alternative_on_a_builtin_is_refused` and
+`a_prebinding_violation_is_refused_only_where_the_query_executes`
+(`tests/spec_linker.rs`),
+`ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them` and
+`a_function_body_violating_prebinding_is_refused_only_where_a_call_executes_it`
 (`tests/shapes_graph_wellformedness.rs`),
-`validator_declarations_enforce_attachment_kind_and_query_datatype`
-(`tests/component_parameters.rs`) and the `sparql_function_with_*_is_rejected` tests in
-`crates/shapes/src/shapes.rs`.
+`validator_declarations_enforce_attachment_kind_and_query_datatype` and
+`parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not`
+(`tests/component_parameters.rs`), and the `sparql_function_with_*_is_rejected` tests
+in `crates/shapes/src/shapes.rs`.
 
 ### Every `owl:imports` triple is an import, and a `sh:declare` description resolves one
 

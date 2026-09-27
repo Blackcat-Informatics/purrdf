@@ -79,12 +79,9 @@ with a contradicting signature is a mismatch. Validators declared for a
 built-in component (vocabularies such as DASH give SHACL Core components SPARQL
 validators) bind as alternatives the native implementation supersedes: SHACL
 1.2 SPARQL Extensions selects "one of the values" of a component's validators,
-so each is an implementation of the same component. An alternative is never
-executed; `validator_alternatives` and `lint::lint` list every one. A declaration no
-shape reaches — an alternative, the validators of a component no shape uses, a
-`sh:SPARQLFunction` nothing calls — is checked where it is certified: an ill-formed
-one loads as an `inert::InertDefect`, and `lint::lint` reports each as a finding.
-Where a shape reaches it, the load refuses it as before. Any other `sh:`
+so each is an implementation of the same component. An alternative must be a
+well-formed SPARQL validator of its attachment and is never executed;
+`validator_alternatives` and `lint::lint` list every one. Any other `sh:`
 statement on a built-in's declaration, beyond `sh:message`, `sh:labelTemplate`
 and the non-validating characteristics, is refused. A bodiless function the
 engine does not implement is refused in any namespace.
@@ -95,6 +92,29 @@ byte-identical with and without the merge.
 node-expression function bound natively, to a custom body, to a SPARQL
 registration or to a host extension.
 
+**Ill-formed declarations and pre-binding.** A SHACL-SPARQL or SHACL-AF
+declaration that violates a syntax rule refuses the load whether or not any
+shape reaches it, because SHACL 1.2 Core says "A SHACL processor SHOULD produce
+a failure in this case" with no reachability qualifier: a non-SELECT value of
+`sh:nodeValidator` or `sh:propertyValidator` and a non-ASK value of
+`sh:validator` (`nodeValidator-class`, `propertyValidator-class`,
+`validator-class`), on a built-in or a custom component; a malformed validator
+query (`ask-count`, `ask-sparql`, `select-query-valid`, …); a component
+parameter named `this`, `path`, `PATH` or `value` (`parameter-name-not-in`);
+a `sh:SPARQLFunction` parameter with one of those names or `shapesGraph` or
+`currentShape`; a `sh:SPARQLFunction` without exactly one `sh:ask` or
+`sh:select` (`SPARQLFunction-query`). The refusal is `ShapesError::IllFormed`,
+and it lists every violation in the graph, each with its declaration and rule
+id. A pre-binding violation — a `MINUS`, a `VALUES`, an `AS ?var` for a
+pre-bound variable — is not a syntax violation: SHACL 1.2 SPARQL Extensions,
+Appendix A, requires a failure for a query "executed with pre-bound
+variables". So it refuses the load, as `ShapesError::Prebinding`, only where a
+query executes: the validator a use of a custom component selects, or a
+`sh:SPARQLFunction` a node expression or reachable SPARQL calls. A validator of
+a built-in component never executes, and neither does a validator no use
+selects or a function nothing calls; those load, and `lint::lint` lists each in
+its `unexecuted` section as a finding.
+
 **SHACL-JS.** SHACL JavaScript Extensions are not part of SHACL 1.2 and the
 engine has no JavaScript engine. A shape that reaches SHACL-JS is refused with
 `ShapesError::ShaclJs`: `sh:js` or a SHACL-JS type on the shape, a `sh:JSTarget`
@@ -103,8 +123,9 @@ rules, a constraint component whose selected validator is a `sh:JSValidator`
 with no SPARQL validator beside it ("The values of sh:validator must be
 ASK-based validators", SHACL 1.2 SPARQL Extensions), and a call to a
 `sh:JSFunction` from a node expression or from SPARQL the shape runs. SHACL-JS
-that no shape reaches is declared vocabulary and loads inert, so a library such
-as DASH, which declares `sh:JSValidator`s beside SPARQL ones, can be imported.
+that no shape reaches is declared vocabulary and loads inert, so a library that
+declares `sh:JSValidator`s beside SPARQL ones loads when its SPARQL declarations
+are well-formed.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL

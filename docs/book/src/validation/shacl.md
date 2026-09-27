@@ -81,8 +81,7 @@ The terms the SHACL vocabularies define and the engine refuses by name are:
   `sh:JSRule` among its rules, a constraint component whose selected validator
   is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
   `sh:JSFunction` from a node expression or from SPARQL the shape runs. A
-  library that only declares SHACL-JS, as DASH does, loads, and those
-  declarations are inert;
+  library that only declares SHACL-JS loads, and those declarations are inert;
 - `sh:describe` and `sh:update` on a shape, a node expression, a SPARQL-based
   constraint, a validator or a rule. The SHACL 1.2 vocabulary declares them as
   the queries of `sh:SPARQLDescribeExecutable` and `sh:SPARQLUpdateExecutable`,
@@ -317,12 +316,13 @@ resolves each declaration against the engine's table of what it implements:
   implementation supersedes. SHACL 1.2 SPARQL Extensions selects "one of the
   values" of a component's validators, so each is an implementation of the same
   component, and the engine's own is the one that runs. Vocabularies such as
-  DASH declare them for SHACL Core components. An alternative is never
-  executed, so its query may call a function the engine does not have, and an
-  ill-formed one (an ASK validator under `sh:propertyValidator`, an unparsable
-  query, a `MINUS` in a pre-bound query) does not fail the load: it is an inert
-  defect that `purrdf shapes lint` reports as a finding. A SHACL-JS
-  `sh:JSValidator` alternative is inert too, and is not a defect;
+  DASH declare them for SHACL Core components. A SPARQL alternative must be a
+  well-formed SPARQL validator of its attachment: an ASK validator under
+  `sh:propertyValidator` (`propertyValidator-class`) or an unparsable query
+  (`ask-sparql`) fails the load. It is never executed, so its query may call a
+  function the engine does not have, and a `MINUS` in its pre-bound query does
+  not fail the load: `purrdf shapes lint` lists it under `unexecuted`. A
+  SHACL-JS `sh:JSValidator` alternative is inert: never parsed and never run;
 - any other `sh:` statement on a built-in's declaration fails the load, except
   `sh:message`, `sh:labelTemplate` and the non-validating characteristics
   (`sh:name`, `sh:description`, …): `sh:severity` on
@@ -345,13 +345,31 @@ call site, whether the call bound natively, to a custom body, to a SPARQL
 registration or to a host extension, and lists every validator declared for a
 built-in component as `superseded-by-native`. Those lines are never findings.
 
-A declaration no shape reaches is judged where it is certified, not where it is
-loaded. A custom component's validators are checked when a shape uses the
-component, and a `sh:SPARQLFunction` declaration when a node expression or a
-query a shape reaches calls the function. There, an ill-formed one fails the load
-as before. A shapes graph that imports a library declaring ill-formed components
-or functions it never uses, as DASH does, loads, and `purrdf shapes lint` lists
-each such defect as a finding.
+A SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule fails the
+load whether or not any shape reaches it. SHACL 1.2 Core says "A SHACL processor
+SHOULD produce a failure in this case" and does not limit that to what a shape
+uses. The rules are those of SHACL 1.2 SPARQL Extensions and SHACL Advanced
+Features, and the refusal names each one by its id. A value of
+`sh:nodeValidator` or `sh:propertyValidator` must be a SELECT validator and a
+value of `sh:validator` an ASK validator (`nodeValidator-class`,
+`propertyValidator-class`, `validator-class`). A component parameter must not be
+named `this`, `path`, `PATH` or `value` (`parameter-name-not-in`). A
+`sh:SPARQLFunction` parameter must not have one of those names, nor
+`shapesGraph` or `currentShape`. A `sh:SPARQLFunction` needs exactly one
+`sh:ask` or `sh:select` (`SPARQLFunction-query`). The refusal is
+`ShapesError::IllFormed` and lists every violation in the graph, so a shapes
+graph that imports a library with ill-formed declarations, as DASH has, fails
+with all of them named.
+
+A pre-binding violation is judged where the query runs. SHACL 1.2 SPARQL
+Extensions requires a failure for a query "executed with pre-bound variables"
+that contains a `MINUS`, a `VALUES` or an `AS ?var` for a pre-bound variable.
+The load therefore fails, with `ShapesError::Prebinding`, when a use of a custom
+component selects such a validator, or when a node expression or a query a
+shape reaches calls such a `sh:SPARQLFunction`. A function's parameters are its
+pre-bound variables. A validator of a built-in component never runs, and neither
+does a validator no use selects or a function nothing calls. Those load, and
+`purrdf shapes lint` lists each one as a finding.
 
 ## SHACL 1.2 conformance
 
@@ -990,13 +1008,15 @@ once, on request, and reports five sections:
 4. `validators`: every validator the shapes graph declares for a built-in
    constraint component, which the native implementation supersedes and never
    runs. These lines are never findings.
-5. `inert`: every defect of a declaration no shape reaches, such as an
-   ill-formed validator of a built-in component or of a component no shape
-   uses, or an ill-formed `sh:SPARQLFunction` nothing calls. The load accepts
-   them; each is a finding here.
+5. `unexecuted`: every query that violates a pre-binding restriction and that
+   nothing runs: a validator of a built-in component, a validator no use of its
+   component selects, or a `sh:SPARQLFunction` nothing calls. The load accepts
+   them, and each is a finding here. A declaration that breaks a syntax rule is
+   never listed here, because it fails the load.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded and no unreached declaration is defective. Every host renders the same deterministic text; the
+result is superseded and no unexecuted query violates a pre-binding
+restriction. Every host renders the same deterministic text; the
 [CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)
 shows it.
 
