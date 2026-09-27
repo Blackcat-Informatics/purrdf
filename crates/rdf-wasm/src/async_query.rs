@@ -42,21 +42,20 @@
 //! A suspended job's frames stay live in linear memory, so two jobs cannot share the one
 //! shadow stack. Every job owns a heap-allocated region ([`AsyncJob::stack_top`] /
 //! [`AsyncJob::stack_base`], 16-byte aligned, a canary word [`AsyncJob::stack_canary`] at
-//! the base). The host sets the stack pointer to the job's top before the promising call,
-//! switches back to its own saved pointer at every suspension, and restores its idle value
-//! after completion.
+//! the base). The package's post-link step, `wasm-link`, wraps the job runner so it sets
+//! the stack pointer to the job's top before the job's first frame and restores the idle
+//! value after the run returns, and routes every call of the suspending import through
+//! one linked function that parks the job on the idle pointer for the duration of the
+//! import.
 //!
-//! The host's restore is not enough on its own: between one job's promise settling and
-//! its resumption reaction running, another job's continuation may run and move the
-//! global. So the resumed job must put its *own* stack pointer back before anything can
-//! allocate a frame. That is what [`suspend`] guarantees: it takes the address of a local
-//! (so it has a shadow-stack frame), is `#[inline(never)]`, and makes no call after the
-//! import returns — only a read of its own frame — so its epilogue, which writes the
-//! frame's stack pointer back to `__stack_pointer`, is the first stack-relevant thing that
-//! happens on resumption. `wasm-opt` inlines it anyway; the inlined code keeps its own
-//! frame and the same property, which is why the build gate checks it structurally (the
-//! first stack-pointer instruction after every call of the import is its restore), never
-//! by counting call sites.
+//! Parking is not enough on its own: between one job's promise settling and its
+//! resumption reaction running, another job's continuation may run and move the global.
+//! So the resumed job must put its *own* stack pointer back before anything can allocate
+//! a frame. The linked function guarantees that by construction: it saves the frame's
+//! stack pointer in a local before the import and writes it back the instruction after
+//! the import returns, so the restore is the first stack-relevant thing that happens on
+//! resumption, whatever `wasm-opt` inlined. [`suspend`] is a plain call of the import; the
+//! linker refuses a module in which the import is reached any other way.
 //!
 //! Inside the region two guards read one measurement. The run installs the region's base
 //! as the stack floor the evaluator's guards measure against, with no walk

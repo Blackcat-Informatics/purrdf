@@ -63,6 +63,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
+| `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -247,9 +248,9 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (26 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Seven members never reach
+is single-sourced in `[workspace.package]`. Eight members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
-`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`, and
+`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`, `wasm-link`, and
 `purrdf-python` (PyPI via maturin instead). `purrdf-alloc-probe` is a
 dev-dependency of published crates, so its root `[workspace.dependencies]` entry
 is path-only with **no `version`** — cargo then strips it from the packaged
