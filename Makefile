@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test test-shard doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -126,6 +126,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/bind-wasm-glue.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
+	python3 scripts/check-test-shards.py --self-test
+	python3 scripts/check-test-shards.py
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
@@ -224,6 +226,10 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 
 test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
+
+test-shard: node-prerequisite ## Run one CI test shard locally: make test-shard SHARD=kernel (names: scripts/test-shards.py --matrix).
+	@test -n "$(SHARD)" || { echo "usage: make test-shard SHARD=<name>; shards: $$(python3 scripts/test-shards.py --matrix)" >&2; exit 2; }
+	cargo test --locked $$(python3 scripts/test-shards.py --packages $(SHARD))
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
 	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings

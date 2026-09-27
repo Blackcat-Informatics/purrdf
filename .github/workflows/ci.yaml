@@ -96,6 +96,12 @@ jobs:
       - name: Check no tracked path is unsafe to pass to a command
         run: python3 scripts/check-tracked-paths.py
 
+      - name: Check the test-shard gate can still fail
+        run: python3 scripts/check-test-shards.py --self-test
+
+      - name: Check the CI test shards cover every workspace member exactly once
+        run: python3 scripts/check-test-shards.py
+
       - name: Check the workload acquisition pins and refusals hold (offline)
         run: python3 scripts/benchmark-acquire.py --self-test
 
@@ -177,19 +183,61 @@ jobs:
       - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  test:
+  # `cargo test --workspace` used to run here as ONE job. On a cold runner it
+  # compiled for thirty minutes before the first test started and then ran for nine
+  # more, so it could not fit the per-job budget however the timeout was set. The
+  # same run is now split by package into the shards `scripts/test-shards.py` names,
+  # one matrix leg each, in parallel. `cargo test -p X` selects exactly the targets
+  # `--workspace` selects for X (unit, integration, bins, examples, test-enabled
+  # benches and X's doctests), so the union of the legs IS the workspace run, and
+  # `scripts/check-test-shards.py` (workspace job, `make check`) refuses a member
+  # left in no shard. `make check` itself still runs the unsplit command.
+  #
+  # The matrix is emitted by this planning job rather than hand-copied into the
+  # `strategy:` below, so there is one list and the gate checks that list. It needs
+  # no Rust toolchain: it reads the manifests, and `--matrix` refuses to print a
+  # list that is not an exact partition of the members.
+  test-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Emit the test shards (refuses a list that leaves a crate untested)
+        id: plan
+        run: |
+          set -euo pipefail
+          shards="$(python3 scripts/test-shards.py --matrix)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "shards: $shards"
+
+  test:
+    needs: test-plan
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Every leg reports: a failure in one shard must not cancel the others and
+      # hide whether they would have passed.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.test-plan.outputs.shards) }}
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
     # every other lane too -- and a second place to set one thing was exactly the
     # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
-      # This lane links every test target in the workspace, which is the largest
-      # thing CI builds -- one binary per integration-test file, each carrying the
-      # line tables `[profile.dev]` asks for, plus the umbrella crate's doctests,
-      # whose link line pulls in every member crate at once.
+      # These legs link the workspace's test targets, the largest thing CI builds --
+      # one binary per integration-test file, plus (in the `hosts` shard) the
+      # umbrella crate's doctests, whose link line pulls in every member crate at
+      # once. Splitting shrinks each leg's share, but the heaviest legs still build
+      # most of the library graph, so the reclaim stays on every leg.
       #
       # A hosted runner ships ~30 GB of preinstalled toolchains this repository
       # never uses, and running out of disk here does NOT surface as a disk error:
@@ -218,19 +266,36 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
+      # Warm runs only: a pull request's first run has no cache of its own, and
+      # every leg is sized to fit the budget without one. One key per shard, since
+      # the legs build different graphs. Saved from `main` alone, so six per-branch
+      # target directories do not evict main's (and the wasm lanes') caches from
+      # the repository's shared quota; a branch restores main's.
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: test-${{ matrix.shard }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Install Node for the Unicode ECMAScript oracle
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
 
-      - name: Run workspace tests (includes doc tests)
+      - name: Run this shard's tests (includes doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
         # reassociated path this job requires; the distance, kNN and HNSW tests still
         # assert they executed every path the runner reports. `avx512-sde` below
         # requires the rest.
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
-        run: cargo test --workspace --locked
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          packages="$(python3 scripts/test-shards.py --packages "$SHARD")"
+          echo "shard $SHARD: $packages"
+          # shellcheck disable=SC2086 # one word per `-p` / package name
+          cargo test --locked $packages
 
   projection-oracles:
     runs-on: ubuntu-latest
