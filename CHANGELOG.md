@@ -2418,12 +2418,23 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   decides what that means: `SERVICE SILENT` is the join identity and `LOAD SILENT`
   loads nothing, each recorded on `evidence.silenced` with kind `"fault"`; without
   `SILENT` the request fails with `native-sparql-host-fault` or
-  `native-sparql-load-fault`, its message never echoing the handler's words. Such a
-  failure was a fault latched on the whole job, which no `SILENT` absorbed; a job's
-  fault is now only a broken delivery protocol. `handleSparqlRequest` answers a
-  `SILENT` clause over a throwing handler with the clause's own answer (`200`, or
-  `204` for an update) while still reporting the bug through `onInternalError` under a
-  correlation id; without `SILENT` it stays the `500` carrying that id.
+  `native-sparql-load-fault`, its message carrying the handler's words for the host
+  that wrote the handler. Such a failure was a fault latched on the whole job, which
+  no `SILENT` absorbed; a job's fault is now only a broken delivery protocol.
+  `handleSparqlRequest` answers a `SILENT` clause over a throwing handler with the
+  clause's own answer (`200`, or `204` for an update) while still reporting the bug
+  through `onInternalError` under a correlation id; without `SILENT` it stays the
+  `500` carrying that id and none of the handler's words. In Rust the failure is
+  `RemoteError::HostFault { endpoint, message }` for a `SERVICE` source and
+  `LoadError::Fault` for a `LOAD` source; a loud `SERVICE` raises
+  `EvalError::ServiceHostFault`, whose code is `EvalError::HOST_FAULT_CODE`
+  (`native-sparql-host-fault`), and `FailureCode::from` maps both to
+  `FailureCode::HostFault`, so a protocol boundary answers it as the host's fault.
+
+- **BREAKING** **sparql-eval:** `MAX_HOPS_CAP` is removed and `PathLimits::new`
+  accepts any `max_hops` a `u32` holds. The path-relation traversal keeps every piece
+  of per-depth state on the heap, so the cap that stood in for a stack budget names
+  nothing; the two resource guards bound the work a walk does.
 
 - **BREAKING** **sparql-eval, wasm:** a `LOAD` the host's own policy refused
   (`LoadError::HostDenied`) is `native-sparql-load-host-denied`, apart from the
