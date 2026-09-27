@@ -222,7 +222,15 @@ ownership, and all limits. Complete examples are in
   browser or Node host has no retrieval IRI of its own, so omit it and a
   relative reference throws rather than being mis-parsed (`dataNt` needs no
   counterpart — N-Triples admits no relative IRI by grammar). `Dataset.parse`
-  takes the same optional third argument.
+  takes the same optional third argument. `shaclValidateToSarif` also takes
+  `conformanceDisallows?`, `importIris?`, `importDocuments?` and a trailing
+  `shapesGraph?`: the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf
+  validate --shapes-graph` names it. `$shapesGraph` is pre-bound to it and `GRAPH
+  $shapesGraph { … }` reads the shapes graph (SHACL 1.0's pre-binding, which SHACL
+  1.2 removed); omitted, `$shapesGraph` is an ordinary variable. A relative IRI
+  resolves against `shapesBase`, and one with no base throws.
+  `shaclValidateChangesToSarif`, `shaclPackProduct` (which records it in the
+  product) and `shaclLintShapes` take the same trailing `shapesGraph?`.
 - `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
   — validates a CHANGE to `dataNt` rather than the whole graph: hand it the rows
   joining and the rows leaving, and the engine re-validates only the focus nodes
@@ -277,7 +285,7 @@ ownership, and all limits. Complete examples are in
   named node to an anonymous expression, each step reaching exactly one value;
   or `exprTurtle` gives the expression inline as Turtle, whose one root blank
   node is the expression.
-- `shaclLintShapes(shapesTtl, shapesBase?)` — certifies a shapes graph: the
+- `shaclLintShapes(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)` — certifies a shapes graph: the
   loader's verdict, every result of validating it against the W3C
   `shacl-shacl.ttl`, which implementation every function call binds to, and
   every validator declared for a built-in component (superseded by the native

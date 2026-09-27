@@ -10,6 +10,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, python, wasm, capi (BREAKING for C):** the shapes-graph IRI
+  that `purrdf validate --shapes-graph` names — the IRI SHACL-SPARQL's `$shapesGraph`
+  is pre-bound to, with the shapes graph exposed under it (SHACL 1.0 pre-binding,
+  which SHACL 1.2 removed and PurRDF keeps as a caller's choice) — reaches every host.
+  Python: `shapes_graph=` on `shapes.validate`, `shapes.Shapes` (carried into
+  `prepare()`, `PreparedShapes` and `to_product()`), `shapes.pack_product` and
+  `shapes.lint_shapes`. WebAssembly: a trailing `shapesGraph` on
+  `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and
+  `shaclLintShapes`. C: a nullable `shapes_graph_iri` immediately after
+  `shapes_base_iri` on `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+  `purrdf_shapes_product_encode` (incompatible; rides the unshipped `0.8.0` ABI
+  bump). Rust: `engine::parse_shapes_with_graph`,
+  `engine::validate_graphs_with_shapes_graph`, `engine::resolve_shapes_graph_iri`,
+  and `purrdf_validate::{validate_to_sarif_string_with_shapes_graph,
+  validate_changes_to_sarif_string_with_shapes_graph,
+  lint_shapes_ttl_with_shapes_graph, pack_shapes_product_with_shapes_graph}`. A
+  relative IRI resolves against the shapes document's base, as the command line
+  resolves it; one with no base is refused (`iri-relative-no-base`). Without it, W3C
+  SHACL 1.0 `sparql/pre-binding/shapesGraph-001` silently conformed on Python,
+  WebAssembly and C; named, every host reports its approved result, and unnamed,
+  every host reports the SHACL 1.2 ordinary-variable answer (conforms). A `Shapes`
+  parsed under a shapes-graph IRI is now exposed under it by `validate_dataset`,
+  `validate_projected_dataset`, `validate_projected_dataset_with_focus_filter`,
+  `PreparedShapes::bind_projected_dataset` and `bind_shared_dataset` too; they used
+  to validate it as if the IRI were absent, leaving `$shapesGraph` unbound. A `Shapes`
+  without one takes the same path it always did.
+
 - **shapes, validate, cli, python, wasm, capi:** a SPARQL 1.2 RL rule set can be
   checked without being evaluated, on every host. `purrdf_shapes::srl::check(text,
   base, imports, level)` applies the static checks up to a `CheckLevel` — `Syntax`

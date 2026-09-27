@@ -1657,12 +1657,15 @@ export class ShaclLintReport {
  * implementation every node-expression function call binds to. Throws a
  * `ShaclImportError` when the closure is not in hand — never a report about the
  * importing document alone — and otherwise only when the document is not Turtle.
+ * `shapesGraph` configures the loader as `purrdf shapes lint --shapes-graph` does (see
+ * `shaclValidateToSarif`).
  */
 export function shaclLintShapes(
   shapesTtl: string,
   shapesBase?: string,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  shapesGraph?: string,
 ): ShaclLintReport;
 /**
  * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
@@ -1701,6 +1704,12 @@ export interface ShaclSarifMessage {
  * the first in canonical order); whenever that text alone would lose something —
  * several messages, a language tag, a direction, an `rdf:HTML` message — the result's
  * `properties.shaclMessages` lists EVERY message as `ShaclSarifMessage`.
+ *
+ * `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
+ * --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+ * … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
+ * Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
+ * resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
  */
 export function shaclValidateToSarif(
   shapesTtl: string,
@@ -1709,6 +1718,7 @@ export function shaclValidateToSarif(
   conformanceDisallows?: readonly ShaclSeverity[],
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  shapesGraph?: string,
 ): string;
 
 /**
@@ -1768,6 +1778,8 @@ export function shaclValidateChangesToSarif(
   shapesBase?: string,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  /** The shapes-graph IRI, exactly as `shaclValidateToSarif` takes it. */
+  shapesGraph?: string,
 ): ShaclChangeValidation;
 
 /**
@@ -1805,6 +1817,10 @@ export class ShaclProductRefusal {
  * `ShaclImportError`); the product carries the merged closure, so a restore needs no
  * documents.
  *
+ * `shapesGraph` (see `shaclValidateToSarif`) is recorded in the product and bound by
+ * its identity, as `purrdf shacl pack --shapes-graph` records it; a restore exposes the
+ * shapes graph under it.
+ *
  * Throws a `ShaclImportError` when the shapes graph's `owl:imports` closure is not in
  * hand, and a `ShaclProductRefusal` otherwise.
  */
@@ -1813,6 +1829,7 @@ export function shaclPackProduct(
   shapesBase?: string,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  shapesGraph?: string,
 ): Uint8Array;
 
 /**

@@ -176,7 +176,12 @@ entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
 conformance_disallows=[...])` sets the severity IRIs that make a report
 non-conforming (by default `sh:Violation`, `sh:Warning` and `sh:Info`), and
 the dict's `conformance_disallows` names the set the report was judged
-against.
+against. `shapes_graph=IRI` on `shapes.validate`, `shapes.Shapes`,
+`shapes.pack_product` and `shapes.lint_shapes` names the IRI SHACL-SPARQL sees
+the shapes graph under, as `purrdf validate --shapes-graph` does: `$shapesGraph`
+is pre-bound to it and `GRAPH $shapesGraph { ... }` reads the shapes graph
+(SHACL 1.0's pre-binding, which SHACL 1.2 removed). Omitted, `$shapesGraph` is
+an ordinary variable. A `Shapes` carries it into `prepare()` and its products.
 
 Four tools sit beside validation, each the same library call the CLI, WebAssembly
 and C surfaces make:

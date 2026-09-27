@@ -142,6 +142,10 @@
  * default. Both are incompatible (a `0.7.0` host passes its import table or its
  * out-pointer into the new slots), and both ride this bump for the reason the others do.
  *
+ * The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
+ * entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
+ * the reason the other added symbols ride it.
+ *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
  * and never sees an enumerator's value move. The discriminants are therefore pinned
@@ -2713,16 +2717,24 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * smaller shapes graph than the one named. Read its kind and IRIs with
  * `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
  *
+ * `shapes_graph_iri` is the IRI SHACL-SPARQL sees the shapes graph under, and may be
+ * NULL — `purrdf validate --shapes-graph`. `$shapesGraph` is pre-bound to it and `GRAPH
+ * $shapesGraph { … }` reads the shapes graph: SHACL 1.0's pre-binding, which SHACL 1.2
+ * removed. NULL names no graph, and `$shapesGraph` is then an ordinary variable. A
+ * relative IRI resolves against `shapes_base_iri`; one with no base is a `ParseError`
+ * (`iri-relative-no-base`).
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string; when
- * `conformance_disallows_count` is non-zero, `conformance_disallows` must address
+ * `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C
+ * string; when `conformance_disallows_count` is non-zero, `conformance_disallows` must address
  * that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_buffer` must be a writable
  * pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        const char *shapes_base_iri,
+                                       const char *shapes_graph_iri,
                                        const char *data_nt,
                                        const char *const *conformance_disallows,
                                        size_t conformance_disallows_count,
@@ -2778,15 +2790,18 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * buffer — on the `BOUNDED` arm. Free a non-NULL one with `purrdf_buffer_free`,
  * exactly as `*out_buffer` is freed.
  *
+ * `shapes_graph_iri` carries the meaning it does on `purrdf_shacl_validate_to_sarif`.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri`, `added_nt` and `removed_nt` must be null or NUL-terminated C
- * strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `shapes_base_iri`, `shapes_graph_iri`, `added_nt` and `removed_nt` must be null or
+ * NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_buffer`, `out_scope`, `out_focus_nodes` and
  * `out_reason` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
                                                const char *shapes_base_iri,
+                                               const char *shapes_graph_iri,
                                                const char *data_nt,
                                                const char *added_nt,
                                                const char *removed_nt,
@@ -3009,14 +3024,18 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * no report — never a report about the importing document alone, which would call a
  * shapes graph clean that validation refuses.
  *
+ * `shapes_graph_iri` is the shapes-graph IRI the loader is configured with, nullable —
+ * `purrdf shapes lint --shapes-graph` (see `purrdf_shacl_validate_to_sarif`).
+ *
  * # Safety
- * `shapes_ttl` must be a non-null NUL-terminated C string; `shapes_base_iri` must be
- * null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `shapes_ttl` must be a non-null NUL-terminated C string; `shapes_base_iri` and
+ * `shapes_graph_iri` must each be null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_report`, `out_clean` and
  * `out_findings` must be writable; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_lint_shapes(const char *shapes_ttl,
                                  const char *shapes_base_iri,
+                                 const char *shapes_graph_iri,
                                  const char *const *import_iris,
                                  const char *const *import_documents,
                                  size_t import_count,
@@ -3050,14 +3069,19 @@ int32_t purrdf_shacl_lint_shapes(const char *shapes_ttl,
  * closure, so a restore needs no documents; one that is not in hand returns
  * `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, exactly as validation does.
  *
+ * `shapes_graph_iri` (see `purrdf_shacl_validate_to_sarif`) is nullable, RECORDED in the
+ * product and bound by its identity — `purrdf shacl pack --shapes-graph` — so a restore
+ * exposes the shapes graph under it.
+ *
  * # Safety
- * `shapes_ttl` must be a non-null, NUL-terminated C string; `shapes_base_iri` must be
- * null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `shapes_ttl` must be a non-null, NUL-terminated C string; `shapes_base_iri` and
+ * `shapes_graph_iri` must each be null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_buffer` must be a writable
  * pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
                                      const char *shapes_base_iri,
+                                     const char *shapes_graph_iri,
                                      const char *const *import_iris,
                                      const char *const *import_documents,
                                      size_t import_count,

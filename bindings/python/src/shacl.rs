@@ -33,6 +33,18 @@
 //! — raises `ShapesImportError` rather than validating a smaller shapes graph than the one
 //! named, exactly as the Rust API, the command line, WebAssembly and C refuse it. The
 //! default `()` imports nothing and still enforces the rule. PurRDF fetches nothing.
+//!
+//! # The shapes-graph IRI
+//!
+//! `validate`, `Shapes`, `pack_product` and `lint_shapes` take a `shapes_graph` keyword:
+//! the IRI SHACL-SPARQL sees the shapes graph under, exactly as `purrdf validate
+//! --shapes-graph` names it. `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+//! … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed. `None`
+//! (the default) names no graph, and `$shapesGraph` is then an ordinary variable. A
+//! relative IRI resolves against the shapes document's base (`shapes_base` / `base`); one
+//! with no base in scope raises `ValueError` (`iri-relative-no-base`). A `Shapes` carries
+//! it into every validation, into `prepare()`'s `PreparedShapes`, and into the product
+//! `to_product()` writes, whose identity binds it.
 
 use std::sync::Arc;
 
@@ -77,8 +89,11 @@ use crate::py_store::PyStore;
 /// `sh:Debug` and `sh:Trace` included.
 ///
 /// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self).
+///
+/// `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under — see the
+/// [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn validate(
     py: Python<'_>,
@@ -87,6 +102,7 @@ fn validate(
     shapes_base: Option<&str>,
     conformance_disallows: Option<Vec<String>>,
     imports: Vec<(String, String)>,
+    shapes_graph: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let options = match conformance_disallows {
         None => engine::ValidationOptions::default(),
@@ -101,7 +117,14 @@ fn validate(
     let report = py
         .detach(|| {
             let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
-            engine::validate_graphs_with_options(data_nt, shapes_ttl, shapes_base, &options, &table)
+            engine::validate_graphs_with_shapes_graph(
+                data_nt,
+                shapes_ttl,
+                shapes_base,
+                shapes_graph,
+                &options,
+                &table,
+            )
         })
         .map_err(|error| shapes_error(py, error))?;
 
@@ -482,20 +505,32 @@ fn eval_node_expr(
 /// `ShapesImportError` — never a report about the importing document alone, which would
 /// call a shapes graph `clean` that validation refuses.
 ///
-/// Otherwise raises `ValueError` only when the document is not Turtle; a malformed shapes
-/// graph is a report, not an exception.
+/// Otherwise raises `ValueError` only when the document is not Turtle, or for a
+/// `shapes_graph` that names no graph; a malformed shapes graph is a report, not an
+/// exception.
+///
+/// `shapes_graph` is the shapes-graph IRI the loader is configured with, as `purrdf shapes
+/// lint --shapes-graph` configures it (see the [module documentation](self)).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn lint_shapes(
     py: Python<'_>,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
+    shapes_graph: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let pairs = crate::py_entail::import_list(&imports);
     let report = py
-        .detach(|| purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base, &pairs))
+        .detach(|| {
+            purrdf_validate::lint_shapes_ttl_with_shapes_graph(
+                shapes_ttl,
+                shapes_base,
+                shapes_graph,
+                &pairs,
+            )
+        })
         .map_err(|error| shapes_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("clean", report.is_clean())?;
@@ -616,7 +651,7 @@ fn validate_nt_against(
 
 #[pymethods]
 impl PyShapes {
-    /// `Shapes(shapes_ttl, *, base=None, imports=())`.
+    /// `Shapes(shapes_ttl, *, base=None, imports=(), shapes_graph=None)`.
     ///
     /// `base` is the shapes document's own base IRI, used to resolve its relative IRI
     /// references (RFC-3986 §5.1.2). Omitted, only an in-document `@base` can establish
@@ -625,21 +660,26 @@ impl PyShapes {
     /// `imports` is the shapes graph's `owl:imports` table (see the [module documentation](self)): the
     /// parsed shapes are the whole closure, and a closure that is not in hand raises
     /// `ShapesImportError`.
+    ///
+    /// `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under (see the
+    /// [module documentation](self)), resolved against `base`; every validation of these
+    /// shapes, `prepare()` and `to_product()` carry it.
     #[new]
-    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new()))]
+    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None))]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     fn new(
         py: Python<'_>,
         shapes_ttl: &str,
         base: Option<&str>,
         imports: Vec<(String, String)>,
+        shapes_graph: Option<&str>,
     ) -> PyResult<Self> {
         let pairs = crate::py_entail::import_list(&imports);
         // Shapes-graph parsing runs detached (GIL released).
         let inner = py
             .detach(|| {
                 let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
-                engine::parse_shapes_with_config(shapes_ttl, base, None, &table)
+                engine::parse_shapes_with_graph(shapes_ttl, base, None, shapes_graph, &table)
             })
             .map_err(|error| shapes_error(py, error))?;
         Ok(Self { inner })
@@ -1420,18 +1460,30 @@ impl PyShapesProduct {
 /// Raises `ShapesImportError` — the same refusal `validate` raises — when the shapes
 /// graph's `owl:imports` closure is not in hand; otherwise `ShapesProductError`, whose
 /// `.dimension` is `None` when the shapes document itself did not parse.
+///
+/// `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under (see the
+/// [module documentation](self)), recorded in the product and bound by its identity —
+/// `purrdf shacl pack --shapes-graph`; a relative one resolves against `shapes_base`.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn pack_product<'py>(
     py: Python<'py>,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
+    shapes_graph: Option<&str>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let pairs = crate::py_entail::import_list(&imports);
     let bytes = py
-        .detach(|| purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base, &pairs))
+        .detach(|| {
+            purrdf_validate::pack_shapes_product_with_shapes_graph(
+                shapes_ttl,
+                shapes_base,
+                shapes_graph,
+                &pairs,
+            )
+        })
         .map_err(|refusal| match refusal.import_error() {
             Some(error) => import_error(py, error),
             None => product_error(py, &refusal),

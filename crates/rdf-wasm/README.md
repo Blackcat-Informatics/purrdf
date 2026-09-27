@@ -81,7 +81,9 @@ const reparsed = Dataset.parse(nq, "nquads");
   lower bound, an upper bound, or neither. A tripped UPDATE applies nothing at all.
   `explainQuery` renders the metered charge ledger those budgets are sized from.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
-  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report (a trailing
+  `shapesGraph` names the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, as
+  `purrdf validate --shapes-graph` does);
   `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?)` validates a
   CHANGE to that graph instead — both halves of the delta, expanded into the focus
   nodes it can move — and returns the report beside the scope it describes, because

@@ -309,10 +309,11 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
         (
             "purrdf_shacl_validate_to_sarif",
             // `0.8.0` (unshipped) also inserted the conformance-disallow set and the
-            // shapes graph's `owl:imports` table before the out-parameters;
-            // `shapes_base_iri` stays where `0.7.0` put it.
+            // shapes graph's `owl:imports` table before the out-parameters, and the
+            // nullable `shapes_graph_iri` beside `shapes_base_iri`, which stays where
+            // `0.7.0` put it.
             "int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, \
-             const char *shapes_base_iri, const char *data_nt, \
+             const char *shapes_base_iri, const char *shapes_graph_iri, const char *data_nt, \
              const char *const *conformance_disallows, size_t conformance_disallows_count, \
              const char *const *import_iris, const char *const *import_documents, \
              size_t import_count, PurrdfBuffer **out_buffer, PurrdfError **out_error)"

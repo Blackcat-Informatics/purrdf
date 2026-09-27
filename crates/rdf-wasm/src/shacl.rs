@@ -177,6 +177,7 @@ pub(crate) fn validate_to_sarif_impl(
     conformance_disallows: Option<&[String]>,
     import_iris: &[String],
     import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<String, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     let validation = match conformance_disallows {
@@ -184,9 +185,10 @@ pub(crate) fn validate_to_sarif_impl(
         Some(iris) => purrdf_validate::ValidationOptions::default()
             .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
     };
-    purrdf_validate::validate_to_sarif_string(
+    purrdf_validate::validate_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
+        shapes_graph,
         data_nt,
         &purrdf_validate::SarifOptions {
             validation,
@@ -197,7 +199,7 @@ pub(crate) fn validate_to_sarif_impl(
 }
 
 /// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?, conformanceDisallows?,
-/// importIris?, importDocuments?)` → a SARIF 2.1.0 JSON string.
+/// importIris?, importDocuments?, shapesGraph?)` → a SARIF 2.1.0 JSON string.
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse.
@@ -219,6 +221,12 @@ pub(crate) fn validate_to_sarif_impl(
 ///
 /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
 /// [`ShaclImportError`]); an incomplete closure rejects with that class.
+///
+/// `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
+/// --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+/// … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
+/// Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
+/// resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
 #[wasm_bindgen(js_name = shaclValidateToSarif)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_validate_to_sarif(
@@ -228,6 +236,7 @@ pub fn shacl_validate_to_sarif(
     conformance_disallows: Option<Vec<String>>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
 ) -> Result<String, JsValue> {
     validate_to_sarif_impl(
         shapes_ttl,
@@ -236,6 +245,7 @@ pub fn shacl_validate_to_sarif(
         conformance_disallows.as_deref(),
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
     )
     .map_err(shapes_rejection)
 }
@@ -314,6 +324,10 @@ impl ShaclChangeValidation {
 /// Returns a plain `String` error (NOT a `JsError`) for the reason
 /// [`validate_to_sarif_impl`] does, and the engine's own `ChangeScope` rather than
 /// the guest class, so the loop is exercisable off wasm.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+)]
 pub(crate) fn validate_changes_to_sarif_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -322,11 +336,13 @@ pub(crate) fn validate_changes_to_sarif_impl(
     removed_nt: Option<&str>,
     import_iris: &[String],
     import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<(String, purrdf_validate::ChangeScope), ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    purrdf_validate::validate_changes_to_sarif_string(
+    purrdf_validate::validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
+        shapes_graph,
         data_nt,
         added_nt,
         removed_nt,
@@ -336,8 +352,8 @@ pub(crate) fn validate_changes_to_sarif_impl(
 }
 
 /// `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?,
-/// importIris?, importDocuments?)` → a `ShaclChangeValidation` carrying a SARIF 2.1.0
-/// JSON string and its scope.
+/// importIris?, importDocuments?, shapesGraph?)` → a `ShaclChangeValidation` carrying a
+/// SARIF 2.1.0 JSON string and its scope.
 ///
 /// The incremental twin of [`shacl_validate_to_sarif`]: instead of re-validating
 /// the whole graph after an edit, hand it both halves of the delta and the engine
@@ -362,7 +378,8 @@ pub(crate) fn validate_changes_to_sarif_impl(
 /// expansion and a clean bill of health are indistinguishable in a report.
 ///
 /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
-/// [`ShaclImportError`]).
+/// [`ShaclImportError`]), and `shapesGraph` the IRI SHACL-SPARQL sees the shapes graph
+/// under, exactly as [`shacl_validate_to_sarif`] takes them.
 ///
 /// Throws (rejects) if the shapes graph or any of the three N-Triples documents
 /// fails to parse, and with a [`ShaclImportError`] when the shapes graph's
@@ -370,6 +387,10 @@ pub(crate) fn validate_changes_to_sarif_impl(
 /// done.
 #[wasm_bindgen(js_name = shaclValidateChangesToSarif)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+)]
 pub fn shacl_validate_changes_to_sarif(
     shapes_ttl: &str,
     data_nt: &str,
@@ -378,6 +399,7 @@ pub fn shacl_validate_changes_to_sarif(
     shapes_base: Option<String>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
 ) -> Result<ShaclChangeValidation, JsValue> {
     let (sarif, scope) = validate_changes_to_sarif_impl(
         shapes_ttl,
@@ -387,6 +409,7 @@ pub fn shacl_validate_changes_to_sarif(
         removed_nt.as_deref(),
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
     )
     .map_err(shapes_rejection)?;
     Ok(ShaclChangeValidation { sarif, scope })
@@ -867,13 +890,19 @@ pub(crate) fn lint_shapes_impl(
     shapes_base: Option<&str>,
     import_iris: &[String],
     import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<purrdf_validate::LintReport, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base, &imports)
+    purrdf_validate::lint_shapes_ttl_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        &imports,
+    )
 }
 
-/// `shaclLintShapes(shapesTtl, shapesBase?, importIris?, importDocuments?)` → a
-/// `ShaclLintReport`.
+/// `shaclLintShapes(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)`
+/// → a `ShaclLintReport`.
 ///
 /// Certifies a Turtle shapes graph COLD — its whole `owl:imports` closure, resolved
 /// against `importIris` / `importDocuments` (see [`ShaclImportError`]): the loader's
@@ -882,7 +911,8 @@ pub(crate) fn lint_shapes_impl(
 /// `sparql-registered`, `host-extension`). Rejects with a [`ShaclImportError`] when the
 /// closure is not in hand — never a report about the importing document alone. Otherwise
 /// throws only when the document is not Turtle; a malformed shapes graph is a report with
-/// findings, not an exception. Call `.free()` on the result.
+/// findings, not an exception. `shapesGraph` configures the loader as `purrdf shapes lint
+/// --shapes-graph` does (see [`shacl_validate_to_sarif`]). Call `.free()` on the result.
 #[wasm_bindgen(js_name = shaclLintShapes)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_lint_shapes(
@@ -890,12 +920,14 @@ pub fn shacl_lint_shapes(
     shapes_base: Option<String>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
 ) -> Result<ShaclLintReport, JsValue> {
     lint_shapes_impl(
         shapes_ttl,
         shapes_base.as_deref(),
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
     )
     .map(|report| ShaclLintReport { report })
     .map_err(shapes_rejection)
@@ -977,14 +1009,20 @@ pub(crate) fn pack_product_impl(
     shapes_base: Option<&str>,
     import_iris: &[String],
     import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
     let imports =
         shapes_import_pairs(import_iris, import_documents).map_err(ShapesProductRefusal::Shapes)?;
-    purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base, &imports)
+    purrdf_validate::pack_shapes_product_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        &imports,
+    )
 }
 
-/// `shaclPackProduct(shapesTtl, shapesBase?, importIris?, importDocuments?)` → the
-/// prepared product as a `Uint8Array`.
+/// `shaclPackProduct(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)`
+/// → the prepared product as a `Uint8Array`.
 ///
 /// Compile once, restore many times: the product carries the compiled SHACL model AND
 /// the shapes dataset it came from, under a per-section SHA-256 and a whole-container
@@ -1002,7 +1040,8 @@ pub(crate) fn pack_product_impl(
 ///
 /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
 /// [`ShaclImportError`]); the product carries the merged closure, so a restore needs no
-/// documents.
+/// documents. `shapesGraph` (see [`shacl_validate_to_sarif`]) is recorded in the product
+/// and bound by its identity, as `purrdf shacl pack --shapes-graph` records it.
 ///
 /// Rejects with a [`ShaclImportError`] — the same refusal `shaclValidateToSarif` raises —
 /// when the shapes graph's `owl:imports` closure is not in hand, and with a
@@ -1014,12 +1053,14 @@ pub fn shacl_pack_product(
     shapes_base: Option<String>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
 ) -> Result<Vec<u8>, JsValue> {
     pack_product_impl(
         shapes_ttl,
         shapes_base.as_deref(),
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
     )
     .map_err(|refusal| match refusal.import_error() {
         Some(error) => ShaclImportError::from(error).into(),
@@ -1288,8 +1329,8 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_2_1_0() {
-        let sarif =
-            validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[]).expect("sarif produced");
+        let sarif = validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[], None)
+            .expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
     }
@@ -1304,7 +1345,7 @@ mod tests {
             "sh:path ex:age ; sh:severity sh:Warning ;",
         );
         let conforms = |disallows: Option<&[String]>| -> serde_json::Value {
-            let sarif = validate_to_sarif_impl(&shapes, None, DATA, disallows, &[], &[])
+            let sarif = validate_to_sarif_impl(&shapes, None, DATA, disallows, &[], &[], None)
                 .expect("sarif produced");
             let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
             log["runs"][0]["properties"]["shaclConforms"].clone()
@@ -1312,7 +1353,7 @@ mod tests {
         assert_eq!(conforms(None), serde_json::json!(false));
         let violation = ["http://www.w3.org/ns/shacl#Violation".to_owned()];
         assert_eq!(conforms(Some(&violation)), serde_json::json!(true));
-        assert!(validate_to_sarif_impl(&shapes, None, DATA, Some(&[]), &[], &[]).is_err());
+        assert!(validate_to_sarif_impl(&shapes, None, DATA, Some(&[]), &[], &[], None).is_err());
         assert!(
             validate_to_sarif_impl(
                 &shapes,
@@ -1320,7 +1361,8 @@ mod tests {
                 DATA,
                 Some(&["Violation".to_owned()]),
                 &[],
-                &[]
+                &[],
+                None
             )
             .is_err()
         );
@@ -1328,7 +1370,9 @@ mod tests {
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA, None, &[], &[]).is_err());
+        assert!(
+            validate_to_sarif_impl("@@@ not turtle", None, DATA, None, &[], &[], None).is_err()
+        );
     }
 
     /// A conforming base, so every violation a change test sees is the change's.
@@ -1351,6 +1395,7 @@ mod tests {
             None,
             &[],
             &[],
+            None,
         )
         .expect("the change validates");
         assert_eq!(scope.focus_nodes(), Some(1));
@@ -1363,7 +1408,8 @@ mod tests {
                 &format!("{CHANGE_BASE}{BAD_AGE}"),
                 None,
                 &[],
-                &[]
+                &[],
+                None
             )
             .expect("full validation"),
         );
@@ -1371,9 +1417,17 @@ mod tests {
         // The retract half is a real half: taking the row back out restores
         // conformance through the same one call.
         let merged = format!("{CHANGE_BASE}{BAD_AGE}");
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(SHAPES, None, &merged, None, Some(BAD_AGE), &[], &[])
-                .expect("the retraction validates");
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            &merged,
+            None,
+            Some(BAD_AGE),
+            &[],
+            &[],
+            None,
+        )
+        .expect("the retraction validates");
         assert!(scope.is_bounded());
         assert!(!sarif.contains("\"level\": \"error\""), "{sarif}");
     }
@@ -1398,6 +1452,7 @@ mod tests {
             None,
             &[],
             &[],
+            None,
         )
         .expect("the change validates");
         let validation = ShaclChangeValidation { sarif, scope };
@@ -1423,6 +1478,7 @@ mod tests {
             None,
             &[],
             &[],
+            None,
         )
         .expect("the change validates");
         let bounded = ShaclChangeValidation { sarif, scope };
@@ -1442,12 +1498,22 @@ mod tests {
                 None,
                 &[],
                 &[],
+                None,
             )
             .is_err()
         );
         // The neighbouring VALID case still succeeds — a refusal is a claim too.
-        validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None, &[], &[])
-            .expect("a well-formed change document still validates");
+        validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(BAD_AGE),
+            None,
+            &[],
+            &[],
+            None,
+        )
+        .expect("a well-formed change document still validates");
     }
 
     // A shapes graph with a `sh:TripleRule` that types every `ex:Person` as an
@@ -1483,7 +1549,7 @@ mod tests {
 
     #[test]
     fn a_product_round_trips_and_reaches_the_same_verdict() {
-        let product = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         product_certify_impl(&product).expect("certified");
         assert!(
             product_explain_impl(&product)
@@ -1494,8 +1560,8 @@ mod tests {
         // Restoring the product and parsing the shapes graph are two routes to ONE
         // verdict, which is the property a cache is only allowed to have.
         let via_product = product_validate_impl(&product, DATA).expect("validated via product");
-        let via_document =
-            validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[]).expect("validated directly");
+        let via_document = validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[], None)
+            .expect("validated directly");
         assert_eq!(via_product, via_document);
 
         // Rebuilding a CURRENT product reaches the byte-identical verdict too: the
@@ -1507,7 +1573,8 @@ mod tests {
 
     #[test]
     fn a_refused_product_keeps_its_dimension_across_the_boundary() {
-        let mut wrong_magic = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
+        let mut wrong_magic =
+            pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         wrong_magic[0] = b'X';
 
         let refusal = ShaclProductRefusal::from(
@@ -1520,7 +1587,7 @@ mod tests {
 
         // A DATA graph that does not parse never reached the admission boundary, so
         // it truthfully names no dimension rather than borrowing one.
-        let product = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let data_refusal = ShaclProductRefusal::from(
             product_validate_impl(&product, "@@@ not n-triples").expect_err("refused"),
         );
@@ -1550,9 +1617,10 @@ mod tests {
 
     #[test]
     fn a_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
-        let wanted =
-            rendered_selector(&pack_product_impl(OTHER_SHAPES, None, &[], &[]).expect("packed"));
+        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let wanted = rendered_selector(
+            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+        );
         assert_ne!(wanted, rendered_selector(&held));
 
         let refusal = product_validate_expecting_impl(&held, DATA, &wanted)
@@ -1571,7 +1639,7 @@ mod tests {
 
     #[test]
     fn a_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let own = rendered_selector(&product);
 
         let bound = product_validate_expecting_impl(&product, DATA, &own)
@@ -1596,9 +1664,10 @@ mod tests {
     /// happily re-derive it.
     #[test]
     fn a_rebuilt_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
-        let wanted =
-            rendered_selector(&pack_product_impl(OTHER_SHAPES, None, &[], &[]).expect("packed"));
+        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let wanted = rendered_selector(
+            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+        );
         assert_ne!(wanted, rendered_selector(&held));
 
         let refusal = product_validate_rebuild_expecting_impl(&held, DATA, &wanted)
@@ -1622,7 +1691,7 @@ mod tests {
     /// unbound rebuild and the bound admission-based validation both reach.
     #[test]
     fn a_rebuilt_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None, &[], &[]).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let own = rendered_selector(&product);
 
         let bound_rebuild = product_validate_rebuild_expecting_impl(&product, DATA, &own)
@@ -2057,7 +2126,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn wasm_lint_shapes() {
         let clean = ShaclLintReport {
-            report: lint_shapes_impl(TOOLS_SHAPES, None, &[], &[]).expect("lint runs"),
+            report: lint_shapes_impl(TOOLS_SHAPES, None, &[], &[], None).expect("lint runs"),
         };
         assert!(clean.clean());
         assert_eq!(clean.findings(), 0);
@@ -2079,6 +2148,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 None,
                 &[],
                 &[],
+                None,
             )
             .expect("lint runs"),
         };
@@ -2086,7 +2156,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(malformed.findings() >= 2, "{}", malformed.report());
         assert!(malformed.load_error().is_some());
         assert!(malformed.report().ends_with("clean false\n"));
-        assert!(lint_shapes_impl("@@@ not turtle", None, &[], &[]).is_err());
+        assert!(lint_shapes_impl("@@@ not turtle", None, &[], &[], None).is_err());
     }
 
     /// `shaclCheckRules`' native core: every level answers its own question, a check
@@ -2133,5 +2203,91 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 .to_string()
                 .contains("is not a SPARQL 1.2 RL check level")
         );
+    }
+
+    /// W3C SHACL 1.0 `sparql/pre-binding/shapesGraph-001` through the exported
+    /// `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and
+    /// `shaclLintShapes` cores: with `shapesGraph` named, the approved ONE result; without
+    /// it, SHACL 1.2's ordinary unbound variable and a conforming data graph. A relative
+    /// IRI with no base is refused beside its absolute neighbour.
+    #[test]
+    fn shapes_graph_001_honours_the_shapes_graph_iri() {
+        let path = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/pre-binding/shapesGraph-001.ttl"
+        ))
+        .canonicalize()
+        .expect("the vendored W3C test file");
+        let base = format!("file://{}", path.display());
+        let shapes = std::fs::read_to_string(&path).expect("reads");
+        // The test's data graph is the same file: its triples, as N-Triples.
+        let dataset =
+            purrdf::parse_dataset(shapes.as_bytes(), "text/turtle", Some(&base)).expect("parses");
+        let data = String::from_utf8(
+            purrdf::serialize_dataset(
+                &*dataset,
+                "application/n-quads",
+                purrdf::SerializeGraph::Dataset,
+            )
+            .expect("serializes"),
+        )
+        .expect("N-Quads is UTF-8");
+        let results = |sarif: &str| -> usize {
+            let log: serde_json::Value = serde_json::from_str(sarif).expect("json");
+            log["runs"][0]["results"].as_array().map_or(0, Vec::len)
+        };
+        for (graph, expected) in [(Some(base.as_str()), 1usize), (None, 0)] {
+            let sarif = validate_to_sarif_impl(&shapes, Some(&base), &data, None, &[], &[], graph)
+                .expect("validates");
+            assert_eq!(results(&sarif), expected, "validate, {graph:?}");
+            let (sarif, _) = validate_changes_to_sarif_impl(
+                &shapes,
+                Some(&base),
+                "",
+                Some(&data),
+                None,
+                &[],
+                &[],
+                graph,
+            )
+            .expect("the change validates");
+            assert_eq!(results(&sarif), expected, "change path, {graph:?}");
+            let product = pack_product_impl(&shapes, Some(&base), &[], &[], graph).expect("packs");
+            let sarif = purrdf_validate::validate_with_shapes_product(
+                &product,
+                &data,
+                &purrdf_validate::SarifOptions::default(),
+            )
+            .expect("the product validates");
+            assert_eq!(results(&sarif), expected, "product, {graph:?}");
+            assert!(lint_shapes_impl(&shapes, Some(&base), &[], &[], graph).is_ok());
+        }
+        let relative = validate_to_sarif_impl(
+            &shapes,
+            None,
+            &data,
+            None,
+            &[],
+            &[],
+            Some("shapesGraph-001.ttl"),
+        )
+        .expect_err("no base: the relative IRI names no graph");
+        assert!(
+            relative
+                .to_string()
+                .starts_with("shapes graph `shapesGraph-001.ttl`: iri-relative-no-base"),
+            "{relative}"
+        );
+        let resolved = validate_to_sarif_impl(
+            &shapes,
+            Some(&base),
+            &data,
+            None,
+            &[],
+            &[],
+            Some("shapesGraph-001.ttl"),
+        )
+        .expect("resolves against the base");
+        assert_eq!(results(&resolved), 1);
     }
 }

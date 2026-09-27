@@ -80,8 +80,8 @@ pub use product::{
     IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
     admit_shapes_product_expecting, admit_shapes_product_with_implementations,
     certify_shapes_product, diff_shapes_products, explain_shapes_product, pack_shapes_product,
-    pack_shapes_product_from_dataset, parse_identity_digest, prepared_to_product,
-    prepared_to_product_with_implementations, rebuild_shapes_product,
+    pack_shapes_product_from_dataset, pack_shapes_product_with_shapes_graph, parse_identity_digest,
+    prepared_to_product, prepared_to_product_with_implementations, rebuild_shapes_product,
     rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
     validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
     validate_with_shapes_product_expecting,
@@ -119,7 +119,10 @@ pub use purrdf_shapes::{
     IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
     ShapesImportError,
 };
-pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
+pub use shacl::{
+    validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,
+    validate_to_sarif_string, validate_to_sarif_string_with_shapes_graph,
+};
 
 /// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`
 /// pairs, each document Turtle text parsed with its ontology IRI as its base.
@@ -143,5 +146,6 @@ pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, Sel
 pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
     NodeExprRequest, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples, check_rules,
-    eval_node_expr_to_terms, lint_shapes_ttl, parse_check_level, parse_scope_binding,
+    eval_node_expr_to_terms, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph, parse_check_level,
+    parse_scope_binding,
 };

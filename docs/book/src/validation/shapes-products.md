@@ -133,6 +133,12 @@ the command line able to close the gap.
 Omitting `--shapes-graph` packs exactly as it always has: the product records
 whatever `sh:shapesGraph` the shapes graph itself declares, or none at all.
 
+Every other host records it the same way: Python's `pack_product(...,
+shapes_graph=IRI)` and `Shapes(..., shapes_graph=IRI).prepare().to_product()`,
+WebAssembly's `shaclPackProduct(..., shapesGraph)`, and C's
+`purrdf_shapes_product_encode(..., shapes_graph_iri, ...)`. Each resolves a relative
+value against the shapes document's base, as the command line does.
+
 ### `--box-role-vocab` is resolved and recorded at pack time, the same way `validate --shapes` resolves it
 
 The graph-box role annotation feature takes a caller-supplied vocabulary — six

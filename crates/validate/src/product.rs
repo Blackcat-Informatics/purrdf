@@ -188,6 +188,29 @@ pub fn pack_shapes_product(
     shapes_base: Option<&str>,
     imports: &ShapesImportList<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
+    pack_shapes_product_with_shapes_graph(shapes_ttl, shapes_base, None, imports)
+}
+
+/// [`pack_shapes_product`] with the shapes-graph IRI the product records — the IRI a
+/// restore exposes the shapes graph under to SHACL-SPARQL (`$shapesGraph`), exactly as
+/// `purrdf shacl pack --shapes-graph` records it. A relative one resolves against
+/// `shapes_base` ([`purrdf_shapes::engine::resolve_shapes_graph_iri`]); `None` is
+/// [`pack_shapes_product`]. The product's identity binds it.
+///
+/// # Errors
+///
+/// Everything [`pack_shapes_product`] refuses, and [`ShapesProductRefusal::Shapes`] for a
+/// `shapes_graph` that names no graph.
+pub fn pack_shapes_product_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImportList<'_>,
+) -> Result<Vec<u8>, ShapesProductRefusal> {
+    let shapes_graph = shapes_graph
+        .map(|raw| engine::resolve_shapes_graph_iri(raw, shapes_base))
+        .transpose()
+        .map_err(ShapesProductRefusal::Shapes)?;
     let mut table = ShapesImports::from_turtle(imports)
         .map_err(|error| ShapesProductRefusal::Shapes(error.into()))?;
     let purrdf_shapes::text_ingest::TurtleDocument {
@@ -201,7 +224,7 @@ pub fn pack_shapes_product(
     if let Some(document_base) = document_base {
         table.declare_loaded(document_base);
     }
-    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None, None, &table)
+    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, shapes_graph, None, &table)
 }
 
 /// Write an already-READ shapes dataset out as a prepared product under

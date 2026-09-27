@@ -1576,13 +1576,16 @@ class _Shapes:
     # relative reference raises ValueError rather than being silently unresolved.
     # `imports` is the shapes graph's owl:imports table (see `shapes.validate`): the
     # parsed shapes are the whole closure, and one not in hand raises
-    # ShapesImportError.
+    # ShapesImportError. `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph
+    # under (see `shapes.validate`), resolved against `base`; every validation,
+    # `prepare()` and `to_product()` carry it.
     def __init__(
         self,
         shapes_ttl: str,
         *,
         base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
@@ -1757,12 +1760,15 @@ class shapes:
     # Compile a Turtle shapes graph into a prepared product in one call — the
     # composition of `Shapes(...).prepare().to_product()`. The product carries the
     # merged owl:imports closure; one not in hand raises ShapesImportError.
+    # `shapes_graph` (see `validate`) is recorded in the product and bound by its
+    # identity, as `purrdf shacl pack --shapes-graph` records it.
     @staticmethod
     def pack_product(
         shapes_ttl: str,
         *,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> bytes: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
@@ -1793,6 +1799,13 @@ class shapes:
     # `<X> a sh:ShapesGraph`, or an ontology whose owl:versionIRI is `<X>`); anything
     # else — or a table entry no import names — raises ShapesImportError. PurRDF
     # fetches nothing; an omitted table still enforces the rule.
+    #
+    # `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under, as
+    # `purrdf validate --shapes-graph` names it: $shapesGraph is pre-bound to it and
+    # `GRAPH $shapesGraph { ... }` reads the shapes graph (SHACL 1.0's pre-binding,
+    # which SHACL 1.2 removed). None names no graph, and $shapesGraph is then an
+    # ordinary variable. A relative IRI resolves against `shapes_base`; one with no
+    # base raises ValueError (iri-relative-no-base).
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1801,6 +1814,7 @@ class shapes:
         shapes_base: str | None = None,
         conformance_disallows: Sequence[str] | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -1917,12 +1931,15 @@ class shapes:
     # report certifies the whole owl:imports closure; one not in hand
     # raises ShapesImportError, never a report about the importing document alone.
     # Otherwise raises ValueError only when the document is not Turtle.
+    # `shapes_graph` configures the loader as `purrdf shapes lint --shapes-graph` does
+    # (see `validate`).
     @staticmethod
     def lint_shapes(
         shapes_ttl: str,
         *,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> dict[str, builtins.object]: ...
 
 # Back-compat alias for the native submodule's own name.

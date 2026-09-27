@@ -131,6 +131,15 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
 /// the reason the other added symbols ride it.
 ///
+/// The same unshipped bump carries the shapes-graph IRI. `purrdf_shacl_validate_to_sarif`,
+/// `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+/// `purrdf_shapes_product_encode` each gained a nullable `shapes_graph_iri` immediately
+/// after `shapes_base_iri` — the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, which
+/// `purrdf validate --shapes-graph` names and no C host could until now. Incompatible (a
+/// `0.7.0` host passes its data or import table into the new slot); it rides this bump
+/// for the reason the others do, and sits beside the base it resolves against for the
+/// reason `shapes_base_iri` sits beside the document it qualifies.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

@@ -1484,6 +1484,14 @@ impl PreparedShapes {
         &self,
         data: Arc<RdfDataset>,
     ) -> Result<PreparedValidator, ShapesError> {
+        if self.shapes.shapes_graph.is_some() {
+            // A shapes graph parsed under an IRI is exposed under it here too.
+            return self.bind_shared_dataset_with_shapes_graph(
+                data,
+                None,
+                ::purrdf::ir::ViewLimits::default(),
+            );
+        }
         let view = Arc::new(ShaclDatasetView::project(data));
         self.bind_view(view)
     }
@@ -1562,7 +1570,8 @@ impl PreparedShapes {
         &self,
         projected: Arc<RdfDataset>,
     ) -> Result<PreparedValidator, ShapesError> {
-        self.bind(ShaclData::new(Arc::clone(&projected), projected, None))
+        // A shapes graph parsed under an IRI is exposed under it here too.
+        self.bind(projected_data(projected, &self.shapes)?)
     }
 
     /// Bind a projected snapshot with the shapes graph exposed to SPARQL under
@@ -2869,7 +2878,10 @@ pub fn validate_dataset(
 ///
 /// Call [`project_dataset`] first when the same base graph is reused across many
 /// overlays; this avoids flattening/reifier-projecting the base graph on every
-/// validation pass.
+/// validation pass. When `shapes` was parsed under a shapes-graph IRI
+/// ([`Shapes::shapes_graph`]), SHACL-SPARQL sees the shapes graph under it — the answer
+/// [`validate_projected_dataset_with_shapes_graph`] gives with no override — so
+/// [`validate_dataset`] and this honour the IRI too.
 ///
 /// # Errors
 ///
@@ -2878,9 +2890,21 @@ pub fn validate_projected_dataset(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
 ) -> Result<ValidationReport, ShapesError> {
-    // Core lookups and the SHACL-SPARQL paths run over the same `Arc<RdfDataset>`.
-    let data = ShaclData::new(Arc::clone(&projected), projected, None);
+    let data = projected_data(projected, shapes)?;
     validate_with(&data, shapes)
+}
+
+/// The views a validation of `projected` against `shapes` reads: Core lookups and the
+/// SHACL-SPARQL paths over the same `Arc<RdfDataset>` — and, when `shapes` was parsed
+/// under a shapes-graph IRI ([`Shapes::shapes_graph`]), the shapes graph exposed to
+/// SHACL-SPARQL under it, exactly as [`validate_projected_dataset_with_shapes_graph`]
+/// exposes it with no override. A `Shapes` that carries the IRI is never validated as if
+/// it did not: `$shapesGraph` would silently be unbound.
+fn projected_data(projected: Arc<RdfDataset>, shapes: &Shapes) -> Result<ShaclData, String> {
+    if shapes.shapes_graph.is_some() {
+        return build_projected_data(projected, shapes, None);
+    }
+    Ok(ShaclData::new(Arc::clone(&projected), projected, None))
 }
 
 /// Validate an already-SHACL-projected dataset with a focus-node filter.
@@ -2896,7 +2920,7 @@ pub fn validate_projected_dataset_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let data = ShaclData::new(Arc::clone(&projected), projected, None);
+    let data = projected_data(projected, shapes)?;
     validate_with_focus_filter(&data, shapes, include_focus)
 }
 
@@ -3089,6 +3113,79 @@ pub fn parse_shapes_with_config(
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
     imports: &ShapesImports,
 ) -> Result<Shapes, ShapesError> {
+    parse_shapes_with_graph(shapes_ttl, base, box_role_vocab, None, imports)
+}
+
+/// The shapes-graph IRI a host named, resolved against the shapes document's base the
+/// way `purrdf validate --shapes-graph` resolves it: an absolute IRI is carried
+/// lexical-verbatim, a relative reference resolves against `base` — so it names exactly
+/// what `sh:shapesGraph <that reference>` written in a document read under `base` names —
+/// and one with no base in scope names no graph and is refused.
+///
+/// # Errors
+///
+/// [`ShapesError::Invalid`] carrying the IRI diagnostic code (`iri-relative-no-base` for a
+/// relative reference with no base), for a value that names no graph or a `base` that is
+/// not a usable base IRI.
+pub fn resolve_shapes_graph_iri(raw: &str, base: Option<&str>) -> Result<String, ShapesError> {
+    use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+    let scope = match base {
+        Some(base) => BaseScope::rooted(
+            BaseIri::parse(base).map_err(|error| {
+                ShapesError::Invalid(format!(
+                    "shapes graph `{raw}`: the shapes document's base `{base}` is not a usable \
+                     base IRI: {error}"
+                ))
+            })?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
+    scope
+        .resolve(raw)
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|error| {
+            let code = error.diagnostic_code();
+            if code == "iri-relative-no-base" {
+                ShapesError::Invalid(format!(
+                    "shapes graph `{raw}`: {code}: a relative IRI reference has no base in \
+                     scope, so it names no graph to expose the shapes graph under; pass the \
+                     shapes document's base, which it resolves against exactly as a \
+                     `sh:shapesGraph` written in that document would, or name the graph by an \
+                     absolute IRI"
+                ))
+            } else {
+                ShapesError::Invalid(format!("shapes graph `{raw}`: {code}: {error}"))
+            }
+        })
+}
+
+/// [`parse_shapes_with_config`] with the shapes-graph IRI the SHACL-SPARQL paths see the
+/// shapes graph under: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }`
+/// reads the shapes graph (SHACL 1.0 §5.3.1 pre-binding, which SHACL 1.2 removed and PurRDF
+/// keeps as a caller's choice; with none, `$shapesGraph` is an ordinary variable). It is
+/// the same parse input `purrdf shacl pack --shapes-graph` records into a product, so a
+/// [`Shapes`] built here exposes it through every validation entry point, every
+/// [`PreparedShapes`] and every product written from one, and it is recorded into the
+/// parse provenance. `shapes_graph` resolves against `base` through
+/// [`resolve_shapes_graph_iri`]; `None` leaves the graph unnamed.
+///
+/// # Errors
+///
+/// Everything [`parse_shapes_with_config`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` [`resolve_shapes_graph_iri`] refuses.
+pub fn parse_shapes_with_graph(
+    shapes_ttl: &str,
+    base: Option<&str>,
+    box_role_vocab: Option<crate::model::BoxRoleVocab>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImports,
+) -> Result<Shapes, ShapesError> {
+    // Resolved before the document is read: a value that names no graph is the caller's
+    // malformed request, not a fact about the shapes graph.
+    let shapes_graph = shapes_graph
+        .map(|raw| resolve_shapes_graph_iri(raw, base))
+        .transpose()?;
     // Parse the shapes graph via the native purrdf codecs. The document's prefix map
     // comes back from the SAME parse — the codec's own record of its `@prefix` /
     // `PREFIX` directives, never a scan of the text — because SHACL-SPARQL queries
@@ -3125,7 +3222,7 @@ pub fn parse_shapes_with_config(
         base,
         &doc_prefixes,
         box_role_vocab,
-        None,
+        shapes_graph,
         imports,
     )
 }
@@ -3187,10 +3284,33 @@ pub fn validate_graphs_with_options(
     options: &ValidationOptions,
     imports: &ShapesImports,
 ) -> Result<ValidationReport, ShapesError> {
+    validate_graphs_with_shapes_graph(data_nt, shapes_ttl, shapes_base, None, options, imports)
+}
+
+/// [`validate_graphs_with_options`] with the shapes-graph IRI the SHACL-SPARQL paths see
+/// the shapes graph under ([`parse_shapes_with_graph`], resolved against `shapes_base`):
+/// `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes
+/// graph. `None` is [`validate_graphs_with_options`], where `$shapesGraph` is an ordinary
+/// variable. This is the text boundary every host's `shapes_graph` parameter reaches, and
+/// the same engine input `purrdf validate --shapes-graph` gives.
+///
+/// # Errors
+///
+/// Everything [`validate_graphs_with_options`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` that names no graph.
+pub fn validate_graphs_with_shapes_graph(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    options: &ValidationOptions,
+    imports: &ShapesImports,
+) -> Result<ValidationReport, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
     let imports = linked_imports(data.as_ref(), imports)?;
-    let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, &imports)?;
+    let mut shapes =
+        parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &imports)?;
     shapes.set_validation_options(options.clone());
     validate_dataset(data.as_ref(), &shapes)
 }

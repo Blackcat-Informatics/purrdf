@@ -83,10 +83,41 @@ pub fn validate_to_sarif_string(
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
 ) -> Result<String, ShapesError> {
-    let report = engine::validate_graphs_with_options(
+    validate_to_sarif_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        None,
+        data_nt,
+        options,
+        imports,
+    )
+}
+
+/// [`validate_to_sarif_string`] with the shapes-graph IRI the SHACL-SPARQL paths see the
+/// shapes graph under: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }`
+/// reads the shapes graph — the SHACL 1.0 pre-binding `purrdf validate --shapes-graph`
+/// gives, which SHACL 1.2 removed. A relative `shapes_graph` resolves against
+/// `shapes_base` ([`engine::resolve_shapes_graph_iri`]); `None` is
+/// [`validate_to_sarif_string`], where `$shapesGraph` is an ordinary variable. Python's
+/// `shapes_graph=`, WebAssembly's `shapesGraph` and C's `shapes_graph_iri` all reach here.
+///
+/// # Errors
+///
+/// Everything [`validate_to_sarif_string`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` that names no graph.
+pub fn validate_to_sarif_string_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    options: &SarifOptions,
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
+    let report = engine::validate_graphs_with_shapes_graph(
         data_nt,
         shapes_ttl,
         shapes_base,
+        shapes_graph,
         &options.validation,
         &ShapesImports::from_turtle(imports)?,
     )?;
@@ -176,6 +207,41 @@ pub fn validate_changes_to_sarif_string(
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
 ) -> Result<(String, ChangeScope), ShapesError> {
+    validate_changes_to_sarif_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        None,
+        data_nt,
+        added_nt,
+        removed_nt,
+        options,
+        imports,
+    )
+}
+
+/// [`validate_changes_to_sarif_string`] with the shapes-graph IRI the SHACL-SPARQL paths
+/// see the shapes graph under, exactly as [`validate_to_sarif_string_with_shapes_graph`]
+/// takes it.
+///
+/// # Errors
+///
+/// Everything [`validate_changes_to_sarif_string`] refuses, and [`ShapesError::Invalid`]
+/// for a `shapes_graph` that names no graph.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the change path's three documents, the shapes document's two IRIs, the \
+              options and the import table are each an independent input"
+)]
+pub fn validate_changes_to_sarif_string_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+    options: &SarifOptions,
+    imports: &ShapesImportList<'_>,
+) -> Result<(String, ChangeScope), ShapesError> {
     let mut table = ShapesImports::from_turtle(imports)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
@@ -200,8 +266,11 @@ pub fn validate_changes_to_sarif_string(
     // The data graph this validation reads is the MUTATED one, so its links are read off
     // the snapshot: a change may add or retract a `sh:shapesGraph` link like any other row.
     table.link_data_graph(snapshot.as_ref(), &[])?;
-    let mut shapes = engine::parse_shapes_with_config(shapes_ttl, shapes_base, None, &table)?;
+    let mut shapes =
+        engine::parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &table)?;
     shapes.set_validation_options(options.validation.clone());
+    // `None` here is no override: the binding exposes the IRI the shapes were parsed
+    // under, if any.
     let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
         Arc::clone(&snapshot),
         None,

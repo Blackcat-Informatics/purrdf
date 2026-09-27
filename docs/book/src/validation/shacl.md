@@ -365,6 +365,34 @@ never mistaken for a directive. If the document declares a prefix twice, the
 fallback uses the last declaration. A `PREFIX` in a query's own text applies to
 that query only.
 
+## The shapes graph as a named graph: `$shapesGraph`
+
+SHACL 1.0 pre-binds `$shapesGraph` in every SHACL-SPARQL query to the IRI of the
+shapes graph, so a query can read the shapes graph with `GRAPH $shapesGraph { … }`.
+SHACL 1.2 removed that pre-binding, and there `$shapesGraph` is an ordinary
+variable. PurRDF keeps the SHACL 1.0 behaviour as a caller's choice. Name the
+shapes graph's IRI and `$shapesGraph` is pre-bound to it, with the shapes graph
+exposed under that name. Name none and `$shapesGraph` stays an ordinary, unbound
+variable. A relative IRI resolves against the shapes document's base, so it names
+what `sh:shapesGraph <that reference>` in the document would name. A relative IRI
+with no base in scope names no graph and is refused (`iri-relative-no-base`).
+
+Every host takes the IRI:
+
+| Host | Spelling |
+|---|---|
+| CLI | `--shapes-graph IRI` on `validate`, `shapes lint` and `shacl pack` |
+| Python | `shapes_graph=` on `validate`, `Shapes(...)`, `pack_product` and `lint_shapes` |
+| WebAssembly | a trailing `shapesGraph` on `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and `shaclLintShapes` |
+| C | `shapes_graph_iri` after `shapes_base_iri` on `purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shapes_product_encode` and `purrdf_shacl_lint_shapes` |
+| Rust | `engine::parse_shapes_with_graph`, `engine::validate_graphs_with_shapes_graph` and the `purrdf-validate` `*_with_shapes_graph` entry points |
+
+A `Shapes` parsed under the IRI carries it into every validation, every
+`PreparedShapes` binding and every prepared product, whose identity binds it.
+The W3C SHACL 1.0 test `sparql/pre-binding/shapesGraph-001` shows the difference.
+With the IRI named, it reports the one approved result. With none, `$shapesGraph`
+is unbound, the query selects nothing, and the data graph conforms.
+
 ## Built-in declarations and the W3C vocabularies
 
 The SHACL 1.2 vocabularies (`shacl.ttl`, `shnex.ttl` and `shnex-sparql.ttl`)

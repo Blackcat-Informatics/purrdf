@@ -467,6 +467,54 @@ done:
     return failed;
 }
 
+/* The shapes-graph IRI through the real header and linkage, on the constraint of the W3C
+ * SHACL 1.0 test sparql/pre-binding/shapesGraph-001: it selects its focus node only when
+ * $shapesGraph is bound and GRAPH $shapesGraph reads the shapes graph. Named, the approved
+ * ONE result; NULL, SHACL 1.2's ordinary unbound variable, so the data conforms. */
+static int check_shapes_graph_iri(void) {
+    const char *shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix ex: <http://example.org/ns#> .\n"
+        "ex:TestShape a sh:NodeShape ; sh:targetNode ex:InvalidResource ; ex:property 42 ;\n"
+        "  sh:sparql [ sh:message \"Test message\" ; sh:select \"\"\"\n"
+        "    SELECT $this WHERE { FILTER bound($shapesGraph) .\n"
+        "      GRAPH $shapesGraph { FILTER bound($currentShape) .\n"
+        "        $currentShape <http://example.org/ns#property> 42 . } }\"\"\" ] .\n";
+    const char *data = "<http://example.org/ns#InvalidResource> "
+                       "<http://example.org/ns#p> <http://example.org/ns#o> .\n";
+    const char *graphs[2] = {"http://example.org/shapes", NULL};
+    for (int i = 0; i < 2; i++) {
+        PurrdfBuffer *sarif = NULL;
+        PurrdfError *error = NULL;
+        const uint8_t *bytes = NULL;
+        size_t len = 0;
+        int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, graphs[i], data, NULL, 0, NULL,
+                                                    NULL, 0, &sarif, &error);
+        CHECK(rc == PURRDF_STATUS_OK && sarif != NULL, "validate_to_sarif(shapes_graph_iri)");
+        purrdf_buffer_data(sarif, &bytes, &len);
+        if (graphs[i] != NULL) {
+            CHECK(contains_bytes(bytes, len, "\"shaclConforms\": false") &&
+                      contains_bytes(bytes, len, "Test message"),
+                  "a named shapes graph pre-binds $shapesGraph: the one approved result");
+        } else {
+            CHECK(contains_bytes(bytes, len, "\"shaclConforms\": true"),
+                  "no shapes graph: $shapesGraph is unbound and the data conforms");
+        }
+        purrdf_buffer_free(sarif);
+    }
+    PurrdfBuffer *refused = NULL;
+    PurrdfError *error = NULL;
+    int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, "shapes", data, NULL, 0, NULL, NULL,
+                                                0, &refused, &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && refused == NULL,
+          "a relative shapes graph with no base names no graph");
+    CHECK(strstr(purrdf_error_message(error), "iri-relative-no-base") != NULL,
+          "the refusal names its code");
+    purrdf_error_free(error);
+    printf("shapes_graph_iri: named pre-binds $shapesGraph, NULL leaves it unbound\n");
+    return 0;
+}
+
 /* The check-only SPARQL 1.2 RL entry point through the real header and linkage: a
  * self-negating rule is syntactically valid (level SYNTAX answers with its summary) but
  * not stratifiable (level STRATIFIED refuses it, naming the stage, and writes no
@@ -1363,6 +1411,7 @@ int main(int argc, char **argv) {
     purrdf_reasoner_free(session);
     purrdf_reasoner_free(NULL); /* documented no-op */
 
+    CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
 
     purrdf_dataset_free(dataset);

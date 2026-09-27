@@ -384,11 +384,37 @@ pub fn lint_shapes_ttl(
     shapes_base: Option<&str>,
     imports: &ShapesImportList<'_>,
 ) -> Result<LintReport, ShapesError> {
+    lint_shapes_ttl_with_shapes_graph(shapes_ttl, shapes_base, None, imports)
+}
+
+/// [`lint_shapes_ttl`] with the shapes-graph IRI the loader is configured with, as
+/// `purrdf shapes lint --shapes-graph` configures it: a relative one resolves against
+/// `shapes_base` ([`engine::resolve_shapes_graph_iri`]). `None` is [`lint_shapes_ttl`].
+///
+/// # Errors
+///
+/// Everything [`lint_shapes_ttl`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` that names no graph.
+pub fn lint_shapes_ttl_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImportList<'_>,
+) -> Result<LintReport, ShapesError> {
+    let shapes_graph = shapes_graph
+        .map(|raw| engine::resolve_shapes_graph_iri(raw, shapes_base))
+        .transpose()?;
     let table = ShapesImports::from_turtle(imports)?;
     let document =
         parse_turtle_document(shapes_ttl, shapes_base).map_err(|errors| errors.join("\n"))?;
     let table = read_under(table, shapes_base, document.base.as_deref());
-    lint::lint(&document.dataset, &document.prefixes, None, None, &table)
+    lint::lint(
+        &document.dataset,
+        &document.prefixes,
+        None,
+        shapes_graph,
+        &table,
+    )
 }
 
 /// `imports`, with the IRIs a shapes document was read under declared loaded: the base the

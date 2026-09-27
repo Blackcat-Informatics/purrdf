@@ -150,7 +150,10 @@ executes that example against the generated shared library and committed header.
   `max_join_steps` limits between `max_generated_terms` and `import_iris`, and
   `purrdf_entail_materialize_to_nquads` the same two between `program` and
   `out_nquads`. It also adds `purrdf_shacl_check_rules` and its
-  `PurrdfSrlCheckLevel` discriminant.
+  `PurrdfSrlCheckLevel` discriminant, and gives `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+  `purrdf_shapes_product_encode` a nullable `shapes_graph_iri` immediately after
+  `shapes_base_iri` (see [The shapes-graph IRI](#the-shapes-graph-iri)).
   It bumps in any case because `0.7.0` is the ABI of the released
   `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
@@ -201,7 +204,7 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   blank node is the expression. `focus` is an IRI or an N-Triples term, and each
   `scope` entry a `NAME=TERM` binding. The output nodes come back one N-Triples
   term per line, in sequence order.
-- `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, import_iris,
+- `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, shapes_graph_iri, import_iris,
   import_documents, import_count, out_report, out_clean, out_findings, out_error)`
   certifies a shapes graph — its whole `owl:imports` closure: the loader's verdict, the
   W3C `shacl-shacl.ttl` results, which implementation every function call binds to, and
@@ -244,6 +247,18 @@ graph: a link on the data graph's `sh:DataGraph` node that nothing resolves is k
 `unheld-shapes-graph-link`, and a link value that is not an IRI is
 `invalid-shapes-graph-link`. A `sh:shapesGraph` on any other node is data. An imported document's shapes, rules and functions take part exactly as the
 importing document's do, and a prepared product carries the merged closure.
+
+## The shapes-graph IRI
+
+`purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`,
+`purrdf_shacl_lint_shapes` and `purrdf_shapes_product_encode` take a nullable
+`shapes_graph_iri` right after `shapes_base_iri`: the IRI SHACL-SPARQL sees the
+shapes graph under, which `purrdf validate --shapes-graph` names. `$shapesGraph` is
+pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. That is SHACL
+1.0's pre-binding, which SHACL 1.2 removed. NULL names no graph, and `$shapesGraph`
+is then an ordinary variable. A relative IRI resolves against `shapes_base_iri`; one
+with no base is a `ParseError` (`iri-relative-no-base`). A product records the IRI
+and its identity binds it, so a restore exposes the shapes graph under it.
 
 ## Base IRIs across the surface
 
