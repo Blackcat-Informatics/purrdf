@@ -166,11 +166,15 @@ impl Parser<'_> {
     /// parameter predicate's local name), the required-arity count, the
     /// `sh:select`/`sh:ask` body, and the `sh:returnType` constraint.
     ///
+    /// A malformed declaration — a parameter without a predicate or with a reserved
+    /// name, two parameters whose derived variable names collide, a missing/ambiguous
+    /// body, or an unparsable body query — is not registered and not an error here: it
+    /// is recorded in `function_defects`, refused where a reachable call reaches it
+    /// and otherwise an inert defect (see [`crate::inert`]).
+    ///
     /// # Errors
     ///
-    /// Hard-fails on a malformed declaration — a parameter without a predicate,
-    /// two parameters whose derived variable names collide, a missing/ambiguous
-    /// body, or an unparsable body query.
+    /// Hard-fails on a blank-node declaration and on a SPARQL body for a built-in.
     ///
     /// What this adds to `registry` is INCOMPLETE on purpose: the custom
     /// node-expression functions SHACL 1.2 SPARQL Extensions §7.3 also asks for are
@@ -227,8 +231,17 @@ impl Parser<'_> {
                     iri.as_str()
                 ));
             }
-            let func = self.parse_one_sparql_function(&id)?;
-            registry.insert(iri.as_str().to_owned(), func);
+            // An ill-formed declaration is refused where a reachable call reaches it
+            // (see `Parser::refuse_reached_calls`); nothing calls the rest, which are
+            // inert defects `lint` reports.
+            match self.parse_one_sparql_function(&id) {
+                Ok(func) => registry.insert(iri.as_str().to_owned(), func),
+                Err(message) => {
+                    self.function_defects
+                        .borrow_mut()
+                        .insert(iri.as_str().to_owned(), message);
+                }
+            }
         }
         Ok(())
     }

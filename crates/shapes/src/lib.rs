@@ -42,6 +42,7 @@ pub mod free_expression;
 pub mod function_resolution;
 pub mod graphql;
 pub mod imports;
+pub mod inert;
 pub mod instance;
 pub mod json_schema;
 pub mod linkml;

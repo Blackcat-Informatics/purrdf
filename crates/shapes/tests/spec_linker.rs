@@ -645,32 +645,70 @@ fn a_semantic_statement_on_a_builtin_declaration_is_refused() {
     );
 }
 
-/// A SPARQL alternative must still be a well-formed validator of its attachment. An ASK
-/// validator under `sh:propertyValidator` is not ("The values of sh:propertyValidator
-/// must be SELECT-based validators"), nor is an ASK validator whose query does not
-/// parse; each is refused. The neighbours — the SPARQL validator of the right form, with
-/// a parsable query calling an unknown function — load (see
-/// `a_builtin_component_given_validators_binds_natively`), and so does a SHACL-JS
-/// alternative (see `a_javascript_alternative_on_a_builtin_is_inert_and_listed`).
+/// A SPARQL alternative that is not a well-formed validator of its attachment — an ASK
+/// validator under `sh:propertyValidator` ("The values of sh:propertyValidator must be
+/// SELECT-based validators"), an unparsable ASK query, a `MINUS` in a pre-bound query —
+/// is never reached: the native implementation is the one that runs. So the load accepts
+/// it, the native semantics are observed (`ex:b`, lacking `ex:p`, violates; `ex:a`
+/// conforms — the same report as without the alternative), and the refusal moves to
+/// `lint`, which reports it as a finding. The reached neighbour — the same validator on
+/// a CUSTOM component a shape uses — is still refused by the load.
 #[test]
 fn an_ill_formed_alternative_on_a_builtin_is_refused() {
-    let wrong_form = load_error(&format!(
-        "{MIN_COUNT_DECLARATION}
-         sh:MinCountConstraintComponent sh:propertyValidator [
-           a sh:SPARQLAskValidator ; sh:ask \"ASK {{ }}\" ] .
-         {MIN_COUNT_SHAPE}"
-    ));
-    assert!(
-        wrong_form.contains("requires SELECT validators"),
-        "{wrong_form}"
-    );
-    let unparsable = load_error(&format!(
-        "{MIN_COUNT_DECLARATION}
-         sh:MinCountConstraintComponent sh:validator [
-           a sh:SPARQLAskValidator ; sh:ask \"ASK {{\" ] .
-         {MIN_COUNT_SHAPE}"
-    ));
-    assert!(unparsable.contains("unparsable query"), "{unparsable}");
+    let cases: [(&str, &str); 3] = [
+        (
+            "sh:propertyValidator [ a sh:SPARQLAskValidator ; sh:ask \"ASK { }\" ]",
+            "requires SELECT validators",
+        ),
+        (
+            "sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {\" ]",
+            "unparsable query",
+        ),
+        (
+            "sh:propertyValidator [ a sh:SPARQLSelectValidator ;
+               sh:select \"SELECT $this WHERE { $this $PATH ?v MINUS { $this $PATH ?v } }\" ]",
+            "pre-binding",
+        ),
+    ];
+    let data = "ex:a ex:p 1 .";
+    let without = validate(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"), data);
+    for (validator, reason) in cases {
+        let graph = format!("{MIN_COUNT_DECLARATION} sh:MinCountConstraintComponent {validator} .");
+        let report = validate(&format!("{graph}{MIN_COUNT_SHAPE}"), data);
+        assert_eq!(
+            focus_nodes(&report),
+            vec!["<http://example.org/ns#b>".to_owned()],
+            "{validator}"
+        );
+        assert_eq!(summary(&report), summary(&without), "{validator}");
+
+        let lint = lint_report(&format!("{graph}{MIN_COUNT_SHAPE}"));
+        assert_eq!(lint.load_error(), None, "{}", lint.render());
+        let inert = lint.inert_defects().expect("the load accepted the graph");
+        assert_eq!(inert.len(), 1, "{}", lint.render());
+        assert!(
+            inert[0].declaration.starts_with("validator ")
+                && inert[0]
+                    .declaration
+                    .ends_with("of the built-in component <http://www.w3.org/ns/shacl#MinCountConstraintComponent>"),
+            "{}",
+            inert[0].declaration
+        );
+        assert!(inert[0].message.contains(reason), "{}", inert[0].message);
+        assert!(!lint.is_clean(), "{}", lint.render());
+        assert!(
+            lint.render().contains("inert 1\ndefect validator "),
+            "{}",
+            lint.render()
+        );
+
+        let custom = format!(
+            "ex:Custom a sh:ConstraintComponent ; sh:parameter [ sh:path ex:custom ] ; {validator} .
+             ex:T a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; ex:custom 1 ] ."
+        );
+        let error = load_error(&custom);
+        assert!(error.contains(reason), "{validator}: {error}");
+    }
 }
 
 /// A SHACL-JS `sh:JSValidator` declared for a built-in is an alternative the native
@@ -1161,7 +1199,11 @@ fn lint_reports_superseded_alternatives_without_findings() {
     ));
     assert!(refused.load_error().is_some());
     assert_eq!(refused.alternative_validators(), None);
-    assert!(refused.render().contains("validators unavailable\n"));
+    assert!(
+        refused
+            .render()
+            .contains("validators unavailable\ninert unavailable\n")
+    );
 }
 
 /// The neighbour of the alternative that calls an unknown function: a SELECTED

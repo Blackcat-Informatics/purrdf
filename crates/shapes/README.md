@@ -79,9 +79,12 @@ with a contradicting signature is a mismatch. Validators declared for a
 built-in component (vocabularies such as DASH give SHACL Core components SPARQL
 validators) bind as alternatives the native implementation supersedes: SHACL
 1.2 SPARQL Extensions selects "one of the values" of a component's validators,
-so each is an implementation of the same component. An alternative must be a
-well-formed SPARQL validator of its attachment and is never executed;
-`validator_alternatives` and `lint::lint` list every one. Any other `sh:`
+so each is an implementation of the same component. An alternative is never
+executed; `validator_alternatives` and `lint::lint` list every one. A declaration no
+shape reaches — an alternative, the validators of a component no shape uses, a
+`sh:SPARQLFunction` nothing calls — is checked where it is certified: an ill-formed
+one loads as an `inert::InertDefect`, and `lint::lint` reports each as a finding.
+Where a shape reaches it, the load refuses it as before. Any other `sh:`
 statement on a built-in's declaration, beyond `sh:message`, `sh:labelTemplate`
 and the non-validating characteristics, is refused. A bodiless function the
 engine does not implement is refused in any namespace.

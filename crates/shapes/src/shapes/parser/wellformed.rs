@@ -34,6 +34,7 @@ use ::purrdf::FastSet;
 
 use super::shacl_instance::ShaclInstances;
 use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids};
+use crate::inert::InertDefect;
 use crate::model::{rdf, sh, xsd};
 use crate::shapes::Parser;
 use crate::spec::ValueRule;
@@ -113,8 +114,56 @@ impl Parser<'_> {
             self.check_shape_node(shape, is_parameter)?;
             self.check_implicit_class_shape(shape, &mut instances)?;
         }
+        let used = self.used_components(&shapes);
+        self.check_component_defects(&used)?;
         let shapes: FastSet<Term> = shapes.into_iter().collect();
-        self.check_sparql_executables(&shapes)
+        self.check_sparql_executables(&shapes, &used)
+    }
+
+    /// The IRIs of the custom constraint components a shape of the shapes graph
+    /// uses: one that carries values for all of the component's mandatory parameters
+    /// (the usage `Parser::parse_constraints` builds a constraint from). A usage whose
+    /// parameters cannot be read counts as a use, so its own error surfaces where the
+    /// shape is parsed.
+    fn used_components(&self, shapes: &[Term]) -> FastSet<String> {
+        let mut used = FastSet::default();
+        for (iri, component) in &self.component_registry.components {
+            let reached = shapes.iter().any(|shape| {
+                component
+                    .instantiate(shape, |path| self.objects_of(shape, path))
+                    .map_or(true, |instances| !instances.is_empty())
+            });
+            if reached {
+                used.insert(iri.clone());
+            }
+        }
+        used
+    }
+
+    /// Refuse the first custom component, in IRI order, that a shape uses and that
+    /// declares an ill-formed validator; record the defects of the components no shape
+    /// uses, and of the validators declared for built-in components, as inert (see
+    /// [`crate::inert`]).
+    fn check_component_defects(&self, used: &FastSet<String>) -> Result<(), String> {
+        let mut defective: Vec<(&String, &String)> = self
+            .component_registry
+            .components
+            .iter()
+            .filter_map(|(iri, component)| component.defect.as_ref().map(|defect| (iri, defect)))
+            .collect();
+        defective.sort();
+        let mut inert = self.inert.borrow_mut();
+        for (iri, defect) in defective {
+            if used.contains(iri) {
+                return Err(defect.clone());
+            }
+            inert.push(InertDefect {
+                declaration: format!("the constraint component <{iri}>, which no shape uses"),
+                message: defect.clone(),
+            });
+        }
+        inert.extend(self.component_registry.defects.iter().cloned());
+        Ok(())
     }
 
     /// Check every SPARQL executable the loader reads — the SPARQL-based
@@ -130,73 +179,123 @@ impl Parser<'_> {
     /// and `shnex:` namespaces pass. A node that is also a shape of the shapes
     /// graph (`ex:S sh:sparql ex:S`) may also carry what a shape carries, which
     /// [`Self::check_shape_node`] has already checked.
-    fn check_sparql_executables(&self, shapes: &FastSet<Term>) -> Result<(), String> {
-        let mut executables: Vec<(Term, &'static str, &'static [&'static str])> = Vec::new();
+    ///
+    /// A validator is checked where a shape reaches it — a validator of a custom
+    /// component in `used`. Any other validator (a built-in's alternative, one of a
+    /// component no shape uses, one attached to no component) is never run, so what
+    /// would refuse it is recorded as an inert defect instead (see [`crate::inert`]).
+    fn check_sparql_executables(
+        &self,
+        shapes: &FastSet<Term>,
+        used: &FastSet<String>,
+    ) -> Result<(), String> {
+        let mut executables: Vec<(Term, &'static str, &'static [&'static str], bool)> = Vec::new();
         for (_, _, node) in self.quads_with(None, Some(sh::SPARQL), None) {
-            executables.push((node, "SPARQL-based constraint", &SPARQL_EXECUTABLE_TERMS));
+            executables.push((
+                node,
+                "SPARQL-based constraint",
+                &SPARQL_EXECUTABLE_TERMS,
+                true,
+            ));
         }
         for attachment in [sh::VALIDATOR, sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR] {
-            for (_, _, node) in self.quads_with(None, Some(attachment), None) {
+            for (component, _, node) in self.quads_with(None, Some(attachment), None) {
                 // A SHACL-JS validator is not a SPARQL executable: its `sh:js…`
                 // vocabulary is inert where it is declared, and a shape that would
                 // run it is refused where the shape's constraint is read.
                 if crate::components::is_javascript_validator(self.data, &node) {
                     continue;
                 }
-                executables.push((node, "SPARQL validator", &SPARQL_VALIDATOR_TERMS));
+                let reached =
+                    matches!(&component, Term::NamedNode(iri) if used.contains(iri.as_str()));
+                executables.push((node, "SPARQL validator", &SPARQL_VALIDATOR_TERMS, reached));
             }
         }
         for (_, _, node) in self.quads_with(None, Some(sh::TARGET), None) {
             if self.has_type(&node, sh::SPARQL_TARGET) {
-                executables.push((node, "SPARQL-based target", &SPARQL_TARGET_TERMS));
+                executables.push((node, "SPARQL-based target", &SPARQL_TARGET_TERMS, true));
             }
         }
-        executables.sort_by(|a, b| crate::term::canonical_cmp(&a.0, &b.0).then(a.1.cmp(b.1)));
+        executables.sort_by(|a, b| {
+            crate::term::canonical_cmp(&a.0, &b.0)
+                .then(a.1.cmp(b.1))
+                .then(b.3.cmp(&a.3))
+        });
+        // A validator two components share is reached when either is used; the sort
+        // puts its reached entry first, and that is the one kept.
         executables.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-        for (node, kind, allowed) in &executables {
+        for (node, kind, allowed, reached) in &executables {
             if !matches!(node, Term::NamedNode(_) | Term::BlankNode(_)) {
                 continue;
             }
-            let is_shape = shapes.contains(node);
-            let mut predicates: Vec<NamedNode> =
-                native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
-                    .into_iter()
-                    .map(|(_, predicate, _)| predicate)
-                    .collect();
-            predicates.sort();
-            predicates.dedup();
-            for predicate in &predicates {
-                let p = predicate.as_str();
-                if !census::is_census_namespace(p) || allowed.contains(&p) {
-                    continue;
+            if !reached {
+                if let Err(message) =
+                    self.check_executable_census(node, kind, allowed, shapes, false)
+                {
+                    self.inert.borrow_mut().push(InertDefect {
+                        declaration: format!("{kind} {node}, which no shape reaches"),
+                        message,
+                    });
                 }
-                let Some(row) = census::classify(p) else {
-                    return Err(format!(
-                        "{kind} {node} carries <{p}>, which is not a term of SHACL 1.2, SHACL \
-                         Advanced Features or SHACL-SPARQL; it is refused rather than silently \
-                         ignored"
-                    ));
-                };
-                if let TermClass::Refused(why) = row.class {
-                    return Err(self.refuse_shacl_js(
-                        node,
-                        p,
-                        format!(
-                            "{kind} {node} uses <{p}>, which is not evaluated by this engine: \
-                             {why}"
-                        ),
-                    ));
-                }
-                if row.class == TermClass::NonValidating || (is_shape && row.on_shape()) {
-                    continue;
-                }
-                return Err(format!(
-                    "{kind} {node} carries <{p}>, which is {} and not read on a {kind}{}; it is \
-                     refused rather than silently ignored",
-                    describe_class(row.class),
-                    census::no_processing_note(p)
-                ));
+                continue;
             }
+            self.check_executable_census(node, kind, allowed, shapes, true)?;
+        }
+        Ok(())
+    }
+
+    /// The census check of one SPARQL executable `node` of `kind`: every `sh:` /
+    /// `shnex:` predicate it carries must be one of `allowed`, non-validating, or — on a
+    /// node that is also a shape — a shape's. `reached` says whether a refusal of a
+    /// SHACL-JS term is recorded as the parse's typed refusal: an unreached node's is
+    /// only an inert defect, which must not type the load's own error.
+    fn check_executable_census(
+        &self,
+        node: &Term,
+        kind: &str,
+        allowed: &[&str],
+        shapes: &FastSet<Term>,
+        reached: bool,
+    ) -> Result<(), String> {
+        let is_shape = shapes.contains(node);
+        let mut predicates: Vec<NamedNode> =
+            native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
+                .into_iter()
+                .map(|(_, predicate, _)| predicate)
+                .collect();
+        predicates.sort();
+        predicates.dedup();
+        for predicate in &predicates {
+            let p = predicate.as_str();
+            if !census::is_census_namespace(p) || allowed.contains(&p) {
+                continue;
+            }
+            let Some(row) = census::classify(p) else {
+                return Err(format!(
+                    "{kind} {node} carries <{p}>, which is not a term of SHACL 1.2, SHACL \
+                     Advanced Features or SHACL-SPARQL; it is refused rather than silently \
+                     ignored"
+                ));
+            };
+            if let TermClass::Refused(why) = row.class {
+                let message = format!(
+                    "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
+                );
+                return Err(if reached {
+                    self.refuse_shacl_js(node, p, message)
+                } else {
+                    message
+                });
+            }
+            if row.class == TermClass::NonValidating || (is_shape && row.on_shape()) {
+                continue;
+            }
+            return Err(format!(
+                "{kind} {node} carries <{p}>, which is {} and not read on a {kind}{}; it is \
+                 refused rather than silently ignored",
+                describe_class(row.class),
+                census::no_processing_note(p)
+            ));
         }
         Ok(())
     }

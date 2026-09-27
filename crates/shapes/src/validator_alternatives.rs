@@ -27,15 +27,17 @@
 //!
 //! # What is not an alternative
 //!
-//! A SPARQL alternative must still be a well-formed validator of its attachment: "The
+//! A SPARQL alternative should still be a well-formed validator of its attachment: "The
 //! values of sh:nodeValidator must be SELECT-based validators. The values of
 //! sh:propertyValidator must be SELECT-based validators" and "The values of
 //! sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL Extensions,
-//! "SELECT-based Validators" and "ASK-based Validators"). An untyped node, or a SPARQL
-//! validator of the other query form, violates those rules, and SHACL 1.2 Core,
-//! "Handling of Ill-formed Shapes Graphs", says "A SHACL processor SHOULD produce a
-//! failure in this case" — so each is a load error, on a built-in as on a custom
-//! component.
+//! "SELECT-based Validators" and "ASK-based Validators"), and its query must parse and
+//! meet the pre-binding restrictions. SHACL 1.2 Core, "Handling of Ill-formed Shapes
+//! Graphs", says "A SHACL processor SHOULD produce a failure in this case". An
+//! alternative is never reached, so that failure is produced where the shapes graph is
+//! certified rather than where it is loaded: an ill-formed alternative is an
+//! [`crate::inert::InertDefect`], which [`crate::lint`] reports as a finding. On a
+//! custom component a shape uses, the same validator refuses the load.
 //!
 //! # A SHACL-JS validator is inert vocabulary
 //!

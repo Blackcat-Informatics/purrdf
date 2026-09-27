@@ -1868,8 +1868,10 @@ class shapes:
     # the loader refused the graph), "alternatives" (each validator declared for a
     # built-in constraint component, superseded by the native implementation:
     # "component" / "attachment" / "validator" / "language"; never findings; None
-    # when the loader refused the graph), "report" (the deterministic text every host
-    # prints)}. The report certifies the whole owl:imports closure; one not in hand
+    # when the loader refused the graph), "inert" (each defect of a declaration no
+    # shape reaches, which the load accepts: "declaration" / "message"; each is a
+    # finding; None when the loader refused the graph), "report" (the deterministic
+    # text every host prints)}. The report certifies the whole owl:imports closure; one not in hand
     # raises ShapesImportError, never a report about the importing document alone.
     # Otherwise raises ValueError only when the document is not Turtle.
     @staticmethod

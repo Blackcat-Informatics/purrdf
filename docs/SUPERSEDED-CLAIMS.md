@@ -602,3 +602,48 @@ Pinned by `a_builtin_component_given_validators_binds_natively`,
 `imported_native_validator_binds_as_a_superseded_alternative`
 (`tests/component_parameters.rs`) and
 `cli_shapes_lint_reports_superseded_builtin_validators`.
+
+### An ill-formed declaration refuses the load whether or not anything reaches it
+
+**Was stated in** `crates/shapes/src/validator_alternatives.rs`, `crates/shapes/README.md`,
+the "Built-in declarations and the W3C vocabularies" section of
+`docs/book/src/validation/shacl.md`, the rule of the entry above, and the tests
+`an_ill_formed_alternative_on_a_builtin_is_refused`,
+`validator_declarations_enforce_attachment_kind_and_query_datatype` and the
+`sparql_function_with_*_is_rejected` family:
+
+> A validator that is not a well-formed SPARQL validator of its attachment is refused
+> at load, on a built-in or a custom component, and a malformed `sh:SPARQLFunction`
+> declaration is refused at load — because SHACL 1.2 Core says a processor "SHOULD
+> produce a failure" for an ill-formed shapes graph.
+
+**Why it was believed.** A load that accepted an ill-formed declaration looked like the
+silent-drop failure the census exists to close: something the author wrote would be
+walked past.
+
+**What changed.** A declaration nothing reaches is not walked past by validation — it
+is never evaluated at all, and no report can differ because of it. Libraries declare
+far more than a shapes graph uses, and DASH, the document the approved W3C test
+`sparql/component/validator-001` imports, declares an ASK validator under
+`sh:nodeValidator` for `sh:HasValueConstraintComponent`, a `MINUS` in a pre-bound
+alternative for `sh:EqualsConstraintComponent`, an ASK `sh:propertyValidator` for
+`dash:SubSetOfConstraintComponent` and a `sh:SPARQLFunction` parameter named `value`.
+None of them is reached by that test, whose approved result is exactly what the engine
+produces with DASH loaded. Refusing the load refused a validation nothing ill-formed
+takes part in: over-refusal. And the SHOULD is still honoured where it is paid for
+once — the cold certify surface.
+
+**The rule now.** Loading (the hot admit) judges a declaration's well-formedness where
+a shape REACHES it, with the refusal unchanged there: a custom component's validators
+where a shape uses the component, a `sh:SPARQLFunction` where a node expression or a
+SPARQL text a shape reaches calls it (directly or through another function's body).
+A built-in component's validators are never reached. An unreached defect is an
+`InertDefect` (`crates/shapes/src/inert.rs`), and `purrdf shapes lint` reports every one
+as a finding in its `inert` section, so the report is not clean. Pinned by
+`an_ill_formed_alternative_on_a_builtin_is_refused` (`tests/spec_linker.rs`),
+`unreached_ill_formed_declarations_are_inert_at_load_and_findings_in_lint` and
+`reached_ill_formed_declarations_are_still_refused`
+(`tests/shapes_graph_wellformedness.rs`),
+`validator_declarations_enforce_attachment_kind_and_query_datatype`
+(`tests/component_parameters.rs`) and the `sparql_function_with_*_is_rejected` tests in
+`crates/shapes/src/shapes.rs`.

@@ -463,6 +463,19 @@ fn lint_shapes(
             out.set_item("alternatives", alternatives)?;
         }
     }
+    match report.inert_defects() {
+        None => out.set_item("inert", py.None())?,
+        Some(defects) => {
+            let inert = PyList::empty(py);
+            for defect in defects {
+                let d = PyDict::new(py);
+                d.set_item("declaration", &defect.declaration)?;
+                d.set_item("message", &defect.message)?;
+                inert.append(d)?;
+            }
+            out.set_item("inert", inert)?;
+        }
+    }
     out.set_item("report", report.render())?;
     Ok(out.into_any().unbind())
 }

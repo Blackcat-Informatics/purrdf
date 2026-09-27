@@ -58,6 +58,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   command-line hosts report it with the same message as before.
 - **sparql-algebra:** `Query::custom_function_calls` lists the IRI of every
   extension function a query calls, anywhere in its algebra.
+- **shapes:** a declaration no shape reaches is judged by `lint`, not by the load.
+  An ill-formed validator of a built-in component (never run), an ill-formed
+  validator of a custom component no shape uses, and an ill-formed
+  `sh:SPARQLFunction` nothing calls (a reserved parameter name, a missing or
+  unparsable body) no longer refuse the load: each is an `inert::InertDefect`,
+  and `purrdf shapes lint` gains a fifth section, `inert N` (`inert unavailable`
+  over a refused graph), listing each as `defect DECLARATION` with its error
+  lines and counting it as a finding. Where a shape uses the component, or a
+  node expression or a query a shape reaches calls the function (directly or
+  through another function's body), the load refuses it as before.
+  `LintReport::inert_defects` returns them, and the Python lint dictionary gains
+  `inert`. A shapes graph importing DASH, whose unused declarations include
+  such defects, now loads.
 - **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
   onto a list value's `@list` array: `sh:minListLength` as `minItems`,
   `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,
@@ -2603,11 +2616,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   never executed, so their queries may call functions the engine does not have. Such
   a declaration used to be refused as a duplicate definition. A body, an `sh:ask` or
   an `sh:select` stated on the component itself is still a duplicate definition, a
-  contradicting signature is still a mismatch, and a validator that is not a
+  contradicting signature is still a mismatch. A validator that is not a
   well-formed SPARQL validator of its attachment — an untyped node, an ASK validator
   under `sh:nodeValidator` or `sh:propertyValidator`, a SELECT validator under
-  `sh:validator`, an unparsable query — is refused. A SHACL-JS `sh:JSValidator` is
-  an inert alternative, never parsed and never run. Newly refused: an `sh:`
+  `sh:validator`, an unparsable query — is never run either, so it is an inert
+  defect `purrdf shapes lint` reports as a finding, not a load refusal. A SHACL-JS
+  `sh:JSValidator` is an inert alternative, never parsed and never run. Newly refused: an `sh:`
   statement on a built-in's declaration other than its signature, its validators,
   `sh:message`, `sh:labelTemplate` or a non-validating characteristic (`sh:severity`
   on `sh:MinCountConstraintComponent`, for one), which the native implementation

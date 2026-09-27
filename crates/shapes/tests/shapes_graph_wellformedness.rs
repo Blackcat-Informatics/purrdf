@@ -387,6 +387,143 @@ fn every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal() {
     }
 }
 
+/// Declarations a library ships that are NOT well-formed SHACL 1.2, the way DASH ships
+/// them: validators of a built-in component that are an ASK validator under
+/// `sh:nodeValidator` and a SELECT with `MINUS` in a pre-bound query, a custom component
+/// whose `sh:propertyValidator` is an ASK validator, and a `sh:SPARQLFunction` with a
+/// parameter named `value`.
+const ILL_FORMED_LIBRARY: &str = r#"
+sh:MinLengthConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path sh:minLength ; sh:datatype xsd:integer ] ;
+  sh:nodeValidator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) >= $minLength) }" ] ;
+  sh:propertyValidator [ a sh:SPARQLSelectValidator ;
+    sh:select "SELECT $this ?value WHERE { $this $PATH ?value MINUS { $this $PATH ?value FILTER (STRLEN(STR(?value)) >= $minLength) } }" ] .
+ex:SubSetOfComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:subSetOf ] ;
+  sh:propertyValidator [ a sh:SPARQLAskValidator ; sh:ask "ASK { $this $subSetOf $value }" ] .
+ex:uriTemplate a sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:template ; sh:order 0 ] ;
+  sh:parameter [ sh:path ex:value ; sh:order 1 ] ;
+  sh:returnType xsd:anyURI ;
+  sh:select "SELECT (IRI(REPLACE($template, '[{][a-z]+[}]', STR($value))) AS ?result) WHERE { }" .
+"#;
+
+/// The shape the ill-formed library is validated with: `sh:minCount` and `sh:minLength`
+/// on `ex:p`, over `ex:a` and `ex:b`.
+const LENGTH_SHAPE: &str = r"
+ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+  sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:minLength 2 ] .
+";
+
+/// The lint report of `shapes_ttl`.
+fn lint_of(shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
+    let document =
+        purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{shapes_ttl}"), None)
+            .expect("parses");
+    purrdf_shapes::lint::lint(
+        &document.dataset,
+        &document.prefixes,
+        None,
+        None,
+        &purrdf_shapes::ShapesImports::new(),
+    )
+    .expect("lint runs")
+}
+
+/// A shapes graph whose ill-formed declarations no shape reaches LOADS — those
+/// declarations are inert — and its own constraints are honoured. The oracle observes
+/// both: `ex:a` lacks `ex:p` (`sh:minCount`) and `ex:b`'s `"x"` is too short
+/// (`sh:minLength`, whose ill-formed alternatives did not replace the native
+/// implementation), while `"long"` passes; the report equals the one without the library.
+/// The defects are not silenced: `lint` reports each of the four as a finding.
+#[test]
+fn unreached_ill_formed_declarations_are_inert_at_load_and_findings_in_lint() {
+    let data = r#"ex:b ex:p "x", "long" ."#;
+    let with = validate(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"), data);
+    assert_eq!(
+        results(&with),
+        vec![
+            ("<http://example.org/ns#a>".to_owned(), String::new()),
+            ("<http://example.org/ns#b>".to_owned(), "\"x\"".to_owned()),
+        ]
+    );
+    let without = validate(LENGTH_SHAPE, data);
+    assert_eq!(results(&with), results(&without));
+
+    let lint = lint_of(&format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}"));
+    assert_eq!(lint.load_error(), None, "{}", lint.render());
+    let inert = lint.inert_defects().expect("the load accepted the graph");
+    let mut reasons: Vec<(String, bool)> = inert
+        .iter()
+        .map(|defect| {
+            (
+                defect
+                    .declaration
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+                defect.message.contains("requires SELECT validators")
+                    || defect.message.contains("pre-binding")
+                    || defect.message.contains("reserved name"),
+            )
+        })
+        .collect();
+    reasons.sort();
+    assert_eq!(
+        reasons,
+        vec![
+            ("the".to_owned(), true),
+            ("the".to_owned(), true),
+            ("validator".to_owned(), true),
+            ("validator".to_owned(), true),
+        ],
+        "{}",
+        lint.render()
+    );
+    let text = lint.render();
+    for needle in [
+        "defect the constraint component <http://example.org/ns#SubSetOfComponent>, which no shape uses",
+        "defect the sh:SPARQLFunction <http://example.org/ns#uriTemplate>, which nothing calls",
+        "of the built-in component <http://www.w3.org/ns/shacl#MinLengthConstraintComponent>",
+    ] {
+        assert!(text.contains(needle), "{needle}: {text}");
+    }
+    assert_eq!(lint.findings(), lint_of(LENGTH_SHAPE).findings() + 4);
+}
+
+/// The reached neighbours of the inert declarations are still refused at load: a shape
+/// using the component whose `sh:propertyValidator` is an ASK validator, a shape whose
+/// SPARQL calls the function with the reserved parameter name, and a node expression
+/// calling it.
+#[test]
+fn reached_ill_formed_declarations_are_still_refused() {
+    let cases: [(&str, &str); 3] = [
+        (
+            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:p ; ex:subSetOf ex:q ] .",
+            "requires SELECT validators",
+        ),
+        (
+            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:sparql [ a sh:SPARQLConstraint ;
+                 sh:select \"SELECT $this WHERE { FILTER (!ISIRI(<http://example.org/ns#uriTemplate>('x{y}', $this))) }\" ] .",
+            "reserved name",
+        ),
+        (
+            "ex:T a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:q ; sh:values [ ex:uriTemplate ( \"x{y}\" sh:this ) ] ; sh:minCount 1 ] .",
+            "reserved name",
+        ),
+    ];
+    for (shape, reason) in cases {
+        refused(
+            &format!("{ILL_FORMED_LIBRARY}{LENGTH_SHAPE}{shape}"),
+            reason,
+        );
+    }
+}
+
 /// SHACL Advanced Features 1.1's minus expression — "exactly one value for the
 /// property sh:minus … and exactly one value for the property sh:nodes", "the input
 /// nodes except those that are in another 'minus' list" — is SHACL 1.2's

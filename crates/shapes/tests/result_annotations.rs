@@ -306,11 +306,16 @@ fn describe_and_update_are_refused_wherever_the_loader_reads_and_load_elsewhere(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:describe \"DESCRIBE ?x\" .",
         "no SHACL specification executes",
     );
-    refused(
+    // A validator is read where a shape uses its component; one no shape reaches is an
+    // inert defect the load accepts (`lint` reports it).
+    const UPDATING_COMPONENT: &str =
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .
-         ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:update \"CLEAR ALL\" .",
+         ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:update \"CLEAR ALL\" .";
+    refused(
+        &format!("{UPDATING_COMPONENT} ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:q 1 ."),
         "no SHACL specification executes",
     );
+    loads(UPDATING_COMPONENT);
     loads(&sparql_constraint(""));
     loads(
         "ex:Cleanup a sh:SPARQLUpdateExecutable ; sh:update \"CLEAR ALL\" .
@@ -321,16 +326,21 @@ fn describe_and_update_are_refused_wherever_the_loader_reads_and_load_elsewhere(
 
 /// A SPARQL-based constraint runs only `sh:select`: an `sh:ask` beside it, or a
 /// misspelled `sh:mesage`, is refused rather than ignored; an ASK validator
-/// carrying an `sh:select` is refused; the SELECT-only neighbours load.
+/// carrying an `sh:select` is refused where a shape uses its component, and loads as
+/// an inert defect where none does; the SELECT-only neighbours load.
 #[test]
 fn a_query_a_node_never_runs_is_refused() {
     refused(&sparql_constraint("sh:ask \"ASK {}\" ;"), "shacl#ask");
     refused(&sparql_constraint("sh:mesage \"typo\" ;"), "shacl#mesage");
-    refused(
+    const BOTH_QUERIES: &str =
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .
-         ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:select \"SELECT $this WHERE {}\" .",
+         ex:V a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ; sh:select \"SELECT $this WHERE {}\" .";
+    refused(
+        &format!("{BOTH_QUERIES} ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:q 1 ."),
         "never runs",
     );
+    // No shape uses the component, so the validator is never reached: an inert defect.
+    loads(BOTH_QUERIES);
     loads(&sparql_constraint("sh:message \"fine\" ;"));
     loads(
         "ex:C a sh:ConstraintComponent ; sh:parameter [ sh:path ex:q ] ; sh:validator ex:V .

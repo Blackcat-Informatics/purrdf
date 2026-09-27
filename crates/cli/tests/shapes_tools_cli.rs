@@ -564,7 +564,7 @@ fn cli_shapes_lint() {
         "{report}"
     );
     assert!(
-        report.ends_with("validators 0\nfindings 0\nclean true\n"),
+        report.ends_with("validators 0\ninert 0\nfindings 0\nclean true\n"),
         "{report}"
     );
     assert!(stderr(&out).contains("shapes lint clean true\n"));

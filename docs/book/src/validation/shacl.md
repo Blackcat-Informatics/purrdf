@@ -306,11 +306,12 @@ resolves each declaration against the engine's table of what it implements:
   implementation supersedes. SHACL 1.2 SPARQL Extensions selects "one of the
   values" of a component's validators, so each is an implementation of the same
   component, and the engine's own is the one that runs. Vocabularies such as
-  DASH declare them for SHACL Core components. A SPARQL alternative must be a
-  well-formed SPARQL validator of its attachment: an ASK validator under
-  `sh:propertyValidator` or an unparsable query fails the load. It is never
-  executed, so its query may call a function the engine does not have. A
-  SHACL-JS `sh:JSValidator` alternative is inert: never parsed and never run;
+  DASH declare them for SHACL Core components. An alternative is never
+  executed, so its query may call a function the engine does not have, and an
+  ill-formed one (an ASK validator under `sh:propertyValidator`, an unparsable
+  query, a `MINUS` in a pre-bound query) does not fail the load: it is an inert
+  defect that `purrdf shapes lint` reports as a finding. A SHACL-JS
+  `sh:JSValidator` alternative is inert too, and is not a defect;
 - any other `sh:` statement on a built-in's declaration fails the load, except
   `sh:message`, `sh:labelTemplate` and the non-validating characteristics
   (`sh:name`, `sh:description`, …): `sh:severity` on
@@ -332,6 +333,14 @@ test pins the difference at zero. `purrdf shapes lint` reports, per function
 call site, whether the call bound natively, to a custom body, to a SPARQL
 registration or to a host extension, and lists every validator declared for a
 built-in component as `superseded-by-native`. Those lines are never findings.
+
+A declaration no shape reaches is judged where it is certified, not where it is
+loaded. A custom component's validators are checked when a shape uses the
+component, and a `sh:SPARQLFunction` declaration when a node expression or a
+query a shape reaches calls the function. There, an ill-formed one fails the load
+as before. A shapes graph that imports a library declaring ill-formed components
+or functions it never uses, as DASH does, loads, and `purrdf shapes lint` lists
+each such defect as a finding.
 
 ## SHACL 1.2 conformance
 
@@ -504,13 +513,16 @@ value schema also rejects an array, so every value of an array is judged.
 
 Pydantic enforces `allOf`, `oneOf`, `not` and `contains` with its runtime check
 over the raw JSON input, so it agrees with validation on each of these. LinkML
-states them as `all_of`, `any_of`, `exactly_one_of` and `none_of`. The
-official LinkML 1.11.1 generator honours `has_member` only for scalar
-constraints, not for a value schema, so `contains` is recorded. TypeScript
-states intersections and unions, and records `oneOf`, `not` and `contains`,
-which it has no type for. GraphQL delegates the composition to its custom
-scalar. Each emitter oracle runs these constraints over projected instances of
-real data.
+states them as `all_of`, `any_of`, `exactly_one_of`, `none_of` and
+`has_member`, whose expression is the whole value schema, class ranges
+included, so nothing is recorded. The official LinkML 1.11.1 JSON Schema
+generator, which the LinkML validator also runs, turns a `has_member` into
+`contains` only for its scalar constraints. Its output therefore accepts an
+array with no conforming value, although the LinkML schema states the
+constraint. TypeScript states intersections and unions, and records `oneOf`,
+`not` and `contains`, which it has no type for. GraphQL delegates the
+composition to its custom scalar. Each emitter oracle runs these constraints
+over projected instances of real data.
 
 Each emitter oracle also runs the temporal bounds over projected instances.
 Pydantic and LinkML agree with validation on each of them. TypeScript and
@@ -949,7 +961,7 @@ purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
 **Certifying a shapes graph.** Loading a shapes graph is the hot path: it
 refuses the first construct it cannot evaluate faithfully, and does not pay for
 validating the graph against the W3C `shacl-shacl.ttl`. Linting pays that cost
-once, on request, and reports four sections:
+once, on request, and reports five sections:
 
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
@@ -965,9 +977,13 @@ once, on request, and reports four sections:
 4. `validators`: every validator the shapes graph declares for a built-in
    constraint component, which the native implementation supersedes and never
    runs. These lines are never findings.
+5. `inert`: every defect of a declaration no shape reaches, such as an
+   ill-formed validator of a built-in component or of a component no shape
+   uses, or an ill-formed `sh:SPARQLFunction` nothing calls. The load accepts
+   them; each is a finding here.
 
-A report is clean when the loader accepted the graph and every `shacl-shacl`
-result is superseded. Every host renders the same deterministic text; the
+A report is clean when the loader accepted the graph, every `shacl-shacl`
+result is superseded and no unreached declaration is defective. Every host renders the same deterministic text; the
 [CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)
 shows it.
 

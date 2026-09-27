@@ -406,6 +406,10 @@ fn native_component_declarations_preserve_every_repeatable_constraint_family() {
     }
 }
 
+/// Each validator here is ill-formed: an ASK validator under a SELECT attachment and
+/// vice versa, and a query that is not an `xsd:string`. Where a shape USES the component
+/// the load refuses it. Where no shape does, the validator is never reached: the load
+/// accepts it as an inert defect, and `lint` reports that defect as a finding.
 #[test]
 fn validator_declarations_enforce_attachment_kind_and_query_datatype() {
     for validator in [
@@ -419,7 +423,30 @@ fn validator_declarations_enforce_attachment_kind_and_query_datatype() {
         let body = format!(
             "ex:Component a sh:ConstraintComponent ; sh:parameter [ sh:path ex:arg ] ; {validator} ."
         );
-        assert!(shapes(&body).is_err(), "accepted {validator}");
+        let used = format!("{body} ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:arg 1 .");
+        assert!(shapes(&used).is_err(), "accepted a used {validator}");
+        assert!(
+            shapes(&body).is_ok(),
+            "refused {validator}, which no shape uses"
+        );
+        let document =
+            purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{body}"), None)
+                .expect("parses");
+        let report = purrdf_shapes::lint::lint(
+            &document.dataset,
+            &document.prefixes,
+            None,
+            None,
+            &purrdf_shapes::ShapesImports::new(),
+        )
+        .expect("lint runs");
+        let inert = report.inert_defects().expect("the load accepted the graph");
+        assert_eq!(inert.len(), 1, "{validator}: {}", report.render());
+        assert_eq!(
+            inert[0].declaration,
+            "the constraint component <http://example.org/Component>, which no shape uses"
+        );
+        assert!(!report.is_clean(), "{}", report.render());
     }
 }
 

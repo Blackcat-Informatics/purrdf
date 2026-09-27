@@ -1180,6 +1180,20 @@ pub(crate) fn from_resolved_dataset(
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
 ) -> Result<Shapes, ShapesError> {
+    from_resolved_dataset_with_inert(dataset, base, doc_prefixes, box_role_vocab, shapes_graph)
+        .map(|(shapes, _)| shapes)
+}
+
+/// [`from_resolved_dataset`], also answering the defects of the declarations no shape
+/// reaches — sorted and de-duplicated — which the load accepts (see [`crate::inert`]).
+/// `lint` reports them.
+pub(crate) fn from_resolved_dataset_with_inert(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+) -> Result<(Shapes, Vec<crate::inert::InertDefect>), ShapesError> {
     let mut parser = Parser::new(
         dataset.as_ref(),
         base.map(ToOwned::to_owned),
@@ -1188,7 +1202,11 @@ pub(crate) fn from_resolved_dataset(
         Arc::clone(dataset),
         shapes_graph,
     );
-    parser.parse()
+    let shapes = parser.parse()?;
+    let mut inert = parser.inert.take();
+    inert.sort();
+    inert.dedup();
+    Ok((shapes, inert))
 }
 
 /// Parse a shapes graph AND, in the same parse, the node expressions rooted at
@@ -1268,6 +1286,14 @@ pub(crate) struct Parser<'s> {
     /// refuses a SHACL-JS term records it here through [`Self::refuse_shacl_js`], and
     /// [`Self::load_error`] types the parse's error when that error IS this refusal.
     shacl_js: std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
+    /// The defects of declarations no shape reaches, in the order the parse met them
+    /// (see [`crate::inert`]). The load accepts them; `lint` reports them.
+    pub(crate) inert: std::cell::RefCell<Vec<crate::inert::InertDefect>>,
+    /// Every `sh:SPARQLFunction` declaration that is not well-formed, by IRI, with the
+    /// refusal a call to it raises. Filled by `parse_sparql_functions`; a function
+    /// here is registered nowhere, and a reachable call to it is refused at the end of
+    /// the parse.
+    pub(crate) function_defects: std::cell::RefCell<std::collections::BTreeMap<String, String>>,
     /// Tracks the shape nodes and node-expression nodes currently being parsed,
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
@@ -1458,6 +1484,8 @@ impl<'s> Parser<'s> {
         Self {
             data,
             shacl_js: std::cell::RefCell::new(None),
+            inert: std::cell::RefCell::new(Vec::new()),
+            function_defects: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             in_flight: FastSet::default(),
             base,
             prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
@@ -1726,18 +1754,23 @@ impl<'s> Parser<'s> {
                 self.shapes_graph.clone(),
             ),
         };
-        self.refuse_javascript_calls(&shapes)?;
+        self.refuse_reached_calls(&shapes)?;
         Ok((shapes, expressions))
     }
 
-    /// Refuse a shapes graph in which a SPARQL text a shape reaches calls a function
-    /// the shapes graph declares as a SHACL-JS `sh:JSFunction` — directly, or through a
-    /// `sh:SPARQLFunction` it calls. This engine has no JavaScript engine, so the call
-    /// could only fail at evaluation. A `sh:JSFunction` nothing reachable calls is
-    /// inert vocabulary. A node-expression call to one is refused where the call is
-    /// parsed.
-    fn refuse_javascript_calls(&self, shapes: &Shapes) -> Result<(), String> {
-        let javascript: std::collections::BTreeSet<String> = self
+    /// Refuse a shapes graph in which something a shape reaches calls a function it
+    /// cannot evaluate: a node expression or a SPARQL text a shape reaches calls —
+    /// directly, or through a `sh:SPARQLFunction` it calls — a function the shapes
+    /// graph declares as a SHACL-JS `sh:JSFunction` (this engine has no JavaScript
+    /// engine), or a `sh:SPARQLFunction` whose declaration is not well-formed (the
+    /// declaration's own refusal). Either call could only fail at evaluation. A
+    /// declaration nothing reachable calls is inert: a `sh:JSFunction` is vocabulary,
+    /// and an ill-formed `sh:SPARQLFunction` is recorded as an inert defect (see
+    /// [`crate::inert`]). A node-expression call to a `sh:JSFunction` is refused where
+    /// the call is parsed.
+    fn refuse_reached_calls(&self, shapes: &Shapes) -> Result<(), String> {
+        let defects = self.function_defects.borrow().clone();
+        let mut unevaluable: std::collections::BTreeSet<String> = self
             .quads_with(None, Some(rdf::TYPE), Some(SH_JS_FUNCTION))
             .into_iter()
             .filter_map(|(subject, _, _)| match subject {
@@ -1745,22 +1778,40 @@ impl<'s> Parser<'s> {
                 _ => None,
             })
             .collect();
-        if javascript.is_empty() {
+        unevaluable.extend(defects.keys().cloned());
+        if unevaluable.is_empty() {
             return Ok(());
         }
-        let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &javascript)
-        else {
-            return Ok(());
-        };
-        Err(self.refuse_shacl_js(
-            &Term::NamedNode(NamedNode::from(function.as_str())),
-            SH_JS_FUNCTION,
-            format!(
-                "the SPARQL of {site} calls <{function}>, a sh:JSFunction: {}; the shapes \
-                 graph is refused rather than failing when the call is evaluated",
-                crate::spec::census::JS
-            ),
-        ))
+        if let Some((site, function)) =
+            crate::extension_usage::reachable_call_to(shapes, &unevaluable)
+        {
+            return Err(match defects.get(&function) {
+                Some(defect) => format!(
+                    "{site} calls <{function}>, whose sh:SPARQLFunction declaration is not \
+                     well-formed: {defect}"
+                ),
+                None => self.refuse_shacl_js(
+                    &Term::NamedNode(NamedNode::from(function.as_str())),
+                    SH_JS_FUNCTION,
+                    format!(
+                        "the SPARQL of {site} calls <{function}>, a sh:JSFunction: {}; the \
+                         shapes graph is refused rather than failing when the call is evaluated",
+                        crate::spec::census::JS
+                    ),
+                ),
+            });
+        }
+        self.inert
+            .borrow_mut()
+            .extend(
+                defects
+                    .into_iter()
+                    .map(|(iri, message)| crate::inert::InertDefect {
+                        declaration: format!("the sh:SPARQLFunction <{iri}>, which nothing calls"),
+                        message,
+                    }),
+            );
+        Ok(())
     }
 
     /// Resolve NOW every shape IRI a `sh:nodeByExpression` already names, against
@@ -2877,6 +2928,25 @@ mod tests {
 
     // ── SHACL-AF sh:SPARQLFunction declaration parsing ────────────────────────
 
+    /// A shape whose SPARQL constraint calls `ex:{local}` on every focus node, and
+    /// reports each focus node the call is false for — the call that REACHES the
+    /// declaration.
+    fn calls(local: &str) -> String {
+        format!(
+            "ex:Caller a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:sparql [ a sh:SPARQLConstraint ;
+                 sh:select \"SELECT $this WHERE {{ FILTER (!<http://example.org/ns#{local}>($this)) }}\" ] ."
+        )
+    }
+
+    /// The inert defects of `ttl`, which must load.
+    fn inert_of(ttl: &str) -> Vec<crate::inert::InertDefect> {
+        let dataset = load_store(ttl);
+        from_resolved_dataset_with_inert(&dataset, None, &[], None, None)
+            .expect("an unreached ill-formed declaration loads")
+            .1
+    }
+
     #[test]
     fn sparql_function_declaration_parsed_into_registry() {
         let ttl = format!(
@@ -2919,8 +2989,17 @@ mod tests {
                 sh:ask "ASK {{}}" .
             "#
         );
-        let err = from_store(&load_store(&ttl)).expect_err("both bodies must fail");
+        let err = from_store(&load_store(&format!("{ttl}{}", calls("bad"))))
+            .expect_err("both bodies must fail");
         assert!(err.contains("both sh:select and sh:ask"), "got: {err}");
+        // Nothing calls it: the load accepts the graph, and the defect is inert.
+        let inert = inert_of(&ttl);
+        assert_eq!(inert.len(), 1, "{inert:?}");
+        assert_eq!(
+            inert[0].declaration,
+            "the sh:SPARQLFunction <http://example.org/ns#bad>, which nothing calls"
+        );
+        assert!(err.contains(&inert[0].message), "{err} / {inert:?}");
     }
 
     #[test]
@@ -2934,8 +3013,17 @@ mod tests {
                 sh:select "SELECT (1 AS ?result) WHERE {{}}" .
             "#
         );
-        let err = from_store(&load_store(&ttl)).expect_err("reserved param name must fail");
+        let err = from_store(&load_store(&format!("{ttl}{}", calls("bad"))))
+            .expect_err("reserved param name must fail");
         assert!(err.contains("reserved"), "got: {err}");
+        // Nothing calls it: the load accepts the graph, and the defect is inert.
+        let inert = inert_of(&ttl);
+        assert_eq!(inert.len(), 1, "{inert:?}");
+        assert_eq!(
+            inert[0].declaration,
+            "the sh:SPARQLFunction <http://example.org/ns#bad>, which nothing calls"
+        );
+        assert!(err.contains(&inert[0].message), "{err} / {inert:?}");
     }
 
     #[test]
@@ -2947,8 +3035,17 @@ mod tests {
                 sh:select "SELECT (1 AS ?result) WHERE {{}}" .
             "#
         );
-        let err = from_store(&load_store(&ttl)).expect_err("non-numeric sh:order must fail");
+        let err = from_store(&load_store(&format!("{ttl}{}", calls("bad"))))
+            .expect_err("non-numeric sh:order must fail");
         assert!(err.contains("sh:order"), "got: {err}");
+        // Nothing calls it: the load accepts the graph, and the defect is inert.
+        let inert = inert_of(&ttl);
+        assert_eq!(inert.len(), 1, "{inert:?}");
+        assert_eq!(
+            inert[0].declaration,
+            "the sh:SPARQLFunction <http://example.org/ns#bad>, which nothing calls"
+        );
+        assert!(err.contains(&inert[0].message), "{err} / {inert:?}");
     }
 
     #[test]
@@ -2963,8 +3060,17 @@ mod tests {
                 sh:select "SELECT ?result WHERE {{}}" .
             "#
         );
-        let err = from_store(&load_store(&ttl)).expect_err("collision must fail");
+        let err = from_store(&load_store(&format!("{ttl}{}", calls("clash"))))
+            .expect_err("collision must fail");
         assert!(err.contains("collides"), "got: {err}");
+        // Nothing calls it: the load accepts the graph, and the defect is inert.
+        let inert = inert_of(&ttl);
+        assert_eq!(inert.len(), 1, "{inert:?}");
+        assert_eq!(
+            inert[0].declaration,
+            "the sh:SPARQLFunction <http://example.org/ns#clash>, which nothing calls"
+        );
+        assert!(err.contains(&inert[0].message), "{err} / {inert:?}");
     }
 
     // ── Test 1: targetClass + sh:property with minCount/maxCount ──────────────

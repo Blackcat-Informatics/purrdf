@@ -22,6 +22,7 @@ use ::purrdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads};
+use crate::inert::InertDefect;
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
@@ -102,6 +103,11 @@ pub(crate) struct Component {
     /// and only a use whose selected attachment offers nothing but these is refused
     /// (see [`Self::javascript_only`]).
     pub javascript: Vec<(&'static str, Term)>,
+    /// The first ill-formed validator the component declares, as the refusal the
+    /// loader raises where a shape uses the component. A component no shape uses loads
+    /// with it as an inert defect (see [`crate::inert`]); its validator lists are then
+    /// empty.
+    pub defect: Option<String>,
     /// The `sh:message` values declared on the component node.
     pub messages: Vec<Literal>,
     /// Optional severity declared on the component node.
@@ -155,6 +161,9 @@ pub(crate) struct ComponentRegistry {
     /// Every validator declared for a built-in component — an alternative its native
     /// implementation supersedes — sorted. See [`crate::validator_alternatives`].
     pub alternatives: Vec<AlternativeValidator>,
+    /// The ill-formed validators declared for built-in components: never reached, so
+    /// inert defects rather than load refusals (see [`crate::inert`]).
+    pub defects: Vec<InertDefect>,
 }
 
 impl ComponentRegistry {
@@ -166,12 +175,14 @@ impl ComponentRegistry {
     /// component's `sh:parameter` declarations and `sh:nodeValidator` /
     /// `sh:propertyValidator` / `sh:validator` SPARQL validators are parsed and
     /// validated (query must parse to the declared form and satisfy SHACL-SPARQL
-    /// pre-binding restrictions). Any malformed component is a hard error.
+    /// pre-binding restrictions). An ill-formed validator is not an error here: a
+    /// custom component carries it as [`Component::defect`], refused where a shape uses
+    /// the component, and a built-in's is an inert defect in [`Self::defects`].
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` when a component, parameter, or validator is
-    /// malformed or when a validator query violates the pre-binding restrictions.
+    /// Returns `Err(String)` when a component's declaration or parameters are
+    /// malformed.
     ///
     /// A SHACL-JS `sh:JSValidator` is declared vocabulary, not a load error: a
     /// built-in's is an alternative like any other, and a custom component's is
@@ -183,6 +194,7 @@ impl ComponentRegistry {
         let mut seen: FastSet<String> = FastSet::default();
         let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
         let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
+        let mut defects: Vec<InertDefect> = Vec::new();
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -229,18 +241,31 @@ impl ComponentRegistry {
                     .map(|param| sparql_local_name(param.path))
                     .collect();
                 for (attachment, validator, kind) in
-                    declared_validators(data, &component_term, &mut subclass_memo)?
+                    declared_validators(data, &component_term, &mut subclass_memo)
                 {
+                    // An alternative is never reached, so an ill-formed one is an inert
+                    // defect, reported by `lint`, rather than a load refusal.
+                    let mut defect = |message: String| {
+                        defects.push(InertDefect {
+                            declaration: format!(
+                                "validator {validator} of the built-in component <{}>",
+                                component.as_str()
+                            ),
+                            message,
+                        });
+                    };
                     let language = match kind {
-                        DeclaredKind::Sparql(kind) => {
-                            parse_validator(
+                        Ok(DeclaredKind::Sparql(kind)) => {
+                            if let Err(message) = parse_validator(
                                 data,
                                 prefixes,
                                 &component_term,
                                 &validator,
                                 &param_names,
                                 kind,
-                            )?;
+                            ) {
+                                defect(message);
+                            }
                             match kind {
                                 ValidatorKind::Ask => ValidatorLanguage::SparqlAsk,
                                 ValidatorKind::Select => ValidatorLanguage::SparqlSelect,
@@ -248,7 +273,11 @@ impl ComponentRegistry {
                         }
                         // Never run, and never parsed: this engine has no JavaScript
                         // engine, and the native implementation is the one that runs.
-                        DeclaredKind::JavaScript => ValidatorLanguage::JavaScript,
+                        Ok(DeclaredKind::JavaScript) => ValidatorLanguage::JavaScript,
+                        Err(message) => {
+                            defect(message);
+                            continue;
+                        }
                     };
                     builtin_alternatives.push(AlternativeValidator {
                         component: component.as_str().to_owned(),
@@ -265,6 +294,7 @@ impl ComponentRegistry {
 
         let mut registry = Self {
             alternatives: builtin_alternatives,
+            defects,
             ..Self::default()
         };
         for component_iri in component_iris {
@@ -860,19 +890,21 @@ pub(crate) fn is_javascript_validator(data: &RdfDataset, validator: &Term) -> bo
 }
 
 /// Every validator `component` declares, as `(attachment, validator, kind)` in
-/// attachment order and canonical term order within one.
+/// attachment order and canonical term order within one. Each kind is the validator's
+/// own verdict, so a caller decides whether an ill-formed one refuses the load (a
+/// reached custom component) or is an inert defect (a built-in's alternative, an
+/// unused component).
 ///
-/// # Errors
-///
-/// A validator [`validator_kind`] refuses, and a SPARQL validator whose query form is
-/// not the one its attachment takes: "The values of sh:nodeValidator must be SELECT-based
-/// validators. The values of sh:propertyValidator must be SELECT-based validators", "The
-/// values of sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL Extensions).
+/// A kind is an error for a validator [`validator_kind`] refuses, and for a SPARQL
+/// validator whose query form is not the one its attachment takes: "The values of
+/// sh:nodeValidator must be SELECT-based validators. The values of sh:propertyValidator
+/// must be SELECT-based validators", "The values of sh:validator must be ASK-based
+/// validators" (SHACL 1.2 SPARQL Extensions).
 fn declared_validators(
     data: &RdfDataset,
     component: &Term,
     memo: &mut FastMap<(String, String), bool>,
-) -> Result<Vec<(&'static str, Term, DeclaredKind)>, String> {
+) -> Vec<(&'static str, Term, Result<DeclaredKind, String>)> {
     let mut out = Vec::new();
     for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
         let mut nodes = objects_of(data, component, attachment);
@@ -880,20 +912,23 @@ fn declared_validators(
         let expects_ask = attachment == sh::VALIDATOR;
         for node in nodes {
             let kind = validator_kind(data, &node, memo)
-                .map_err(|e| format!("component {component} validator {node}: {e}"))?;
-            if let DeclaredKind::Sparql(kind) = kind
-                && matches!(kind, ValidatorKind::Ask) != expects_ask
-            {
-                return Err(format!(
-                    "component {component} {attachment} requires {} validators, and {node} is \
-                     {kind:?}",
-                    if expects_ask { "ASK" } else { "SELECT" },
-                ));
-            }
+                .map_err(|e| format!("component {component} validator {node}: {e}"))
+                .and_then(|kind| match kind {
+                    DeclaredKind::Sparql(form)
+                        if matches!(form, ValidatorKind::Ask) != expects_ask =>
+                    {
+                        Err(format!(
+                            "component {component} {attachment} requires {} validators, and \
+                             {node} is {form:?}",
+                            if expects_ask { "ASK" } else { "SELECT" },
+                        ))
+                    }
+                    kind => Ok(kind),
+                });
             out.push((attachment, node, kind));
         }
     }
-    Ok(out)
+    out
 }
 
 /// Whether `name` is a SPARQL `VARNAME` and not one of the reserved names banned
@@ -1046,17 +1081,38 @@ fn parse_component(
     let mut property_validators = Vec::new();
     let mut validators = Vec::new();
     let mut javascript = Vec::new();
-    for (attachment, node, kind) in declared_validators(data, component, subclass_memo)? {
-        let DeclaredKind::Sparql(kind) = kind else {
-            javascript.push((attachment, node));
-            continue;
+    // The first ill-formed validator, in attachment and canonical order. It refuses the
+    // load only where a shape uses the component; see [`Component::defect`].
+    let mut defect: Option<String> = None;
+    for (attachment, node, kind) in declared_validators(data, component, subclass_memo) {
+        let parsed = match kind {
+            Ok(DeclaredKind::JavaScript) => {
+                javascript.push((attachment, node));
+                continue;
+            }
+            Ok(DeclaredKind::Sparql(kind)) => {
+                parse_validator(data, prefixes, component, &node, &param_names, kind)
+            }
+            Err(message) => Err(message),
         };
-        let parsed = parse_validator(data, prefixes, component, &node, &param_names, kind)?;
-        match attachment {
-            sh::NODE_VALIDATOR => node_validators.push(parsed),
-            sh::PROPERTY_VALIDATOR => property_validators.push(parsed),
-            _ => validators.push(parsed),
+        match parsed {
+            Ok(parsed) => match attachment {
+                sh::NODE_VALIDATOR => node_validators.push(parsed),
+                sh::PROPERTY_VALIDATOR => property_validators.push(parsed),
+                _ => validators.push(parsed),
+            },
+            Err(message) => {
+                defect.get_or_insert(message);
+            }
         }
+    }
+    if defect.is_some() {
+        // A defective component has no validator a use could run: a use is refused
+        // with the defect before any constraint is built from it.
+        node_validators.clear();
+        property_validators.clear();
+        validators.clear();
+        javascript.clear();
     }
 
     let messages = declared_messages(data, component)?;
@@ -1070,6 +1126,7 @@ fn parse_component(
         property_validators,
         validators,
         javascript,
+        defect,
         messages,
         severity,
     })
@@ -1142,6 +1199,7 @@ mod tests {
             property_validators: vec![],
             validators: vec![],
             javascript: vec![],
+            defect: None,
             messages: vec![],
             severity: None,
         };

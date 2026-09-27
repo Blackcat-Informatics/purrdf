@@ -268,22 +268,39 @@ fn an_unparsable_body_is_a_load_error() {
     assert!(err.contains("unusable sh:bodyExpression"), "got: {err}");
 }
 
-/// `sh:bodyExpression` on a node that is neither declaring class is refused: nothing
-/// would ever evaluate that body, and loading it green would leave a `sh:SPARQLFunction`
-/// with no reachable body at all.
+/// `sh:bodyExpression` on a `sh:SPARQLFunction` that is neither declaring class leaves the
+/// function with no body anything would evaluate. Where a shape's SPARQL calls it, the
+/// load refuses it; where nothing calls it, the declaration is never reached, and the
+/// load accepts it as an inert defect that `lint` reports. The oracle observes the
+/// unreached graph's own constraint firing on `ex:a`, so the acceptance is a validation,
+/// not a graph that checked nothing.
 #[test]
 fn body_expression_without_a_declaring_class_is_a_load_error() {
-    let err = load_error(
-        r"
+    const DECLARATION: &str = r"
         ex:f a sh:SPARQLFunction ;
           sh:bodyExpression [ shnex:arg 0 ] ;
           sh:parameter [ sh:path ex:arg ] .
-        ",
-    );
+        ";
+    let err = load_error(&format!(
+        "{DECLARATION}
+         ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:sparql [ a sh:SPARQLConstraint ;
+             sh:select \"SELECT $this WHERE {{ FILTER (!<http://example.org/ns#f>($this)) }}\" ] ."
+    ));
     assert!(
         err.contains("sh:ListParameterExpressionFunction"),
         "got: {err}"
     );
+    let report = validate(
+        "",
+        &format!(
+            "{DECLARATION}
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1 ] ."
+        ),
+    )
+    .expect("an uncalled ill-formed declaration loads");
+    assert_eq!(report.results.len(), 1, "{report:?}");
+    assert_eq!(report.results[0].focus_node, ex_term("a"));
 }
 
 /// SHACL 1.2 SPARQL Extensions §7.2's `ex:spacedConcat`: a `sh:sparqlExpr` body

@@ -10,7 +10,7 @@
 //! parameter value, an unresolved or duplicate function definition (the
 //! [linker](crate::spec)) — and it deliberately does not validate the graph against the
 //! W3C's `shacl-shacl.ttl`, because a load pays for that on every validation. [`lint`]
-//! is where that price is paid once, on request. It reports four sections:
+//! is where that price is paid once, on request. It reports five sections:
 //!
 //! 1. **load** — the loader's own verdict: accepted, or the refusal it raised.
 //! 2. **shacl-shacl** — every result of validating the shapes graph, as DATA, against
@@ -22,6 +22,11 @@
 //!    constraint component, which the native implementation supersedes and never runs
 //!    ([`crate::validator_alternatives`]), when the load succeeded. They are reported,
 //!    never findings: the component's semantics are the specification's either way.
+//! 5. **inert** — every defect of a declaration no shape reaches ([`crate::inert`]):
+//!    an ill-formed validator of a built-in component or of a custom component no
+//!    shape uses, an ill-formed `sh:SPARQLFunction` nothing calls. The load accepts
+//!    them, because nothing it runs is ill-formed; each is a FINDING here, so the
+//!    defect is not silenced — it is certified rather than refused.
 //!
 //! # Where `shacl-shacl.ttl` lags SHACL 1.2 Core
 //!
@@ -36,8 +41,8 @@
 //! `tests/shacl_shacl_differential.rs`, pins exactly that against every corpus shapes
 //! graph and hundreds of mutants); over a graph the loader refused, every result counts.
 //!
-//! A report is CLEAN exactly when the loader accepted the graph and every `shacl-shacl`
-//! result is superseded.
+//! A report is CLEAN exactly when the loader accepted the graph, every `shacl-shacl`
+//! result is superseded, and no unreached declaration is defective.
 //!
 //! # An incomplete `owl:imports` closure is not a report
 //!
@@ -59,9 +64,10 @@ use crate::engine::validate_dataset_with_shapes_graph;
 use crate::error::ShapesError;
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
+use crate::inert::InertDefect;
 use crate::model::BoxRoleVocab;
 use crate::shapes::{
-    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset,
+    Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_inert,
 };
 use crate::term::Term;
 use crate::validator_alternatives::AlternativeValidator;
@@ -237,6 +243,9 @@ pub struct LintReport {
     functions: Option<FunctionResolution>,
     /// The validators declared for built-ins, when the loader accepted the graph.
     alternatives: Option<Vec<AlternativeValidator>>,
+    /// The defects of declarations no shape reaches, when the loader accepted the
+    /// graph.
+    inert: Option<Vec<InertDefect>>,
 }
 
 impl LintReport {
@@ -268,8 +277,16 @@ impl LintReport {
         self.alternatives.as_deref()
     }
 
+    /// Every defect of a declaration no shape reaches, sorted, or `None` when the
+    /// loader refused the graph. Each is a finding; see the [module docs](self).
+    #[must_use]
+    pub fn inert_defects(&self) -> Option<&[InertDefect]> {
+        self.inert.as_deref()
+    }
+
     /// How many findings the report carries: one for a load refusal, plus every
-    /// `shacl-shacl.ttl` result no [`Supersession`] covers.
+    /// `shacl-shacl.ttl` result no [`Supersession`] covers, plus every defect of a
+    /// declaration no shape reaches.
     #[must_use]
     pub fn findings(&self) -> usize {
         usize::from(self.load_error.is_some())
@@ -278,6 +295,7 @@ impl LintReport {
                 .iter()
                 .filter(|result| result.superseded.is_none())
                 .count()
+            + self.inert.as_ref().map_or(0, Vec::len)
     }
 
     /// Whether the report carries no finding.
@@ -299,6 +317,9 @@ impl LintReport {
     /// call BINDING FUNCTION in OWNER
     /// validators N|unavailable
     /// alternative COMPONENT ATTACHMENT VALIDATOR LANGUAGE superseded-by-native
+    /// inert N|unavailable
+    /// defect DECLARATION
+    ///   error LINE                     (one per line of the defect's refusal)
     /// findings N
     /// clean true|false
     /// ```
@@ -307,7 +328,8 @@ impl LintReport {
     /// [`FunctionBinding::label`](crate::function_resolution::FunctionBinding::label);
     /// `functions unavailable` means the loader refused the graph. `LANGUAGE` is
     /// [`ValidatorLanguage::label`](crate::validator_alternatives::ValidatorLanguage::label);
-    /// `validators unavailable` means the loader refused the graph. Every list is in the
+    /// `validators unavailable` means the loader refused the graph, and so does `inert
+    /// unavailable`. Every list is in the
     /// order its accessor documents, so the text is a pure function of the shapes graph.
     #[must_use]
     pub fn render(&self) -> String {
@@ -374,6 +396,18 @@ impl LintReport {
                 }
             }
         }
+        match &self.inert {
+            None => out.push_str("inert unavailable\n"),
+            Some(inert) => {
+                let _ = writeln!(out, "inert {}", inert.len());
+                for defect in inert {
+                    let _ = writeln!(out, "defect {}", defect.declaration);
+                    for line in defect.message.lines() {
+                        let _ = writeln!(out, "  error {line}");
+                    }
+                }
+            }
+        }
         let _ = writeln!(out, "findings {}", self.findings());
         let _ = writeln!(out, "clean {}", self.is_clean());
         out
@@ -403,7 +437,7 @@ pub fn lint(
 ) -> Result<LintReport, ShapesError> {
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
     let dataset = &resolved.dataset;
-    let loaded = from_resolved_dataset(
+    let loaded = from_resolved_dataset_with_inert(
         dataset,
         None,
         &resolved.prefixes,
@@ -457,22 +491,28 @@ pub fn lint(
         )
     });
     shacl_shacl.dedup();
-    let (load_error, functions, alternatives) = match loaded {
-        Ok(shapes) => {
+    let (load_error, functions, alternatives, inert) = match loaded {
+        Ok((shapes, inert)) => {
             // The load that just succeeded parsed the same registry, so this cannot
             // refuse; were it to, the report says so rather than listing nothing.
             match alternative_validators(dataset, &resolved.prefixes) {
-                Ok(alternatives) => (None, Some(shapes.function_resolution()), Some(alternatives)),
-                Err(error) => (Some(error), None, None),
+                Ok(alternatives) => (
+                    None,
+                    Some(shapes.function_resolution()),
+                    Some(alternatives),
+                    Some(inert),
+                ),
+                Err(error) => (Some(error), None, None, None),
             }
         }
-        Err(error) => (Some(error), None, None),
+        Err(error) => (Some(error), None, None, None),
     };
     Ok(LintReport {
         load_error,
         shacl_shacl,
         functions,
         alternatives,
+        inert,
     })
 }
 
