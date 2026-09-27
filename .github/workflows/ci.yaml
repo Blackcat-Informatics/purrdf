@@ -163,6 +163,9 @@ jobs:
       - name: Check the SIMD asm evidence gate can still fail
         run: python3 scripts/check-simd-asm.py --self-test
 
+      - name: Check the bench comparison selects criterion suites only
+        run: python3 scripts/bench-criterion-targets.py --self-test
+
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 
