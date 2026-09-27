@@ -1331,6 +1331,14 @@ export class SparqlProtocolRequest {
    * host's own fault.
    */
   static problemFor(error: unknown, cancelled: boolean): FailureProblem;
+  /**
+   * The HTTP problem a governed operation a governor stopped is answered with: a
+   * ceiling's `422` carrying its `dimension`, `limit` and `consumed` or `estimate`, or
+   * the `503` of a stop signal's `cause`; the problem's `code` is the governor's label.
+   *
+   * @throws {Error} A record that describes no governor this build names.
+   */
+  static problemForTrip(tripped: TrippedGovernor): FailureProblem;
   /** The reason phrase of an HTTP `status` — an `about:blank` problem's `title`. */
   static statusTitle(status: number): string | undefined;
   readonly kind: "query" | "update";

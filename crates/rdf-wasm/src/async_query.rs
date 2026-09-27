@@ -928,7 +928,7 @@ impl AsyncCounters {
         add_ms(wait, waited_ms);
     }
 
-    fn snapshot(&self, stack_top: usize) -> AsyncEvidence {
+    pub(crate) fn snapshot(&self, stack_top: usize) -> AsyncEvidence {
         let low = self.stack_low_water.load(Ordering::Relaxed);
         let high_water = if low == usize::MAX {
             0

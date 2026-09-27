@@ -108,6 +108,10 @@ const problemStatus: number = problem.status;
 const problemBody: string = problem.body(problem.internal ? "correlation-1" : undefined);
 problem.free();
 const title: string | undefined = SparqlProtocolRequest.statusTitle(409);
+if (!negotiated.isComplete && negotiated.tripped !== undefined) {
+  const trip: FailureProblem = SparqlProtocolRequest.problemForTrip(negotiated.tripped);
+  trip.free();
+}
 
 void problemStatus;
 void problemBody;

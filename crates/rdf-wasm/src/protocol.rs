@@ -30,6 +30,7 @@
 
 use std::fmt::Write as _;
 
+use purrdf_core::{ResourceDimension, StopCause, TrippedGovernor as TrippedValue};
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::protocol::{
     FailureCode, OperationKind, ProblemDetail, ProtocolError, ProtocolRequest, ResultKind,
@@ -59,6 +60,27 @@ extern "C" {
     #[wasm_bindgen(method, setter = parameter)]
     fn set_parameter(this: &ProtocolJsError, parameter: &str);
 
+    /// A governed outcome's `tripped` record, read for the governor it describes.
+    type TripRecord;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn kind(this: &TripRecord) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn label(this: &TripRecord) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn dimension(this: &TripRecord) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn limit(this: &TripRecord) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn consumed(this: &TripRecord) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn estimate(this: &TripRecord) -> JsValue;
+
     /// Whatever a failed operation rejected with, read for its `code` and `message`.
     type Failure;
 
@@ -67,6 +89,72 @@ extern "C" {
 
     #[wasm_bindgen(method, getter, structural)]
     fn message(this: &Failure) -> JsValue;
+}
+
+/// A `u64` member of a trip record: a `bigint`, or a safe-integer `number`.
+fn trip_count(value: &JsValue) -> Option<u64> {
+    if value.is_bigint() {
+        return u64::try_from(value.clone()).ok();
+    }
+    value
+        .as_f64()
+        .filter(|number| number.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(number))
+        .map(|number| number as u64)
+}
+
+/// The governor a trip record describes: `kind` (`"budget"`, `"refused"`, `"stopped"`)
+/// with the `label`, `dimension`, `limit`, `consumed` and `estimate` its kind carries.
+///
+/// # Errors
+///
+/// A record that describes no governor this build names.
+fn trip_from_record(
+    kind: Option<&str>,
+    label: Option<&str>,
+    dimension: Option<&str>,
+    limit: Option<u64>,
+    consumed: Option<u64>,
+    estimate: Option<u64>,
+) -> Result<TrippedValue, String> {
+    let dimension = || {
+        dimension
+            .and_then(|name| {
+                ResourceDimension::ALL
+                    .into_iter()
+                    .find(|candidate| candidate.label() == name)
+            })
+            .ok_or_else(|| format!("a {kind:?} trip names no governed dimension"))
+    };
+    let count = |value: Option<u64>, name: &str| {
+        value.ok_or_else(|| format!("a {kind:?} trip carries no {name}"))
+    };
+    match kind {
+        Some("budget") => Ok(TrippedValue::Budget {
+            dimension: dimension()?,
+            limit: count(limit, "limit")?,
+            consumed: count(consumed, "consumed")?,
+        }),
+        Some("refused") => Ok(TrippedValue::Refused {
+            dimension: dimension()?,
+            limit: count(limit, "limit")?,
+            estimate: count(estimate, "estimate")?,
+        }),
+        Some("stopped") => {
+            let cause = match label {
+                Some("cancelled") => StopCause::Cancelled,
+                Some("deadline-exceeded") => StopCause::Deadline,
+                other => {
+                    return Err(format!(
+                        "a stopped trip labelled {other:?} names no stop cause"
+                    ));
+                }
+            };
+            Ok(TrippedValue::Stopped { cause })
+        }
+        other => Err(format!(
+            "a trip of kind {other:?} names no governor this build knows"
+        )),
+    }
 }
 
 /// The media type of every problem document.
@@ -106,6 +194,10 @@ pub struct FailureProblem {
     /// The failure's own code, the problem's `code` for an evaluation failure.
     failure_code: String,
     message: String,
+    /// The governor that stopped the operation, when the problem answers a trip: its
+    /// label is the problem's `code`, and its dimension, ceiling and measurements are
+    /// the problem's members.
+    trip: Option<TrippedValue>,
 }
 
 impl FailureProblem {
@@ -126,15 +218,28 @@ impl FailureProblem {
                 .unwrap_or_else(|| FailureCode::HostFault.code())
                 .to_owned(),
             message: message.to_owned(),
+            trip: None,
+        }
+    }
+
+    /// The problem for an operation a governor stopped: a ceiling's `422`, or the `503`
+    /// of a cancellation or a deadline.
+    fn for_trip(tripped: TrippedValue) -> Self {
+        let failure = FailureCode::from(&tripped);
+        Self {
+            failure,
+            failure_code: tripped.label().to_owned(),
+            message: tripped.to_string(),
+            trip: Some(tripped),
         }
     }
 
     /// The problem document, with `correlation_id` for a failure that is the host's own.
     fn render(&self, correlation_id: Option<&str>) -> Result<String, String> {
         let problem = problem_for(self.failure);
-        let code = match self.failure {
-            FailureCode::Evaluation => self.failure_code.as_str(),
-            _ => problem.code,
+        let code = match (self.failure, self.trip) {
+            (_, Some(_)) | (FailureCode::Evaluation, None) => self.failure_code.as_str(),
+            (_, None) => problem.code,
         };
         let (detail, correlation) = match (problem.detail, correlation_id) {
             (ProblemDetail::Message, _) => (self.message.clone(), None),
@@ -171,6 +276,34 @@ impl FailureProblem {
         if let Some(id) = correlation {
             // Writing to a `String` cannot fail.
             let _ = write!(body, ",\"correlationId\":{}", json_string(id));
+        }
+        match self.trip {
+            Some(TrippedValue::Stopped { .. }) => {
+                let _ = write!(body, ",\"cause\":{}", json_string(code));
+            }
+            Some(TrippedValue::Budget {
+                dimension,
+                limit,
+                consumed,
+            }) => {
+                let _ = write!(
+                    body,
+                    ",\"dimension\":{},\"limit\":{limit},\"consumed\":{consumed}",
+                    json_string(dimension.label())
+                );
+            }
+            Some(TrippedValue::Refused {
+                dimension,
+                limit,
+                estimate,
+            }) => {
+                let _ = write!(
+                    body,
+                    ",\"dimension\":{},\"limit\":{limit},\"estimate\":{estimate}",
+                    json_string(dimension.label())
+                );
+            }
+            _ => {}
         }
         if self.failure == FailureCode::NotAcceptable {
             // A negotiated operation refuses only the one shape no format can carry
@@ -510,6 +643,36 @@ impl SparqlProtocolRequest {
         FailureProblem::new(code.as_deref(), &message.unwrap_or_default(), cancelled)
     }
 
+    /// The HTTP problem a governed operation a governor stopped is answered with:
+    /// `tripped` is its outcome's `tripped` record. A ceiling reached or refused at
+    /// admission is a `422` carrying its `dimension`, `limit` and `consumed` or
+    /// `estimate`; a stop signal is the `503` of its `cause`. The problem's `code` is the
+    /// governor's label.
+    ///
+    /// # Errors
+    ///
+    /// A record that describes no governor this build names.
+    #[wasm_bindgen(js_name = problemForTrip)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn problem_for_trip(tripped: JsValue) -> Result<FailureProblem, JsError> {
+        if !tripped.is_object() {
+            return Err(JsError::new(
+                "problemForTrip expects a tripped-governor record",
+            ));
+        }
+        let record = tripped.unchecked_ref::<TripRecord>();
+        trip_from_record(
+            record.kind().as_string().as_deref(),
+            record.label().as_string().as_deref(),
+            record.dimension().as_string().as_deref(),
+            trip_count(&record.limit()),
+            trip_count(&record.consumed()),
+            trip_count(&record.estimate()),
+        )
+        .map(FailureProblem::for_trip)
+        .map_err(|message| JsError::new(&message))
+    }
+
     /// The reason phrase of an HTTP `status` (RFC 9110 §15) — an `about:blank`
     /// problem's `title` — or `undefined` for a status no problem is answered with here.
     #[wasm_bindgen(js_name = statusTitle)]
@@ -819,6 +982,75 @@ mod tests {
                 "application/n-quads",
                 "application/ld+json"
             ])
+        );
+    }
+
+    /// A ceiling a governor reached is a `422` whose code is the governor's label and
+    /// whose members are its dimension, ceiling and consumption, as exact integers; a
+    /// refusal at admission carries the estimate instead; a stop signal is a `503` whose
+    /// code and cause are its label.
+    #[test]
+    fn a_trip_is_answered_by_its_governor() {
+        let reached = trip_from_record(
+            Some("budget"),
+            Some("answer-cap-exhausted"),
+            Some("answer-rows"),
+            Some(u64::MAX - 1),
+            Some(3),
+            None,
+        )
+        .expect("a budget trip");
+        let problem = FailureProblem::for_trip(reached);
+        assert_eq!(problem.status(), 422);
+        assert!(!problem.internal());
+        let text = problem.render(None).expect("renders");
+        assert!(
+            text.contains("\"limit\":18446744073709551614"),
+            "exact: {text}"
+        );
+        let document = body(&problem, None);
+        assert_eq!(document["title"], "Unprocessable Content");
+        assert_eq!(document["code"], "answer-cap-exhausted");
+        assert_eq!(document["dimension"], "answer-rows");
+        assert_eq!(document["consumed"], 3);
+        assert_eq!(document["estimate"], serde_json::Value::Null);
+
+        let refused = trip_from_record(
+            Some("refused"),
+            Some("cardinality-exhausted"),
+            Some("intermediate-cells"),
+            Some(10),
+            None,
+            Some(20),
+        )
+        .expect("a refusal");
+        let document = body(&FailureProblem::for_trip(refused), None);
+        assert_eq!(document["status"], 422);
+        assert_eq!(document["estimate"], 20);
+        assert_eq!(document["consumed"], serde_json::Value::Null);
+
+        for label in ["deadline-exceeded", "cancelled"] {
+            let stopped = trip_from_record(Some("stopped"), Some(label), None, None, None, None)
+                .expect("a stop");
+            let problem = FailureProblem::for_trip(stopped);
+            assert_eq!(problem.status(), 503);
+            let document = body(&problem, None);
+            assert_eq!(document["code"], label);
+            assert_eq!(document["cause"], label);
+            assert_eq!(document["dimension"], serde_json::Value::Null);
+        }
+        // A record that names no governor is refused, not guessed at.
+        assert!(trip_from_record(Some("unknown"), Some("x"), None, None, None, None).is_err());
+        assert!(
+            trip_from_record(
+                Some("budget"),
+                None,
+                Some("no-such"),
+                Some(1),
+                Some(1),
+                None
+            )
+            .is_err()
         );
     }
 

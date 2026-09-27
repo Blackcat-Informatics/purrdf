@@ -16,7 +16,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   diagnostic's code, and `protocol::problem_for` is the one mapping to the HTTP
   problem a host answers with (`Problem { status, code, detail }`, the detail either
   the failure's own words, a fixed description, or an internal one logged under a
-  correlation id). A new failure cannot compile until it has a status. The default
+  correlation id). A governed outcome's trip converts too (`FailureCode::GovernorCeiling`,
+  a `422`, or the `503` of a stop signal). A new failure cannot compile until it has a
+  status. The default
   request timeout and user agent are public (`remote_http::DEFAULT_TIMEOUT`,
   `DEFAULT_USER_AGENT`).
 
@@ -28,7 +30,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `purrdf-wasm-usage`, `purrdf-wasm-serialize`, `purrdf-wasm-entailment`,
   `purrdf-wasm-extension-environment`, `purrdf-wasm-shacl`,
   `purrdf-wasm-shacl-product-refusal`). `SparqlProtocolRequest.problemFor(error,
-  cancelled)` answers a failure with its RFC 9457 problem, and
+  cancelled)` answers a failure with its RFC 9457 problem,
+  `SparqlProtocolRequest.problemForTrip(tripped)` a governed outcome's trip, and
   `SparqlProtocolRequest.statusTitle(status)` gives a status's reason phrase.
   `Dataset.snapshot()` returns an independent copy of a dataset, and
   `ServiceCatalog.copy()` an independent copy of a catalog. The asynchronous
@@ -2468,8 +2471,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `AsyncJob.deliverBindings` are removed in favour of `errorCode`/`errorMessage`,
   `expireEffect`, and the shared-exchange deliveries. `Dataset.queryAsync` takes
   `queryRawAsync`'s options. The synchronous methods run the same operation
-  implementation as their twins, metered and with no source; their results are
-  unchanged.
+  implementation as their twins with no source: an ungoverned one on the engine's
+  ungoverned entry, installing no governor state, and a governed one under exactly the
+  governors its caller named; their results are unchanged.
 
 - **BREAKING** **cloudflare:** `createFetchServiceResolver` no longer takes `catalog`,
   `timeoutMs`, `waitUntil` or `onCacheError`: the catalog and each request's timeout

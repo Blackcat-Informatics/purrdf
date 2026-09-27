@@ -582,23 +582,21 @@ function problem(status, detail, extensions, headers) {
   });
 }
 
-/** The response for a governor that stopped the request: `503` for a stop signal, else `422`. */
-function trippedProblem(tripped, headers) {
-  if (tripped.kind === "stopped") {
-    return problem(503, tripped.message, { code: tripped.label, cause: tripped.cause }, headers);
+/**
+ * The response for a governor that stopped the request, as Rust answers the outcome's
+ * `tripped` record (`SparqlProtocolRequest.problemForTrip`): a ceiling's `422` with its
+ * dimension and measurements, or the `503` of a cancellation or a deadline.
+ */
+function tripResponse(tripped, headers) {
+  const found = SparqlProtocolRequest.problemForTrip(tripped);
+  try {
+    return new Response(found.body(undefined), {
+      status: found.status,
+      headers: [["Content-Type", found.contentType], ...headers],
+    });
+  } finally {
+    found.free();
   }
-  return problem(
-    422,
-    tripped.message,
-    {
-      code: tripped.label,
-      dimension: tripped.dimension,
-      limit: tripped.limit === undefined ? undefined : exactNumber(tripped.limit),
-      consumed: tripped.consumed === undefined ? undefined : exactNumber(tripped.consumed),
-      estimate: tripped.estimate === undefined ? undefined : exactNumber(tripped.estimate),
-    },
-    headers,
-  );
 }
 
 /** A `SparqlProtocolRequest` refusal (it carries `status`, `name`, `parameter`) as its problem. */
@@ -838,7 +836,7 @@ export async function handleSparqlRequest(request, options) {
   }
   const headers = [...cors, ...vary];
   // Everything below is either an already-classified refusal (`protocolStep`,
-  // `failureResponse`, `trippedProblem`) or a `500`: nothing past this point may ever
+  // `failureResponse`, `tripResponse`) or a `500`: nothing past this point may ever
   // let an exception escape as anything but a problem response. An error this catch
   // reaches unclassified — a bug in this adapter, or `protocolStep` re-throwing something
   // that was never a protocol refusal — is exactly `handleSparqlRequest`'s own version of
@@ -907,7 +905,7 @@ export async function handleSparqlRequest(request, options) {
           if (fault !== undefined) return internalFailure(undefined, headers, internal, fault.correlationId);
         }
         const timing = serverTiming(outcome.evidence.async);
-        if (!outcome.isApplied) return trippedProblem(outcome.tripped, [...timing, ...headers]);
+        if (!outcome.isApplied) return tripResponse(outcome.tripped, [...timing, ...headers]);
         return new Response(null, { status: 204, headers: [...timing, ...headers] });
       }
       const accept = request.headers.get("Accept") ?? undefined;
@@ -948,7 +946,7 @@ export async function handleSparqlRequest(request, options) {
       }
       const timing = serverTiming(outcome.evidence.async);
       if (!outcome.isComplete) {
-        return trippedProblem(outcome.tripped, [...timing, ["Vary", "Accept"], ...headers]);
+        return tripResponse(outcome.tripped, [...timing, ["Vary", "Accept"], ...headers]);
       }
       return new Response(outcome.body.bytes, {
         status: 200,

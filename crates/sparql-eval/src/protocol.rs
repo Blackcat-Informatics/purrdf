@@ -1172,6 +1172,10 @@ pub enum FailureCode {
     NotAcceptable,
     /// An update of the same dataset is already in flight.
     UpdateInFlight,
+    /// A deterministic governor ceiling stopped the operation: it was reached, or the
+    /// planner's estimate already exceeded it. The operation's outcome carries the
+    /// trip; this is how a host answers one.
+    GovernorCeiling,
     /// The host's own code failed: a bug in a host handler, or an exception no failure
     /// code classifies.
     HostFault,
@@ -1181,7 +1185,7 @@ pub enum FailureCode {
 
 impl FailureCode {
     /// Every variant, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::QueryParse,
         Self::UpdateParse,
         Self::ParseStackExhausted,
@@ -1205,6 +1209,7 @@ impl FailureCode {
         Self::Deadline,
         Self::NotAcceptable,
         Self::UpdateInFlight,
+        Self::GovernorCeiling,
         Self::HostFault,
         Self::Evaluation,
     ];
@@ -1236,6 +1241,7 @@ impl FailureCode {
             Self::Deadline => "native-sparql-deadline",
             Self::NotAcceptable => "native-sparql-not-acceptable",
             Self::UpdateInFlight => "native-sparql-update-in-flight",
+            Self::GovernorCeiling => "native-sparql-governor-ceiling",
             Self::HostFault => "native-sparql-host-fault",
             Self::Evaluation => "native-sparql-evaluation",
         }
@@ -1280,6 +1286,25 @@ impl From<&EvalError> for FailureCode {
             | EvalError::CompositeBound(_)
             | EvalError::RelationIncomplete { .. }
             | EvalError::FloatEnvironment(_) => Self::Evaluation,
+        }
+    }
+}
+
+impl From<&purrdf_core::TrippedGovernor> for FailureCode {
+    /// A stop signal is the cancellation or the deadline it reports; a ceiling reached or
+    /// refused at admission is a governor ceiling. The kernel's enum is open to new
+    /// governors, and one this build cannot name is answered as the ceiling it stands
+    /// beside: a deterministic governor, not a stop signal.
+    fn from(tripped: &purrdf_core::TrippedGovernor) -> Self {
+        use purrdf_core::{StopCause, TrippedGovernor};
+        match tripped {
+            TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled,
+            } => Self::Cancelled,
+            TrippedGovernor::Stopped {
+                cause: StopCause::Deadline,
+            } => Self::Deadline,
+            _ => Self::GovernorCeiling,
         }
     }
 }
@@ -1354,6 +1379,7 @@ pub struct Problem {
 /// | `403` | a catalog or the host's policy refused a `SERVICE` or `LOAD` it names; nothing was contacted |
 /// | `406` | no acceptable format carries the result |
 /// | `409` | an update of the same dataset is already in flight |
+/// | `422` | a deterministic governor ceiling stopped the operation |
 /// | `500` | evaluation failed (its own words), or the host's own fault (sanitized, logged under a correlation id) |
 /// | `502` | a `SERVICE` endpoint or `LOAD` source was contacted and gave no usable answer |
 /// | `503` | a cancellation or the deadline stopped the operation |
@@ -1397,6 +1423,7 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         ),
         FailureCode::NotAcceptable => (406, ProblemDetail::Message),
         FailureCode::UpdateInFlight => (409, ProblemDetail::Message),
+        FailureCode::GovernorCeiling => (422, ProblemDetail::Message),
         FailureCode::EvaluationStackExhausted | FailureCode::Evaluation => {
             (500, ProblemDetail::Message)
         }

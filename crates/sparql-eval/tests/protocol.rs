@@ -1236,3 +1236,35 @@ fn stops_not_acceptable_and_update_in_flight_have_their_own_statuses() {
     assert_eq!(in_flight.status, 409);
     assert_eq!(in_flight.code, "native-sparql-update-in-flight");
 }
+
+/// A governor ceiling reached or refused at admission is a `422`; a stop signal is the
+/// `503` of the cancellation or the deadline it reports.
+#[test]
+fn a_ceiling_trip_is_a_422_and_a_stop_is_a_503() {
+    use purrdf_core::{ResourceDimension, StopCause, TrippedGovernor};
+    let reached = FailureCode::from(&TrippedGovernor::Budget {
+        dimension: ResourceDimension::Fuel,
+        limit: 10,
+        consumed: 10,
+    });
+    let refused = FailureCode::from(&TrippedGovernor::Refused {
+        dimension: ResourceDimension::IntermediateCells,
+        limit: 10,
+        estimate: 20,
+    });
+    for ceiling in [reached, refused] {
+        assert_eq!(ceiling, FailureCode::GovernorCeiling);
+        assert_eq!(problem_for(ceiling).status, 422);
+        assert_eq!(problem_for(ceiling).detail, ProblemDetail::Message);
+    }
+    let cancelled = FailureCode::from(&TrippedGovernor::Stopped {
+        cause: StopCause::Cancelled,
+    });
+    let deadline = FailureCode::from(&TrippedGovernor::Stopped {
+        cause: StopCause::Deadline,
+    });
+    assert_eq!(cancelled, FailureCode::Cancelled);
+    assert_eq!(deadline, FailureCode::Deadline);
+    assert_eq!(problem_for(cancelled).status, 503);
+    assert_eq!(problem_for(deadline).status, 503);
+}
