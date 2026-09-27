@@ -18,8 +18,9 @@
 // skipping, so the CI step cannot pass without having run.
 //
 // Asserted:
-//   * the runtime gives the package JSPI and a yield primitive (recorded in the log and
-//     the job summary);
+//   * the runtime gives the package JSPI and the yield primitive a Worker needs,
+//     `setTimeout` (recorded in the log and the job summary, beside a table of which
+//     candidate primitives let a concurrent request in between turns);
 //   * a SERVICE the catalog admits is joined: 200 and SPARQL Results JSON;
 //   * SERVICE SILENT over an endpoint that answered 500 is the join identity, and the
 //     endpoint was really asked;
@@ -244,10 +245,10 @@ async function main() {
     ]);
     diagnostics(await yieldExperiment(mf, probe.candidates));
     assert.equal(probe.hasAsyncQueries, true, "workerd provides JSPI and a yield primitive");
-    assert.ok(
-      ["setImmediate", "MessageChannel"].includes(probe.primitive),
-      `a supported yield primitive (${probe.primitive})`,
-    );
+    // workerd delivers a MessageChannel message without letting another request in, so
+    // a Worker must yield through the timer (the experiment above shows both).
+    assert.equal(probe.userAgent, "Cloudflare-Workers", "workerd reports the documented Workers user agent");
+    assert.equal(probe.primitive, "setTimeout", "a Worker yields through setTimeout");
 
     // A SERVICE the catalog admits is joined.
     const joined = await post(QUERY);

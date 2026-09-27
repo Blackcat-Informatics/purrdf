@@ -34,9 +34,11 @@ export function expectedCrossCount(size) {
  * `yieldEveryPolls: 64`, counting the ticks of a 5 ms interval during each. Node delivers
  * up to a thousand queued `MessagePort` messages in one event-loop turn, so at 1 024 the
  * `MessageChannel` fallback came round to the timer phase only once in the whole run;
- * at 64 it comes round often enough that a tick count of zero means starvation.
+ * at 64 it comes round often enough that a tick count of zero means starvation. A
+ * primitive that turns the timer phase at every yield needs no such density, and a
+ * caller may pass a larger `yieldEveryPolls`.
  */
-export async function measureYielding(engine, size) {
+export async function measureYielding(engine, size, yieldEveryPolls = 64) {
   const dataset = crossDataset(size);
   let ticks = 0;
   const interval = setInterval(() => {
@@ -47,7 +49,7 @@ export async function measureYielding(engine, size) {
     const syncCount = sync.rows.take(0).c.value;
     const syncTicks = ticks;
     ticks = 0;
-    const outcome = await engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 64 });
+    const outcome = await engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls });
     const asyncTicks = ticks;
     return {
       syncCount,

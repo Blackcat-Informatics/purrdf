@@ -1171,8 +1171,8 @@ export function hasAsyncQueries() {
 
 /**
  * The macrotask primitive asynchronous jobs yield to the event loop through —
- * `"setImmediate"` or `"MessageChannel"` — or `undefined` when the environment has
- * neither.
+ * `"setTimeout"` in a Cloudflare Worker, else `"setImmediate"` or `"MessageChannel"` — or
+ * `undefined` when the environment has none.
  */
 export function asyncYieldPrimitive() {
   assertNotPoisoned();

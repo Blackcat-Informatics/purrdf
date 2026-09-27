@@ -504,8 +504,11 @@ parse is the `LOAD`'s own failure.
 A job counts the evaluator's governor polls and gives the event loop one turn every
 `yieldEveryPolls` polls: 65 536 by default, and `0` yields at every poll. The count, not
 the clock, decides when to yield. It yields through one macrotask primitive, chosen when
-the module loads and reported by `asyncYieldPrimitive()`: `setImmediate`, or a
-`MessageChannel` round trip where there is none (a browser, for one). It never uses
+the module loads and reported by `asyncYieldPrimitive()`: `setTimeout(…, 0)` in a
+Cloudflare Worker (recognized by its `navigator.userAgent`, `Cloudflare-Workers`, because
+workerd delivers a `MessageChannel` message without letting another request in),
+else `setImmediate`, or a `MessageChannel` round trip where there is none (a browser,
+for one). It never uses
 `scheduler.yield`: that resumes as a prioritized continuation ahead of ordinary tasks, so
 a job yielding through it would starve timers, messages and the fetch responses other
 jobs await. Only evaluation yields (an entailment closure included). Freezing the dataset before the job and serializing

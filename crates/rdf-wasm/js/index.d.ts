@@ -1542,8 +1542,11 @@ export interface AsyncJobError extends Error {
  */
 export function hasAsyncQueries(): boolean;
 
-/** The macrotask primitive asynchronous jobs yield through, or `undefined` when none exists. */
-export function asyncYieldPrimitive(): "setImmediate" | "MessageChannel" | undefined;
+/**
+ * The macrotask primitive asynchronous jobs yield through — `"setTimeout"` in a Cloudflare
+ * Worker, else `"setImmediate"` or `"MessageChannel"` — or `undefined` when none exists.
+ */
+export function asyncYieldPrimitive(): "setTimeout" | "setImmediate" | "MessageChannel" | undefined;
 
 /**
  * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)

@@ -138,9 +138,27 @@ const yielder = chooseYield();
 // `scheduler.yield()` is deliberately not a candidate. It resumes as a prioritized
 // continuation that runs ahead of ordinary tasks of the same priority, so a job that
 // keeps yielding through it never lets a timer, a message or a network task run — in a
-// browser that starves the very fetch responses a concurrent job awaits. Both primitives
-// below queue an ordinary task behind the ones already waiting.
+// browser that starves the very fetch responses a concurrent job awaits. Every primitive
+// below queues an ordinary task behind the ones already waiting.
+//
+// A Cloudflare Worker (workerd) is recognized by its documented `navigator.userAgent`,
+// "Cloudflare-Workers", and yields through `setTimeout(…, 0)`, ahead of every other
+// check. Feature detection cannot tell it from a browser: it has `MessageChannel` and no
+// `setImmediate`, just as a page does. But workerd delivers a `MessageChannel` message
+// without returning to its event loop, so a job yielding through it lets no other request
+// into the isolate until it finishes: measured under workerd, a request sent while a
+// spinner yielded through a `MessageChannel` round trip was answered only after it, and
+// one sent while it yielded through `setTimeout(…, 0)` was answered between its turns.
+// The check comes before `setImmediate` so a Worker built with Node.js compatibility,
+// which adds one, still yields through the timer.
 function chooseYield() {
+  if (globalThis.navigator?.userAgent === "Cloudflare-Workers" && typeof globalThis.setTimeout === "function") {
+    const setTimeout = globalThis.setTimeout;
+    return {
+      name: "setTimeout",
+      once: () => new Promise((resolve) => setTimeout(resolve, 0)),
+    };
+  }
   if (typeof globalThis.setImmediate === "function") {
     const setImmediate = globalThis.setImmediate;
     return {
@@ -304,8 +322,9 @@ export function assertNotPoisoned() {
 }
 
 /**
- * The macrotask primitive jobs yield through — `"setImmediate"` or `"MessageChannel"`,
- * chosen once when this module loads — or `undefined` when neither exists.
+ * The macrotask primitive jobs yield through — `"setTimeout"` in a Cloudflare Worker,
+ * else `"setImmediate"` or `"MessageChannel"`, chosen once when this module loads — or
+ * `undefined` when none exists.
  */
 export function asyncYieldPrimitive() {
   return yielder?.name;

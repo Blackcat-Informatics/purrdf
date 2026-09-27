@@ -1456,6 +1456,41 @@ test("setImmediate is preferred where it exists, beside a scheduler.yield", () =
   assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
 });
 
+// A Cloudflare Worker has no `setImmediate` and a `MessageChannel` whose delivery never
+// returns to workerd's event loop, so a job yielding through it lets no other request
+// in. The preload gives the process that shape (the delivery modelled as a microtask,
+// so no timer runs either) and the Workers user agent.
+test("a Cloudflare Worker yields through setTimeout, which lets a timer run during queryAsync", () => {
+  const report = runChild("workerd-preload.mjs", "workerd-child.mjs");
+  assert.equal(report.setImmediate, "undefined");
+  assert.equal(report.userAgent, "Cloudflare-Workers");
+  // The oracle can see starvation: turns through the installed MessageChannel run no timer.
+  assert.ok(report.starvedTurns > 0);
+  assert.equal(report.starvedTicks, 0, "yielding through the Worker-shaped MessageChannel starves the timer");
+  assert.equal(report.hasAsyncQueries, true);
+  assert.equal(report.primitive, "setTimeout");
+  assert.equal(report.syncCount, expectedCrossCount(1000));
+  assert.equal(report.syncTicks, 0, "the synchronous control never turns the event loop");
+  assert.equal(report.asyncComplete, true);
+  assert.equal(report.asyncCount, report.syncCount);
+  assert.ok(report.yields > 0);
+  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
+});
+
+// The control: the same Worker-shaped globals without the Workers user agent (a browser
+// page's shape) keep the MessageChannel, and through this starving one the timer never
+// runs — so the tick count above is the primitive's doing, not the workload's.
+test("without the Workers user agent the Worker-shaped MessageChannel is kept, and starves the timer", () => {
+  const report = runChild("workerd-preload.mjs", "workerd-child.mjs", { PURRDF_TEST_WORKERS_USER_AGENT: "0" });
+  assert.equal(report.setImmediate, "undefined");
+  assert.notEqual(report.userAgent, "Cloudflare-Workers");
+  assert.equal(report.primitive, "MessageChannel");
+  assert.equal(report.asyncComplete, true);
+  assert.equal(report.asyncCount, expectedCrossCount(1000));
+  assert.ok(report.yields > 0, "the job yielded through the MessageChannel");
+  assert.equal(report.asyncTicks, 0, "no timer ran while the job yielded through it");
+});
+
 // ---------------------------------------------------------------------------
 // The governor corpus's federated vectors, through the asynchronous lane
 // ---------------------------------------------------------------------------
