@@ -49,8 +49,9 @@ pub enum ShapesError {
     /// A shape of the shapes graph reaches a construct of the SHACL JavaScript
     /// Extensions (SHACL-JS). See [`ShaclJsRefusal`].
     ShaclJs(ShaclJsRefusal),
-    /// A SHACL-SPARQL or SHACL-AF declaration of the shapes graph violates a syntax
-    /// rule, whether or not any shape reaches it. See [`IllFormedShapesGraph`].
+    /// A SHACL-SPARQL or SHACL-AF declaration of the shapes graph, or a node's
+    /// `sh:message` values (`message-datatype`), violates a syntax rule, whether or not
+    /// any shape reaches it. See [`IllFormedShapesGraph`].
     IllFormed(IllFormedShapesGraph),
     /// A query the engine executes with pre-bound variables violates a pre-binding
     /// restriction. See [`PrebindingViolation`].
@@ -245,8 +246,9 @@ impl fmt::Display for IllFormedDeclaration {
     }
 }
 
-/// A shapes graph refused because SHACL-SPARQL or SHACL-AF declarations in it violate
-/// syntax rules, with every violation the graph contains, in a deterministic order.
+/// A shapes graph refused because SHACL-SPARQL or SHACL-AF declarations in it — or the
+/// `sh:message` values of a node (SHACL 1.2 Core `message-datatype`) — violate syntax
+/// rules, with every violation the graph contains, in a deterministic order.
 ///
 /// SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs": "If the shapes graph contains
 /// ill-formed nodes, then the result of the validation process is undefined. A SHACL

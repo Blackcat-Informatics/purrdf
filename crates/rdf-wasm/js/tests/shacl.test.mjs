@@ -65,6 +65,21 @@ test("wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformance
   assert.throws(() => shaclValidateToSarif(warning, DATA, undefined, ["Violation"]));
 });
 
+// SHACL 1.2 Core section 6.7.1.4: every report states sh:shapesGraphWellFormed — true,
+// or false for an empty sh:in list the approved W3C tests require validating.
+test("wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed", () => {
+  const withIn = (members) =>
+    `@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in ${members} .
+`;
+  const data = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+  const stated = (shapes) =>
+    JSON.parse(shaclValidateToSarif(shapes, data)).runs[0].properties.shaclShapesGraphWellFormed;
+  assert.equal(stated(withIn("( <http://example.org/a> )")), true);
+  assert.equal(stated(withIn("( )")), false);
+});
+
 // SHACL 1.2 Core section 6.3's subClassOfInShapesGraph: a class target reached only through
 // the shapes graph's rdfs:subClassOf fires with the parameter and not without it; the
 // control, a direct instance of the target class, fires both ways.

@@ -68,6 +68,10 @@ pub mod sh {
     /// conformance-disallow set holds.
     pub const CONFORMANCE_DISALLOWS: &str = "http://www.w3.org/ns/shacl#conformanceDisallows";
 
+    /// `sh:shapesGraphWellFormed` — whether the processor checked, and was certain, that
+    /// the shapes graph of the validation is well-formed.
+    pub const SHAPES_GRAPH_WELL_FORMED: &str = "http://www.w3.org/ns/shacl#shapesGraphWellFormed";
+
     // ── Shape type terms ───────────────────────────────────────────────────────
 
     /// `sh:NodeShape` — the class of node shapes.

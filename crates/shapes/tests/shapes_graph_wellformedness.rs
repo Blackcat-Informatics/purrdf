@@ -2192,3 +2192,64 @@ fn a_literal_sh_shape_value_is_refused_and_an_iri_one_targets() {
         )]
     );
 }
+
+/// SHACL 1.2 Core, Appendix A, `message-datatype`: "A subject should neither have more
+/// than one value for sh:message with the same language tag, nor multiple values with
+/// datatype xsd:string" — read as a must, so such a subject is ill-formed and refused
+/// typed, naming the rule (`SPARQLConstraint-message-datatype` on a SPARQL-based
+/// constraint). The neighbour holds one value per tag, one untagged string and two
+/// `rdf:HTML` values, loads, and its messages are observed on the result.
+#[test]
+fn a_repeated_message_language_is_ill_formed_and_one_per_language_loads() {
+    let shape = |messages: &str| {
+        format!(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal ;
+               sh:message {messages} ."
+        )
+    };
+    for (messages, needle) in [
+        ("\"one\" , \"two\"", "2 values with datatype xsd:string"),
+        ("\"eins\"@de , \"zwei\"@DE", "language tag \"de\""),
+        ("\"a\"@en--ltr , \"b\"@en--rtl", "language tag \"en\""),
+    ] {
+        let error = load_error(&shape(messages));
+        let refusal = error
+            .as_ill_formed()
+            .unwrap_or_else(|| panic!("typed ShapesError::IllFormed: {error:?}"));
+        assert_eq!(refusal.violations().len(), 1, "{refusal}");
+        assert_eq!(
+            refusal.violations()[0].rule(),
+            Some("message-datatype"),
+            "{refusal}"
+        );
+        assert!(refusal.to_string().contains(needle), "{refusal}");
+    }
+
+    let error = load_error(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:sparql [ sh:select \"SELECT $this WHERE { FILTER(false) }\" ;
+                       sh:message \"one\" , \"two\" ] .",
+    );
+    let refusal = error
+        .as_ill_formed()
+        .unwrap_or_else(|| panic!("typed ShapesError::IllFormed: {error:?}"));
+    assert_eq!(
+        refusal.violations()[0].rule(),
+        Some("SPARQLConstraint-message-datatype"),
+        "{refusal}"
+    );
+
+    let report = validate(
+        &shape(
+            "\"plain\" , \"Englisch\"@en , \"Deutsch\"@de , \
+             \"<b>one</b>\"^^rdf:HTML , \"<b>two</b>\"^^rdf:HTML",
+        ),
+        "ex:a ex:p 1 .",
+    );
+    assert_eq!(report.results.len(), 1, "the shape reports ex:a");
+    assert_eq!(
+        report.results[0].messages.len(),
+        5,
+        "every message is copied"
+    );
+}

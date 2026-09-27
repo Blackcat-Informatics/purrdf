@@ -188,7 +188,8 @@ unsafe fn cstr_array<'a>(
 /// `sh:and` / `sh:or` / `sh:xone` check alike. `count == 0` (the array may then be
 /// NULL) is SHACL's default set, `sh:Violation`, `sh:Warning` and `sh:Info`; a
 /// value that is not an absolute IRI is a `ParseError`. The SARIF run carries
-/// `properties.shaclConforms` and `properties.shaclConformanceDisallows`, because the
+/// `properties.shaclConforms`, `properties.shaclConformanceDisallows` and
+/// `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`), because the
 /// results alone cannot say whether the data conforms: an `sh:Debug` / `sh:Trace`
 /// result (SARIF `kind` `informational`, `level` `none`) appears in the log of a
 /// conforming report. A result's `message.text` is its untagged `sh:resultMessage`
@@ -1716,6 +1717,11 @@ ex:StatusShape a sh:NodeShape ;
         let off = run(false);
         assert!(off.contains("http://example.org/bob"), "{off}");
         assert!(!off.contains("http://example.org/alice"), "{off}");
+        // Every report states sh:shapesGraphWellFormed (SHACL 1.2 Core §6.7.1.4).
+        assert!(
+            off.contains("\"shaclShapesGraphWellFormed\": true"),
+            "{off}"
+        );
         let on = run(true);
         assert!(on.contains("http://example.org/bob"), "{on}");
         assert!(on.contains("http://example.org/alice"), "{on}");

@@ -75,6 +75,12 @@ pub const PROP_SHACL_CONFORMS: &str = "shaclConforms";
 /// [`ConformanceDisallows::levels`]: purrdf_shapes::report::ConformanceDisallows::levels
 pub const PROP_SHACL_CONFORMANCE_DISALLOWS: &str = "shaclConformanceDisallows";
 
+/// The run-level property carrying the report's `sh:shapesGraphWellFormed` (SHACL 1.2
+/// Core §6.7.1.4: a processor that checks the shapes graph "SHOULD use the property
+/// sh:shapesGraphWellFormed to inform the consumer of the validation report"). Present
+/// exactly when the report states it — every report a validation produces.
+pub const PROP_SHACL_SHAPES_GRAPH_WELL_FORMED: &str = "shaclShapesGraphWellFormed";
+
 /// Optional source context that upgrades results from logical-only to
 /// source-traced. All fields are optional — absent context degrades gracefully
 /// to logical locations (the SARIF spec permits results with no physical span).
@@ -216,6 +222,12 @@ pub fn build_report_sarif_with(
         PROP_SHACL_CONFORMANCE_DISALLOWS,
         report.conformance_disallows.iris(),
     );
+    if let Some(well_formed) = report.shapes_graph_well_formed {
+        run.properties.insert(
+            PROP_SHACL_SHAPES_GRAPH_WELL_FORMED,
+            serde_json::Value::Bool(well_formed),
+        );
+    }
     SarifLog::single_run(run)
 }
 
@@ -769,6 +781,7 @@ mod tests {
                 None,
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let r = &log.runs[0].results[0];
@@ -838,6 +851,39 @@ mod tests {
         let json = crate::model::to_json_pretty(&log);
         assert!(json.contains("\"kind\": \"informational\""));
         assert!(json.contains("\"level\": \"none\""));
+    }
+
+    /// A report log carries the report's `sh:shapesGraphWellFormed` exactly when the
+    /// report states it, with its value; a report no validation produced states nothing.
+    #[test]
+    fn sarif_run_properties_carry_shapes_graph_well_formed() {
+        let empty = || {
+            ValidationReport::from_results(
+                Vec::new(),
+                purrdf_shapes::report::ConformanceDisallows::default(),
+            )
+        };
+        let unstated = build_report_sarif(&empty(), &SarifOptions::default());
+        assert_eq!(
+            unstated.runs[0]
+                .properties
+                .0
+                .get(PROP_SHACL_SHAPES_GRAPH_WELL_FORMED),
+            None
+        );
+        for well_formed in [true, false] {
+            let log = build_report_sarif(
+                &empty().with_shapes_graph_well_formed(well_formed),
+                &SarifOptions::default(),
+            );
+            assert_eq!(
+                log.runs[0]
+                    .properties
+                    .0
+                    .get(PROP_SHACL_SHAPES_GRAPH_WELL_FORMED),
+                Some(&serde_json::Value::Bool(well_formed))
+            );
+        }
     }
 
     /// A report log states `sh:conforms` and the set it was judged against: a
@@ -992,6 +1038,7 @@ mod tests {
                 None,
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let text = &log.runs[0].results[0].message.text;
@@ -1033,6 +1080,7 @@ mod tests {
                 ),
             ],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let run = &log.runs[0];
@@ -1073,6 +1121,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -1114,6 +1163,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -1144,6 +1194,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let related = &log.runs[0].results[0].related_locations;
@@ -1173,6 +1224,7 @@ mod tests {
             conforms: false,
             results: vec![r],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let path_loc = log.runs[0].results[0].locations[0]
@@ -1222,6 +1274,7 @@ mod tests {
                 ),
             ],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let json = report_to_sarif_string(&report, &SarifOptions::default());
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -1257,6 +1310,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let rule = &log.runs[0].tool.driver.rules[0];
@@ -1292,6 +1346,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -1348,6 +1403,7 @@ mod tests {
                 Some("bad"),
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -1411,6 +1467,7 @@ mod tests {
             conforms: true,
             results: vec![],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let none = build_report_sarif(&report, &SarifOptions::default());
         assert_eq!(none.runs[0].invocations, [] as [_; 0]);
@@ -1456,6 +1513,7 @@ mod tests {
             conforms: false,
             results: vec![vr],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
 
         // The numeric id's Display form is the interner ordinal (`unit` + index) —

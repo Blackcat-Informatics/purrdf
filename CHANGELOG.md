@@ -10,6 +10,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, python, wasm, capi:** every validation report states
+  `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4: a processor that checks the
+  shapes graph "SHOULD use the property sh:shapesGraphWellFormed to inform the consumer
+  of the validation report"). It is `true`, since an ill-formed shapes graph is refused
+  before validation, except for a shapes graph with an empty `sh:in` or `sh:xone` list:
+  Appendix A's `in-minListLength` / `xone-minListLength` say "Each such list SHOULD
+  have at least one member", but the approved W3C tests `core/node/in-002`, `in-003`,
+  `xone-002` and `xone-003` require such a graph to be validated, so it is, and its
+  report states `false`. `ValidationReport::shapes_graph_well_formed` (`None` for a
+  report assembled by `from_results`, which states nothing) and
+  `with_shapes_graph_well_formed`; `Shapes::is_well_formed`; the SARIF run property
+  `shaclShapesGraphWellFormed`; Python `ValidationReport.shapes_graph_well_formed` and
+  the `shapes.validate` dict key `shapes_graph_well_formed`. Report bytes change by the
+  one added triple: the first-party corpus expectations and the change-path golden
+  each gain exactly that line, and no other byte moves.
+
+- **shapes (BREAKING):** a node whose `sh:message` values repeat a language tag, or
+  hold more than one `xsd:string`, is ill-formed and refused as
+  `ShapesError::IllFormed`, rule `message-datatype` (`SPARQLConstraint-message-datatype`
+  on a SPARQL-based constraint): "A subject should neither have more than one value for
+  sh:message with the same language tag, nor multiple values with datatype xsd:string",
+  read as a must. Tags compare case-insensitively and a direction does not make two
+  values of one tag distinct; `rdf:HTML` values are not limited. Such a node used to
+  load, and its results carried every message.
+
 - **shapes, validate, cli, python, wasm, capi (BREAKING for C):** SHACL 1.2 Core
   §6.3's `subClassOfInShapesGraph` ("SHACL processors SHOULD offer a parameter
   subClassOfInShapesGraph"), on every host. When set, the shapes graph's

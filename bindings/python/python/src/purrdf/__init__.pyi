@@ -1561,6 +1561,12 @@ class _ValidationReport:
 
     @property
     def conforms(self) -> bool: ...
+    # The report's sh:shapesGraphWellFormed (SHACL 1.2 Core section 6.7.1.4): True
+    # when the shapes graph is certainly well-formed, False for the one ill-formedness
+    # validated anyway (an empty sh:in or sh:xone list, which the approved W3C tests
+    # require validating), None for a report no validation produced.
+    @property
+    def shapes_graph_well_formed(self) -> bool | None: ...
     # Each result dict carries "messages": every sh:resultMessage, as
     # {"text": str, "language"?: str, "direction"?: "ltr" | "rtl", "datatype"?: str}.
     @property
@@ -1786,7 +1792,9 @@ class shapes:
     # results make the data non-conforming. `None` is SHACL's default set
     # (sh:Violation, sh:Warning, sh:Info); an empty sequence or a non-IRI raises
     # ValueError. The dict carries "conforms", "conformance_disallows" (the set the
-    # report was judged against) and "results", each result's "severity" being its
+    # report was judged against), "shapes_graph_well_formed" (the report's
+    # sh:shapesGraphWellFormed, as `ValidationReport.shapes_graph_well_formed`) and
+    # "results", each result's "severity" being its
     # IRI — sh:Debug and sh:Trace included, which the default set does not block —
     # and its "messages" EVERY sh:resultMessage, each {"text", and "language" /
     # "direction" / "datatype" when present}; a result carrying SHACL-SPARQL result

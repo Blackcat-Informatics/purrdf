@@ -1162,8 +1162,9 @@ fn evaluate_shape_focus_nodes(
 
 fn finish_report(
     mut results: Vec<crate::report::ValidationResult>,
-    disallows: &ConformanceDisallows,
+    shapes: &Shapes,
 ) -> ValidationReport {
+    let disallows = &shapes.validation_options.conformance_disallows;
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
     // message, severity, result annotations). The message, severity and annotation
     // tiebreakers make the ordering TOTAL: two results that agree on the first five components (e.g. several
@@ -1189,6 +1190,7 @@ fn finish_report(
     };
     results.sort_by_cached_key(sort_key);
     ValidationReport::from_results(results, disallows.clone())
+        .with_shapes_graph_well_formed(shapes.is_well_formed())
 }
 
 fn validate_with_plan_and_focus_filter<F>(
@@ -1233,10 +1235,7 @@ where
             |_| true,
         )?);
     }
-    Ok(finish_report(
-        all_results,
-        &shapes.validation_options.conformance_disallows,
-    ))
+    Ok(finish_report(all_results, shapes))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -1831,10 +1830,7 @@ impl PreparedValidator {
                 |_| true,
             )?);
         }
-        Ok(finish_report(
-            all_results,
-            &self.shapes.validation_options.conformance_disallows,
-        ))
+        Ok(finish_report(all_results, &self.shapes))
     }
 
     /// Validate only the supplied candidate focus nodes that match each shape's
@@ -2349,10 +2345,7 @@ impl PreparedValidator {
     fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
-            return Ok(finish_report(
-                Vec::new(),
-                &self.shapes.validation_options.conformance_disallows,
-            ));
+            return Ok(finish_report(Vec::new(), &self.shapes));
         }
         // The dual question, asked once for the whole focus set: not "shape, do
         // you contain this node?" once per (shape, focus node) pair, but "node,
@@ -2382,10 +2375,7 @@ impl PreparedValidator {
                 |focus| claimed.contains(focus),
             )?);
         }
-        Ok(finish_report(
-            all_results,
-            &self.shapes.validation_options.conformance_disallows,
-        ))
+        Ok(finish_report(all_results, &self.shapes))
     }
 }
 

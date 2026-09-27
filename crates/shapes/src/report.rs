@@ -459,6 +459,23 @@ pub struct ValidationReport {
     /// report graph echoes as `sh:conformanceDisallows` (see
     /// [`Self::to_dataset`]).
     pub conformance_disallows: ConformanceDisallows,
+    /// What the processor determined about the shapes graph's well-formedness, which
+    /// the report graph states as `sh:shapesGraphWellFormed` (see [`Self::to_dataset`]).
+    ///
+    /// SHACL 1.2 Core §6.7.1.4: "Implementations that do perform such checks (e.g., when
+    /// the shapes graph is installed in the system, or before or during the validation)
+    /// SHOULD use the property sh:shapesGraphWellFormed to inform the consumer of the
+    /// validation report about this fact. If a SHACL instance of sh:ValidationReport in
+    /// the results graph has true as the value for sh:shapesGraphWellFormed then the
+    /// processor was certain that the shapes graph that was used for the validation
+    /// process is well-formed." PurRDF checks every shapes graph before validating it and
+    /// refuses an ill-formed one, so every report the engine produces states `Some`:
+    /// `true`, or `false` for the one ill-formedness the W3C suite requires a validation
+    /// of — an empty `sh:in` or `sh:xone` list (`in-minListLength`,
+    /// `xone-minListLength`), see [`crate::shapes::Shapes::is_well_formed`]. `None` — a
+    /// report assembled by [`Self::from_results`] rather than by a validation — states
+    /// nothing.
+    pub shapes_graph_well_formed: Option<bool>,
 }
 
 /// The graph a blank node a validation report carries was read from.
@@ -589,7 +606,16 @@ impl ValidationReport {
             conforms,
             results,
             conformance_disallows: disallows,
+            shapes_graph_well_formed: None,
         }
+    }
+
+    /// This report stating `sh:shapesGraphWellFormed` as `well_formed` (see
+    /// [`Self::shapes_graph_well_formed`]).
+    #[must_use]
+    pub const fn with_shapes_graph_well_formed(mut self, well_formed: bool) -> Self {
+        self.shapes_graph_well_formed = Some(well_formed);
+        self
     }
 
     /// Materialize the report graph as a frozen PurRDF [`RdfDataset`].
@@ -666,6 +692,7 @@ impl ValidationReport {
                 conforms: self.conforms,
                 results,
                 conformance_disallows: self.conformance_disallows.clone(),
+                shapes_graph_well_formed: self.shapes_graph_well_formed,
             },
             labels,
         )
@@ -721,6 +748,21 @@ impl ValidationReport {
                     RdfTerm::iri(level.iri()),
                 );
             }
+        }
+
+        // _:report sh:shapesGraphWellFormed "true"^^xsd:boolean — SHACL 1.2 Core
+        // §6.7.1.4: a processor that checks the shapes graph "SHOULD use the property
+        // sh:shapesGraphWellFormed to inform the consumer of the validation report".
+        if let Some(well_formed) = self.shapes_graph_well_formed {
+            push_triple(
+                &mut builder,
+                report_subj.clone(),
+                sh::SHAPES_GRAPH_WELL_FORMED,
+                RdfTerm::Literal(::purrdf::RdfLiteral::typed(
+                    if well_formed { "true" } else { "false" },
+                    xsd::BOOLEAN,
+                )),
+            );
         }
 
         for (i, r) in self.results.iter().enumerate() {
@@ -1415,6 +1457,7 @@ mod tests {
             conforms: false,
             results: vec![make_result()],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: Some(true),
         };
 
         let nt = report.to_ntriples();
@@ -1449,6 +1492,7 @@ mod tests {
             conforms: false,
             results: vec![parent],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
 
         let nt = report.to_ntriples();
@@ -1462,6 +1506,7 @@ mod tests {
             conforms: false,
             results: vec![detail],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         assert!(
             parsed.is_disjoint(&as_report.result_tuples()),
@@ -1668,6 +1713,7 @@ mod tests {
             conforms: false,
             results,
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         }
     }
 
@@ -1746,6 +1792,7 @@ mod tests {
             conforms: true,
             results: vec![],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
 
         let direct = report.to_dataset();
@@ -1808,6 +1855,7 @@ mod tests {
                 conforms: false,
                 results: vec![make_result()],
                 conformance_disallows: ConformanceDisallows::default(),
+                shapes_graph_well_formed: None,
             };
             report.results[0].focus_node = Term::blank(hostile);
 
@@ -1873,6 +1921,7 @@ mod tests {
             conforms: false,
             results: vec![make_result()],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         // `r1` is one past the last result index, and `reports` is not `report`:
         // neither is a label this report mints.
@@ -1941,6 +1990,7 @@ mod tests {
             conforms: false,
             results: vec![first, second],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
         let (labelled, labels) = report.with_report_blank_labels();
         assert_eq!(labelled.results[0].focus_node, Term::blank("dg0"));
@@ -1981,6 +2031,7 @@ mod tests {
             conforms: true,
             results: vec![],
             conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
         };
 
         let nt = report.to_ntriples();

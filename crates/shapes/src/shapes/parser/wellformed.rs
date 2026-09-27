@@ -195,6 +195,91 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// Every subject of the shapes graph whose `sh:message` values break the second
+    /// sentence of the `message-datatype` syntax rule, one violation per subject.
+    ///
+    /// SHACL 1.2 Core, Appendix A, `message-datatype`: "The values of sh:message are
+    /// literals with datatype xsd:string, rdf:dirLangString, rdf:langString, or rdf:HTML.
+    /// A subject should neither have more than one value for sh:message with the same
+    /// language tag, nor multiple values with datatype xsd:string." SHACL 1.2 SPARQL
+    /// Extensions states the same for a SPARQL-based constraint
+    /// (`SPARQLConstraint-message-datatype`). PurRDF reads the should as a must, so such a
+    /// subject is ill-formed and the load fails. Language tags compare case-insensitively
+    /// (BCP 47), and a direction does not make two values of one tag distinct: "the same
+    /// language tag" is the tag. `rdf:HTML` values carry no tag and are not limited. The
+    /// first sentence — a value that is not such a literal — is judged where the value is
+    /// read.
+    pub(crate) fn check_message_uniqueness(&self) -> Vec<crate::error::IllFormedDeclaration> {
+        let mut by_subject: std::collections::BTreeMap<String, (Term, Vec<Term>)> =
+            std::collections::BTreeMap::new();
+        for (subject, _, value) in self.quads_with(None, Some(sh::MESSAGE), None) {
+            by_subject
+                .entry(subject.to_string())
+                .or_insert_with(|| (subject, Vec::new()))
+                .1
+                .push(value);
+        }
+        let sparql_constraints: FastSet<Term> = self
+            .quads_with(None, Some(sh::SPARQL), None)
+            .into_iter()
+            .map(|(_, _, node)| node)
+            .collect();
+        let mut violations = Vec::new();
+        for (rendered, (subject, mut values)) in by_subject {
+            if values.len() < 2 {
+                continue;
+            }
+            values.sort_by(crate::term::canonical_cmp);
+            values.dedup();
+            let mut strings = 0usize;
+            let mut tags: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for value in &values {
+                let Term::Literal(literal) = value else {
+                    continue;
+                };
+                if let Some(tag) = literal.language() {
+                    *tags.entry(tag.to_ascii_lowercase()).or_default() += 1;
+                } else if literal.datatype_str() == xsd::STRING {
+                    strings += 1;
+                }
+            }
+            let repeated: Vec<&str> = tags
+                .iter()
+                .filter(|(_, count)| **count > 1)
+                .map(|(tag, _)| tag.as_str())
+                .collect();
+            if strings < 2 && repeated.is_empty() {
+                continue;
+            }
+            let mut what = Vec::new();
+            if strings > 1 {
+                what.push(format!("{strings} values with datatype xsd:string"));
+            }
+            for tag in repeated {
+                what.push(format!(
+                    "more than one value with the language tag \"{tag}\""
+                ));
+            }
+            let rule = if sparql_constraints.contains(&subject) {
+                "SPARQLConstraint-message-datatype"
+            } else {
+                "message-datatype"
+            };
+            violations.push(crate::error::IllFormedDeclaration::new(
+                format!("the node {rendered}"),
+                Some(rule),
+                format!(
+                    "its sh:message has {}; \"A subject should neither have more than one value \
+                     for sh:message with the same language tag, nor multiple values with \
+                     datatype xsd:string\"",
+                    what.join(" and ")
+                ),
+            ));
+        }
+        violations
+    }
+
     /// The shapes of the shapes graph, by SHACL 1.2 Core §2.1's definition, in
     /// canonical term order.
     fn spec_shapes(&self) -> Vec<Term> {

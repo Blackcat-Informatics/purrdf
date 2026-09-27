@@ -142,6 +142,7 @@ fn validate(
     let out = PyDict::new(py);
     out.set_item("conforms", report.conforms)?;
     out.set_item("conformance_disallows", report.conformance_disallows.iris())?;
+    out.set_item("shapes_graph_well_formed", report.shapes_graph_well_formed)?;
 
     let results = PyList::empty(py);
     for r in &report.results {
@@ -872,6 +873,15 @@ impl PyValidationReport {
     #[getter]
     fn conforms(&self) -> bool {
         self.inner.conforms
+    }
+
+    /// The report's `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4): `True` when the
+    /// processor is certain the shapes graph is well-formed, `False` for the one
+    /// ill-formedness it validates anyway (an empty `sh:in` or `sh:xone` list, which the
+    /// approved W3C tests require validating), `None` for a report no validation produced.
+    #[getter]
+    const fn shapes_graph_well_formed(&self) -> Option<bool> {
+        self.inner.shapes_graph_well_formed
     }
 
     #[getter]

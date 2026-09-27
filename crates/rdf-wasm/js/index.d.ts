@@ -1698,8 +1698,11 @@ export interface ShaclSarifMessage {
  * `conformanceDisallows` is the conformance-disallow set: the severities whose results
  * make the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
  * `sh:Warning`, `sh:Info`); an empty array or a value that is not an absolute IRI
- * throws. The log's run carries `properties.shaclConforms` (boolean) and
- * `properties.shaclConformanceDisallows` (the set the report was judged against),
+ * throws. The log's run carries `properties.shaclConforms` (boolean),
+ * `properties.shaclConformanceDisallows` (the set the report was judged against) and
+ * `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`:
+ * `true`, or `false` for a shapes graph with an empty `sh:in` / `sh:xone` list, which
+ * the approved W3C tests require validating),
  * because the results alone cannot say whether the data conforms: an `sh:Debug` or
  * `sh:Trace` result is SARIF `kind: "informational"` with `level: "none"` and appears in
  * the log of a conforming report, its IRI kept in `properties.shaclSeverity`.

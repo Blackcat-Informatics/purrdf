@@ -1241,6 +1241,20 @@ original label. The in-memory `results` keep the original labels. The blank
 nodes the report *mints* (the report node, one per result, and the interior
 nodes of a complex `sh:path`) are distinct from both label spaces.
 
+Every report a validation produces also states `sh:shapesGraphWellFormed`. SHACL
+1.2 Core §6.7.1.4 says a processor that checks the shapes graph "SHOULD use the
+property sh:shapesGraphWellFormed to inform the consumer of the validation report
+about this fact", and that `true` means "the processor was certain that the shapes
+graph that was used for the validation process is well-formed". PurRDF refuses an
+ill-formed shapes graph before validating, so the value is `true`, with one
+exception. The approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and
+`xone-003` require a shapes graph with an empty `sh:in` or `sh:xone` list to be
+validated, although Appendix A's `in-minListLength` and `xone-minListLength` say
+"Each such list SHOULD have at least one member". PurRDF validates such a graph as
+the suite requires, and its report states `false` rather than a certainty it does
+not have. `ValidationReport::shapes_graph_well_formed` carries the value, and the
+SARIF run carries it as `properties.shaclShapesGraphWellFormed`.
+
 ## SARIF output
 
 Validation reports stay structured in the engine; the SARIF 2.1.0 boundary is

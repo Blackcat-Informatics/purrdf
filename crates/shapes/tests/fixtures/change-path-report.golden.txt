@@ -18,6 +18,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case datatype
 ### results 2
@@ -39,6 +40,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case node_kind
 ### results 2
@@ -60,6 +62,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case min_count
 ### results 2
@@ -79,6 +82,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case max_count
 ### results 2
@@ -98,6 +102,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case min_inclusive
 ### results 2
@@ -119,6 +124,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case max_inclusive
 ### results 2
@@ -140,6 +146,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case min_exclusive
 ### results 2
@@ -161,6 +168,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case max_exclusive
 ### results 2
@@ -182,6 +190,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case min_length
 ### results 2
@@ -203,6 +212,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case max_length
 ### results 2
@@ -224,6 +234,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case pattern
 ### results 2
@@ -245,6 +256,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case language_in
 ### results 2
@@ -266,6 +278,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case unique_lang
 ### results 2
@@ -287,6 +300,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case equals
 ### results 4
@@ -324,6 +338,7 @@ _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
 _:report <http://www.w3.org/ns/shacl#result> _:r2 .
 _:report <http://www.w3.org/ns/shacl#result> _:r3 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case disjoint
 ### results 2
@@ -345,6 +360,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case less_than
 ### results 2
@@ -366,6 +382,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case less_than_or_equals
 ### results 2
@@ -387,6 +404,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case not
 ### results 2
@@ -406,6 +424,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case and
 ### results 2
@@ -425,6 +444,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case or
 ### results 2
@@ -444,6 +464,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case xone
 ### results 2
@@ -463,6 +484,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case node
 ### results 2
@@ -484,6 +506,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case property
 ### results 2
@@ -505,6 +528,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case qualified_min_count
 ### results 2
@@ -524,6 +548,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case qualified_max_count
 ### results 2
@@ -543,6 +568,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case closed
 ### results 2
@@ -564,6 +590,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case closed_by_types
 ### results 2
@@ -585,6 +612,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case has_value
 ### results 2
@@ -604,6 +632,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case in
 ### results 2
@@ -625,6 +654,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case reification_required
 ### results 2
@@ -646,6 +676,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case reifier_shapes
 ### results 2
@@ -681,6 +712,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case node_by_expression
 ### results 2
@@ -700,6 +732,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_predicate
 ### results 2
@@ -719,6 +752,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_inverse
 ### results 2
@@ -739,6 +773,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_sequence
 ### results 2
@@ -762,6 +797,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_alternative
 ### results 2
@@ -786,6 +822,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_zero_or_more
 ### results 2
@@ -808,6 +845,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_one_or_more
 ### results 2
@@ -828,6 +866,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case path_zero_or_one
 ### results 2
@@ -850,6 +889,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case min_list_length
 ### results 2
@@ -871,6 +911,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case max_list_length
 ### results 2
@@ -892,6 +933,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case unique_members
 ### results 2
@@ -929,6 +971,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case member_shape
 ### results 2
@@ -964,6 +1007,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case single_line
 ### results 2
@@ -985,6 +1029,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case root_class
 ### results 2
@@ -1006,6 +1051,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case some_value
 ### results 2
@@ -1025,6 +1071,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case subset_of
 ### results 2
@@ -1046,6 +1093,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case equals_path
 ### results 4
@@ -1083,6 +1131,7 @@ _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
 _:report <http://www.w3.org/ns/shacl#result> _:r2 .
 _:report <http://www.w3.org/ns/shacl#result> _:r3 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case disjoint_path
 ### results 2
@@ -1104,6 +1153,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case subset_of_path
 ### results 2
@@ -1125,6 +1175,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case less_than_path
 ### results 2
@@ -1146,6 +1197,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case less_than_or_equals_path
 ### results 2
@@ -1167,6 +1219,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case unique_values_for
 ### results 2
@@ -1184,6 +1237,7 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
 ### case class/validate_focus_nodes
 ### results 2
@@ -1205,4 +1259,5 @@ _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#shapesGraphWellFormed> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 
