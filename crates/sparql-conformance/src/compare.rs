@@ -371,6 +371,26 @@ fn encode_solution_set(
     Ok(purrdf_core::canonicalize(&dataset).nquads)
 }
 
+/// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
+/// N-Quads of its `encode_solution_set` encoding: one fresh blank node per row, one
+/// quad per bound cell, plus a row-ordinal quad when `ordered`.
+///
+/// Two sequences are equal under the comparer exactly when these strings are equal,
+/// so a snapshot that records this string pins a result up to the same blank-node
+/// relabelling (and, unless `ordered`, the same row reordering) the comparer allows.
+///
+/// # Errors
+///
+/// Returns the freeze diagnostic if the cells do not form a structurally valid
+/// dataset.
+pub fn canonical_solutions(
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ordered: bool,
+) -> Result<String, String> {
+    encode_solution_set(variables, rows, ordered)
+}
+
 /// Intern one [`TermValue`] into `builder`, recursively for triple terms.
 ///
 /// Every value blank node — top-level or nested in a triple term — is interned

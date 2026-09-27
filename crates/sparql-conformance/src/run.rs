@@ -541,72 +541,13 @@ pub fn run(
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::QueryEval => {
-            let mut dataset = load_dataset(case)?;
-            // OWL-Direct is query-directed: augment the RAW dataset with the DL
-            // entailments its basic graph pattern needs, then hand the augmented
-            // dataset to the UNMODIFIED engine (whose simple-entailment answers then
-            // coincide with the OWL Direct-Semantics certain answers).
-            if case.regime == Some(purrdf_entail::Regime::OwlDirect) {
-                let bgp = collect_query_bgp(&case.base, &query_text);
-                dataset = purrdf_entail::materialize_dl_reported(&dataset, &bgp)
-                    .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?
-                    .0;
-            }
-            // RIF entailment: the qt:data graph references one or more `.rif`
-            // documents via `rif:usedWithProfile`; parse each (plus its RDF
-            // imports) into a Horn rule set, forward-chain it over the RAW dataset,
-            // then hand the materialized dataset to the UNMODIFIED engine.
-            if case.regime == Some(purrdf_entail::Regime::Rif) {
-                let ruleset = build_rif_ruleset(case, &dataset)?;
-                dataset = purrdf_entail::materialize_rif(&dataset, &ruleset)
-                    .map_err(|e| format!("RIF entailment for {}: {e}", case.iri))?
-                    .0;
-            }
-            // Both the extension-function namespace and the standpoint predicate
-            // table are CALLER configuration (the engine has no defaults): the
-            // purrdf-extend suite's standpoint cases exercise `ext:heldIn` and the
-            // purrdf-list-functions suite the `ext:list*` functions, all spelled
-            // under the harness-configured example.org/ext/ namespace, against
-            // fixture data written in the same namespace — so the harness supplies
-            // that namespace plus its accordingTo/sharpens table here. (A gmeow
-            // deployment would supply its own gmeow IRIs instead — everything
-            // flows through configuration, not constants.) Harmless for the W3C
-            // suites, which never call the extension functions.
-            let parser_options = ParserOptions {
-                extension_fn_namespaces: vec![EXT_NS.to_owned()],
-                property_fn_namespaces: vec![REL_NS.to_owned()],
-                property_fn_iris: Vec::new(),
-            };
-            let engine = NativeSparqlEngine::new()
-                .with_standpoint_predicates(StandpointPredicates::new(
-                    format!("{EXT_NS}accordingTo"),
-                    format!("{EXT_NS}sharpens"),
-                ))
-                .with_loss_vocabulary(LossVocabulary::new(
-                    format!("{LOSS_NS}ProjectionLoss"),
-                    format!("{LOSS_NS}lossCode"),
-                    format!("{LOSS_NS}lostReifies"),
-                ));
+            let dataset = query_eval_dataset(case, &query_text)?;
+            let engine = query_eval_engine();
             let request = SparqlRequest {
                 query: &query_text,
                 base_iri: Some(&case.base),
                 substitutions: &[],
             };
-            // `purrdf:aggregateNamespace` (see `crate::manifest::SparqlTestCase`) is
-            // PER-CASE, unlike `EXT_NS`/`REL_NS`: unlike the property-function/
-            // extension-function namespaces (recognized only when the query text
-            // actually calls one), `AggregateRegistry::register_statistical_aggregates`
-            // registers ten IRIs unconditionally under its namespace, so registering it
-            // harness-wide would change the answer of any OTHER case (including a
-            // vendored W3C fixture) whose query happens to call `AGG(<iri>, …)` under
-            // that same namespace. Opt-in per case keeps every other case byte-for-byte
-            // unaffected — `None` here is the untouched behavior from before this field
-            // existed.
-            let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
-                let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
-                registry.register_statistical_aggregates(namespace);
-                registry
-            });
             // A federated case resolves `SERVICE` through the injected source; every case
             // (federated or not) carries the harness relation table for its OUTER
             // pattern — a call node inside a `SERVICE` body is refused at forwarding
@@ -615,28 +556,14 @@ pub fn run(
             // fixtures happen to spell no `REL_NS` predicate today, but the registry
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
-            // The declared parser options AND both registries together, as the one
-            // environment the text is read against — folded into a single
-            // `ExtensionEnv::new` call (rather than `ExtensionEnv::over`, which would
-            // silently drop `parser_options`) so the EXT_NS/REL_NS namespace
-            // declaration above and the registries below can never disagree about
-            // which predicates are calls.
-            let env = purrdf_sparql_eval::ExtensionEnv::new(
-                parser_options.clone(),
-                harness_relations().clone(),
-                aggregates.as_ref().map_or_else(
-                    || purrdf_sparql_eval::AggregateRegistry::EMPTY,
-                    Clone::clone,
-                ),
-            )
-            .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
+            let env = query_eval_env(case)?;
             let options = QueryOptions::new().with_env(&env);
             let result = match remote {
                 Some(source) => engine.query_with_source(&dataset, request, source, options),
                 None => engine.query_with_options_view(&*dataset, request, options),
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
-            let ordered = query_is_top_level_ordered(&query_text, &parser_options);
+            let ordered = query_eval_is_ordered(&query_text);
             Ok(RunOutcome::Eval { result, ordered })
         }
         TestKind::UpdateEval => {
@@ -665,6 +592,125 @@ pub fn run(
         }
         TestKind::Unknown => Err(format!("unmodeled test type for {}", case.iri)),
     }
+}
+
+/// The dataset a `QueryEvaluationTest` is evaluated over: the case's
+/// [`load_dataset`], further augmented for the two query-directed regimes.
+///
+/// Public so a differential corpus that re-evaluates a suite case evaluates it over
+/// exactly the dataset [`run`] does.
+///
+/// # Errors
+///
+/// Returns a message on any load, parse, or entailment failure.
+pub fn query_eval_dataset(
+    case: &SparqlTestCase,
+    query_text: &str,
+) -> Result<Arc<RdfDataset>, String> {
+    let mut dataset = load_dataset(case)?;
+    // OWL-Direct is query-directed: augment the RAW dataset with the DL
+    // entailments its basic graph pattern needs, then hand the augmented
+    // dataset to the UNMODIFIED engine (whose simple-entailment answers then
+    // coincide with the OWL Direct-Semantics certain answers).
+    if case.regime == Some(purrdf_entail::Regime::OwlDirect) {
+        let bgp = collect_query_bgp(&case.base, query_text);
+        dataset = purrdf_entail::materialize_dl_reported(&dataset, &bgp)
+            .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?
+            .0;
+    }
+    // RIF entailment: the qt:data graph references one or more `.rif`
+    // documents via `rif:usedWithProfile`; parse each (plus its RDF
+    // imports) into a Horn rule set, forward-chain it over the RAW dataset,
+    // then hand the materialized dataset to the UNMODIFIED engine.
+    if case.regime == Some(purrdf_entail::Regime::Rif) {
+        let ruleset = build_rif_ruleset(case, &dataset)?;
+        dataset = purrdf_entail::materialize_rif(&dataset, &ruleset)
+            .map_err(|e| format!("RIF entailment for {}: {e}", case.iri))?
+            .0;
+    }
+    Ok(dataset)
+}
+
+/// The parse-time namespace declarations every `QueryEvaluationTest` is read with.
+///
+/// Both the extension-function namespace and the standpoint predicate table are
+/// CALLER configuration (the engine has no defaults): the purrdf-extend suite's
+/// standpoint cases exercise `ext:heldIn` and the purrdf-list-functions suite the
+/// `ext:list*` functions, all spelled under the harness-configured example.org/ext/
+/// namespace, against fixture data written in the same namespace — so the harness
+/// supplies that namespace here. (A gmeow deployment would supply its own gmeow IRIs
+/// instead — everything flows through configuration, not constants.) Harmless for the
+/// W3C suites, which never call the extension functions.
+#[must_use]
+pub fn query_eval_parser_options() -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: vec![EXT_NS.to_owned()],
+        property_fn_namespaces: vec![REL_NS.to_owned()],
+        property_fn_iris: Vec::new(),
+    }
+}
+
+/// The engine every `QueryEvaluationTest` runs on: the standpoint predicate table and
+/// the loss vocabulary the first-party suites are written against, both under the
+/// harness's example.org namespaces.
+#[must_use]
+pub fn query_eval_engine() -> NativeSparqlEngine {
+    NativeSparqlEngine::new()
+        .with_standpoint_predicates(StandpointPredicates::new(
+            format!("{EXT_NS}accordingTo"),
+            format!("{EXT_NS}sharpens"),
+        ))
+        .with_loss_vocabulary(LossVocabulary::new(
+            format!("{LOSS_NS}ProjectionLoss"),
+            format!("{LOSS_NS}lossCode"),
+            format!("{LOSS_NS}lostReifies"),
+        ))
+}
+
+/// The extension environment a `QueryEvaluationTest` is read and evaluated against:
+/// [`query_eval_parser_options`], [`harness_relations`], and the case's own
+/// statistical-aggregate registry when it declares one.
+///
+/// `purrdf:aggregateNamespace` (see `crate::manifest::SparqlTestCase`) is PER-CASE,
+/// unlike `EXT_NS`/`REL_NS`: unlike the property-function/extension-function
+/// namespaces (recognized only when the query text actually calls one),
+/// `AggregateRegistry::register_statistical_aggregates` registers ten IRIs
+/// unconditionally under its namespace, so registering it harness-wide would change
+/// the answer of any OTHER case (including a vendored W3C fixture) whose query happens
+/// to call `AGG(<iri>, …)` under that same namespace. Opt-in per case keeps every
+/// other case byte-for-byte unaffected.
+///
+/// The declared parser options AND both registries are folded into a single
+/// `ExtensionEnv::new` call (rather than `ExtensionEnv::over`, which would silently
+/// drop the parser options) so the namespace declaration and the registries can never
+/// disagree about which predicates are calls.
+///
+/// # Errors
+///
+/// Returns a message if the declarations do not read as one environment.
+pub fn query_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
+    let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        registry.register_statistical_aggregates(namespace);
+        registry
+    });
+    purrdf_sparql_eval::ExtensionEnv::new(
+        query_eval_parser_options(),
+        harness_relations().clone(),
+        aggregates.as_ref().map_or_else(
+            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
+            Clone::clone,
+        ),
+    )
+    .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))
+}
+
+/// Whether `query_text` is a `SELECT` whose top-level `ORDER BY` makes its row order
+/// observable, read with [`query_eval_parser_options`] — the `ordered` flag [`run`]
+/// hands the comparer.
+#[must_use]
+pub fn query_eval_is_ordered(query_text: &str) -> bool {
+    query_is_top_level_ordered(query_text, &query_eval_parser_options())
 }
 
 /// The `LOAD` source every update case runs with: the network the suite assumes, in which
