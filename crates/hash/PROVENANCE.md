@@ -44,6 +44,9 @@ ported or consulted, in any language.
   consulted, in any language or from memory. The design, the key schedule
   and the measured decision to ship an AES path are recorded in
   `src/fixed.rs`, `src/fixed/*.rs` and `benches/hasher.rs`.
+  The terminal tagged-slice operation was added for PurRDF's primary IRI
+  index. Its own avalanche, sparse-key, corpus and distribution tests cover
+  both the portable and AES functions; it is not a content identity.
 - **Instruction semantics** — the Rust `core::arch` reference
   (doc.rust-lang.org) for the x86 SHA, `pclmulqdq` and `aesenc` intrinsics
   and the AArch64 SHA1, CRC32, PMULL, `vaeseq_u8` and `vaesmcq_u8`
@@ -86,6 +89,8 @@ These two files record what this crate's own portable and AES table-hash
 functions answered when they were written. Their `oracle` header names
 purrdf-hash itself. No third-party output is involved, and a replay proves
 stability across targets and edits rather than correctness.
+They include streaming `Hasher` operations and the terminal tagged-slice
+operation used by the RDF interner.
 `tests/fixed_hasher.rs` writes them when `PURRDF_RECORD_FIXED_HASHER=1` is
 set.
 

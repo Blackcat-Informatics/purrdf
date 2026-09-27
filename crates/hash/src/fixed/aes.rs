@@ -39,14 +39,16 @@ fn quad(bytes: &[u8], at: usize) -> [Block; 4] {
 
 /// Compresses a slice of more than 16 bytes to two words.
 ///
-/// Four 128-bit lanes each take one 16-byte block of every 64-byte step as
+/// For 17–32 bytes, the first and last sixteen bytes feed two lanes. Each
+/// takes two AES rounds before their outputs are XOR-ed. For longer slices,
+/// four 128-bit lanes each take one 16-byte block of every 64-byte step as
 /// `lane = R(lane ⊕ block, key)`, where `R` is one AES round. Steps run from
 /// the start while more than 64 bytes remain, and the final step is the last
-/// 64 bytes. For 17–32 bytes, the first and last sixteen bytes feed two
-/// lanes. For 33–64 bytes, the first 32 and last 32 feed all four.
+/// 64 bytes. For 33–64 bytes, the first 32 and last 32 feed all four.
 ///
-/// Each lane then takes one more round on its own, `w = R(lane, f)`, before
-/// any lanes meet. The merge is `R(w0 ⊕ w1, m0) ⊕ R(w2 ⊕ w3, m1)`.
+/// For slices over 32 bytes, each lane then takes one more round on its own,
+/// `w = R(lane, f)`, before any lanes meet. The merge is
+/// `R(w0 ⊕ w1, m0) ⊕ R(w2 ⊕ w3, m1)`.
 ///
 /// The extra round is what makes the merge sound. The first design XOR-ed a
 /// lane that had one round into a lane that had two. Sparse inputs then
@@ -59,12 +61,25 @@ fn quad(bytes: &[u8], at: usize) -> [Block; 4] {
 pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
     let len = bytes.len();
     debug_assert!(len > 16);
+    if len <= 32 {
+        // The common IRI case needs only the first and last 16 bytes. Two
+        // rounds per lane diffuse every input byte before the lanes meet;
+        // the caller's folded multiply mixes the two output words again.
+        let (low, high) = AES_LANE_INIT[0];
+        let first = Block::from_words(low, high)
+            .xor(block(bytes, 0))
+            .round(Block::from_words(AES_LANE_KEY[0].0, AES_LANE_KEY[0].1))
+            .round(Block::from_words(AES_FINAL_KEY[0].0, AES_FINAL_KEY[0].1));
+        let (low, high) = AES_LANE_INIT[1];
+        let last = Block::from_words(low, high)
+            .xor(block(bytes, len - 16))
+            .round(Block::from_words(AES_LANE_KEY[1].0, AES_LANE_KEY[1].1))
+            .round(Block::from_words(AES_FINAL_KEY[1].0, AES_FINAL_KEY[1].1));
+        return first.xor(last).words();
+    }
     let keys = AES_LANE_KEY.map(|(low, high)| Block::from_words(low, high));
     let mut lanes = AES_LANE_INIT.map(|(low, high)| Block::from_words(low, high));
-    if len <= 32 {
-        lanes[0] = lanes[0].xor(block(bytes, 0)).round(keys[0]);
-        lanes[1] = lanes[1].xor(block(bytes, len - 16)).round(keys[1]);
-    } else if len <= 64 {
+    if len <= 64 {
         step(
             &mut lanes,
             &keys,

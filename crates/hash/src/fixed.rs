@@ -45,8 +45,9 @@
 //!
 //! * integers are one fold;
 //! * slices of 0–16 bytes are two independent folds plus a length term;
-//! * longer slices are first compressed by four independent lanes (folds,
-//!   or AES rounds on an AES build);
+//! * slices of 17–32 bytes use two folded products or two AES lanes;
+//! * slices over 32 bytes use four independent lanes (folds, or AES rounds
+//!   on an AES build);
 //! * [`finish`](core::hash::Hasher::finish) is one final fold.
 //!
 //! On 32-bit targets the 128-bit product is built from 32-bit multiplies
@@ -73,6 +74,8 @@ use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, SEED};
 pub(crate) trait Compress {
     /// The path's name, as the tests and bench print it.
     const NAME: &'static str;
+    /// The portable terminal path folds its two compressed words separately.
+    const TERMINAL_FOLD_LANES: bool;
     /// Two words standing for `bytes`, which is longer than 16 bytes.
     fn compress_long(bytes: &[u8]) -> (u64, u64);
 }
@@ -83,6 +86,7 @@ pub(crate) struct Portable;
 
 impl Compress for Portable {
     const NAME: &'static str = "portable";
+    const TERMINAL_FOLD_LANES: bool = true;
     #[inline]
     fn compress_long(bytes: &[u8]) -> (u64, u64) {
         portable::compress_long(bytes)
@@ -105,6 +109,7 @@ pub(crate) struct Aes;
 ))]
 impl Compress for Aes {
     const NAME: &'static str = "aes";
+    const TERMINAL_FOLD_LANES: bool = false;
     #[inline]
     fn compress_long(bytes: &[u8]) -> (u64, u64) {
         aes::compress_long(bytes)
@@ -194,6 +199,36 @@ impl<P: Compress> Engine<P> {
     pub(crate) const fn finish(self) -> u64 {
         fold(self.acc ^ FIN_X, FIN_M)
     }
+
+    #[inline]
+    pub(crate) fn terminal(tag: u8, bytes: &[u8]) -> u64 {
+        if bytes.len() <= 16 {
+            // Small key spaces need the two-stage streaming finalization to
+            // satisfy the exhaustive two-byte avalanche check.
+            let mut hasher = Self::new();
+            hasher.word(u64::from(tag));
+            hasher.bytes(bytes);
+            return hasher.finish();
+        }
+        let (first, second) = P::compress_long(bytes);
+        // A tag and one byte slice are the entire key: there is no later
+        // field to separate. Each compressed word has already mixed its own
+        // input. The portable path folds them separately before one final
+        // fold; the AES path folds their combined words once.
+        let domain = SEED
+            ^ FIN_X
+            ^ u64::from(tag).wrapping_mul(K_A)
+            ^ (bytes.len() as u64).wrapping_mul(LEN_M);
+        if P::TERMINAL_FOLD_LANES {
+            // Keep the two portable lanes nonlinear until after the folds:
+            // rotating and XOR-ing their raw tail words first would let
+            // sparse differences cancel before any final mixer could see them.
+            let lanes = fold(first ^ domain, K_A) ^ fold(second ^ domain.rotate_left(31), K_B);
+            fold(lanes, FIN_M)
+        } else {
+            fold(first ^ second.rotate_left(29) ^ domain, FIN_M)
+        }
+    }
 }
 
 macro_rules! hasher {
@@ -201,6 +236,20 @@ macro_rules! hasher {
         $(#[$meta])*
         #[derive(Clone, Debug)]
         pub struct $name(crate::fixed::Engine<$path>);
+
+        impl $name {
+            /// Hash a tagged byte slice that is the whole table key.
+            ///
+            /// This path avoids the extra state transitions of the streaming
+            /// [`Hasher`](core::hash::Hasher). Its result is build-specific,
+            /// non-cryptographic and must never be persisted or exposed as a
+            /// content identity.
+            #[must_use]
+            #[inline]
+            pub fn hash_terminal(tag: u8, bytes: &[u8]) -> u64 {
+                crate::fixed::Engine::<$path>::terminal(tag, bytes)
+            }
+        }
 
         impl Default for $name {
             #[inline]

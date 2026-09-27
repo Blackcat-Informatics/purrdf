@@ -32,3 +32,13 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
+
+/// Hash an IRI for the primary term index, including its variant tag.
+///
+/// The builder, global dictionary and frozen dataset must use this exact
+/// protocol for their borrowed and stored lookups. An IRI is the whole key,
+/// so the native hasher can compress its bytes and length in one operation.
+#[inline]
+pub(crate) fn hash_iri_for_interner(iri: &str) -> u64 {
+    purrdf_hash::fixed::FixedHasher::hash_terminal(0, iri.as_bytes())
+}

@@ -1290,10 +1290,9 @@ impl RdfDataset {
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
     #[must_use]
     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
-        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        0u8.hash(&mut hasher);
-        iri.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
+        self.find_term_hashed(crate::hash::hash_iri_for_interner(iri), |id| {
+            self.iri_matches(id, iri)
+        })
     }
 
     /// The id of an interned blank node, without allocating its label.
@@ -2232,6 +2231,32 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn frozen_iri_lookup_round_trips_across_lengths_and_table_growth() {
+        let mut builder = RdfDatasetBuilder::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris.iter().map(|iri| builder.intern_iri(iri)).collect();
+        let dataset = builder.freeze().expect("freeze");
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                dataset.term_id_by_iri(iri),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+            assert_eq!(
+                dataset.term_id_by_value(&TermValue::Iri(iri.clone())),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+        }
+        assert_eq!(dataset.term_id_by_iri("http://example.org/absent"), None);
     }
 
     #[test]

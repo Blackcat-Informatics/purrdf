@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Byte packing and the portable four-lane compression of long slices.
+//! Byte packing and portable compression of long slices.
 
 use super::fold::fold;
 use super::keys::{LANE_INIT, LANE_KEY};
@@ -67,34 +67,33 @@ fn block_words(block: &[u8; 32]) -> [u64; 4] {
 
 /// Compresses a slice of more than 16 bytes to two words.
 ///
-/// Four lanes each fold one word of every 32-byte block by their own key.
-/// Blocks run from the start while more than 32 bytes remain; the final
-/// block is the last 32 bytes, overlapping its predecessor when the length
-/// is not a multiple of 32. 17–32 bytes are one block: the first sixteen
-/// bytes, then the last sixteen. The caller mixes in the length, which the
-/// overlap leaves ambiguous.
+/// For 17–32 bytes, two folds mix the first sixteen bytes and two rotated
+/// words bring in the last sixteen. Longer slices use four lanes, each
+/// folding one word of every 32-byte block by its own key. Blocks run from
+/// the start while more than 32 bytes remain; the final block is the last
+/// 32 bytes, overlapping its predecessor when the length is not a multiple
+/// of 32. The caller mixes in the length, which overlap leaves ambiguous.
 #[inline]
 pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
     let len = bytes.len();
     debug_assert!(len > 16);
-    let mut lanes = LANE_INIT;
     if len <= 32 {
-        step(
-            &mut lanes,
-            [
-                read64(bytes, 0),
-                read64(bytes, 8),
-                read64(bytes, len - 16),
-                read64(bytes, len - 8),
-            ],
-        );
-    } else {
-        let (blocks, _) = bytes[..len - 1].as_chunks::<32>();
-        for block in blocks {
-            step(&mut lanes, block_words(block));
-        }
-        let last = bytes.last_chunk::<32>().expect("more than 32 bytes");
-        step(&mut lanes, block_words(last));
+        // The common IRI length class has four possibly overlapping words.
+        // Two independent folded products mix the first sixteen bytes; the
+        // last sixteen enter separate words before the caller's final pair
+        // of folds. Distinct rotations keep aligned overlap from cancelling.
+        let first = fold(LANE_INIT[0] ^ read64(bytes, 0), LANE_KEY[0])
+            ^ (LANE_INIT[2] ^ read64(bytes, len - 16)).rotate_left(17);
+        let second = fold(LANE_INIT[1] ^ read64(bytes, 8), LANE_KEY[1])
+            ^ (LANE_INIT[3] ^ read64(bytes, len - 8)).rotate_left(43);
+        return (first, second);
     }
+    let mut lanes = LANE_INIT;
+    let (blocks, _) = bytes[..len - 1].as_chunks::<32>();
+    for block in blocks {
+        step(&mut lanes, block_words(block));
+    }
+    let last = bytes.last_chunk::<32>().expect("more than 32 bytes");
+    step(&mut lanes, block_words(last));
     (lanes[0] ^ lanes[2], lanes[1] ^ lanes[3])
 }

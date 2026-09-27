@@ -80,8 +80,8 @@ fn one<H: Hasher + Default>(feed: impl FnOnce(&mut H)) -> u64 {
 
 // --- the vector file ---------------------------------------------------------
 
-/// One record's operation, applied to a fresh hasher.
-fn apply<H: Hasher + Default>(fields: &[&str]) -> u64 {
+/// One record's streaming or terminal operation.
+fn apply<H: Hasher + Default>(fields: &[&str], terminal: fn(u8, &[u8]) -> u64) -> u64 {
     let hex = |field: &str| u128::from_str_radix(field, 16).expect("a hexadecimal value");
     let decimal = |field: &str| field.parse::<usize>().expect("a decimal length");
     match fields[0] {
@@ -96,6 +96,10 @@ fn apply<H: Hasher + Default>(fields: &[&str]) -> u64 {
         "bytes" => {
             let data = stream(decimal(fields[1]), hex(fields[2]) as u64);
             one::<H>(|h| h.write(&data))
+        }
+        "terminal" => {
+            let data = stream(decimal(fields[2]), hex(fields[3]) as u64);
+            terminal(hex(fields[1]) as u8, &data)
         }
         "text" => {
             let text = decode_str(fields[1]).expect("an encoded text field");
@@ -156,6 +160,14 @@ fn vector_inputs() -> Vec<Vec<String>> {
                 length.to_string(),
                 hex(seed.into()),
             ]);
+            for tag in [0u8, 3] {
+                records.push(vec![
+                    "terminal".to_owned(),
+                    hex(tag.into()),
+                    length.to_string(),
+                    hex(seed.into()),
+                ]);
+            }
         }
     }
     for _ in 0..200 {
@@ -193,13 +205,13 @@ const PORTABLE_VECTORS: &str = include_str!("vectors/fixed_hasher_portable_vecto
 const AES_VECTORS: &str = include_str!("vectors/fixed_hasher_aes_vectors.txt");
 
 /// Replays `text` against `H`, returning the number of records.
-fn replay<H: Hasher + Default>(name: &str, text: &str) -> usize {
+fn replay<H: Hasher + Default>(name: &str, text: &str, terminal: fn(u8, &[u8]) -> u64) -> usize {
     let file = VectorFile::parse(text).unwrap_or_else(|error| panic!("{name}: {error}"));
     // Every operation's inputs precede the one answer field.
     let mut total = 0;
     for record in file.records() {
         let (inputs, answer) = record.fields.split_at(record.fields.len() - 1);
-        let actual = format!("{:016x}", apply::<H>(inputs));
+        let actual = format!("{:016x}", apply::<H>(inputs, terminal));
         assert_eq!(
             actual, answer[0],
             "{name}, line {}: {inputs:?} hashed differently",
@@ -217,7 +229,11 @@ fn replay<H: Hasher + Default>(name: &str, text: &str) -> usize {
 
 fn portable_vectors_are_reproduced() {
     let count = purrdf_testkit::harness::without_host_clock_or_entropy(|| {
-        replay::<PortableFixedHasher>("portable", PORTABLE_VECTORS)
+        replay::<PortableFixedHasher>(
+            "portable",
+            PORTABLE_VECTORS,
+            PortableFixedHasher::hash_terminal,
+        )
     });
     purrdf_testkit::harness::print_line(&format!("fixed hasher: portable, {count} records"));
 }
@@ -228,7 +244,7 @@ fn portable_vectors_are_reproduced() {
     target_feature = "aes"
 ))]
 fn aes_vectors_are_reproduced() {
-    let count = replay::<AesFixedHasher>("aes", AES_VECTORS);
+    let count = replay::<AesFixedHasher>("aes", AES_VECTORS, AesFixedHasher::hash_terminal);
     purrdf_testkit::harness::print_line(&format!("fixed hasher: aes, {count} records"));
 }
 
@@ -244,7 +260,7 @@ fn the_selected_function_answers_its_own_vectors() {
         "aes" => AES_VECTORS,
         other => panic!("unknown path {other:?}"),
     };
-    replay::<FixedHasher>(FIXED_HASHER_PATH, text);
+    replay::<FixedHasher>(FIXED_HASHER_PATH, text, FixedHasher::hash_terminal);
     let state = FixedState::new();
     assert_eq!(state, FixedState::default());
     let copy = state;
@@ -285,11 +301,14 @@ fn record_vectors_when_asked() {
             "proves stability across targets and time, not correctness; no third-party".to_owned(),
             "implementation or output was consulted.".to_owned(),
             String::new(),
-            "Each record is one fresh hasher, one operation, then `finish`:".to_owned(),
+            "Each record is one operation; streaming ones use a fresh hasher and `finish`:"
+                .to_owned(),
             "  empty                       nothing written".to_owned(),
             "  u8|u16|u32|usize|u64|u128 V write_<kind>(V), V hexadecimal".to_owned(),
             "  bytes L S                   write(first L bytes of the little-endian u64".to_owned(),
             "                              stream of Xoshiro256::from_seed(S)), S hex".to_owned(),
+            "  terminal T L S              hash_terminal(T, first L stream bytes), T hex"
+                .to_owned(),
             "  text T                      write(T's UTF-8 bytes); T from corpus_iris.txt"
                 .to_owned(),
             "  chain A L S B C             write_u32(A), write(bytes L S), write_u8(B),".to_owned(),
@@ -319,21 +338,17 @@ fn record_vectors_when_asked() {
         std::fs::write(dir.join(file), recorder.render()).expect("the vector file is written");
         purrdf_testkit::harness::print_line(&format!("recorded {file}"));
     };
-    write(
-        "fixed_hasher_portable_vectors.txt",
-        "portable",
-        &apply::<PortableFixedHasher>,
-    );
+    write("fixed_hasher_portable_vectors.txt", "portable", &|fields| {
+        apply::<PortableFixedHasher>(fields, PortableFixedHasher::hash_terminal)
+    });
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
         target_endian = "little",
         target_feature = "aes"
     ))]
-    write(
-        "fixed_hasher_aes_vectors.txt",
-        "aes",
-        &apply::<AesFixedHasher>,
-    );
+    write("fixed_hasher_aes_vectors.txt", "aes", &|fields| {
+        apply::<AesFixedHasher>(fields, AesFixedHasher::hash_terminal)
+    });
 }
 
 // --- contract ----------------------------------------------------------------
@@ -613,6 +628,64 @@ mod quality {
         assert_distinct(&format!("{path} sparse 256-bit keys"), hashes);
     }
 
+    pub(super) fn terminal_hash_quality(path: &str, hash: fn(u8, &[u8]) -> u64) {
+        for len in [2, 16, 17, 24, 31, 32, 33] {
+            let (worst, tolerance) =
+                avalanche(&format!("{path} terminal"), len, &|bytes| hash(0, bytes));
+            purrdf_testkit::harness::print_line(&format!(
+                "avalanche {path} terminal: {len:>2} bytes, worst |p − ½| = {worst:.5} (tolerance {tolerance:.4})"
+            ));
+        }
+
+        let mut sparse = Vec::with_capacity(2_796_417);
+        let sparse_hash = |bits: &[usize]| {
+            let mut key = [0u8; 32];
+            for &bit in bits {
+                key[bit / 8] |= 1 << (bit % 8);
+            }
+            hash(0, &key)
+        };
+        sparse.push(sparse_hash(&[]));
+        for a in 0..256 {
+            sparse.push(sparse_hash(&[a]));
+            for b in a + 1..256 {
+                sparse.push(sparse_hash(&[a, b]));
+                for c in b + 1..256 {
+                    sparse.push(sparse_hash(&[a, b, c]));
+                }
+            }
+        }
+        assert_distinct(&format!("{path} terminal sparse 256-bit keys"), sparse);
+
+        let cross_length: Vec<u64> = (2..=128)
+            .flat_map(|len| {
+                let iri = format!("a:{}", "x".repeat(len - 2));
+                [hash(0, iri.as_bytes()), hash(3, iri.as_bytes())]
+            })
+            .collect();
+        assert_distinct(&format!("{path} terminal tags and lengths"), cross_length);
+
+        let iris = corpus();
+        let hashes: Vec<u64> = iris.iter().map(|iri| hash(0, iri.as_bytes())).collect();
+        assert_distinct(&format!("{path} terminal corpus IRIs"), hashes.clone());
+        assert_uniform(&format!("{path} terminal corpus IRIs"), &hashes, 7);
+        let mut minted = Vec::with_capacity(iris.len() * 8192);
+        let mut key = Vec::with_capacity(256);
+        for iri in &iris {
+            for n in 0..8192u32 {
+                key.clear();
+                key.extend_from_slice(iri.as_bytes());
+                key.extend_from_slice(format!("{{{n}}}").as_bytes());
+                minted.push(hash(0, &key));
+            }
+        }
+        assert_uniform(
+            &format!("{path} terminal corpus IRIs × 0..8192"),
+            &minted,
+            20,
+        );
+    }
+
     /// The Wilson–Hilferty z of a χ² statistic with `df` degrees of freedom:
     /// approximately standard normal under the uniform hypothesis.
     fn chi_squared_z(counts: &[u64]) -> f64 {
@@ -752,6 +825,20 @@ fn portable_is_uniform() {
     quality::uniform_over_iris_and_integers::<PortableFixedHasher>("portable");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn portable_terminal_hash_quality() {
+    quality::terminal_hash_quality("portable", PortableFixedHasher::hash_terminal);
+}
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+fn aes_terminal_hash_quality() {
+    quality::terminal_hash_quality("aes", AesFixedHasher::hash_terminal);
+}
+
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_endian = "little",
@@ -803,6 +890,14 @@ purrdf_testkit::harness_main!(
     aes_has_no_sparse_key_collisions,
     #[cfg(not(target_arch = "wasm32"))]
     portable_is_uniform,
+    #[cfg(not(target_arch = "wasm32"))]
+    portable_terminal_hash_quality,
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    aes_terminal_hash_quality,
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
         target_endian = "little",

@@ -90,6 +90,12 @@ primitives: both are broken for collision resistance.
 constants derived from `⌊2^64/φ⌋`, with no run-time seeding, so a build
 hashes equal inputs equally on every run.
 
+The RDF term interner uses `FixedHasher::hash_terminal(tag, bytes)` when a
+tagged byte slice is the whole key. This avoids streaming state updates for
+ordinary IRIs while preserving a separate generic `Hasher` path for compound
+terms. Borrowed lookup, stored-term rehash and frozen lookup must all call the
+same terminal function. Its result is an in-memory table hash only.
+
 ```rust
 use core::hash::BuildHasher;
 use std::collections::HashMap;
@@ -103,7 +109,8 @@ assert_eq!(FixedState::new().hash_one(7u32), FixedState::new().hash_one(7u32));
 | Input | Function |
 |---|---|
 | integers, and byte slices of 0–16 bytes | folded multiplies (the low and high halves of a 128-bit product XOR-ed), every build |
-| byte slices over 16 bytes | four AES-round lanes when the build's target enables AES (x86-64, little-endian AArch64); four folded-multiply lanes otherwise |
+| byte slices of 17–32 bytes | two AES lanes with two rounds each when the build's target enables AES (x86-64, little-endian AArch64); two folded products plus two rotated words otherwise |
+| byte slices over 32 bytes | four AES-round lanes on AES builds; four folded-multiply lanes otherwise |
 
 The choice between the two is made at compile time, never at run time. On
 32-bit targets (i686, wasm32) the 128-bit product is built from 32-bit

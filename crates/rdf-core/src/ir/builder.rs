@@ -44,14 +44,20 @@ fn hash_of<T: Hash>(value: &T) -> u64 {
 }
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
+    if let TermLookup::Iri(iri) = lookup {
+        return crate::hash::hash_iri_for_interner(iri);
+    }
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_lookup(lookup, &mut hasher);
+    hash_non_iri_lookup(lookup, &mut hasher);
     hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
+    if let InternedTerm::Iri(r) = term {
+        return crate::hash::hash_iri_for_interner(arena_str(arena, *r));
+    }
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_stored(arena, term, &mut hasher);
+    hash_non_iri_stored(arena, term, &mut hasher);
     hasher.finish()
 }
 
@@ -108,14 +114,11 @@ pub(crate) fn is_lowercase(s: &str) -> bool {
     s.chars().flat_map(char::to_lowercase).eq(s.chars())
 }
 
-/// Hash a borrowed lookup. MUST hash byte-identically to [`hash_stored`] for equal
-/// values — explicit discriminant tags + `str::hash` (so the find/insert hashes agree).
-fn hash_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
+/// Hash a borrowed non-IRI lookup. MUST hash byte-identically to
+/// [`hash_non_iri_stored`] for equal values.
+fn hash_non_iri_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
     match lookup {
-        TermLookup::Iri(iri) => {
-            0u8.hash(state);
-            iri.hash(state);
-        }
+        TermLookup::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
         TermLookup::Blank { label, scope } => {
             1u8.hash(state);
             label.hash(state);
@@ -143,13 +146,10 @@ fn hash_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
 }
 
 /// Hash a stored term, resolving its `StrRange`s through `arena`. MUST match
-/// [`hash_lookup`] for equal values.
-fn hash_stored<H: Hasher>(arena: &[u8], term: &InternedTerm, state: &mut H) {
+/// [`hash_non_iri_lookup`] for equal values.
+fn hash_non_iri_stored<H: Hasher>(arena: &[u8], term: &InternedTerm, state: &mut H) {
     match term {
-        InternedTerm::Iri(r) => {
-            0u8.hash(state);
-            arena_str(arena, *r).hash(state);
-        }
+        InternedTerm::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
         InternedTerm::Blank { label, scope } => {
             1u8.hash(state);
             arena_str(arena, *label).hash(state);
@@ -1618,6 +1618,70 @@ mod tests {
         let d = b.intern_iri("http://example.org/y");
         assert_eq!(a, c);
         assert_ne!(a, d);
+    }
+
+    #[test]
+    fn iri_hash_matches_stored_form_across_lengths_and_table_growth() {
+        let mut interner = Interner::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris
+            .iter()
+            .map(|iri| interner.intern(TermLookup::Iri(iri)))
+            .collect();
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                hash_lookup_value(&TermLookup::Iri(iri)),
+                hash_stored_value(interner.arena(), interner.term(id)),
+                "borrowed and stored IRI hashes differ at length {}",
+                iri.len()
+            );
+            assert_eq!(interner.lookup_iri(iri), Some(id));
+            assert_eq!(interner.intern(TermLookup::Iri(iri)), id);
+        }
+    }
+
+    #[test]
+    fn all_term_kinds_match_borrowed_and_stored_hashes() {
+        let mut interner = Interner::new();
+        let iri = TermLookup::Iri(RDF_DIR_LANG_STRING);
+        let datatype = interner.intern(iri);
+        let blank = TermLookup::Blank {
+            label: "b",
+            scope: BlankScope(7),
+        };
+        let blank_id = interner.intern(blank);
+        let literal = TermLookup::Literal {
+            lexical: "hello",
+            datatype,
+            language: Some("en"),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let literal_id = interner.intern(literal);
+        let triple = TermLookup::Triple {
+            s: blank_id,
+            p: datatype,
+            o: literal_id,
+        };
+        let triple_id = interner.intern(triple);
+        // Rehash the table after every variant is present, then verify that
+        // borrowed keys still find their original stored representatives.
+        for n in 0..256 {
+            interner.intern(TermLookup::Iri(&format!("http://example.org/fill/{n}")));
+        }
+        for (lookup, id) in [
+            (iri, datatype),
+            (blank, blank_id),
+            (literal, literal_id),
+            (triple, triple_id),
+        ] {
+            let hash = hash_lookup_value(&lookup);
+            assert_eq!(hash, hash_stored_value(interner.arena(), interner.term(id)));
+            assert_eq!(interner.intern(lookup), id);
+        }
+        assert_eq!(interner.term_count(), 260);
     }
 
     /// No fabricated default: a plain `new`/`default` builder has content-id

@@ -192,14 +192,11 @@ enum GlobalTermLookup<'a> {
     },
 }
 
-/// Fixed-key `FixedHasher` hash of a lookup (id-based dedup path). MUST hash byte-identically to
-/// [`hash_stored`] for equal values — explicit discriminant tags + `str::hash`.
-fn hash_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
+/// Fixed-key hash of a non-IRI lookup. MUST hash byte-identically to
+/// [`hash_non_iri_stored`] for equal values.
+fn hash_non_iri_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
     match lookup {
-        GlobalTermLookup::Iri(iri) => {
-            0u8.hash(state);
-            iri.hash(state);
-        }
+        GlobalTermLookup::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
         GlobalTermLookup::Blank { label, scope } => {
             1u8.hash(state);
             label.hash(state);
@@ -228,12 +225,9 @@ fn hash_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
 
 /// Fixed-key `FixedHasher` hash of a stored term, resolving its `StrRange`s through `arena`
 /// (id-based dedup path). MUST match [`hash_lookup`] for equal values.
-fn hash_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H) {
+fn hash_non_iri_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H) {
     match term {
-        GlobalInternedTerm::Iri(r) => {
-            0u8.hash(state);
-            arena_str(arena, *r).hash(state);
-        }
+        GlobalInternedTerm::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
         GlobalInternedTerm::Blank { label, scope } => {
             1u8.hash(state);
             arena_str(arena, *label).hash(state);
@@ -256,14 +250,20 @@ fn hash_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H
 }
 
 fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
+    if let GlobalTermLookup::Iri(iri) = lookup {
+        return crate::hash::hash_iri_for_interner(iri);
+    }
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_lookup(lookup, &mut hasher);
+    hash_non_iri_lookup(lookup, &mut hasher);
     hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &GlobalInternedTerm) -> u64 {
+    if let GlobalInternedTerm::Iri(r) = term {
+        return crate::hash::hash_iri_for_interner(arena_str(arena, *r));
+    }
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_stored(arena, term, &mut hasher);
+    hash_non_iri_stored(arena, term, &mut hasher);
     hasher.finish()
 }
 
@@ -789,6 +789,7 @@ fn hash_value(value: &TermValue) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::term::RDF_DIR_LANG_STRING;
 
     /// Intern a fixture value, asserting it satisfies the IR-boundary absoluteness
     /// invariant. Every fixture below is deliberately absolute; the refusal path has
@@ -809,6 +810,71 @@ mod tests {
         assert_eq!(b.index(), a.index() + 1);
         assert_eq!(dict.len(), 2);
         assert!(!dict.is_empty());
+    }
+
+    #[test]
+    fn iri_hash_matches_stored_form_across_lengths_and_table_growth() {
+        let mut dict = GlobalDictionary::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<GlobalTermId> = iris
+            .iter()
+            .map(|iri| dict.intern_iri(iri).expect("absolute IRI"))
+            .collect();
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                hash_lookup_value(&GlobalTermLookup::Iri(iri)),
+                hash_stored_value(&dict.arena, &dict.terms[id.index()]),
+                "borrowed and stored IRI hashes differ at length {}",
+                iri.len()
+            );
+            assert_eq!(dict.intern_iri(iri), Ok(id));
+        }
+    }
+
+    #[test]
+    fn all_term_kinds_match_borrowed_and_stored_hashes() {
+        let mut dict = GlobalDictionary::new();
+        let iri = GlobalTermLookup::Iri(RDF_DIR_LANG_STRING);
+        let datatype = dict.intern_iri(RDF_DIR_LANG_STRING).expect("absolute IRI");
+        let blank = GlobalTermLookup::Blank {
+            label: "b",
+            scope: BlankScope(7),
+        };
+        let blank_id = dict.intern_lookup(blank);
+        let literal = GlobalTermLookup::Literal {
+            lexical: "hello",
+            datatype,
+            language: Some("en"),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let literal_id = dict.intern_lookup(literal);
+        let triple = GlobalTermLookup::Triple {
+            s: blank_id,
+            p: datatype,
+            o: literal_id,
+        };
+        let triple_id = dict.intern_lookup(triple);
+        for n in 0..256 {
+            dict.intern_iri(&format!("http://example.org/fill/{n}"))
+                .expect("absolute IRI");
+        }
+        for (lookup, id) in [
+            (iri, datatype),
+            (blank, blank_id),
+            (literal, literal_id),
+            (triple, triple_id),
+        ] {
+            let hash = hash_lookup_value(&lookup);
+            assert_eq!(
+                hash,
+                hash_stored_value(&dict.arena, &dict.terms[id.index()])
+            );
+            assert_eq!(dict.intern_lookup(lookup), id);
+        }
+        assert_eq!(dict.len(), 260);
     }
 
     #[test]

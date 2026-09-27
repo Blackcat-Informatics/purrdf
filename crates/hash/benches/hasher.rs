@@ -4,9 +4,10 @@
 //! Fixed-hasher latency per key class, for every function this build can
 //! run: the portable function always, the AES function on a build whose
 //! target enables AES (`RUSTFLAGS='-C target-feature=+aes'`, or a
-//! `target-cpu` that has it). Each measurement hashes a whole key set, one
-//! fresh hasher and one `finish` per key, so the reported time per element
-//! is the cost of one table-lookup hash. Report-only; not a gate.
+//! `target-cpu` that has it). Each measurement hashes a whole key set;
+//! streaming cases use one fresh hasher and one `finish` per key, while the
+//! interner case calls the terminal key function. The reported time per
+//! element is one table-lookup hash. Report-only; not a gate.
 
 #![allow(missing_docs)] // criterion_main! generates an undocumented `main`
 
@@ -46,12 +47,18 @@ fn corpus() -> Vec<String> {
 }
 
 /// Times one function over every class.
-fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str) {
+fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str, terminal: fn(u8, &[u8]) -> u64) {
     let mut rng = Xoshiro256::from_seed(0x6265_6e63_6831);
     let words: Vec<u64> = (0..4096).map(|_| rng.next_u64()).collect();
     let short = byte_keys(1..=16, 4096, 1);
-    let medium = byte_keys(17..=128, 4096, 2);
+    let short_long = byte_keys(17..=32, 4096, 2);
+    let medium = byte_keys(33..=128, 4096, 4);
     let long = byte_keys(129..=1024, 512, 3);
+    // `http://example.org/i/` is 21 bytes; five digits make a 26-byte IRI.
+    let short_iris: Vec<String> = (0..4096)
+        .map(|i| format!("http://example.org/i/{i:05}"))
+        .collect();
+    assert!(short_iris.iter().all(|iri| iri.len() == 26));
     let iris = corpus();
 
     let mut group = c.benchmark_group("fixed-hasher");
@@ -78,7 +85,8 @@ fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str) {
 
     for (class, keys) in [
         ("1-16B", &short),
-        ("17-128B", &medium),
+        ("17-32B", &short_long),
+        ("33-128B", &medium),
         ("129-1024B", &long),
     ] {
         group.throughput(Throughput::Elements(keys.len() as u64));
@@ -92,6 +100,31 @@ fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str) {
             });
         });
     }
+
+    // The hot 26-byte IRI class through `str`'s `Hash`, including its terminator.
+    group.throughput(Throughput::Elements(short_iris.len() as u64));
+    group.bench_with_input(BenchmarkId::new("iri-26B", path), &short_iris, |b, iris| {
+        b.iter(|| {
+            iris.iter().fold(0u64, |sum, iri| {
+                let mut hasher = H::default();
+                black_box(iri.as_str()).hash(&mut hasher);
+                sum ^ hasher.finish()
+            })
+        });
+    });
+
+    // The primary IR interner's terminal IRI key: one compressed operation.
+    group.bench_with_input(
+        BenchmarkId::new("iri-26B-interner", path),
+        &short_iris,
+        |b, iris| {
+            b.iter(|| {
+                iris.iter().fold(0u64, |sum, iri| {
+                    sum ^ terminal(0, black_box(iri.as_bytes()))
+                })
+            });
+        },
+    );
 
     // The IRI corpus through `str`'s `Hash`, as a `HashMap<String, _>` would.
     group.throughput(Throughput::Elements(iris.len() as u64));
@@ -108,13 +141,13 @@ fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str) {
 }
 
 fn hashers(c: &mut Criterion) {
-    bench_path::<PortableFixedHasher>(c, "portable");
+    bench_path::<PortableFixedHasher>(c, "portable", PortableFixedHasher::hash_terminal);
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
         target_endian = "little",
         target_feature = "aes"
     ))]
-    bench_path::<AesFixedHasher>(c, "aes");
+    bench_path::<AesFixedHasher>(c, "aes", AesFixedHasher::hash_terminal);
 }
 
 criterion_group!(benches, hashers);
