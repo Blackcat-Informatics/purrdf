@@ -1500,6 +1500,7 @@ mod tests {
     use crate::governor::{
         GovernorState as TestGovernorState, QueryGovernors as TestQueryGovernors,
     };
+    use purrdf_sparql_algebra::{Chain, Child};
 
     // The operators take the algebra node itself (it names the barrier and supplies the
     // child edge classification), so these tests build the node and drive the ordinary
@@ -1512,8 +1513,8 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Join {
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+                left: Child::new(left.clone()),
+                right: Child::new(right.clone()),
             },
             ctx,
         )
@@ -1535,8 +1536,8 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::LeftJoin {
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+                left: Child::new(left.clone()),
+                right: Child::new(right.clone()),
                 expression: expression.cloned(),
             },
             ctx,
@@ -1550,8 +1551,8 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Minus {
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+                left: Child::new(left.clone()),
+                right: Child::new(right.clone()),
             },
             ctx,
         )
@@ -1781,8 +1782,8 @@ mod tests {
         let left = bgp(vp("s"), pred("http://ex/likes"), vp("o"));
         let right = bgp(vp("s"), pred("http://ex/knows"), vp("f"));
         let cond = Some(Expression::SameTerm(
-            Box::new(Expression::Variable(Variable::new("s"))),
-            Box::new(Expression::Variable(Variable::new("f"))),
+            Child::new(Expression::Variable(Variable::new("s"))),
+            Child::new(Expression::Variable(Variable::new("f"))),
         ));
         let seq =
             eval_left_join(&left, &right, cond.as_ref(), &mut ctx).expect("filtered optional");
@@ -1942,7 +1943,7 @@ mod tests {
         let scan = bgp(vp("s"), pred("http://example.org/v"), vp("a"));
         let filter_branch = GraphPattern::Filter {
             expr: cond,
-            inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+            inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
         };
         let flag_branch = GraphPattern::Bgp {
             patterns: vec![TriplePattern {
@@ -1955,8 +1956,8 @@ mod tests {
             }],
         };
         GraphPattern::Join {
-            left: Box::new(scan),
-            right: Box::new(GraphPattern::union(filter_branch, flag_branch)),
+            left: Child::new(scan),
+            right: Child::new(GraphPattern::union(filter_branch, flag_branch)),
         }
     }
 
@@ -2016,8 +2017,8 @@ mod tests {
         let ds = union_filter_branch_ds();
         let mut ctx = EvalCtx::new(&ds);
         let pattern = union_filter_branch_pattern(Expression::Greater(
-            Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(Literal::new_typed(
+            Child::new(Expression::Variable(Variable::new("a"))),
+            Child::new(Expression::Literal(Literal::new_typed(
                 "0",
                 NamedNode::new_unchecked(XINT),
             ))),
@@ -2084,7 +2085,7 @@ mod tests {
 
         // branch1: {?s :p1 ?o} BIND(?o + 1 AS ?sum)  -> s=a, o=10, sum=11
         let branch1 = GraphPattern::Extend {
-            inner: Box::new(bgp(vp("s"), pred("http://ex/p1"), vp("o"))),
+            inner: Child::new(bgp(vp("s"), pred("http://ex/p1"), vp("o"))),
             variable: Variable::new("sum"),
             expression: Expression::arithmetic(
                 Expression::Variable(Variable::new("o")),
@@ -2094,7 +2095,7 @@ mod tests {
         };
         // branch2: {?s :p2 ?o} BIND(?o - 9 AS ?sum)  -> s=b, o=20, sum=11 (SAME as branch1)
         let branch2 = GraphPattern::Extend {
-            inner: Box::new(bgp(vp("s"), pred("http://ex/p2"), vp("o"))),
+            inner: Child::new(bgp(vp("s"), pred("http://ex/p2"), vp("o"))),
             variable: Variable::new("sum"),
             expression: Expression::arithmetic(
                 Expression::Variable(Variable::new("o")),
@@ -2104,7 +2105,7 @@ mod tests {
         };
         // branch3: {?s :p3 ?o} BIND(?o + 2 AS ?sum)  -> s=c, o=10, sum=12 (DISJOINT)
         let branch3 = GraphPattern::Extend {
-            inner: Box::new(bgp(vp("s"), pred("http://ex/p3"), vp("o"))),
+            inner: Child::new(bgp(vp("s"), pred("http://ex/p3"), vp("o"))),
             variable: Variable::new("sum"),
             expression: Expression::arithmetic(
                 Expression::Variable(Variable::new("o")),
@@ -2114,7 +2115,7 @@ mod tests {
         };
 
         let pattern = GraphPattern::Union {
-            arms: vec![branch1, branch2, branch3],
+            arms: Chain::try_from(vec![branch1, branch2, branch3]).expect("two or more nodes"),
         };
 
         let run = |forced: bool| {
@@ -2186,8 +2187,8 @@ mod tests {
         let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
         let right_arm = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
         let node = GraphPattern::LeftJoin {
-            left: Box::new(left.clone()),
-            right: Box::new(right_arm.clone()),
+            left: Child::new(left.clone()),
+            right: Child::new(right_arm.clone()),
             expression: None,
         };
 
@@ -2301,22 +2302,22 @@ mod tests {
         let likes = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
         let plans = [
             GraphPattern::Join {
-                left: Box::new(knows.clone()),
-                right: Box::new(likes.clone()),
+                left: Child::new(knows.clone()),
+                right: Child::new(likes.clone()),
             },
             GraphPattern::union(knows.clone(), likes.clone()),
             GraphPattern::LeftJoin {
-                left: Box::new(knows.clone()),
-                right: Box::new(likes.clone()),
+                left: Child::new(knows.clone()),
+                right: Child::new(likes.clone()),
                 expression: None,
             },
             GraphPattern::Minus {
-                left: Box::new(knows.clone()),
-                right: Box::new(likes.clone()),
+                left: Child::new(knows.clone()),
+                right: Child::new(likes.clone()),
             },
             GraphPattern::Lateral {
-                left: Box::new(knows),
-                right: Box::new(likes),
+                left: Child::new(knows),
+                right: Child::new(likes),
             },
         ];
 
@@ -2393,8 +2394,8 @@ mod tests {
     fn union_over_lateral() -> GraphPattern {
         GraphPattern::union(
             GraphPattern::Lateral {
-                left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
-                right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
+                left: Child::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
+                right: Child::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
             },
             bgp(vp("p"), pred("https://example.org/likes"), vp("q")),
         )
@@ -2648,8 +2649,8 @@ mod tests {
         let left = bgp(vp("x"), pred("https://example.org/knows"), vp("y"));
         let right = bgp(vp("p"), pred("https://example.org/likes"), vp("q"));
         let node = GraphPattern::Join {
-            left: Box::new(left.clone()),
-            right: Box::new(right),
+            left: Child::new(left.clone()),
+            right: Child::new(right),
         };
 
         let mut ctx = EvalCtx::new(&ds);
@@ -2736,14 +2737,14 @@ mod tests {
     fn lateral_over_graph_variable_keeps_column_order() {
         let ds = graph_variable_lateral_ds();
         let node = GraphPattern::Lateral {
-            left: Box::new(bgp(
+            left: Child::new(bgp(
                 vp("s"),
                 pred("https://example.org/lateral-graph#p"),
                 vp("g"),
             )),
-            right: Box::new(GraphPattern::Graph {
+            right: Child::new(GraphPattern::Graph {
                 name: NamedNodePattern::Variable(Variable::new("g")),
-                inner: Box::new(bgp(
+                inner: Child::new(bgp(
                     vp("a"),
                     pred("https://example.org/lateral-graph#q"),
                     vp("b"),

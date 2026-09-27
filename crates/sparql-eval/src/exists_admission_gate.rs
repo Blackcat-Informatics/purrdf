@@ -48,6 +48,7 @@
 //! * **Governed × strategy** — the truncated-inner-never-memoized discipline, pinned
 //!   against the current (post-redesign) decision site.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -110,8 +111,8 @@ fn bgp1(s: TermPattern, iri: &str, o: TermPattern) -> GraphPattern {
               threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
               targets, where the same box is still the field's type"
 )]
-fn bx(p: GraphPattern) -> Box<GraphPattern> {
-    Box::new(p)
+fn bx(p: GraphPattern) -> Child<GraphPattern> {
+    Child::new(p)
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ fn exists_results(
         ctx = ctx.with_property_functions(registry);
     }
     let seq = eval(outer, &mut ctx).expect("outer pattern evaluates");
-    let exists_expr = Expression::Exists(Box::new(inner.clone()));
+    let exists_expr = Expression::Exists(Child::new(inner.clone()));
     seq.rows
         .iter()
         .map(|row| {
@@ -307,6 +308,7 @@ fn assert_probe_and_definition_agree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     // ---- shared fixture: `EX:s{n} EX:knows EX:{target}` outer, correlated on `?s` ----
     //
@@ -454,8 +456,8 @@ mod tests {
         // root's (conservative) `current_row_vars` set.
         let inner = GraphPattern::Filter {
             expr: Expression::Equal(
-                Box::new(Expression::Variable(var("m"))),
-                Box::new(Expression::NamedNode(nn(&format!("{EX}club")))),
+                Child::new(Expression::Variable(var("m"))),
+                Child::new(Expression::NamedNode(nn(&format!("{EX}club")))),
             ),
             inner: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
         };
@@ -924,8 +926,8 @@ mod tests {
         let group = GraphPattern::Group {
             inner: bx(GraphPattern::Filter {
                 expr: Expression::Equal(
-                    Box::new(Expression::Variable(var("x"))),
-                    Box::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::Variable(var("x"))),
+                    Child::new(Expression::Variable(var("s"))),
                 ),
                 inner: bx(bgp1(tvar("z"), &format!("{EX}item"), tvar("x"))),
             }),
@@ -944,8 +946,8 @@ mod tests {
         };
         let inner = GraphPattern::Filter {
             expr: Expression::Greater(
-                Box::new(Expression::Variable(var("c"))),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::Variable(var("c"))),
+                Child::new(Expression::Literal(Literal::new_typed(
                     "1",
                     nn("http://www.w3.org/2001/XMLSchema#integer"),
                 ))),
@@ -1024,8 +1026,8 @@ mod tests {
             }),
             right: bx(GraphPattern::Filter {
                 expr: Expression::Equal(
-                    Box::new(Expression::Variable(var("x"))),
-                    Box::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::Variable(var("x"))),
+                    Child::new(Expression::Variable(var("s"))),
                 ),
                 inner: bx(bgp1(tvar("zw"), &format!("{EX}item"), tvar("x"))),
             }),
@@ -1485,12 +1487,12 @@ mod tests {
             }),
             right: bx(bgp1(tvar("z"), &format!("{EX}cand"), tvar("c"))),
             expression: Some(Expression::Equal(
-                Box::new(Expression::Variable(var("c"))),
-                Box::new(Expression::Variable(var("s"))),
+                Child::new(Expression::Variable(var("c"))),
+                Child::new(Expression::Variable(var("s"))),
             )),
         };
         let inner = GraphPattern::Filter {
-            expr: Expression::Not(Box::new(Expression::Bound(var("c")))),
+            expr: Expression::Not(Child::new(Expression::Bound(var("c")))),
             inner: bx(left_join),
         };
 
@@ -1719,15 +1721,15 @@ mod tests {
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
         let inner = GraphPattern::Filter {
             expr: Expression::If(
-                Box::new(Expression::Equal(
-                    Box::new(Expression::Variable(var("s"))),
-                    Box::new(Expression::NamedNode(nn(&format!("{EX}trigger")))),
+                Child::new(Expression::Equal(
+                    Child::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::NamedNode(nn(&format!("{EX}trigger")))),
                 )),
-                Box::new(Expression::FunctionCall(
+                Child::new(Expression::FunctionCall(
                     Function::Custom(nn("http://example.org/undefined-fn")),
-                    Vec::new(),
+                    Vec::new().into(),
                 )),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::Literal(Literal::new_typed(
                     "true",
                     nn("http://www.w3.org/2001/XMLSchema#boolean"),
                 ))),
@@ -1904,13 +1906,13 @@ mod tests {
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
         let inner = GraphPattern::Filter {
             expr: Expression::Equal(
-                Box::new(Expression::Variable(var("s"))),
-                Box::new(Expression::Variable(var("z"))),
+                Child::new(Expression::Variable(var("s"))),
+                Child::new(Expression::Variable(var("z"))),
             ),
             inner: bx(GraphPattern::Filter {
                 expr: Expression::GreaterOrEqual(
-                    Box::new(Expression::Variable(var("r"))),
-                    Box::new(Expression::Literal(Literal::new_typed(
+                    Child::new(Expression::Variable(var("r"))),
+                    Child::new(Expression::Literal(Literal::new_typed(
                         "0",
                         nn("http://www.w3.org/2001/XMLSchema#integer"),
                     ))),
@@ -1918,7 +1920,7 @@ mod tests {
                 inner: bx(GraphPattern::Extend {
                     inner: bx(bgp1(tvar("z"), &format!("{EX}base"), tvar("b"))),
                     variable: var("r"),
-                    expression: Expression::FunctionCall(Function::Rand, Vec::new()),
+                    expression: Expression::FunctionCall(Function::Rand, Vec::new().into()),
                 }),
             }),
         };
@@ -1929,7 +1931,7 @@ mod tests {
             let mut ctx = EvalCtx::new(&ds);
             ctx.options.exists_memo = memo;
             let seq = eval(&outer, &mut ctx).expect("outer");
-            let exists_expr = Expression::Exists(Box::new(inner.clone()));
+            let exists_expr = Expression::Exists(Child::new(inner.clone()));
             for row in &seq.rows {
                 crate::expr::eval_ebv(&exists_expr, row, &seq.schema, &mut ctx)
                     .expect("no hard error");
@@ -1989,8 +1991,8 @@ mod tests {
 
         let nested = GraphPattern::Filter {
             expr: Expression::Less(
-                Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::FunctionCall(Function::Rand, Vec::new().into())),
+                Child::new(Expression::Literal(Literal::new_typed(
                     "0.5",
                     nn("http://www.w3.org/2001/XMLSchema#double"),
                 ))),
@@ -2186,8 +2188,8 @@ mod tests {
             bgp1(tvar("s"), &format!("{EX}p2"), tvar("y")),
             GraphPattern::Filter {
                 expr: Expression::Less(
-                    Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
-                    Box::new(Expression::Literal(Literal::new_typed(
+                    Child::new(Expression::FunctionCall(Function::Rand, Vec::new().into())),
+                    Child::new(Expression::Literal(Literal::new_typed(
                         "0.5",
                         nn("http://www.w3.org/2001/XMLSchema#double"),
                     ))),
@@ -2357,7 +2359,7 @@ mod tests {
         let mut ctx = EvalCtx::new(ds);
         ctx.options.exists_memo = memo;
         let seq = eval(outer, &mut ctx).expect("outer pattern evaluates");
-        let exists_expr = Expression::Exists(Box::new(inner.clone()));
+        let exists_expr = Expression::Exists(Child::new(inner.clone()));
         seq.rows
             .iter()
             .map(|row| {

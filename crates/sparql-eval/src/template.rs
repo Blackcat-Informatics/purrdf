@@ -33,6 +33,7 @@
 //! resolved via `ctx.scratch.value_of(ctx.dataset, term)`, so the value is valid
 //! across a snapshot→mutable boundary (the UPDATE round-trip).
 
+use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, TermValue};
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
@@ -213,9 +214,9 @@ pub(crate) fn instantiate_ground_term(
             };
             let o = instantiate_ground_term(&t.object, blanks, counter)?;
             Some(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
         TermPattern::Variable(_) => None,
@@ -269,9 +270,9 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
             let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)?;
             let o = instantiate_term(&t.object, &to.object, row, blanks, ctx)?;
             Some(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
     }

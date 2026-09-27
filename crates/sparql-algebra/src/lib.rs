@@ -78,11 +78,16 @@ pub mod algebra;
 pub mod ast;
 pub mod error;
 pub mod lexer;
+mod owned;
 pub mod parser;
 mod retained_size;
 pub mod serialize;
 pub mod substitute;
+mod traits;
+pub mod tree;
 mod validate;
+pub mod walk;
+mod worklist;
 
 pub use algebra::{
     AggregateArityError, AggregateExpression, AggregateExpressionError, AggregateFunction,
@@ -106,3 +111,5 @@ pub use parser::{
     WASM_GRAPH_PATTERN_DEPTH, WASM_HOST_STACK_BUDGET, builtin_function_keyword,
 };
 pub use serialize::pattern_to_select_query;
+pub use tree::{Args, Chain, Child, NonEmpty, Subtree};
+pub use walk::{Flow, NodeRef, Visit, fold_post_order, walk_pre_post};

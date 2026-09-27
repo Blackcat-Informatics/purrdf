@@ -462,6 +462,7 @@ mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
@@ -690,9 +691,9 @@ mod tests {
     #[test]
     fn triple_term_binding_shape() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -718,9 +719,9 @@ mod tests {
     #[test]
     fn triple_term_document_exact_bytes() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -746,9 +747,9 @@ mod tests {
         // hard-fail with MalformedTerm rather than emitting structurally invalid
         // SRJ output.
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(lit("not-an-iri", XSD_STRING)),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(lit("not-an-iri", XSD_STRING)),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -767,12 +768,12 @@ mod tests {
     fn non_iri_bnode_triple_predicate_is_malformed_error() {
         // A blank-node predicate is equally invalid.
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],

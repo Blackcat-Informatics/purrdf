@@ -27,6 +27,7 @@
 //! exactly as oxigraph's N-Triples literal writer.
 
 use crate::data_view::ShaclRead;
+use purrdf_core::TermBox;
 
 use std::cmp::Ordering;
 
@@ -837,9 +838,9 @@ impl Term {
                 direction: l.direction,
             },
             Self::Triple(t) => TermValue::Triple {
-                s: Box::new(t.subject.to_term_value()),
-                p: Box::new(t.predicate.to_term_value_iri()),
-                o: Box::new(t.object.to_term_value()),
+                s: TermBox::new(t.subject.to_term_value()),
+                p: TermBox::new(t.predicate.to_term_value_iri()),
+                o: TermBox::new(t.object.to_term_value()),
             },
         }
     }

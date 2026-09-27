@@ -2500,6 +2500,7 @@ fn term_candidate(value: &TermValue) -> Result<Term, RenderError> {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfTextDirection, TermValue};
@@ -2527,9 +2528,9 @@ mod tests {
             TermValue::simple_literal("quick brown fox"),
             TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             let candidate = term_candidate(&value).expect("the fixture value is well-formed");
@@ -2617,9 +2618,9 @@ mod tests {
         ] {
             let value = if nested {
                 TermValue::Triple {
-                    s: Box::new(TermValue::blank("b0")),
-                    p: Box::new(TermValue::iri("http://example.org/p")),
-                    o: Box::new(value.clone()),
+                    s: TermBox::new(TermValue::blank("b0")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value.clone()),
                 }
             } else {
                 value.clone()
@@ -2644,9 +2645,9 @@ mod tests {
             direction: Some(RdfTextDirection::Rtl),
         };
         let nested_blank = TermValue::Triple {
-            s: Box::new(TermValue::blank("b0")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(tagged.clone()),
+            s: TermBox::new(TermValue::blank("b0")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(tagged.clone()),
         };
         let ranked = rank_candidates(
             &variables(),

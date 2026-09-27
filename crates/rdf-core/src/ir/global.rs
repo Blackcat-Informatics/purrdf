@@ -21,6 +21,7 @@
 //! iteration order (buckets are populated in ascending-id order and reads return the
 //! first match).
 
+use crate::TermBox;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
@@ -649,9 +650,9 @@ impl GlobalDictionary {
                 }
             }
             GlobalInternedTerm::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.term_value(*s)),
-                p: Box::new(self.term_value(*p)),
-                o: Box::new(self.term_value(*o)),
+                s: TermBox::new(self.term_value(*s)),
+                p: TermBox::new(self.term_value(*p)),
+                o: TermBox::new(self.term_value(*o)),
             },
         }
     }
@@ -789,6 +790,7 @@ fn hash_value(value: &TermValue) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TermBox;
 
     /// Intern a fixture value, asserting it satisfies the IR-boundary absoluteness
     /// invariant. Every fixture below is deliberately absolute; the refusal path has
@@ -897,9 +899,9 @@ mod tests {
         let p = TermValue::iri("http://example.org/p");
         let o = TermValue::simple_literal("obj");
         let value = TermValue::Triple {
-            s: Box::new(s.clone()),
-            p: Box::new(p.clone()),
-            o: Box::new(o.clone()),
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(o.clone()),
         };
         let id = intern(&mut dict, &value);
         let TermRef::Triple {
@@ -955,9 +957,9 @@ mod tests {
             TermValue::iri("http://example.org/a"), // repeat → same id
             TermValue::lang_literal("x", "en"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/a")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/a")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ];
 
@@ -1022,9 +1024,9 @@ mod tests {
             TermValue::iri(""),
             TermValue::typed_literal("42", "relativeDatatype"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("relativePredicate")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("relativePredicate")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             assert!(dict.intern(&value).is_err(), "value {value:?}");

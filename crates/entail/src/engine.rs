@@ -85,6 +85,7 @@
 //! [`surface_of`] order — a total order over term VALUES, not over interned ids — so the
 //! emission sequence is a function of the dataset's content alone.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -163,9 +164,9 @@ pub(crate) fn resolve_value<D: DatasetView>(ds: &D, id: D::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_value(ds, s)),
-            p: Box::new(resolve_value(ds, p)),
-            o: Box::new(resolve_value(ds, o)),
+            s: TermBox::new(resolve_value(ds, s)),
+            p: TermBox::new(resolve_value(ds, p)),
+            o: TermBox::new(resolve_value(ds, o)),
         },
     }
 }
@@ -1511,6 +1512,7 @@ mod tests {
         OWL_HASKEY, OWL_INTERSECTIONOF, OWL_PROPERTYCHAINAXIOM, OWL_UNIONOF, RDF_FIRST, RDF_NIL,
         RDF_REST, RDF_TYPE, RDFS_SUBCLASSOF, XSD_STRING,
     };
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfTextDirection, TermValue};
     use purrdf_datalog::cache::PlanCache;
     use purrdf_datalog::clause::{ClauseTerm, DlClause};
@@ -1608,9 +1610,9 @@ mod tests {
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(TermValue::iri(s)),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(TermValue::iri(o)),
+            s: TermBox::new(TermValue::iri(s)),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(TermValue::iri(o)),
         }
     }
 

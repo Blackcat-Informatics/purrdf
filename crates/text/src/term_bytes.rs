@@ -200,6 +200,7 @@ pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
 mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
     use super::{FINGERPRINT_BYTES, MAX_TRIPLE_DEPTH, encode_term, fingerprint_terms};
@@ -219,9 +220,9 @@ mod tests {
         let mut value = inner;
         for _ in 0..depth {
             value = TermValue::Triple {
-                s: Box::new(value),
-                p: Box::new(TermValue::iri("https://example.org/p")),
-                o: Box::new(TermValue::iri("https://example.org/o")),
+                s: TermBox::new(value),
+                p: TermBox::new(TermValue::iri("https://example.org/p")),
+                o: TermBox::new(TermValue::iri("https://example.org/o")),
             };
         }
         value
@@ -266,9 +267,9 @@ mod tests {
     fn any_term() -> impl Strategy<Value = TermValue> {
         leaf_term().prop_recursive(3, 24, 3, |inner| {
             (inner.clone(), inner.clone(), inner).prop_map(|(s, p, o)| TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         })
     }

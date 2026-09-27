@@ -15,6 +15,7 @@
 //! order the harness ran it in. A stack overflow aborts the whole test process, so every
 //! assertion reached is itself the proof that nothing overflowed.
 
+use purrdf_sparql_algebra::Child;
 use std::hash::{Hash, Hasher};
 
 use purrdf_sparql_algebra::{
@@ -451,7 +452,7 @@ fn triple_terms_nest_as_deep_as_the_stack_holds_them() {
 fn triple_term_nesting_counts_the_longest_chain() {
     let leaf = TermPattern::Variable(purrdf_sparql_algebra::Variable::new("o"));
     let wrap = |subject: TermPattern, object: TermPattern| {
-        TermPattern::Triple(Box::new(purrdf_sparql_algebra::TriplePattern {
+        TermPattern::Triple(Child::new(purrdf_sparql_algebra::TriplePattern {
             subject,
             predicate: purrdf_sparql_algebra::NamedNodePattern::NamedNode(
                 purrdf_sparql_algebra::NamedNode::new(format!("{EX}p")).expect("IRI"),
@@ -476,10 +477,8 @@ fn triple_term_nesting_counts_the_longest_chain() {
         100_000,
         "counted without recursion"
     );
-    // Dropped level by level, so the test's stack never holds its drop.
-    while let TermPattern::Triple(triple) = long {
-        long = triple.object;
-    }
+    // Dropped over a work list: the test's stack never holds its drop.
+    drop(long);
 }
 
 /// A tall tree is held to the same measure when it is admitted as when it is parsed:

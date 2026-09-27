@@ -64,6 +64,7 @@
 //! the service made them and claims in the order the answer reports them, so
 //! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
 
+use purrdf_core::TermBox;
 use purrdf_core::{RdfDataset, TermValue};
 
 use super::axiom::DlAxiom;
@@ -1927,9 +1928,9 @@ fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, Dl
             let p = decode_term_at(reader, depth + 1)?;
             let o = decode_term_at(reader, depth + 1)?;
             Ok(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         }
         _ => Err(malformed("unknown term kind")),
@@ -2209,6 +2210,7 @@ mod tests {
     use crate::reasoner::{
         Certified, ModuleMethod, Reasoner, extract_module, extract_module_with_proofs,
     };
+    use purrdf_core::TermBox;
 
     /// What every fixture below asks for, and what every `expect` on a proof term says.
     ///
@@ -3720,9 +3722,9 @@ mod tests {
     /// arm no test reaches is an arm a forger has to itself.
     fn exotic_terms_proof() -> ServiceProof {
         let inner = TermValue::Triple {
-            s: Box::new(TermValue::iri(EX_TOM)),
-            p: Box::new(TermValue::iri(RDF_TYPE)),
-            o: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::iri(EX_TOM)),
+            p: TermBox::new(TermValue::iri(RDF_TYPE)),
+            o: TermBox::new(TermValue::Blank {
                 label: "b1".to_owned(),
                 scope: purrdf_core::BlankScope(7),
             }),
@@ -3738,9 +3740,9 @@ mod tests {
             Question::Realization {
                 individuals: vec![
                     TermValue::Triple {
-                        s: Box::new(inner.clone()),
-                        p: Box::new(TermValue::iri(RDFS_SUBCLASS_OF)),
-                        o: Box::new(literal.clone()),
+                        s: TermBox::new(inner.clone()),
+                        p: TermBox::new(TermValue::iri(RDFS_SUBCLASS_OF)),
+                        o: TermBox::new(literal.clone()),
                     },
                     TermValue::Blank {
                         label: "x".to_owned(),

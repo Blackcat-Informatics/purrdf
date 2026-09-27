@@ -28,6 +28,8 @@
 //! `heldIn` called without a caller-supplied standpoint-predicate configuration
 //! (`UnsupportedKind::HeldInUnconfigured`).
 
+use purrdf_core::TermBox;
+use purrdf_sparql_algebra::{Chain, Child};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -2688,7 +2690,7 @@ fn substitute_pattern_impl(
             boxed_and_mapped(
                 GraphPattern::Filter {
                     expr: substitute_expr(expr, row, map, defer),
-                    inner: inner_final,
+                    inner: inner_final.into(),
                 },
                 pattern,
                 map,
@@ -2705,7 +2707,7 @@ fn substitute_pattern_impl(
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Extend {
-                    inner: inner_final,
+                    inner: inner_final.into(),
                     variable: variable.clone(),
                     expression: substitute_expr(expression, row, map, defer),
                 },
@@ -2729,7 +2731,7 @@ fn substitute_pattern_impl(
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Unfold {
-                    inner: inner_final,
+                    inner: inner_final.into(),
                     expression: substitute_expr(expression, row, map, defer),
                     element: element.clone(),
                     companion: companion.clone(),
@@ -2743,8 +2745,8 @@ fn substitute_pattern_impl(
             let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Join {
-                    left: left_sub,
-                    right: right_sub,
+                    left: left_sub.into(),
+                    right: right_sub.into(),
                 },
                 pattern,
                 map,
@@ -2765,7 +2767,8 @@ fn substitute_pattern_impl(
                 });
                 remap_moved(map, before, after);
             }
-            boxed_and_mapped(GraphPattern::Union { arms: arms_sub }, pattern, map)
+            let arms = Chain::try_from(arms_sub).expect("one substituted arm per arm of a chain");
+            boxed_and_mapped(GraphPattern::Union { arms }, pattern, map)
         }
         // The optional inline filter evaluates against the (already merged) joined
         // row, so a term-only variable it needs is injected on `left`: an outer
@@ -2786,8 +2789,8 @@ fn substitute_pattern_impl(
             let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::LeftJoin {
-                    left: left_final,
-                    right: right_sub,
+                    left: left_final.into(),
+                    right: right_sub.into(),
                     expression: expression
                         .as_ref()
                         .map(|e| substitute_expr(e, row, map, defer)),
@@ -2805,8 +2808,8 @@ fn substitute_pattern_impl(
             let right_sub = substitute_pattern_impl(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Minus {
-                    left: left_sub,
-                    right: right_sub,
+                    left: left_sub.into(),
+                    right: right_sub.into(),
                 },
                 pattern,
                 map,
@@ -2828,8 +2831,8 @@ fn substitute_pattern_impl(
                 let left_sub = match seed {
                     Some(seed) => plant_mapped_driver(left_sub, seed, left, map, |seed, left| {
                         GraphPattern::Join {
-                            left: seed,
-                            right: left,
+                            left: seed.into(),
+                            right: left.into(),
                         }
                     }),
                     None => left_sub,
@@ -2840,8 +2843,8 @@ fn substitute_pattern_impl(
             };
             boxed_and_mapped(
                 GraphPattern::Lateral {
-                    left: left_sub,
-                    right: right_sub,
+                    left: left_sub.into(),
+                    right: right_sub.into(),
                 },
                 pattern,
                 map,
@@ -2888,7 +2891,7 @@ fn substitute_pattern_impl(
             let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
                     name: resolved_name,
-                    inner: inner_sub,
+                    inner: inner_sub.into(),
                 },
                 pattern,
                 map,
@@ -2936,7 +2939,7 @@ fn substitute_pattern_impl(
             let service_node = boxed_and_mapped(
                 GraphPattern::Service {
                     name: resolved_name,
-                    inner: inner_sub,
+                    inner: inner_sub.into(),
                     silent: *silent,
                 },
                 pattern,
@@ -2969,7 +2972,7 @@ fn substitute_pattern_impl(
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::OrderBy {
-                    inner: inner_final,
+                    inner: inner_final.into(),
                     expression: expression
                         .iter()
                         .map(|oe| match oe {
@@ -3018,7 +3021,7 @@ fn substitute_pattern_impl(
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Group {
-                    inner: inner_final,
+                    inner: inner_final.into(),
                     variables: variables.clone(),
                     aggregates: aggregates
                         .iter()
@@ -3066,11 +3069,23 @@ fn substitute_pattern_impl(
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => {
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
-            boxed_and_mapped(GraphPattern::Distinct { inner: inner_sub }, pattern, map)
+            boxed_and_mapped(
+                GraphPattern::Distinct {
+                    inner: inner_sub.into(),
+                },
+                pattern,
+                map,
+            )
         }
         GraphPattern::Reduced { inner } => {
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
-            boxed_and_mapped(GraphPattern::Reduced { inner: inner_sub }, pattern, map)
+            boxed_and_mapped(
+                GraphPattern::Reduced {
+                    inner: inner_sub.into(),
+                },
+                pattern,
+                map,
+            )
         }
         GraphPattern::Slice {
             inner,
@@ -3080,7 +3095,7 @@ fn substitute_pattern_impl(
             let inner_sub = substitute_pattern_impl(inner, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Slice {
-                    inner: inner_sub,
+                    inner: inner_sub.into(),
                     start: *start,
                     length: *length,
                 },
@@ -3095,7 +3110,7 @@ fn substitute_pattern_impl(
             let inner_sub = substitute_pattern_impl(inner, &narrowed, map, defer);
             boxed_and_mapped(
                 GraphPattern::Project {
-                    inner: inner_sub,
+                    inner: inner_sub.into(),
                     variables: variables.clone(),
                 },
                 pattern,
@@ -3282,8 +3297,8 @@ fn join_leaf_with_values(
     );
     boxed_and_mapped(
         GraphPattern::Join {
-            left: leaf,
-            right: values,
+            left: leaf.into(),
+            right: values.into(),
         },
         source,
         map,
@@ -3369,8 +3384,8 @@ fn wrap_with_expr_term_only_values(
     );
     boxed_and_mapped(
         GraphPattern::Join {
-            left: node,
-            right: values,
+            left: node.into(),
+            right: values.into(),
         },
         source,
         map,
@@ -3413,8 +3428,8 @@ fn bind_row_into_call(
     match seed {
         Some(seed) => plant_mapped_driver(node, seed, source, map, |seed, call| {
             GraphPattern::Lateral {
-                left: seed,
-                right: call,
+                left: seed.into(),
+                right: call.into(),
             }
         }),
         None => node,
@@ -3503,62 +3518,55 @@ fn substitute_expr(
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
         Expression::Or(operands) => Expression::Or(
-            operands
-                .iter()
-                .map(|operand| substitute_expr(operand, row, &mut *map, &mut *defer))
-                .collect(),
+            operands.map_ref(|operand| substitute_expr(operand, row, &mut *map, &mut *defer)),
         ),
         Expression::And(operands) => Expression::And(
-            operands
-                .iter()
-                .map(|operand| substitute_expr(operand, row, &mut *map, &mut *defer))
-                .collect(),
+            operands.map_ref(|operand| substitute_expr(operand, row, &mut *map, &mut *defer)),
         ),
         Expression::Arithmetic(first, steps) => Expression::Arithmetic(
-            Box::new(substitute_expr(first, row, map, defer)),
-            steps
-                .iter()
-                .map(|(op, operand)| (*op, substitute_expr(operand, row, &mut *map, &mut *defer)))
-                .collect(),
+            Child::new(substitute_expr(first, row, map, defer)),
+            steps.map_ref(|(op, operand)| {
+                (*op, substitute_expr(operand, row, &mut *map, &mut *defer))
+            }),
         ),
         Expression::Equal(a, b) => Expression::Equal(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::SameTerm(a, b) => Expression::SameTerm(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::Greater(a, b) => Expression::Greater(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::Less(a, b) => Expression::Less(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Box::new(substitute_expr(a, row, map, defer)),
-            Box::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr(a, row, map, defer)),
+            Child::new(substitute_expr(b, row, map, defer)),
         ),
         Expression::UnaryPlus(a) => {
-            Expression::UnaryPlus(Box::new(substitute_expr(a, row, map, defer)))
+            Expression::UnaryPlus(Child::new(substitute_expr(a, row, map, defer)))
         }
         Expression::UnaryMinus(a) => {
-            Expression::UnaryMinus(Box::new(substitute_expr(a, row, map, defer)))
+            Expression::UnaryMinus(Child::new(substitute_expr(a, row, map, defer)))
         }
-        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row, map, defer))),
+        Expression::Not(a) => Expression::Not(Child::new(substitute_expr(a, row, map, defer))),
         Expression::If(c, t, e) => Expression::If(
-            Box::new(substitute_expr(c, row, map, defer)),
-            Box::new(substitute_expr(t, row, map, defer)),
-            Box::new(substitute_expr(e, row, map, defer)),
+            Child::new(substitute_expr(c, row, map, defer)),
+            Child::new(substitute_expr(t, row, map, defer)),
+            Child::new(substitute_expr(e, row, map, defer)),
         ),
         Expression::In(needle, haystack) => Expression::In(
-            Box::new(substitute_expr(needle, row, map, defer)),
+            Child::new(substitute_expr(needle, row, map, defer)),
             haystack
                 .iter()
                 .map(|h| substitute_expr(h, row, &mut *map, &mut *defer))
@@ -3585,8 +3593,8 @@ fn substitute_expr(
         // (`substitute_pattern_impl`, this arm's sibling call sites), so its nodes keep
         // their ledger identity through `map`.
         Expression::Exists(inner_pat) => match defer.defer(inner_pat, row) {
-            Some(placeholder) => Expression::Exists(placeholder),
-            None => Expression::Exists(substitute_pattern_impl(inner_pat, row, map, defer)),
+            Some(placeholder) => Expression::Exists(placeholder.into()),
+            None => Expression::Exists(substitute_pattern_impl(inner_pat, row, map, defer).into()),
         },
     }
 }
@@ -3723,7 +3731,7 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
             };
             let predicate = NamedNode::new_unchecked(p_iri);
             let object = ground_term_from_term_value(o)?;
-            GroundTerm::Triple(Box::new(GroundTriple {
+            GroundTerm::Triple(Child::new(GroundTriple {
                 subject,
                 predicate,
                 object,
@@ -5214,9 +5222,9 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         return Ok(None);
     }
     let triple = TermValue::Triple {
-        s: Box::new(s.clone()),
-        p: Box::new(p.clone()),
-        o: Box::new(o.clone()),
+        s: TermBox::new(s.clone()),
+        p: TermBox::new(p.clone()),
+        o: TermBox::new(o.clone()),
     };
     intern(ctx, triple)
 }
@@ -5580,7 +5588,9 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
 mod tests {
     use super::*;
     use crate::eval::eval;
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+    use purrdf_sparql_algebra::{Chain, Child, NonEmpty};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
     fn empty_ds() -> Arc<RdfDataset> {
@@ -5623,8 +5633,8 @@ mod tests {
         let ds = empty_ds();
         // "2"^^xsd:integer < "10"^^xsd:integer (value, not lexicographic).
         let lt = Expression::Less(
-            Box::new(typed_lit("2", XINT)),
-            Box::new(typed_lit("10", XINT)),
+            Child::new(typed_lit("2", XINT)),
+            Child::new(typed_lit("10", XINT)),
         );
         assert_eq!(ebv(&ds, &lt), Some(true));
     }
@@ -5633,7 +5643,10 @@ mod tests {
     fn kleene_or_with_error_and_true_is_true() {
         let ds = empty_ds();
         // (error || true) == true, even though the left operand errors.
-        let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
+        let err = Expression::Less(
+            Child::new(iri("http://ex/a")),
+            Child::new(iri("http://ex/b")),
+        );
         let expr = Expression::or(
             err,
             typed_lit("true", "http://www.w3.org/2001/XMLSchema#boolean"),
@@ -5644,7 +5657,10 @@ mod tests {
     #[test]
     fn kleene_and_with_error_and_false_is_false() {
         let ds = empty_ds();
-        let err = Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b")));
+        let err = Expression::Less(
+            Child::new(iri("http://ex/a")),
+            Child::new(iri("http://ex/b")),
+        );
         let expr = Expression::and(
             err,
             typed_lit("false", "http://www.w3.org/2001/XMLSchema#boolean"),
@@ -5657,12 +5673,12 @@ mod tests {
         let ds = empty_ds();
         // "1"^^xsd:integer = "01"^^xsd:integer (value equal) but NOT sameTerm.
         let eq = Expression::Equal(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("01", XINT)),
+            Child::new(typed_lit("1", XINT)),
+            Child::new(typed_lit("01", XINT)),
         );
         let same = Expression::SameTerm(
-            Box::new(typed_lit("1", XINT)),
-            Box::new(typed_lit("01", XINT)),
+            Child::new(typed_lit("1", XINT)),
+            Child::new(typed_lit("01", XINT)),
         );
         assert_eq!(ebv(&ds, &eq), Some(true));
         assert_eq!(ebv(&ds, &same), Some(false));
@@ -5681,8 +5697,8 @@ mod tests {
         const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
         let ds = empty_ds();
         let eq = Expression::Equal(
-            Box::new(typed_lit("NaN", XDOUBLE)),
-            Box::new(typed_lit("NaN", XFLOAT)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XFLOAT)),
         );
         assert_eq!(ebv(&ds, &eq), Some(true));
         // Same-type NaN pairs already resolve via the identical-RDF-term
@@ -5690,15 +5706,15 @@ mod tests {
         // that path stays `true` too, not just the cross-type one this test
         // targets.
         let eq_same_type = Expression::Equal(
-            Box::new(typed_lit("NaN", XDOUBLE)),
-            Box::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
         );
         assert_eq!(ebv(&ds, &eq_same_type), Some(true));
         // A NaN is still UNORDERED under `<`: the carve-out is `sameValue`'s
         // alone and must not leak into the ordering operators.
         let lt = Expression::Less(
-            Box::new(typed_lit("NaN", XDOUBLE)),
-            Box::new(typed_lit("NaN", XFLOAT)),
+            Child::new(typed_lit("NaN", XDOUBLE)),
+            Child::new(typed_lit("NaN", XFLOAT)),
         );
         assert_eq!(ebv(&ds, &lt), None);
     }
@@ -5706,23 +5722,26 @@ mod tests {
     #[test]
     fn str_and_concat_and_strlen() {
         let ds = empty_ds();
-        let concat = Expression::FunctionCall(Function::Concat, vec![lit("foo"), lit("bar")]);
+        let concat =
+            Expression::FunctionCall(Function::Concat, vec![lit("foo"), lit("bar")].into());
         assert_eq!(lex(&ds, &concat), Some("foobar".to_owned()));
-        let strlen = Expression::FunctionCall(Function::StrLen, vec![lit("héllo")]);
+        let strlen = Expression::FunctionCall(Function::StrLen, vec![lit("héllo")].into());
         assert_eq!(lex(&ds, &strlen), Some("5".to_owned()));
-        let str_of_iri = Expression::FunctionCall(Function::Str, vec![iri("http://ex/x")]);
+        let str_of_iri = Expression::FunctionCall(Function::Str, vec![iri("http://ex/x")].into());
         assert_eq!(lex(&ds, &str_of_iri), Some("http://ex/x".to_owned()));
     }
 
     #[test]
     fn contains_and_regex() {
         let ds = empty_ds();
-        let contains =
-            Expression::FunctionCall(Function::Contains, vec![lit("hello world"), lit("o w")]);
+        let contains = Expression::FunctionCall(
+            Function::Contains,
+            vec![lit("hello world"), lit("o w")].into(),
+        );
         assert_eq!(ebv(&ds, &contains), Some(true));
         let re = Expression::FunctionCall(
             Function::Regex,
-            vec![lit("Hello"), lit("^h"), lit("i")], // case-insensitive
+            vec![lit("Hello"), lit("^h"), lit("i")].into(), // case-insensitive
         );
         assert_eq!(ebv(&ds, &re), Some(true));
     }
@@ -5735,9 +5754,10 @@ mod tests {
         let expr = Expression::FunctionCall(
             Function::StrStarts,
             vec![
-                Expression::FunctionCall(Function::Str, vec![iri("http://ex/alice")]),
+                Expression::FunctionCall(Function::Str, vec![iri("http://ex/alice")].into()),
                 lit("http://ex/"),
-            ],
+            ]
+            .into(),
         );
 
         assert_eq!(
@@ -5813,7 +5833,7 @@ mod tests {
     fn langmatches_function_dispatch_end_to_end() {
         let ds = empty_ds();
         let lm = |tag: &str, range: &str| {
-            Expression::FunctionCall(Function::LangMatches, vec![lit(tag), lit(range)])
+            Expression::FunctionCall(Function::LangMatches, vec![lit(tag), lit(range)].into())
         };
         assert_eq!(ebv(&ds, &lm("en-US", "en")), Some(true));
         assert_eq!(ebv(&ds, &lm("EN", "en")), Some(true));
@@ -5829,9 +5849,14 @@ mod tests {
         let ds = empty_ds();
         let schema = VarSchema::new();
         let mut ctx = EvalCtx::new(&ds);
-        let re = Expression::FunctionCall(Function::Regex, vec![lit("Hello"), lit("^h"), lit("i")]);
-        let bad =
-            Expression::FunctionCall(Function::Regex, vec![lit("Hello"), lit("^h"), lit("z")]);
+        let re = Expression::FunctionCall(
+            Function::Regex,
+            vec![lit("Hello"), lit("^h"), lit("i")].into(),
+        );
+        let bad = Expression::FunctionCall(
+            Function::Regex,
+            vec![lit("Hello"), lit("^h"), lit("z")].into(),
+        );
         // Total `(pattern, flags)` entries across the pattern-keyed two-level map.
         let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| {
             ctx.regex_cache
@@ -5870,8 +5895,14 @@ mod tests {
         let ds = empty_ds();
         let schema = VarSchema::new();
         let mut ctx = EvalCtx::new(&ds);
-        let re = Expression::FunctionCall(Function::Regex, vec![lit("a.c"), lit("a.c"), lit("q")]);
-        let no = Expression::FunctionCall(Function::Regex, vec![lit("abc"), lit("a.c"), lit("q")]);
+        let re = Expression::FunctionCall(
+            Function::Regex,
+            vec![lit("a.c"), lit("a.c"), lit("q")].into(),
+        );
+        let no = Expression::FunctionCall(
+            Function::Regex,
+            vec![lit("abc"), lit("a.c"), lit("q")].into(),
+        );
 
         assert_eq!(
             eval_ebv(&re, &[], &schema, &mut ctx).expect("q regex"),
@@ -5897,7 +5928,7 @@ mod tests {
                 &ds,
                 &Expression::FunctionCall(
                     Function::Regex,
-                    vec![lit(text), lit(pattern), lit(flags)],
+                    vec![lit(text), lit(pattern), lit(flags)].into(),
                 ),
             )
         };
@@ -5953,7 +5984,8 @@ mod tests {
     #[test]
     fn regex_two_argument_call_defaults_flags_and_keeps_the_xsd_dialect() {
         let ds = empty_ds();
-        let expr = Expression::FunctionCall(Function::Regex, vec![lit("a\rb"), lit("^a.b$")]);
+        let expr =
+            Expression::FunctionCall(Function::Regex, vec![lit("a\rb"), lit("^a.b$")].into());
         assert_eq!(ebv(&ds, &expr), Some(false));
     }
 
@@ -5967,7 +5999,7 @@ mod tests {
         let ds = empty_ds();
         let expr = Expression::FunctionCall(
             Function::Replace,
-            vec![lit("axb"), lit("(a)(.)(b)"), lit("$2")],
+            vec![lit("axb"), lit("(a)(.)(b)"), lit("$2")].into(),
         );
         assert_eq!(lex(&ds, &expr), Some("x".to_owned()));
     }
@@ -5983,7 +6015,10 @@ mod tests {
         let m = |text: &str, pattern: &str| {
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::Regex, vec![lit(text), lit(pattern), lit("")]),
+                &Expression::FunctionCall(
+                    Function::Regex,
+                    vec![lit(text), lit(pattern), lit("")].into(),
+                ),
             )
         };
         assert_eq!(m("ab cd", r"\bcd"), None, "\\b is not an XSD construct");
@@ -6009,7 +6044,10 @@ mod tests {
         let m = |text: &str, pattern: &str| {
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::Regex, vec![lit(text), lit(pattern), lit("x")]),
+                &Expression::FunctionCall(
+                    Function::Regex,
+                    vec![lit(text), lit(pattern), lit("x")].into(),
+                ),
             )
         };
         assert_eq!(m("helloworld", "hello world"), Some(true));
@@ -6043,7 +6081,7 @@ mod tests {
                 &ds,
                 &Expression::FunctionCall(
                     Function::Replace,
-                    vec![lit(s), lit(pattern), lit(replacement), lit(flags)],
+                    vec![lit(s), lit(pattern), lit(replacement), lit(flags)].into(),
                 ),
             )
         };
@@ -6073,7 +6111,7 @@ mod tests {
                 &ds,
                 &Expression::FunctionCall(
                     Function::Replace,
-                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")].into(),
                 ),
             )
         };
@@ -6100,7 +6138,7 @@ mod tests {
                 &ds,
                 &Expression::FunctionCall(
                     Function::Replace,
-                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")].into(),
                 ),
             )
         };
@@ -6122,7 +6160,7 @@ mod tests {
                 &ds,
                 &Expression::FunctionCall(
                     Function::Replace,
-                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")].into(),
                 ),
             )
         };
@@ -6136,7 +6174,7 @@ mod tests {
         // SUBSTR("abcdef", 2, 3) == "bcd".
         let s = Expression::FunctionCall(
             Function::SubStr,
-            vec![lit("abcdef"), typed_lit("2", XINT), typed_lit("3", XINT)],
+            vec![lit("abcdef"), typed_lit("2", XINT), typed_lit("3", XINT)].into(),
         );
         assert_eq!(lex(&ds, &s), Some("bcd".to_owned()));
     }
@@ -6147,28 +6185,28 @@ mod tests {
         assert_eq!(
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::IsIri, vec![iri("http://ex/x")])
+                &Expression::FunctionCall(Function::IsIri, vec![iri("http://ex/x")].into())
             ),
             Some(true)
         );
         assert_eq!(
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::IsLiteral, vec![lit("x")])
+                &Expression::FunctionCall(Function::IsLiteral, vec![lit("x")].into())
             ),
             Some(true)
         );
         assert_eq!(
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::IsNumeric, vec![typed_lit("3", XINT)])
+                &Expression::FunctionCall(Function::IsNumeric, vec![typed_lit("3", XINT)].into())
             ),
             Some(true)
         );
         assert_eq!(
             ebv(
                 &ds,
-                &Expression::FunctionCall(Function::IsNumeric, vec![lit("x")])
+                &Expression::FunctionCall(Function::IsNumeric, vec![lit("x")].into())
             ),
             Some(false)
         );
@@ -6178,8 +6216,8 @@ mod tests {
     fn coalesce_skips_errors() {
         let ds = empty_ds();
         // COALESCE(error, "fallback") → "fallback".
-        let err = Expression::FunctionCall(Function::Str, vec![]); // STR() with no arg → error
-        let expr = Expression::Coalesce(vec![err, lit("fallback")]);
+        let err = Expression::FunctionCall(Function::Str, vec![].into()); // STR() with no arg → error
+        let expr = Expression::Coalesce(vec![err, lit("fallback")].into());
         assert_eq!(lex(&ds, &expr), Some("fallback".to_owned()));
     }
 
@@ -6295,7 +6333,7 @@ mod tests {
     fn arithmetic_unary_minus() {
         let ds = empty_ds();
         // -5 = -5
-        let expr = Expression::UnaryMinus(Box::new(typed_lit("5", XINT)));
+        let expr = Expression::UnaryMinus(Child::new(typed_lit("5", XINT)));
         assert_eq!(lex(&ds, &expr), Some("-5".to_owned()));
     }
 
@@ -6305,7 +6343,7 @@ mod tests {
     fn function_abs() {
         let ds = empty_ds();
         // ABS(-3) = 3
-        let expr = Expression::FunctionCall(Function::Abs, vec![typed_lit("-3", XINT)]);
+        let expr = Expression::FunctionCall(Function::Abs, vec![typed_lit("-3", XINT)].into());
         assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
 
@@ -6313,7 +6351,7 @@ mod tests {
     fn function_ceil() {
         let ds = empty_ds();
         // CEIL(2.1) = 3 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
-        let expr = Expression::FunctionCall(Function::Ceil, vec![typed_lit("2.1", XDEC)]);
+        let expr = Expression::FunctionCall(Function::Ceil, vec![typed_lit("2.1", XDEC)].into());
         assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
 
@@ -6321,7 +6359,7 @@ mod tests {
     fn function_floor() {
         let ds = empty_ds();
         // FLOOR(2.9) = 2 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
-        let expr = Expression::FunctionCall(Function::Floor, vec![typed_lit("2.9", XDEC)]);
+        let expr = Expression::FunctionCall(Function::Floor, vec![typed_lit("2.9", XDEC)].into());
         assert_eq!(lex(&ds, &expr), Some("2".to_owned()));
     }
 
@@ -6330,7 +6368,7 @@ mod tests {
         let ds = empty_ds();
         // ROUND(2.5) = 3 (round-half-toward-+infinity per XPath fn:round; XSD 1.1
         // whole-decimal lexical has no point)
-        let expr = Expression::FunctionCall(Function::Round, vec![typed_lit("2.5", XDEC)]);
+        let expr = Expression::FunctionCall(Function::Round, vec![typed_lit("2.5", XDEC)].into());
         assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
 
@@ -6351,7 +6389,7 @@ mod tests {
         );
         let seq = eval(
             &GraphPattern::Extend {
-                inner: Box::new(inner),
+                inner: Child::new(inner),
                 variable: Variable::new("plus1"),
                 expression: expr,
             },
@@ -6553,13 +6591,13 @@ mod tests {
         // { ?s :age ?n FILTER(?n >= 18) } → only :a.
         let inner = bgp1("s", "http://ex/age", "n");
         let cond = Expression::GreaterOrEqual(
-            Box::new(Expression::Variable(Variable::new("n"))),
-            Box::new(typed_lit("18", XINT)),
+            Child::new(Expression::Variable(Variable::new("n"))),
+            Child::new(typed_lit("18", XINT)),
         );
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6575,11 +6613,11 @@ mod tests {
         let inner = bgp1("s", "http://ex/name", "nm");
         let expr = Expression::FunctionCall(
             Function::UCase,
-            vec![Expression::Variable(Variable::new("nm"))],
+            vec![Expression::Variable(Variable::new("nm"))].into(),
         );
         let seq = eval(
             &GraphPattern::Extend {
-                inner: Box::new(inner),
+                inner: Child::new(inner),
                 variable: Variable::new("u"),
                 expression: expr,
             },
@@ -6602,11 +6640,11 @@ mod tests {
         // who are NOT members → only :b (a is a member).
         let inner = bgp1("s", "http://ex/age", "n");
         let exists_pat = bgp1("s", "http://ex/member", "c");
-        let not_exists = Expression::Not(Box::new(Expression::Exists(Box::new(exists_pat))));
+        let not_exists = Expression::Not(Child::new(Expression::Exists(Child::new(exists_pat))));
         let seq = eval(
             &GraphPattern::Filter {
                 expr: not_exists,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6633,17 +6671,17 @@ mod tests {
         // difference is indeterminate (mixed timezone, not kept).
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::arithmetic(
+            Child::new(Expression::arithmetic(
                 Expression::Variable(Variable::new("end")),
                 ArithmeticOperator::Subtract,
                 Expression::Variable(Variable::new("start")),
             )),
-            Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
+            Child::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6662,12 +6700,12 @@ mod tests {
         // is asserted in a single place.
         let ds = temporal_graph();
         let cond = Expression::Greater(
-            Box::new(Expression::arithmetic(
+            Child::new(Expression::arithmetic(
                 Expression::Variable(Variable::new("end")),
                 ArithmeticOperator::Subtract,
                 Expression::Variable(Variable::new("start")),
             )),
-            Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
+            Child::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
         );
 
         let mut ctx_pos = EvalCtx::new(&ds);
@@ -6675,7 +6713,7 @@ mod tests {
         let seq_pos = eval(
             &GraphPattern::Filter {
                 expr: cond.clone(),
-                inner: Box::new(inner_pos),
+                inner: Child::new(inner_pos),
             },
             &mut ctx_pos,
         )
@@ -6686,8 +6724,8 @@ mod tests {
         let inner_neg = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let seq_neg = eval(
             &GraphPattern::Filter {
-                expr: Expression::Not(Box::new(cond)),
-                inner: Box::new(inner_neg),
+                expr: Expression::Not(Child::new(cond)),
+                inner: Child::new(inner_neg),
             },
             &mut ctx_neg,
         )
@@ -6720,17 +6758,17 @@ mod tests {
         // is unambiguously later -> determinate `false`, excluded.
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let cond = Expression::Greater(
-            Box::new(Expression::arithmetic(
+            Child::new(Expression::arithmetic(
                 Expression::Variable(Variable::new("start")),
                 ArithmeticOperator::Add,
                 typed_lit("P5D", XSD_DAYTIME_DURATION),
             )),
-            Box::new(Expression::Variable(Variable::new("end"))),
+            Child::new(Expression::Variable(Variable::new("end"))),
         );
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6752,7 +6790,7 @@ mod tests {
         // predicate is unbound too -> excluded.
         let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
         let bound = GraphPattern::Extend {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variable: Variable::new("len"),
             expression: Expression::arithmetic(
                 Expression::Variable(Variable::new("end")),
@@ -6761,17 +6799,17 @@ mod tests {
             ),
         };
         let cond = Expression::GreaterOrEqual(
-            Box::new(Expression::arithmetic(
+            Child::new(Expression::arithmetic(
                 Expression::Variable(Variable::new("len")),
                 ArithmeticOperator::Divide,
                 typed_lit("P1D", XSD_DAYTIME_DURATION),
             )),
-            Box::new(typed_lit("7", XINT)),
+            Child::new(typed_lit("7", XINT)),
         );
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(bound),
+                inner: Child::new(bound),
             },
             &mut ctx,
         )
@@ -6789,13 +6827,13 @@ mod tests {
         // itself.
         let inner = bgp1("s", "http://ex/period", "period");
         let cond = Expression::Equal(
-            Box::new(Expression::Variable(Variable::new("period"))),
-            Box::new(typed_lit("P30D", XSD_DURATION)),
+            Child::new(Expression::Variable(Variable::new("period"))),
+            Child::new(typed_lit("P30D", XSD_DURATION)),
         );
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6813,14 +6851,14 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // { ?s :period ?period FILTER(!(?period = "P30D"^^xsd:duration)) }
         let inner = bgp1("s", "http://ex/period", "period");
-        let cond = Expression::Not(Box::new(Expression::Equal(
-            Box::new(Expression::Variable(Variable::new("period"))),
-            Box::new(typed_lit("P30D", XSD_DURATION)),
+        let cond = Expression::Not(Child::new(Expression::Equal(
+            Child::new(Expression::Variable(Variable::new("period"))),
+            Child::new(typed_lit("P30D", XSD_DURATION)),
         )));
         let seq = eval(
             &GraphPattern::Filter {
                 expr: cond,
-                inner: Box::new(inner),
+                inner: Child::new(inner),
             },
             &mut ctx,
         )
@@ -6833,7 +6871,7 @@ mod tests {
     #[test]
     fn encode_for_uri_basic() {
         let ds = empty_ds();
-        let expr = Expression::FunctionCall(Function::EncodeForUri, vec![lit("a b/c")]);
+        let expr = Expression::FunctionCall(Function::EncodeForUri, vec![lit("a b/c")].into());
         assert_eq!(lex(&ds, &expr), Some("a%20b%2Fc".to_owned()));
     }
 
@@ -6844,7 +6882,7 @@ mod tests {
     #[test]
     fn md5_abc() {
         let ds = empty_ds();
-        let expr = Expression::FunctionCall(Function::Md5, vec![lit("abc")]);
+        let expr = Expression::FunctionCall(Function::Md5, vec![lit("abc")].into());
         assert_eq!(
             lex(&ds, &expr),
             Some("900150983cd24fb0d6963f7d28e17f72".to_owned())
@@ -6854,7 +6892,7 @@ mod tests {
     #[test]
     fn sha1_abc() {
         let ds = empty_ds();
-        let expr = Expression::FunctionCall(Function::Sha1, vec![lit("abc")]);
+        let expr = Expression::FunctionCall(Function::Sha1, vec![lit("abc")].into());
         assert_eq!(
             lex(&ds, &expr),
             Some("a9993e364706816aba3e25717850c26c9cd0d89d".to_owned())
@@ -6864,7 +6902,7 @@ mod tests {
     #[test]
     fn sha256_abc() {
         let ds = empty_ds();
-        let expr = Expression::FunctionCall(Function::Sha256, vec![lit("abc")]);
+        let expr = Expression::FunctionCall(Function::Sha256, vec![lit("abc")].into());
         assert_eq!(
             lex(&ds, &expr),
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned())
@@ -6888,7 +6926,7 @@ mod tests {
     fn assert_kat(func: &Function, expected: [&str; 3]) {
         let ds = empty_ds();
         for (message, want) in KAT_MESSAGES.iter().zip(expected) {
-            let expr = Expression::FunctionCall(func.clone(), vec![lit(message)]);
+            let expr = Expression::FunctionCall(func.clone(), vec![lit(message)].into());
             assert_eq!(
                 lex(&ds, &expr).as_deref(),
                 Some(want),
@@ -6965,7 +7003,9 @@ mod tests {
             Function::Sha3_512,
         ]
         .into_iter()
-        .map(|f| lex(&ds, &Expression::FunctionCall(f, vec![lit("abc")])).expect("a SHA-3 digest"))
+        .map(|f| {
+            lex(&ds, &Expression::FunctionCall(f, vec![lit("abc")].into())).expect("a SHA-3 digest")
+        })
         .collect();
         // Two hex chars per octet: 224/256/384/512 bits → 56/64/96/128 chars.
         assert_eq!(
@@ -6996,7 +7036,8 @@ mod tests {
                 f.clone(),
                 vec![Expression::NamedNode(
                     NamedNode::new("http://example.org/s").expect("a valid test IRI"),
-                )],
+                )]
+                .into(),
             );
             assert_eq!(lex(&ds, &expr), None, "{f:?} over an IRI must error");
         }
@@ -7029,8 +7070,11 @@ mod tests {
             Function::Sha3_512,
         ];
         for f in functions {
-            let baseline = lex(&ds, &Expression::FunctionCall(f.clone(), vec![lit("abc")]))
-                .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
+            let baseline = lex(
+                &ds,
+                &Expression::FunctionCall(f.clone(), vec![lit("abc")].into()),
+            )
+            .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
             for accepted in [
                 typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string"),
                 Expression::Literal(Literal::new_lang("abc", "en", None)),
@@ -7041,7 +7085,11 @@ mod tests {
                 )),
             ] {
                 assert_eq!(
-                    lex(&ds, &Expression::FunctionCall(f.clone(), vec![accepted])).as_deref(),
+                    lex(
+                        &ds,
+                        &Expression::FunctionCall(f.clone(), vec![accepted].into())
+                    )
+                    .as_deref(),
                     Some(baseline.as_str()),
                     "{f:?} must hash the lexical form of every string-shaped literal"
                 );
@@ -7051,7 +7099,7 @@ mod tests {
                     &ds,
                     &Expression::FunctionCall(
                         f.clone(),
-                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")]
+                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")].into()
                     )
                 ),
                 None,
@@ -7066,9 +7114,9 @@ mod tests {
     fn year_month_day_over_datetime() {
         let ds = empty_ds();
         let dt = typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME);
-        let year = Expression::FunctionCall(Function::Year, vec![dt.clone()]);
-        let month = Expression::FunctionCall(Function::Month, vec![dt.clone()]);
-        let day = Expression::FunctionCall(Function::Day, vec![dt]);
+        let year = Expression::FunctionCall(Function::Year, vec![dt.clone()].into());
+        let month = Expression::FunctionCall(Function::Month, vec![dt.clone()].into());
+        let day = Expression::FunctionCall(Function::Day, vec![dt].into());
         assert_eq!(lex(&ds, &year), Some("2024".to_owned()));
         assert_eq!(lex(&ds, &month), Some("3".to_owned()));
         assert_eq!(lex(&ds, &day), Some("15".to_owned()));
@@ -7078,9 +7126,9 @@ mod tests {
     fn hours_minutes_seconds_over_datetime() {
         let ds = empty_ds();
         let dt = typed_lit("2024-03-15T10:30:45Z", XSD_DATETIME);
-        let hours = Expression::FunctionCall(Function::Hours, vec![dt.clone()]);
-        let minutes = Expression::FunctionCall(Function::Minutes, vec![dt.clone()]);
-        let seconds = Expression::FunctionCall(Function::Seconds, vec![dt]);
+        let hours = Expression::FunctionCall(Function::Hours, vec![dt.clone()].into());
+        let minutes = Expression::FunctionCall(Function::Minutes, vec![dt.clone()].into());
+        let seconds = Expression::FunctionCall(Function::Seconds, vec![dt].into());
         assert_eq!(lex(&ds, &hours), Some("10".to_owned()));
         assert_eq!(lex(&ds, &minutes), Some("30".to_owned()));
         // SECONDS returns xsd:decimal; XSD 1.1 whole-decimal lexical has no point.
@@ -7092,7 +7140,7 @@ mod tests {
         let ds = empty_ds();
         // +05:30 offset → "PT5H30M"
         let dt = typed_lit("2024-03-15T10:30:00+05:30", XSD_DATETIME);
-        let tz = Expression::FunctionCall(Function::Timezone, vec![dt]);
+        let tz = Expression::FunctionCall(Function::Timezone, vec![dt].into());
         let result = lex(&ds, &tz).expect("timezone result");
         assert_eq!(result, "PT5H30M");
     }
@@ -7101,7 +7149,7 @@ mod tests {
     fn timezone_utc_returns_pt0s() {
         let ds = empty_ds();
         let dt = typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME);
-        let tz = Expression::FunctionCall(Function::Timezone, vec![dt]);
+        let tz = Expression::FunctionCall(Function::Timezone, vec![dt].into());
         assert_eq!(lex(&ds, &tz), Some("PT0S".to_owned()));
     }
 
@@ -7111,9 +7159,9 @@ mod tests {
         let dt_utc = typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME);
         let dt_off = typed_lit("2024-03-15T10:30:00+05:30", XSD_DATETIME);
         let dt_none = typed_lit("2024-03-15T10:30:00", XSD_DATETIME);
-        let tz_utc = Expression::FunctionCall(Function::Tz, vec![dt_utc]);
-        let tz_off = Expression::FunctionCall(Function::Tz, vec![dt_off]);
-        let tz_none = Expression::FunctionCall(Function::Tz, vec![dt_none]);
+        let tz_utc = Expression::FunctionCall(Function::Tz, vec![dt_utc].into());
+        let tz_off = Expression::FunctionCall(Function::Tz, vec![dt_off].into());
+        let tz_none = Expression::FunctionCall(Function::Tz, vec![dt_none].into());
         assert_eq!(lex(&ds, &tz_utc), Some("Z".to_owned()));
         assert_eq!(lex(&ds, &tz_off), Some("+05:30".to_owned()));
         assert_eq!(lex(&ds, &tz_none), Some(String::new()));
@@ -7132,7 +7180,7 @@ mod tests {
     const XSD_YEARMONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
 
     fn adjust(value: Expression, timezone: Expression) -> Expression {
-        Expression::FunctionCall(Function::Adjust, vec![value, timezone])
+        Expression::FunctionCall(Function::Adjust, vec![value, timezone].into())
     }
 
     /// The (lexical, datatype) pair of an evaluated constant expression.
@@ -7447,12 +7495,12 @@ mod tests {
     fn unary_minus_on_a_duration_round_trips() {
         let ds = empty_ds();
         let d = typed_lit("P1Y2M", XSD_YEARMONTH_DURATION);
-        let neg = Expression::UnaryMinus(Box::new(d));
+        let neg = Expression::UnaryMinus(Child::new(d));
         let (lex1, dt1) = lex_and_dt(&ds, &neg).expect("-(P1Y2M)");
         assert_eq!(lex1, "-P1Y2M");
         assert_eq!(dt1, XSD_YEARMONTH_DURATION);
         // -(-d) == d, evaluated as one nested expression.
-        let double_neg = Expression::UnaryMinus(Box::new(neg));
+        let double_neg = Expression::UnaryMinus(Child::new(neg));
         let (lex2, dt2) = lex_and_dt(&ds, &double_neg).expect("-(-(P1Y2M))");
         assert_eq!(lex2, "P1Y2M");
         assert_eq!(dt2, XSD_YEARMONTH_DURATION);
@@ -7468,9 +7516,9 @@ mod tests {
         // pins both outcomes side by side.
         let a = typed_lit("P1M", XSD_DURATION);
         let b = typed_lit("P30D", XSD_DURATION);
-        let eq = Expression::Equal(Box::new(a.clone()), Box::new(b.clone()));
+        let eq = Expression::Equal(Child::new(a.clone()), Child::new(b.clone()));
         assert_eq!(ebv(&ds, &eq), Some(false));
-        let lt = Expression::Less(Box::new(a), Box::new(b));
+        let lt = Expression::Less(Child::new(a), Child::new(b));
         assert_eq!(ebv(&ds, &lt), None);
     }
 
@@ -7508,7 +7556,7 @@ mod tests {
         let known_dt = purrdf_xsd::datetime_from_unix_seconds(0);
         let mut ctx = EvalCtx::new(&ds).with_now(XsdValue::DateTime(known_dt));
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::Now, vec![]);
+        let expr = Expression::FunctionCall(Function::Now, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("NOW()")
             .expect("some");
@@ -7532,7 +7580,7 @@ mod tests {
             let cast = |lex: &str| {
                 Expression::FunctionCall(
                     Function::Custom(NamedNode::new_unchecked(dt)),
-                    vec![lit(lex)],
+                    vec![lit(lex)].into(),
                 )
             };
             assert_eq!(
@@ -7558,7 +7606,7 @@ mod tests {
         let dbl = "http://www.w3.org/2001/XMLSchema#double";
         let expr = Expression::FunctionCall(
             Function::Custom(NamedNode::new_unchecked(dbl)),
-            vec![typed_lit("+INF", dbl)],
+            vec![typed_lit("+INF", dbl)].into(),
         );
         assert_eq!(lex(&ds, &expr).as_deref(), Some("INF"));
     }
@@ -7575,7 +7623,7 @@ mod tests {
         let cast = |target: &str, lexical: &str| {
             let expr = Expression::FunctionCall(
                 Function::Custom(NamedNode::new_unchecked(target)),
-                vec![typed_lit(lexical, dec)],
+                vec![typed_lit(lexical, dec)].into(),
             );
             lex(&ds, &expr)
         };
@@ -7636,7 +7684,7 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds).with_rng_seed(12345);
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::Rand, vec![]);
+        let expr = Expression::FunctionCall(Function::Rand, vec![].into());
         // First call
         let t1 = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("rand1")
@@ -7678,7 +7726,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0xDEAD_BEEF_CAFE_BABEu64;
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::Uuid, vec![]);
+        let expr = Expression::FunctionCall(Function::Uuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("UUID")
             .expect("some");
@@ -7715,7 +7763,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0x1234_5678_9ABC_DEF0u64;
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::StrUuid, vec![]);
+        let expr = Expression::FunctionCall(Function::StrUuid, vec![].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("STRUUID")
             .expect("some");
@@ -7923,7 +7971,7 @@ mod tests {
 
         let mut ctx = EvalCtx::new(&ds);
         let seq = eval(&outer, &mut ctx).expect("outer bgp");
-        let exists_expr = Expression::Exists(Box::new(inner));
+        let exists_expr = Expression::Exists(Child::new(inner));
         for row in &seq.rows {
             eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
         }
@@ -8465,7 +8513,7 @@ mod tests {
 
         let mut ctx = EvalCtx::new(&ds);
         let seq = eval(&outer, &mut ctx).expect("outer bgp");
-        let exists_expr = Expression::Exists(Box::new(inner));
+        let exists_expr = Expression::Exists(Child::new(inner));
         for row in &seq.rows {
             eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
         }
@@ -8542,7 +8590,7 @@ mod tests {
             "the fixture must match the inner"
         );
 
-        let exists_expr = Expression::Exists(Box::new(inner));
+        let exists_expr = Expression::Exists(Child::new(inner));
         let mut saw_truncated_inner = false;
         let mut saw_memo = false;
 
@@ -8609,8 +8657,8 @@ mod tests {
         let ds = exists_governor_ds();
         let (outer, inner) = exists_governor_patterns();
         let plan = GraphPattern::Filter {
-            expr: Expression::Not(Box::new(Expression::Exists(Box::new(inner)))),
-            inner: Box::new(outer),
+            expr: Expression::Not(Child::new(Expression::Exists(Child::new(inner)))),
+            inner: Child::new(outer),
         };
         let order_cache = crate::eval::BgpOrderCache::default();
 
@@ -8879,7 +8927,7 @@ mod tests {
     /// standpoint predicate table configured — and return the EBV
     /// (`None` ⇒ SPARQL error / unbound).
     fn held_in(ds: &RdfDataset, arg0: Expression, arg1: Expression) -> Option<bool> {
-        let expr = Expression::FunctionCall(held_in_fn(), vec![arg0, arg1]);
+        let expr = Expression::FunctionCall(held_in_fn(), vec![arg0, arg1].into());
         let mut ctx = EvalCtx::new(ds).with_standpoint_predicates(ex_standpoints());
         let schema = VarSchema::new();
         eval_ebv(&expr, &[], &schema, &mut ctx).expect("eval")
@@ -8890,8 +8938,10 @@ mod tests {
         // No StandpointPredicates configured ⇒ hard error (no fabricated default),
         // even before the arguments are inspected.
         let ds = held_in_ds();
-        let expr =
-            Expression::FunctionCall(held_in_fn(), vec![iri("http://ex/r"), iri("http://ex/T1")]);
+        let expr = Expression::FunctionCall(
+            held_in_fn(),
+            vec![iri("http://ex/r"), iri("http://ex/T1")].into(),
+        );
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
         let err = eval_ebv(&expr, &[], &schema, &mut ctx)
@@ -8994,7 +9044,7 @@ mod tests {
             }],
         };
         let bind_sum = GraphPattern::Extend {
-            inner: Box::new(scan),
+            inner: Child::new(scan),
             variable: Variable::new("sum"),
             expression: Expression::arithmetic(
                 Expression::Variable(Variable::new("o")),
@@ -9003,7 +9053,7 @@ mod tests {
             ),
         };
         let bind_label = GraphPattern::Extend {
-            inner: Box::new(bind_sum),
+            inner: Child::new(bind_sum),
             variable: Variable::new("label"),
             expression: Expression::FunctionCall(
                 Function::Concat,
@@ -9011,9 +9061,10 @@ mod tests {
                     lit("v-"),
                     Expression::FunctionCall(
                         Function::Str,
-                        vec![Expression::Variable(Variable::new("sum"))],
+                        vec![Expression::Variable(Variable::new("sum"))].into(),
                     ),
-                ],
+                ]
+                .into(),
             ),
         };
 
@@ -9091,12 +9142,12 @@ mod tests {
         // degrade to `None`, not panic the engine. Constructed directly here
         // because there is no other way to reach this arm.
         let malformed = TermValue::Triple {
-            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
+            s: TermBox::new(TermValue::Iri("https://example.org/s".to_owned())),
             // A literal predicate: never producible by the parser or by
             // PurRDF's own interner, only by a hand-built (or foreign-view)
             // `TermValue`.
-            p: Box::new(TermValue::simple_literal("not-an-iri")),
-            o: Box::new(TermValue::Iri("https://example.org/o".to_owned())),
+            p: TermBox::new(TermValue::simple_literal("not-an-iri")),
+            o: TermBox::new(TermValue::Iri("https://example.org/o".to_owned())),
         };
 
         assert_eq!(
@@ -9114,14 +9165,14 @@ mod tests {
         // carry the `None` all the way up rather than the outer call constructing
         // a triple around a term that could not be built.
         let inner_malformed = TermValue::Triple {
-            s: Box::new(TermValue::Iri("https://example.org/s2".to_owned())),
-            p: Box::new(TermValue::simple_literal("still-not-an-iri")),
-            o: Box::new(TermValue::Iri("https://example.org/o2".to_owned())),
+            s: TermBox::new(TermValue::Iri("https://example.org/s2".to_owned())),
+            p: TermBox::new(TermValue::simple_literal("still-not-an-iri")),
+            o: TermBox::new(TermValue::Iri("https://example.org/o2".to_owned())),
         };
         let outer = TermValue::Triple {
-            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
-            p: Box::new(TermValue::Iri("https://example.org/p".to_owned())),
-            o: Box::new(inner_malformed),
+            s: TermBox::new(TermValue::Iri("https://example.org/s".to_owned())),
+            p: TermBox::new(TermValue::Iri("https://example.org/p".to_owned())),
+            o: TermBox::new(inner_malformed),
         };
 
         assert_eq!(ground_term_from_term_value(&outer), None);
@@ -9153,10 +9204,11 @@ mod tests {
             "the leaf itself must be untouched — Values Insertion joins a row \
              onto it rather than rewriting its terms"
         );
+        let right = right.into_inner();
         let GraphPattern::Values {
             variables,
             bindings,
-        } = *right
+        } = right
         else {
             panic!("expected the joined right operand to be a Values node");
         };
@@ -9184,8 +9236,8 @@ mod tests {
             }],
         };
         let minus = GraphPattern::Minus {
-            left: Box::new(side()),
-            right: Box::new(side()),
+            left: Child::new(side()),
+            right: Child::new(side()),
         };
         let row = row_binding_iri("s", "a");
 
@@ -9194,7 +9246,7 @@ mod tests {
         let GraphPattern::Minus { left, right } = substituted else {
             panic!("Minus wrapper preserved");
         };
-        for (label, wrapped) in [("left", *left), ("right", *right)] {
+        for (label, wrapped) in [("left", left.into_inner()), ("right", right.into_inner())] {
             let GraphPattern::Join {
                 left: leaf,
                 right: values,
@@ -9231,8 +9283,8 @@ mod tests {
             }],
         };
         let lateral = GraphPattern::Lateral {
-            left: Box::new(outer),
-            right: Box::new(minus),
+            left: Child::new(outer),
+            right: Child::new(minus),
         };
         let seq = eval(&lateral, &mut ctx).expect("eval");
         assert!(
@@ -9258,7 +9310,7 @@ mod tests {
             }],
         };
         let subselect = GraphPattern::Project {
-            inner: Box::new(inner_bgp.clone()),
+            inner: Child::new(inner_bgp.clone()),
             variables: vec![Variable::new("label")], // does NOT project ?s
         };
         let row = row_binding_iri("s", "x1");
@@ -9342,11 +9394,11 @@ mod tests {
         assert_eq!(
             substituted,
             GraphPattern::Lateral {
-                left: Box::new(GraphPattern::Values {
+                left: Child::new(GraphPattern::Values {
                     variables: vec![Variable::new("w")],
                     bindings: vec![vec![Some(blank)]],
                 }),
-                right: Box::new(call),
+                right: Child::new(call),
             }
         );
     }
@@ -9634,7 +9686,7 @@ mod tests {
             panic!("SELECT fixture");
         };
         let mut variables = DetHashSet::default();
-        expr_vars(&Expression::Exists(Box::new(pattern)), &mut variables);
+        expr_vars(&Expression::Exists(Child::new(pattern)), &mut variables);
         assert!(variables.contains(&Variable::new("sort_only")));
         assert!(variables.contains(&Variable::new("nested_only")));
     }
@@ -9770,7 +9822,7 @@ mod tests {
     fn str_lang(ds: &RdfDataset, lexical: &str, tag: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)]);
+        let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
     }
@@ -9779,8 +9831,10 @@ mod tests {
     fn str_lang_dir(ds: &RdfDataset, lexical: &str, tag: &str, dir: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
         let schema = VarSchema::new();
-        let expr =
-            Expression::FunctionCall(Function::StrLangDir, vec![lit(lexical), lit(tag), lit(dir)]);
+        let expr = Expression::FunctionCall(
+            Function::StrLangDir,
+            vec![lit(lexical), lit(tag), lit(dir)].into(),
+        );
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
     }
@@ -9872,7 +9926,7 @@ mod tests {
     fn str_dt(ds: &RdfDataset, lexical: &str, dt: &str) -> Option<TermValue> {
         let mut ctx = EvalCtx::new(ds);
         let schema = VarSchema::new();
-        let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)]);
+        let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)].into());
         let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
         Some(value_of(&ctx, term))
     }
@@ -10068,7 +10122,7 @@ mod tests {
                     fn_kind: kind,
                     iri: kind.iri().to_owned(),
                 }),
-                args,
+                args.into(),
             )
         };
         let list = || cdt(CdtFn::ListConstructor, vec![int("1"), int("2")]);
@@ -10080,7 +10134,8 @@ mod tests {
                     iri("https://example.org/s"),
                     iri("https://example.org/p"),
                     iri("https://example.org/o"),
-                ],
+                ]
+                .into(),
             )
         };
         let rdf_list = || iri("https://example.org/list");
@@ -10310,7 +10365,7 @@ mod tests {
                 assert!(
                     has_value(
                         &ds,
-                        &Expression::FunctionCall(function.clone(), sample.clone())
+                        &Expression::FunctionCall(function.clone(), sample.clone().into())
                     ),
                     "{function:?}{sample:?} has a value with every argument bound"
                 );
@@ -10322,7 +10377,10 @@ mod tests {
                     .map(|sample| {
                         let mut args = sample.clone();
                         args[position] = unbound();
-                        has_value(&ds, &Expression::FunctionCall(function.clone(), args))
+                        has_value(
+                            &ds,
+                            &Expression::FunctionCall(function.clone(), args.into()),
+                        )
                     })
                     .collect();
                 let evaluator_strict = answers.iter().all(|answer| !answer);
@@ -10360,7 +10418,7 @@ mod tests {
         let bound = crate::user_fn::BoundFunctionRegistry::bound_for_test(registry);
         let mut ctx = EvalCtx::new(&*ds).with_user_functions(&bound);
         let answer = eval_expr(
-            &Expression::FunctionCall(custom.clone(), vec![unbound()]),
+            &Expression::FunctionCall(custom.clone(), vec![unbound()].into()),
             &[],
             &VarSchema::new(),
             &mut ctx,
@@ -10414,7 +10472,10 @@ mod tests {
             Some(true) => typed_lit("true", XBOOL),
             Some(false) => typed_lit("false", XBOOL),
             // `<a> < <b>`: IRIs do not order, a type error.
-            None => Expression::Less(Box::new(iri("http://ex/a")), Box::new(iri("http://ex/b"))),
+            None => Expression::Less(
+                Child::new(iri("http://ex/a")),
+                Child::new(iri("http://ex/b")),
+            ),
         }
     }
 
@@ -10437,21 +10498,21 @@ mod tests {
     /// node two operands, exactly the tree the binary operator's grammar builds.
     fn left_nested(
         operands: Vec<Expression>,
-        node: fn(Vec<Expression>) -> Expression,
+        node: fn(Chain<Expression>) -> Expression,
     ) -> Expression {
         let mut operands = operands.into_iter();
         let first = operands.next().expect("at least one operand");
-        operands.fold(first, |left, right| node(vec![left, right]))
+        operands.fold(first, |left, right| node(Chain::new(left, right, [])))
     }
 
-    /// For every sequence of up to five `true`/`false`/error operands, the n-ary `||`
+    /// For every sequence of two to five `true`/`false`/error operands, the n-ary `||`
     /// and `&&` evaluate to exactly what the left-nested binary tree does, and to the
     /// three-valued value computed here from the truth table: `||` is `true` if any
     /// operand is, `false` if all are, an error otherwise; `&&` dually.
     #[test]
     fn n_ary_logical_chains_are_the_left_fold_of_the_binary_operator() {
         let ds = empty_ds();
-        for len in 1..=5 {
+        for len in 2..=5 {
             for values in truth_sequences(len) {
                 let operands: Vec<Expression> = values.iter().map(|v| truth(*v)).collect();
                 let or_expected = if values.contains(&Some(true)) {
@@ -10468,22 +10529,18 @@ mod tests {
                 } else {
                     None
                 };
-                let flat_or = Expression::Or(operands.clone());
+                let flat_or =
+                    Expression::Or(Chain::try_from(operands.clone()).expect("two or more nodes"));
                 assert_eq!(ebv(&ds, &flat_or), or_expected, "|| {values:?}");
-                let flat_and = Expression::And(operands.clone());
+                let flat_and =
+                    Expression::And(Chain::try_from(operands.clone()).expect("two or more nodes"));
                 assert_eq!(ebv(&ds, &flat_and), and_expected, "&& {values:?}");
-                if len >= 2 {
-                    let nested_or = left_nested(operands.clone(), Expression::Or);
-                    assert_eq!(ebv(&ds, &nested_or), or_expected, "nested || {values:?}");
-                    let nested_and = left_nested(operands, Expression::And);
-                    assert_eq!(ebv(&ds, &nested_and), and_expected, "nested && {values:?}");
-                }
+                let nested_or = left_nested(operands.clone(), Expression::Or);
+                assert_eq!(ebv(&ds, &nested_or), or_expected, "nested || {values:?}");
+                let nested_and = left_nested(operands, Expression::And);
+                assert_eq!(ebv(&ds, &nested_and), and_expected, "nested && {values:?}");
             }
         }
-        // The constructed shapes the parser never builds: an empty chain is the
-        // operator's identity.
-        assert_eq!(ebv(&ds, &Expression::Or(vec![])), Some(false));
-        assert_eq!(ebv(&ds, &Expression::And(vec![])), Some(true));
     }
 
     /// An operand that raises a HARD error (an unregistered custom function) fails the
@@ -10499,18 +10556,27 @@ mod tests {
                 Function::Custom(NamedNode::new_unchecked(
                     "https://example.org/fn/unregistered",
                 )),
-                vec![],
+                vec![].into(),
             )
         };
         let run = |expr: &Expression| {
             let mut ctx = EvalCtx::new(&*ds);
             eval_ebv(expr, &[], &VarSchema::new(), &mut ctx)
         };
-        let or = Expression::Or(vec![truth(Some(true)), truth(None), hard()]);
+        let or = Expression::Or(
+            Chain::try_from(vec![truth(Some(true)), truth(None), hard()])
+                .expect("two or more nodes"),
+        );
         assert!(run(&or).is_err());
-        let and = Expression::And(vec![truth(Some(false)), hard(), truth(Some(true))]);
+        let and = Expression::And(
+            Chain::try_from(vec![truth(Some(false)), hard(), truth(Some(true))])
+                .expect("two or more nodes"),
+        );
         assert!(run(&and).is_err());
-        let or = Expression::Or(vec![truth(Some(true)), truth(None), truth(Some(false))]);
+        let or = Expression::Or(
+            Chain::try_from(vec![truth(Some(true)), truth(None), truth(Some(false))])
+                .expect("two or more nodes"),
+        );
         assert_eq!(run(&or).expect("no hard error"), Some(true));
     }
 
@@ -10570,9 +10636,12 @@ mod tests {
             let steps: Vec<(ArithmeticOperator, Expression)> = (1..len)
                 .map(|_| (ops[next(4)], arithmetic_operand(next(11))))
                 .collect();
-            let flat = Expression::Arithmetic(Box::new(first.clone()), steps.clone());
+            let flat = Expression::Arithmetic(
+                Child::new(first.clone()),
+                NonEmpty::try_from(steps.clone()).expect("one or more steps"),
+            );
             let nested = steps.iter().cloned().fold(first, |left, step| {
-                Expression::Arithmetic(Box::new(left), vec![step])
+                Expression::Arithmetic(Child::new(left), NonEmpty::new(step))
             });
             let expected = term(&nested);
             values += usize::from(expected.is_some());
@@ -10580,14 +10649,6 @@ mod tests {
         }
         // The cases are not all errors: most of them compare values.
         assert!(values > 100, "{values} of 400 chains have a value");
-        // A chain with no step denotes its first operand.
-        assert_eq!(
-            term(&Expression::Arithmetic(
-                Box::new(typed_lit("7", XINT)),
-                vec![]
-            )),
-            term(&typed_lit("7", XINT))
-        );
     }
 
     /// Every operand of an arithmetic chain is evaluated, as the binary node evaluates
@@ -10605,22 +10666,24 @@ mod tests {
             Function::Custom(NamedNode::new_unchecked(
                 "https://example.org/fn/unregistered",
             )),
-            vec![],
+            vec![].into(),
         );
         let chain = Expression::Arithmetic(
-            Box::new(lit("x")),
-            vec![
+            Child::new(lit("x")),
+            NonEmpty::try_from(vec![
                 (ArithmeticOperator::Add, typed_lit("1", XINT)),
                 (ArithmeticOperator::Multiply, hard),
-            ],
+            ])
+            .expect("one or more steps"),
         );
         assert!(run(&chain).is_err());
         let neighbour = Expression::Arithmetic(
-            Box::new(lit("x")),
-            vec![
+            Child::new(lit("x")),
+            NonEmpty::try_from(vec![
                 (ArithmeticOperator::Add, typed_lit("1", XINT)),
                 (ArithmeticOperator::Multiply, typed_lit("2", XINT)),
-            ],
+            ])
+            .expect("one or more steps"),
         );
         assert!(!run(&neighbour).expect("no hard error"));
     }

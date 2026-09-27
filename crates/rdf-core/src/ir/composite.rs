@@ -4,6 +4,7 @@
 //! Immutable composition over shared native dictionaries and indexes.
 
 use super::view_accounting::WorkCounter;
+use crate::TermBox;
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
 use crate::hash::FastMap;
@@ -450,9 +451,9 @@ impl CompositeSource {
                         .map(|inner| Box::new(owned_value(&*selection.view, inner)))
                 };
                 selection.lookup(&TermValue::Triple {
-                    s: component(s)?,
-                    p: component(p)?,
-                    o: component(o)?,
+                    s: component(s)?.into(),
+                    p: component(p)?.into(),
+                    o: component(o)?.into(),
                 })
             }
         }
@@ -2102,9 +2103,9 @@ pub(crate) fn owned_value<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(owned_value(view, s)),
-            p: Box::new(owned_value(view, p)),
-            o: Box::new(owned_value(view, o)),
+            s: TermBox::new(owned_value(view, s)),
+            p: TermBox::new(owned_value(view, p)),
+            o: TermBox::new(owned_value(view, o)),
         },
     }
 }

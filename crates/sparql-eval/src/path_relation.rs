@@ -344,6 +344,7 @@
 //!
 //! See each relation's own emission-order contract for the resulting row order.
 
+use purrdf_core::TermBox;
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
@@ -1114,9 +1115,9 @@ fn canonical_edges<D: DatasetView>(
         // which end the hop arrives at.
         let mut record = |subject: TermValue, object: TermValue| {
             let statement = TermValue::Triple {
-                s: Box::new(subject.clone()),
-                p: Box::new(predicate.clone()),
-                o: Box::new(object.clone()),
+                s: TermBox::new(subject.clone()),
+                p: TermBox::new(predicate.clone()),
+                o: TermBox::new(object.clone()),
             };
             let (from, to) = match direction {
                 PathDirection::Forward => (subject, object),
@@ -2311,6 +2312,7 @@ mod tests {
 
     use super::*;
     use crate::property_fn::{next_contained, open_contained};
+    use purrdf_core::TermBox;
 
     /// The IRI a call would be written under; only ever read back in a panic message.
     const CALL_IRI: &str = "http://example.org/ns#pathWitness";
@@ -2322,9 +2324,9 @@ mod tests {
     /// The asserted statement term a hop over `(s, p, o)` records.
     fn stmt(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(iri(s)),
-            p: Box::new(iri(p)),
-            o: Box::new(iri(o)),
+            s: TermBox::new(iri(s)),
+            p: TermBox::new(iri(p)),
+            o: TermBox::new(iri(o)),
         }
     }
 
@@ -2617,9 +2619,9 @@ mod tests {
         assert_eq!(
             rows[0][POS_EDGE],
             TermValue::Triple {
-                s: Box::new(iri("a")),
-                p: Box::new(iri("p")),
-                o: Box::new(quoted.clone()),
+                s: TermBox::new(iri("a")),
+                p: TermBox::new(iri("p")),
+                o: TermBox::new(quoted.clone()),
             }
         );
         // ...and the hop OUT of it records the ASSERTED orientation of the statement it
@@ -2627,9 +2629,9 @@ mod tests {
         assert_eq!(
             rows[2][POS_EDGE],
             TermValue::Triple {
-                s: Box::new(iri("z")),
-                p: Box::new(iri("q")),
-                o: Box::new(quoted),
+                s: TermBox::new(iri("z")),
+                p: TermBox::new(iri("q")),
+                o: TermBox::new(quoted),
             }
         );
     }

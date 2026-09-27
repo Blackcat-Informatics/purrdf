@@ -865,40 +865,88 @@ fn walk_named_node_pattern(
     }
 }
 
-fn walk_term_pattern(p: &purrdf_sparql_algebra::TermPattern, out: &mut BTreeSet<NamedNode>) {
-    match p {
-        purrdf_sparql_algebra::TermPattern::NamedNode(n) => insert_oxiri(n, out),
-        purrdf_sparql_algebra::TermPattern::Literal(lit) => {
-            // Only the datatype IRI counts, never the lexical form.
-            insert_oxiri(&literal_datatype(lit), out);
-        }
-        purrdf_sparql_algebra::TermPattern::Triple(t) => walk_triple_pattern(t, out),
-        purrdf_sparql_algebra::TermPattern::BlankNode(_)
-        | purrdf_sparql_algebra::TermPattern::Variable(_) => {}
-    }
-}
-
 /// A SPARQL `Literal` exposes its datatype; clone the NamedNode from it.
 fn literal_datatype(lit: &purrdf_sparql_algebra::Literal) -> purrdf_sparql_algebra::NamedNode {
     lit.datatype().clone()
 }
 
 fn walk_triple_pattern(t: &purrdf_sparql_algebra::TriplePattern, out: &mut BTreeSet<NamedNode>) {
-    walk_term_pattern(&t.subject, out);
-    walk_named_node_pattern(&t.predicate, out);
-    walk_term_pattern(&t.object, out);
+    collect_iris(Reach::Triple(t), out);
 }
 
-fn walk_path(p: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut BTreeSet<NamedNode>) {
+fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSet<NamedNode>) {
+    collect_iris(Reach::Pattern(g), out);
+}
+
+/// One entry of the IRI collection's work list.
+#[derive(Clone, Copy)]
+enum Reach<'a> {
+    Pattern(&'a purrdf_sparql_algebra::GraphPattern),
+    Expr(&'a purrdf_sparql_algebra::Expression),
+    Path(&'a purrdf_sparql_algebra::PropertyPathExpression),
+    Triple(&'a purrdf_sparql_algebra::TriplePattern),
+    Term(&'a purrdf_sparql_algebra::TermPattern),
+    Ground(&'a purrdf_sparql_algebra::GroundTerm),
+}
+
+/// Every IRI `root` references, into `out`, over a work list: a tree of any depth is
+/// walked without recursion.
+fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
+    let mut pending = vec![root];
+    while let Some(next) = pending.pop() {
+        match next {
+            Reach::Pattern(g) => pattern_iris(g, &mut pending, out),
+            Reach::Expr(e) => expression_iris(e, &mut pending, out),
+            Reach::Path(p) => path_iris(p, &mut pending, out),
+            Reach::Triple(t) => {
+                walk_named_node_pattern(&t.predicate, out);
+                pending.extend([Reach::Term(&t.subject), Reach::Term(&t.object)]);
+            }
+            Reach::Term(t) => {
+                use purrdf_sparql_algebra::TermPattern as T;
+                match t {
+                    T::NamedNode(n) => insert_oxiri(n, out),
+                    // Only the datatype IRI counts, never the lexical form.
+                    T::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    T::Triple(t) => pending.push(Reach::Triple(t)),
+                    T::BlankNode(_) | T::Variable(_) => {}
+                }
+            }
+            // A `VALUES` ground term, including the IRIs inside RDF 1.2 ground quoted
+            // triples, so they become dependency edges too.
+            Reach::Ground(t) => {
+                use purrdf_sparql_algebra::GroundTerm as GT;
+                match t {
+                    GT::NamedNode(n) => insert_oxiri(n, out),
+                    GT::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    GT::Triple(tri) => {
+                        insert_oxiri(&tri.predicate, out);
+                        pending.extend([Reach::Ground(&tri.subject), Reach::Ground(&tri.object)]);
+                    }
+                    // Injection-only variant (native `$this` substitution): never
+                    // produced by the parser, so it cannot appear in a VALUES clause,
+                    // and a blank node carries no IRI dependency edge — a no-op.
+                    GT::BlankNode(_) => {}
+                }
+            }
+        }
+    }
+}
+
+fn path_iris<'a>(
+    p: &'a purrdf_sparql_algebra::PropertyPathExpression,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
     use purrdf_sparql_algebra::PropertyPathExpression as P;
     match p {
         P::NamedNode(n) => insert_oxiri(n, out),
-        P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => walk_path(a, out),
-        P::Range { inner, .. } => walk_path(inner, out),
+        P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => {
+            pending.push(Reach::Path(a));
+        }
+        P::Range { inner, .. } => pending.push(Reach::Path(inner)),
         P::Sequence(elements) | P::Alternative(elements) => {
-            for element in elements {
-                walk_path(element, out);
-            }
+            pending.extend(elements.iter().map(Reach::Path));
         }
         P::NegatedPropertySet(elems) => {
             for e in elems {
@@ -910,7 +958,11 @@ fn walk_path(p: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut BTreeS
     }
 }
 
-fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<NamedNode>) {
+fn expression_iris<'a>(
+    e: &'a purrdf_sparql_algebra::Expression,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
     use purrdf_sparql_algebra::Expression as E;
     match e {
         E::NamedNode(n) => insert_oxiri(n, out),
@@ -918,43 +970,24 @@ fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<Nam
         // term reference; only its datatype IRI is.
         E::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
         E::Variable(_) | E::Bound(_) => {}
-        E::Or(operands) | E::And(operands) => {
-            for operand in operands {
-                walk_expression(operand, out);
-            }
-        }
+        E::Or(operands) | E::And(operands) => pending.extend(operands.iter().map(Reach::Expr)),
         E::Arithmetic(first, steps) => {
-            walk_expression(first, out);
-            for (_, operand) in steps {
-                walk_expression(operand, out);
-            }
+            pending.push(Reach::Expr(first));
+            pending.extend(steps.iter().map(|(_, operand)| Reach::Expr(operand)));
         }
         E::Equal(a, b)
         | E::SameTerm(a, b)
         | E::Greater(a, b)
         | E::GreaterOrEqual(a, b)
         | E::Less(a, b)
-        | E::LessOrEqual(a, b) => {
-            walk_expression(a, out);
-            walk_expression(b, out);
-        }
-        E::UnaryPlus(a) | E::UnaryMinus(a) | E::Not(a) => walk_expression(a, out),
+        | E::LessOrEqual(a, b) => pending.extend([Reach::Expr(a), Reach::Expr(b)]),
+        E::UnaryPlus(a) | E::UnaryMinus(a) | E::Not(a) => pending.push(Reach::Expr(a)),
         E::In(a, list) => {
-            walk_expression(a, out);
-            for x in list {
-                walk_expression(x, out);
-            }
+            pending.push(Reach::Expr(a));
+            pending.extend(list.iter().map(Reach::Expr));
         }
-        E::If(a, b, c) => {
-            walk_expression(a, out);
-            walk_expression(b, out);
-            walk_expression(c, out);
-        }
-        E::Coalesce(list) => {
-            for x in list {
-                walk_expression(x, out);
-            }
-        }
+        E::If(a, b, c) => pending.extend([Reach::Expr(a), Reach::Expr(b), Reach::Expr(c)]),
+        E::Coalesce(list) => pending.extend(list.iter().map(Reach::Expr)),
         E::FunctionCall(func, args) => {
             match func {
                 // An IRI-named external function references the slice defining it.
@@ -971,55 +1004,38 @@ fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<Nam
                 }
                 _ => {}
             }
-            for x in args {
-                walk_expression(x, out);
-            }
+            pending.extend(args.iter().map(Reach::Expr));
         }
-        E::Exists(pattern) => walk_graph_pattern(pattern, out),
+        E::Exists(pattern) => pending.push(Reach::Pattern(pattern)),
     }
 }
 
-fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSet<NamedNode>) {
+fn pattern_iris<'a>(
+    g: &'a purrdf_sparql_algebra::GraphPattern,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
     use purrdf_sparql_algebra::GraphPattern as G;
     match g {
-        G::Bgp { patterns } => {
-            for tp in patterns {
-                walk_triple_pattern(tp, out);
-            }
-        }
+        G::Bgp { patterns } => pending.extend(patterns.iter().map(Reach::Triple)),
         G::Path {
             subject,
             path,
             object,
-        } => {
-            walk_term_pattern(subject, out);
-            walk_path(path, out);
-            walk_term_pattern(object, out);
-        }
+        } => pending.extend([Reach::Term(subject), Reach::Path(path), Reach::Term(object)]),
         G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
-            walk_graph_pattern(left, out);
-            walk_graph_pattern(right, out);
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
         }
-        G::Union { arms } => {
-            for arm in arms {
-                walk_graph_pattern(arm, out);
-            }
-        }
+        G::Union { arms } => pending.extend(arms.iter().map(Reach::Pattern)),
         G::LeftJoin {
             left,
             right,
             expression,
         } => {
-            walk_graph_pattern(left, out);
-            walk_graph_pattern(right, out);
-            if let Some(expr) = expression {
-                walk_expression(expr, out);
-            }
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
+            pending.extend(expression.iter().map(Reach::Expr));
         }
-        G::Filter { expr, inner } => {
-            walk_expression(expr, out);
-            walk_graph_pattern(inner, out);
-        }
+        G::Filter { expr, inner } => pending.extend([Reach::Expr(expr), Reach::Pattern(inner)]),
         // A property-function call's predicate IRI is NOT a dependency edge: it names a
         // host-injected relation resolved against a runtime registry, not a term any
         // slice defines. Recognizing a predicate position as a call at all requires the
@@ -1029,88 +1045,56 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
         // are ordinary term positions, though, and an IRI constant written in one
         // references the slice defining it exactly as the same IRI in a triple pattern
         // would — so both vectors are walked.
-        G::PropertyFunction(call) => {
-            for arg in call.subject_args.iter().chain(&call.object_args) {
-                walk_term_pattern(arg, out);
-            }
-        }
-        G::Graph { name, inner } => {
+        G::PropertyFunction(call) => pending.extend(
+            call.subject_args
+                .iter()
+                .chain(&call.object_args)
+                .map(Reach::Term),
+        ),
+        G::Graph { name, inner } | G::Service { name, inner, .. } => {
             walk_named_node_pattern(name, out);
-            walk_graph_pattern(inner, out);
+            pending.push(Reach::Pattern(inner));
         }
         G::Extend {
             inner, expression, ..
-        } => {
-            walk_graph_pattern(inner, out);
-            walk_expression(expression, out);
-        }
+        } => pending.extend([Reach::Pattern(inner), Reach::Expr(expression)]),
         // `UNFOLD` names no IRI of its own; its operand is an ordinary expression
         // and can reference a slice-defined term exactly as `BIND`s can.
         G::Unfold {
             inner, expression, ..
-        } => {
-            walk_graph_pattern(inner, out);
-            walk_expression(expression, out);
-        }
-        G::Service { name, inner, .. } => {
-            walk_named_node_pattern(name, out);
-            walk_graph_pattern(inner, out);
-        }
+        } => pending.extend([Reach::Pattern(inner), Reach::Expr(expression)]),
         G::OrderBy { inner, expression } => {
-            walk_graph_pattern(inner, out);
+            pending.push(Reach::Pattern(inner));
             // Sort keys can carry IRI-bearing data (custom functions, IRI
             // constants); walk each ORDER BY expression, not just `inner`.
             for order in expression {
                 use purrdf_sparql_algebra::OrderExpression as OE;
-                match order {
-                    OE::Asc(e) | OE::Desc(e) => walk_expression(e, out),
-                }
+                let (OE::Asc(e) | OE::Desc(e)) = order;
+                pending.push(Reach::Expr(e));
             }
         }
         G::Project { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
-        | G::Slice { inner, .. } => walk_graph_pattern(inner, out),
+        | G::Slice { inner, .. } => pending.push(Reach::Pattern(inner)),
         G::Group {
             inner, aggregates, ..
         } => {
-            walk_graph_pattern(inner, out);
+            pending.push(Reach::Pattern(inner));
             for (_var, agg_expr) in aggregates {
                 use purrdf_sparql_algebra::AggregateFunction as AF;
                 if let AF::Custom(n) = agg_expr.function() {
                     insert_oxiri(n, out);
                 }
-                for arg in agg_expr.args() {
-                    walk_expression(arg, out);
-                }
+                pending.extend(agg_expr.args().iter().map(Reach::Expr));
             }
         }
-        G::Values { bindings, .. } => {
-            for row in bindings {
-                for cell in row.iter().flatten() {
-                    walk_ground_term(cell, out);
-                }
-            }
-        }
-    }
-}
-
-/// Walk a `VALUES` ground term, recursing into RDF 1.2 ground quoted triples so
-/// IRIs inside `<<( s p o )>>` cells become dependency edges too.
-fn walk_ground_term(t: &purrdf_sparql_algebra::GroundTerm, out: &mut BTreeSet<NamedNode>) {
-    use purrdf_sparql_algebra::GroundTerm as GT;
-    match t {
-        GT::NamedNode(n) => insert_oxiri(n, out),
-        GT::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
-        GT::Triple(tri) => {
-            walk_ground_term(&tri.subject, out);
-            insert_oxiri(&tri.predicate, out);
-            walk_ground_term(&tri.object, out);
-        }
-        // Injection-only variant (native `$this` substitution): never produced by
-        // the parser, so it cannot appear in a VALUES clause, and a blank node
-        // carries no IRI dependency edge — a no-op.
-        GT::BlankNode(_) => {}
+        G::Values { bindings, .. } => pending.extend(
+            bindings
+                .iter()
+                .flat_map(|row| row.iter().flatten())
+                .map(Reach::Ground),
+        ),
     }
 }
 

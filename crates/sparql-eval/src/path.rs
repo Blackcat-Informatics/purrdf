@@ -1319,6 +1319,7 @@ mod tests {
     use crate::governor::{GovernorState, QueryGovernors};
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
+    use purrdf_sparql_algebra::{Chain, Child};
     use purrdf_sparql_algebra::{NamedNode, TriplePattern};
 
     const EX: &str = "http://ex/";
@@ -1464,7 +1465,7 @@ mod tests {
         assert_eq!(rows, col1(&["b", "c"]));
         // { :b ^:p ?s }  → inverse: ?s is anything that points to :b via :p, i.e. :a
         // (`:b ^:p ?s` ⟺ `?s :p :b`).
-        let rev = PropertyPathExpression::Reverse(Box::new(named("p")));
+        let rev = PropertyPathExpression::Reverse(Child::new(named("p")));
         let rows = run(&ds, &ground("b"), &rev, &var("s"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
@@ -1512,7 +1513,9 @@ mod tests {
     fn sequence_chains_two_predicates() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b"), ("x", "q", "c")]);
         // :a :p/:q ?o → b, c
-        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
+        let seq = PropertyPathExpression::Sequence(
+            Chain::try_from(vec![named("p"), named("q")]).expect("two or more nodes"),
+        );
         let rows = run(&ds, &ground("a"), &seq, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1521,7 +1524,9 @@ mod tests {
     fn sequence_backward_from_object() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b")]);
         // ?s :p/:q :b  → a
-        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
+        let seq = PropertyPathExpression::Sequence(
+            Chain::try_from(vec![named("p"), named("q")]).expect("two or more nodes"),
+        );
         let rows = run(&ds, &var("s"), &seq, &ground("b"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
@@ -1529,7 +1534,9 @@ mod tests {
     #[test]
     fn alternative_unions_both() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c")]);
-        let alt = PropertyPathExpression::Alternative(vec![named("p"), named("q")]);
+        let alt = PropertyPathExpression::Alternative(
+            Chain::try_from(vec![named("p"), named("q")]).expect("two or more nodes"),
+        );
         let rows = run(&ds, &ground("a"), &alt, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1540,14 +1547,14 @@ mod tests {
     fn zero_or_more_includes_self_and_transitive() {
         // a -> b -> c -> d (chain)
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         assert_eq!(
             reach_locals(&ds, &star, "a", true),
             vec!["a", "b", "c", "d"]
         );
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["b", "c", "d"]);
-        let opt = PropertyPathExpression::ZeroOrOne(Box::new(named("p")));
+        let opt = PropertyPathExpression::ZeroOrOne(Child::new(named("p")));
         assert_eq!(reach_locals(&ds, &opt, "a", true), vec!["a", "b"]);
     }
 
@@ -1555,7 +1562,7 @@ mod tests {
     fn one_or_more_includes_start_only_via_cycle() {
         // Cyclic a -> b -> c -> a: every node is reachable from itself.
         let cyclic = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         assert_eq!(
             reach_locals(&cyclic, &plus, "a", true),
             vec!["a", "b", "c"],
@@ -1573,7 +1580,7 @@ mod tests {
     #[test]
     fn star_terminates_on_a_cycle() {
         let cyclic = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         assert_eq!(reach_locals(&cyclic, &star, "a", true), vec!["a", "b", "c"]);
     }
 
@@ -1582,10 +1589,12 @@ mod tests {
         // Cycle closed by a composite step: a -p-> x -q-> a. (p/q)+ from a must
         // terminate and report a (a reaches itself in one (p/q) application).
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "a")]);
-        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(seq.clone()));
+        let seq = PropertyPathExpression::Sequence(
+            Chain::try_from(vec![named("p"), named("q")]).expect("two or more nodes"),
+        );
+        let plus = PropertyPathExpression::OneOrMore(Child::new(seq.clone()));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["a"]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(seq));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(seq));
         assert_eq!(reach_locals(&ds, &star, "a", true), vec!["a"]);
     }
 
@@ -1601,7 +1610,7 @@ mod tests {
             ("d", "p", "e"),
         ]);
         let rng = |min, max| PropertyPathExpression::Range {
-            inner: Box::new(named("p")),
+            inner: Child::new(named("p")),
             min,
             max,
         };
@@ -1626,7 +1635,7 @@ mod tests {
         // visited-set BFS would get wrong.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "a")]);
         let rng = PropertyPathExpression::Range {
-            inner: Box::new(named("p")),
+            inner: Child::new(named("p")),
             min: 2,
             max: Some(4),
         };
@@ -1646,7 +1655,7 @@ mod tests {
         // enough or fast enough.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
         let rng = |min, max| PropertyPathExpression::Range {
-            inner: Box::new(named("p")),
+            inner: Child::new(named("p")),
             min,
             max,
         };
@@ -1704,7 +1713,7 @@ mod tests {
             ("c3", "p", "c0"),
         ]);
         let exactly = PropertyPathExpression::Range {
-            inner: Box::new(named("p")),
+            inner: Child::new(named("p")),
             min: 4_000_000_000,
             max: Some(4_000_000_000),
         };
@@ -2013,7 +2022,7 @@ mod tests {
         for case in &corpus {
             let ds = graph_of(case.edges);
             let rng = PropertyPathExpression::Range {
-                inner: Box::new(named("p")),
+                inner: Child::new(named("p")),
                 min: case.min,
                 max: case.max,
             };
@@ -2103,7 +2112,7 @@ mod tests {
     #[test]
     fn both_ground_is_ask_shaped() {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         // :a :p+ :c  → true (one unit solution).
         let mut ctx = EvalCtx::new(&ds);
         let hit = eval_path(&ground("a"), &plus, &ground("c"), &mut ctx).expect("eval");
@@ -2119,7 +2128,7 @@ mod tests {
     fn both_variable_enumerates_pairs_with_zero_length_self_pairs() {
         // a -> b, plus an isolated edge c -> (nothing further). Node universe = {a,b,c}.
         let ds = graph_of(&[("a", "p", "b"), ("c", "q", "a")]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         // ?s :p* ?o : every node pairs with itself (zero-length) + a→b transitive.
         let rows = run(&ds, &var("s"), &star, &var("o"), &["s", "o"]);
         let mut expected = vec![
@@ -2136,7 +2145,7 @@ mod tests {
     fn same_variable_keeps_only_reflexive_pairs() {
         // Cycle a -> b -> a: with p+, both a and b reach themselves.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "a")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         // ?x :p+ ?x  → a, b (each reaches itself via the cycle).
         let rows = run(&ds, &var("x"), &plus, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b"]));
@@ -2149,7 +2158,7 @@ mod tests {
         // Graph a -> b -> c. Node universe = {a, b, c}.
         // ?x :p* ?x — p* is reflexive, so every node is a solution via zero-length identity.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         let rows = run(&ds, &var("x"), &star, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b", "c"]));
     }
@@ -2159,7 +2168,7 @@ mod tests {
         // Graph a -> b -> c. Node universe = {a, b, c}.
         // ?x :p? ?x — p? is reflexive, so every node is a solution via zero-length identity.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
-        let opt = PropertyPathExpression::ZeroOrOne(Box::new(named("p")));
+        let opt = PropertyPathExpression::ZeroOrOne(Child::new(named("p")));
         let rows = run(&ds, &var("x"), &opt, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b", "c"]));
     }
@@ -2169,7 +2178,7 @@ mod tests {
         // ?x :p{0,2} ?x — min=0 makes it reflexive; every node is a solution.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let rng = PropertyPathExpression::Range {
-            inner: Box::new(named("p")),
+            inner: Child::new(named("p")),
             min: 0,
             max: Some(2),
         };
@@ -2181,7 +2190,7 @@ mod tests {
     fn same_var_nonreflexive_no_cycle_is_empty() {
         // Acyclic a -> b -> c. ?x :p+ ?x — p+ is non-reflexive; no node cycles back.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         let rows = run(&ds, &var("x"), &plus, &var("x"), &["x"]);
         assert_eq!(rows, col1(&[]));
     }
@@ -2189,7 +2198,7 @@ mod tests {
     #[test]
     fn absent_ground_endpoint_is_empty() {
         let ds = graph_of(&[("a", "p", "b")]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(named("p")));
         // :nobody is not in the graph → empty, but the schema still carries ?o.
         let mut ctx = EvalCtx::new(&ds);
         let seq = eval_path(&ground("nobody"), &plus, &var("o"), &mut ctx).expect("eval");
@@ -2204,11 +2213,14 @@ mod tests {
         // Temporal-shaped: (:before | ^:after)+ — before-edges and reversed
         // after-edges, transitively. e1 before e2; e3 after e2 (so e2 ^after e3).
         let ds = graph_of(&[("e1", "before", "e2"), ("e3", "after", "e2")]);
-        let alt = PropertyPathExpression::Alternative(vec![
-            named("before"),
-            PropertyPathExpression::Reverse(Box::new(named("after"))),
-        ]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(alt));
+        let alt = PropertyPathExpression::Alternative(
+            Chain::try_from(vec![
+                named("before"),
+                PropertyPathExpression::Reverse(Child::new(named("after"))),
+            ])
+            .expect("two or more nodes"),
+        );
+        let plus = PropertyPathExpression::OneOrMore(Child::new(alt));
         // From e1: e1 -before-> e2 -^after-> e3.
         assert_eq!(reach_locals(&ds, &plus, "e1", true), vec!["e2", "e3"]);
     }
@@ -2226,11 +2238,16 @@ mod tests {
             ("l2", "rest", "nil"),
         ]);
         // :axiom :members/:rest*/:first ?x → A, B, C
-        let rest_star = PropertyPathExpression::ZeroOrMore(Box::new(named("rest")));
-        let path = PropertyPathExpression::Sequence(vec![
-            named("members"),
-            PropertyPathExpression::Sequence(vec![rest_star, named("first")]),
-        ]);
+        let rest_star = PropertyPathExpression::ZeroOrMore(Child::new(named("rest")));
+        let path = PropertyPathExpression::Sequence(
+            Chain::try_from(vec![
+                named("members"),
+                PropertyPathExpression::Sequence(
+                    Chain::try_from(vec![rest_star, named("first")]).expect("two or more nodes"),
+                ),
+            ])
+            .expect("two or more nodes"),
+        );
         let rows = run(&ds, &ground("axiom"), &path, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["A", "B", "C"]));
     }
@@ -2238,7 +2255,7 @@ mod tests {
     #[test]
     fn determinism_rows_are_termid_ordered() {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         let mut ctx = EvalCtx::new(&ds);
         let first = eval_path(&ground("a"), &star, &var("o"), &mut ctx).expect("eval");
         let mut ctx = EvalCtx::new(&ds);
@@ -2260,7 +2277,7 @@ mod tests {
         // Expected: {b, c}.
         let ds = graph_of(&[("a", "r", "b"), ("b", "r", "c"), ("a", "p", "x")]);
         let neg = PropertyPathExpression::NegatedPropertySet(vec![npe("p", false)]);
-        let plus = PropertyPathExpression::OneOrMore(Box::new(neg));
+        let plus = PropertyPathExpression::OneOrMore(Child::new(neg));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["b", "c"]);
     }
 
@@ -2272,7 +2289,7 @@ mod tests {
         // completely empty dataset still admits the zero-length reflexive
         // pairing for a ground endpoint that never appears in any triple.
         let ds = graph_of(&[]);
-        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        let star = PropertyPathExpression::ZeroOrMore(Child::new(named("p")));
         // ?s :p* :o → s = :o (the object, bound to itself)
         let rows = run(&ds, &var("s"), &star, &ground("o"), &["s"]);
         assert_eq!(rows, col1(&["o"]));
@@ -2285,7 +2302,7 @@ mod tests {
     fn zero_or_one_reflexive_ground_endpoint_absent_from_empty_dataset() {
         // Same shape as above but for `?` (zero_or_one_set_start/_end).
         let ds = graph_of(&[]);
-        let opt = PropertyPathExpression::ZeroOrOne(Box::new(named("p")));
+        let opt = PropertyPathExpression::ZeroOrOne(Child::new(named("p")));
         let rows = run(&ds, &var("s"), &opt, &ground("o"), &["s"]);
         assert_eq!(rows, col1(&["o"]));
         let rows = run(&ds, &ground("s"), &opt, &var("o"), &["o"]);
@@ -2310,7 +2327,7 @@ mod tests {
         // site. The message must now name what it actually is.
         let ds = graph_of(&[]);
         let mut ctx = EvalCtx::new(&ds);
-        let object = TermPattern::Triple(Box::new(TriplePattern {
+        let object = TermPattern::Triple(Child::new(TriplePattern {
             subject: ground("s"),
             predicate: purrdf_sparql_algebra::NamedNodePattern::NamedNode(nn("p")),
             object: var("o"),

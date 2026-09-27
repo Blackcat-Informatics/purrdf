@@ -174,6 +174,7 @@ mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -267,9 +268,9 @@ mod tests {
     #[test]
     fn triple_term_literal_predicate_is_malformed_term_error() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(lit("not-a-predicate", XSD_STRING)),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(lit("not-a-predicate", XSD_STRING)),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -287,12 +288,12 @@ mod tests {
     #[test]
     fn triple_term_blank_predicate_is_malformed_term_error() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -312,17 +313,17 @@ mod tests {
         // The inner triple term (used as the outer subject) carries a
         // non-IRI predicate; the outer triple term's own predicate is fine.
         let inner = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let outer = TermValue::Triple {
-            s: Box::new(inner),
-            p: Box::new(TermValue::Iri("http://example.org/concludes".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o2".to_string())),
+            s: TermBox::new(inner),
+            p: TermBox::new(TermValue::Iri("http://example.org/concludes".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o2".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],

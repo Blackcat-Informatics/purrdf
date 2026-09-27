@@ -4124,6 +4124,7 @@ fn resolve_governed<D: DatasetView + Sync>(
 mod tests {
     use super::*;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::GraphPattern;
 
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*
@@ -6804,7 +6805,7 @@ mod tests {
         let object = Variable::new("o");
         Query::Select {
             pattern: GraphPattern::Project {
-                inner: Box::new(GraphPattern::Bgp {
+                inner: Child::new(GraphPattern::Bgp {
                     patterns: vec![TriplePattern {
                         subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
                         predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(predicate)),
@@ -6921,7 +6922,7 @@ mod tests {
             };
             for _ in 1..depth {
                 pattern = GraphPattern::Project {
-                    inner: Box::new(pattern),
+                    inner: Child::new(pattern),
                     variables: vec![object.clone()],
                 };
             }

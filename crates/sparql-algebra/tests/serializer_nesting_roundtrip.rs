@@ -16,8 +16,8 @@
 
 use proptest::prelude::*;
 use purrdf_sparql_algebra::{
-    ArithmeticOperator, Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern,
-    NegatedPathElement, PropertyPathExpression, Query, QueryDataset, SparqlParser, TermPattern,
+    ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
+    NamedNodePattern, NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern,
     TriplePattern, Variable, pattern_to_select_query,
 };
 
@@ -36,7 +36,7 @@ fn try_select(query: &str) -> Result<GraphPattern, String> {
 /// The WHERE body under the `SELECT` scaffold — the shape a `SERVICE` forwards.
 fn unproject(p: GraphPattern) -> GraphPattern {
     match p {
-        GraphPattern::Project { inner, .. } => *inner,
+        GraphPattern::Project { inner, .. } => inner.into_inner(),
         other => other,
     }
 }
@@ -307,107 +307,6 @@ fn a_mixed_precedence_path_round_trips() {
     );
 }
 
-/// A path chain with fewer than two elements is a shape the parser never builds. One
-/// element forwards as that element, which is what it denotes. No element has no SPARQL
-/// spelling, and the validator refuses it — while the one-element neighbour, which
-/// denotes its element, is admitted.
-#[test]
-fn degenerate_constructed_path_chains() {
-    let p =
-        PropertyPathExpression::OneOrMore(Box::new(PropertyPathExpression::NamedNode(iri("a"))));
-    let body = |path: PropertyPathExpression| GraphPattern::Path {
-        subject: TermPattern::Variable(var("s")),
-        path,
-        object: TermPattern::Variable(var("o")),
-    };
-    let query = |path: PropertyPathExpression| Query::Select {
-        dataset: QueryDataset::default(),
-        pattern: body(path),
-        base_iri: None,
-        version: None,
-    };
-    for lone in [
-        PropertyPathExpression::Sequence(vec![p.clone()]),
-        PropertyPathExpression::Alternative(vec![p.clone()]),
-    ] {
-        let text = pattern_to_select_query(&body(lone.clone()));
-        assert_eq!(
-            unproject(try_select(&text).unwrap_or_else(|e| panic!("{e}: {text}"))),
-            body(p.clone())
-        );
-        query(lone)
-            .validate()
-            .expect("a one-element chain is admitted");
-    }
-    for empty in [
-        PropertyPathExpression::Sequence(vec![]),
-        PropertyPathExpression::Alternative(vec![]),
-    ] {
-        let error = query(empty.clone())
-            .validate()
-            .expect_err("an empty chain is refused");
-        assert!(error.to_string().contains("empty property-path"), "{error}");
-        let text = pattern_to_select_query(&body(empty));
-        assert!(
-            try_select(&text).is_err(),
-            "`()` is never read as a path: {text}"
-        );
-    }
-}
-
-/// The shapes the parser never builds — a chain or union with fewer than two
-/// operands, an arithmetic chain with no step — forward as text that keeps their
-/// meaning (see the variants' docs): the identity of an empty chain, the identity
-/// applied to a lone operand, the lone operand of a stepless chain, and an empty
-/// `VALUES` block for an armless union.
-#[test]
-fn degenerate_constructed_chains_forward_their_meaning() {
-    let a = || Expression::Variable(Variable::new("a"));
-    let boolean = |value: &str| {
-        Expression::Literal(Literal::new_typed(
-            value,
-            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
-        ))
-    };
-    let filter = |expr: Expression| GraphPattern::Filter {
-        expr,
-        inner: Box::new(exists_body()),
-    };
-    let reparse = |body: &GraphPattern| {
-        let text = pattern_to_select_query(body);
-        unproject(try_select(&text).unwrap_or_else(|e| panic!("{e}: {text}")))
-    };
-    let cases = [
-        (Expression::Or(vec![]), boolean("false")),
-        (Expression::And(vec![]), boolean("true")),
-        (
-            Expression::Or(vec![a()]),
-            Expression::Or(vec![boolean("false"), a()]),
-        ),
-        (
-            Expression::And(vec![a()]),
-            Expression::And(vec![boolean("true"), a()]),
-        ),
-        (Expression::Arithmetic(Box::new(a()), vec![]), a()),
-    ];
-    for (constructed, expected) in cases {
-        assert_eq!(reparse(&filter(constructed)), filter(expected));
-    }
-    assert_eq!(
-        reparse(&GraphPattern::Union {
-            arms: vec![exists_body()]
-        }),
-        exists_body()
-    );
-    assert_eq!(
-        reparse(&GraphPattern::Union { arms: vec![] }),
-        GraphPattern::Values {
-            variables: vec![],
-            bindings: vec![],
-        }
-    );
-}
-
 // ── every nesting and chaining family, at its deepest admitted SERVICE body ──
 
 /// `SELECT * WHERE { SERVICE <ep> { BODY } }`.
@@ -445,7 +344,7 @@ fn deepest_admitted(build: &dyn Fn(usize) -> String, ceiling: usize) -> usize {
 /// The inner pattern of the query's one `SERVICE`.
 fn service_body(pattern: GraphPattern) -> GraphPattern {
     match unproject(pattern) {
-        GraphPattern::Service { inner, .. } => *inner,
+        GraphPattern::Service { inner, .. } => inner.into_inner(),
         other => panic!("expected the SERVICE at the root, got {other:?}"),
     }
 }
@@ -715,14 +614,14 @@ fn expression_tree() -> impl Strategy<Value = Expression> {
     let binaries: Vec<Binary> = vec![
         Expression::or,
         Expression::and,
-        |a, b| Expression::Equal(Box::new(a), Box::new(b)),
-        |a, b| Expression::Less(Box::new(a), Box::new(b)),
-        |a, b| Expression::GreaterOrEqual(Box::new(a), Box::new(b)),
+        |a, b| Expression::Equal(Child::new(a), Child::new(b)),
+        |a, b| Expression::Less(Child::new(a), Child::new(b)),
+        |a, b| Expression::GreaterOrEqual(Child::new(a), Child::new(b)),
         |a, b| Expression::arithmetic(a, ArithmeticOperator::Add, b),
         |a, b| Expression::arithmetic(a, ArithmeticOperator::Subtract, b),
         |a, b| Expression::arithmetic(a, ArithmeticOperator::Multiply, b),
         |a, b| Expression::arithmetic(a, ArithmeticOperator::Divide, b),
-        |a, b| Expression::SameTerm(Box::new(a), Box::new(b)),
+        |a, b| Expression::SameTerm(Child::new(a), Child::new(b)),
     ];
     leaf_expression().prop_recursive(6, 64, 3, move |inner| {
         // Two-operand nodes carry most of the weight: operator precedence and
@@ -734,21 +633,21 @@ fn expression_tree() -> impl Strategy<Value = Expression> {
                 inner.clone()
             )
                 .prop_map(|(node, a, b)| node(a, b)),
-            1 => inner.clone().prop_map(|a| Expression::Not(Box::new(a))),
-            1 => inner.clone().prop_map(|a| Expression::UnaryMinus(Box::new(a))),
-            1 => inner.clone().prop_map(|a| Expression::UnaryPlus(Box::new(a))),
+            1 => inner.clone().prop_map(|a| Expression::Not(Child::new(a))),
+            1 => inner.clone().prop_map(|a| Expression::UnaryMinus(Child::new(a))),
+            1 => inner.clone().prop_map(|a| Expression::UnaryPlus(Child::new(a))),
             1 => (inner.clone(), prop::collection::vec(inner.clone(), 0..3))
-                .prop_map(|(a, list)| Expression::In(Box::new(a), list)),
+                .prop_map(|(a, list)| Expression::In(Child::new(a), list.into())),
             1 => inner
                 .clone()
-                .prop_map(|a| Expression::FunctionCall(Function::Str, vec![a])),
+                .prop_map(|a| Expression::FunctionCall(Function::Str, vec![a].into())),
             1 => (inner.clone(), inner.clone(), inner.clone())
-                .prop_map(|(c, t, e)| Expression::If(Box::new(c), Box::new(t), Box::new(e))),
-            1 => prop::collection::vec(inner.clone(), 1..3).prop_map(Expression::Coalesce),
-            1 => Just(Expression::Exists(Box::new(exists_body()))),
+                .prop_map(|(c, t, e)| Expression::If(Child::new(c), Child::new(t), Child::new(e))),
+            1 => prop::collection::vec(inner.clone(), 1..3).prop_map(|list| Expression::Coalesce(list.into())),
+            1 => Just(Expression::Exists(Child::new(exists_body()))),
             1 => inner.prop_map(|a| Expression::and(
                 a,
-                Expression::Exists(Box::new(exists_body()))
+                Expression::Exists(Child::new(exists_body()))
             )),
         ]
     })
@@ -787,19 +686,19 @@ fn path_tree() -> impl Strategy<Value = PropertyPathExpression> {
             }),
             inner
                 .clone()
-                .prop_map(|a| PropertyPathExpression::Reverse(Box::new(a))),
+                .prop_map(|a| PropertyPathExpression::Reverse(Child::new(a))),
             inner
                 .clone()
-                .prop_map(|a| PropertyPathExpression::ZeroOrMore(Box::new(a))),
+                .prop_map(|a| PropertyPathExpression::ZeroOrMore(Child::new(a))),
             inner
                 .clone()
-                .prop_map(|a| PropertyPathExpression::OneOrMore(Box::new(a))),
+                .prop_map(|a| PropertyPathExpression::OneOrMore(Child::new(a))),
             inner
                 .clone()
-                .prop_map(|a| PropertyPathExpression::ZeroOrOne(Box::new(a))),
+                .prop_map(|a| PropertyPathExpression::ZeroOrOne(Child::new(a))),
             (inner, 0_u32..3, prop::option::of(3_u32..5)).prop_map(|(a, min, max)| {
                 PropertyPathExpression::Range {
-                    inner: Box::new(a),
+                    inner: Child::new(a),
                     min,
                     max,
                 }
@@ -817,7 +716,7 @@ proptest! {
     fn a_generated_expression_round_trips(expr in expression_tree()) {
         let body = GraphPattern::Filter {
             expr,
-            inner: Box::new(exists_body()),
+            inner: Child::new(exists_body()),
         };
         assert_forwarded_roundtrip(&body);
     }
@@ -828,7 +727,7 @@ proptest! {
     fn a_generated_property_path_round_trips(path in path_tree()) {
         let path = match path {
             PropertyPathExpression::NamedNode(_) => {
-                PropertyPathExpression::OneOrMore(Box::new(path))
+                PropertyPathExpression::OneOrMore(Child::new(path))
             }
             other => other,
         };

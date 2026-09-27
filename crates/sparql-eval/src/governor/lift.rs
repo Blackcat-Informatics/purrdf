@@ -600,7 +600,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{ResourceDimension, TermId};
     use purrdf_sparql_algebra::{
-        NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
 
     use super::*;
@@ -626,8 +626,8 @@ mod tests {
         }
     }
 
-    fn boxed(pattern: GraphPattern) -> Box<GraphPattern> {
-        Box::new(pattern)
+    fn boxed(pattern: GraphPattern) -> Child<GraphPattern> {
+        Child::new(pattern)
     }
 
     /// One row over a one-column schema, so a test can tell "rows survived" from "rows

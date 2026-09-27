@@ -70,6 +70,7 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
+use purrdf_core::TermBox;
 use std::cmp::Ordering;
 
 use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue};
@@ -1501,9 +1502,9 @@ fn resolve_value<D: DatasetView>(
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_value(dataset, s, depth + 1)?),
-            p: Box::new(resolve_value(dataset, p, depth + 1)?),
-            o: Box::new(resolve_value(dataset, o, depth + 1)?),
+            s: TermBox::new(resolve_value(dataset, s, depth + 1)?),
+            p: TermBox::new(resolve_value(dataset, p, depth + 1)?),
+            o: TermBox::new(resolve_value(dataset, o, depth + 1)?),
         },
     })
 }

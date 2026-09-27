@@ -229,6 +229,7 @@ pub trait RdfSerializer {
 mod tests {
     use super::*;
     use crate::RdfTextDirection;
+    use crate::TermBox;
 
     fn iri(value: &str) -> TermValue {
         TermValue::Iri(value.to_owned())
@@ -256,9 +257,9 @@ mod tests {
             direction: Some(RdfTextDirection::Rtl),
         };
         let triple = TermValue::Triple {
-            s: Box::new(s.clone()),
-            p: Box::new(p.clone()),
-            o: Box::new(o),
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(o),
         };
 
         let mut builder = RdfDatasetBuilder::new();

@@ -9,6 +9,7 @@ use purrdf_core::{
     RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, SparqlResult, TermId, TermRef, TermValue,
     ViewOperationStatus,
 };
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_eval::{
     CancellationFlag, FallibleSparqlError, GovernorState, GraphBuildError, LossVocabulary,
     NativeSparqlEngine, QueryGovernors, QueryOptions,
@@ -323,13 +324,13 @@ fn deeply_joined_construct_on_a_large_stack() {
     };
     for _ in 0..100_000 {
         *pattern = GraphPattern::Join {
-            left: Box::new(std::mem::replace(
+            left: Child::new(std::mem::replace(
                 pattern,
                 GraphPattern::Bgp {
                     patterns: Vec::new(),
                 },
             )),
-            right: Box::new(GraphPattern::Bgp {
+            right: Child::new(GraphPattern::Bgp {
                 patterns: Vec::new(),
             }),
         };

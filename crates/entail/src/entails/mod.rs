@@ -181,6 +181,7 @@
 //! budget rather than a clock. Two runs over one premise and one question return the same
 //! verdict, the same binding, and the same diagnosis, on `wasm32` as on native.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -906,9 +907,9 @@ fn substituted(pat: &Pat, substitution: &BTreeMap<String, TermValue>) -> Option<
         },
         Pat::Var(VarKey::Projected(name)) => substitution.get(name)?.clone(),
         Pat::Triple(inner) => TermValue::Triple {
-            s: Box::new(substituted(&inner[0], substitution)?),
-            p: Box::new(substituted(&inner[1], substitution)?),
-            o: Box::new(substituted(&inner[2], substitution)?),
+            s: TermBox::new(substituted(&inner[0], substitution)?),
+            p: TermBox::new(substituted(&inner[1], substitution)?),
+            o: TermBox::new(substituted(&inner[2], substitution)?),
         },
     })
 }

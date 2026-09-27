@@ -122,6 +122,7 @@ mod tests {
     use super::{RECOGNIZED_DATATYPES, SurrogateIndex, iri_surface};
     use crate::lists::{DATATYPED_RELATION, QUOTED_RELATION};
     use crate::vocab::{RDFS_PROPOSITION, XSD_STRING};
+    use purrdf_core::TermBox;
     use purrdf_core::TermValue;
 
     /// A fixture IRI. PurRDF mints no vocabulary, so every fixture term is `example.org`.
@@ -156,9 +157,9 @@ mod tests {
     fn a_triple_term_is_observed_and_paired_with_rdfs_proposition() {
         let mut index = SurrogateIndex::default();
         let quoted = TermValue::Triple {
-            s: Box::new(TermValue::iri(EX_S)),
-            p: Box::new(TermValue::iri(EX_P)),
-            o: Box::new(TermValue::iri(EX_O)),
+            s: TermBox::new(TermValue::iri(EX_S)),
+            p: TermBox::new(TermValue::iri(EX_P)),
+            o: TermBox::new(TermValue::iri(EX_O)),
         };
         index.observe("<<( <s> <p> <o> )>>", &quoted);
         index.observe("<<( <s> <p> <o> )>>", &quoted);

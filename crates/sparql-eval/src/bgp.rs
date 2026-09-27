@@ -1761,7 +1761,9 @@ mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
     /// A small graph:
@@ -2023,7 +2025,7 @@ mod tests {
 
     /// A nested quoted-triple object pattern `<<( s p o )>>`.
     fn triple_obj(s: TermPattern, p: NamedNodePattern, o: TermPattern) -> TermPattern {
-        TermPattern::Triple(Box::new(TriplePattern {
+        TermPattern::Triple(Child::new(TriplePattern {
             subject: s,
             predicate: p,
             object: o,
@@ -2129,9 +2131,9 @@ mod tests {
                     iri_val("http://ex/r1"),
                     iri_val(reifies),
                     Some(TermValue::Triple {
-                        s: Box::new(TermValue::Iri("http://ex/alice".to_owned())),
-                        p: Box::new(TermValue::Iri("http://ex/age".to_owned())),
-                        o: Box::new(TermValue::Literal {
+                        s: TermBox::new(TermValue::Iri("http://ex/alice".to_owned())),
+                        p: TermBox::new(TermValue::Iri("http://ex/age".to_owned())),
+                        o: TermBox::new(TermValue::Literal {
                             lexical_form: "42".to_owned(),
                             datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
                             language: None,

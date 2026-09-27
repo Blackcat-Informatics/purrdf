@@ -67,6 +67,7 @@
 //! wrong answer rather than a failure, and it is why [`verify_binding`] exists.
 
 use core::slice;
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -866,9 +867,9 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
             direction,
         },
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_value(dataset, s)),
-            p: Box::new(resolve_value(dataset, p)),
-            o: Box::new(resolve_value(dataset, o)),
+            s: TermBox::new(resolve_value(dataset, s)),
+            p: TermBox::new(resolve_value(dataset, p)),
+            o: TermBox::new(resolve_value(dataset, o)),
         },
     }
 }

@@ -72,6 +72,7 @@ use purrdf_cdt::{
     CDT_LIST, CDT_MAP, CdtDatatype, CdtError, CdtLiteral, CdtOutcome, CdtTerm, CdtTripleTerm,
     CdtValue, MapRemoval, TextDirection,
 };
+use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::CdtFn;
 
@@ -491,9 +492,9 @@ pub(crate) fn from_cdt_term(term: &CdtTerm) -> Option<TermValue> {
                 let predicate = done.pop()?;
                 let subject = done.pop()?;
                 done.push(TermValue::Triple {
-                    s: Box::new(subject),
-                    p: Box::new(predicate),
-                    o: Box::new(object),
+                    s: TermBox::new(subject),
+                    p: TermBox::new(predicate),
+                    o: TermBox::new(object),
                 });
             }
             OutJob::Visit(CdtTerm::Null) => return None,

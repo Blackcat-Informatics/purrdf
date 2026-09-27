@@ -353,6 +353,7 @@
 //! call in the producer's membership mode rather than in its ranked one. That pairing is
 //! the whole of what makes a lookup against a self-bounding producer a lookup.
 
+use purrdf_sparql_algebra::Child;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -2422,32 +2423,47 @@ fn lookup_mode_is_declared(
 /// Whether the lookup binds `term`'s position: a constant, a variable
 /// `bound_variable` holds, or a quoted triple each of whose parts is one of those.
 fn lookup_binds(term: &TermPattern, bound_variable: &dyn Fn(&Variable) -> bool) -> bool {
-    match term {
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) => true,
-        TermPattern::BlankNode(_) => false,
-        TermPattern::Variable(variable) => bound_variable(variable),
-        TermPattern::Triple(triple) => {
-            lookup_binds(&triple.subject, bound_variable)
-                && match &triple.predicate {
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        let binds = match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => true,
+            TermPattern::BlankNode(_) => false,
+            TermPattern::Variable(variable) => bound_variable(variable),
+            TermPattern::Triple(triple) => {
+                pending.extend([&triple.object, &triple.subject]);
+                match &triple.predicate {
                     NamedNodePattern::NamedNode(_) => true,
                     NamedNodePattern::Variable(variable) => bound_variable(variable),
                 }
-                && lookup_binds(&triple.object, bound_variable)
+            }
+        };
+        if !binds {
+            return false;
         }
     }
+    true
 }
 
 /// Whether `term` writes `variable`, at its top level or inside a quoted triple.
 fn term_mentions(term: &TermPattern, variable: &Variable) -> bool {
-    match term {
-        TermPattern::Variable(written) => written == variable,
-        TermPattern::Triple(triple) => {
-            matches!(&triple.predicate, NamedNodePattern::Variable(written) if written == variable)
-                || term_mentions(&triple.subject, variable)
-                || term_mentions(&triple.object, variable)
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(written) if written == variable => return true,
+            TermPattern::Triple(triple) => {
+                if matches!(&triple.predicate, NamedNodePattern::Variable(written) if written == variable)
+                {
+                    return true;
+                }
+                pending.extend([&triple.object, &triple.subject]);
+            }
+            TermPattern::Variable(_)
+            | TermPattern::NamedNode(_)
+            | TermPattern::Literal(_)
+            | TermPattern::BlankNode(_) => {}
         }
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => false,
     }
+    false
 }
 
 /// The lookup of a call nothing in its text drives: the call alone, one invocation.
@@ -2497,7 +2513,7 @@ fn point_lookup(
                 TermPattern::BlankNode(BlankNode::new(format!("c{first}")))
             }
             TermPattern::Triple(triple) => {
-                TermPattern::Triple(Box::new(nested_rewrite(triple, source)))
+                TermPattern::Triple(Child::new(nested_rewrite(triple, source)))
             }
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => term.clone(),
         });
@@ -2507,8 +2523,8 @@ fn point_lookup(
     let lookup = GraphPattern::Slice {
         start: 0,
         length: Some(usize::try_from(EXCLUSION_LIMIT).unwrap_or(usize::MAX)),
-        inner: Box::new(GraphPattern::Project {
-            inner: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+        inner: Child::new(GraphPattern::Project {
+            inner: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
                 iri: call.iri.clone(),
                 subject_args,
                 object_args,
@@ -2605,7 +2621,7 @@ fn driven_lookup(
                 };
                 TermPattern::BlankNode(BlankNode::new(format!("{blank}{first}")))
             }
-            TermPattern::Triple(triple) => TermPattern::Triple(Box::new(driven_nested_rewrite(
+            TermPattern::Triple(triple) => TermPattern::Triple(Child::new(driven_nested_rewrite(
                 triple,
                 source_var,
                 &parameter,
@@ -2622,16 +2638,16 @@ fn driven_lookup(
         // writes a needle pattern before its call: the planner orders the group's
         // atoms and drives the call with the sub-`SELECT`'s rows — the parameter
         // counted bound there too, which a `LATERAL` block's inside is not.
-        inner: Box::new(GraphPattern::Join {
-            left: Box::new(GraphPattern::Distinct {
-                inner: Box::new(GraphPattern::Project {
-                    inner: Box::new(driving),
+        inner: Child::new(GraphPattern::Join {
+            left: Child::new(GraphPattern::Distinct {
+                inner: Child::new(GraphPattern::Project {
+                    inner: Child::new(driving),
                     variables: input_vars.clone(),
                 }),
             }),
-            right: Box::new(GraphPattern::Lateral {
-                left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-                right: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+            right: Child::new(GraphPattern::Lateral {
+                left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
                     iri: call.iri.clone(),
                     subject_args,
                     object_args,
@@ -2651,7 +2667,7 @@ fn driven_lookup(
     let lookup = GraphPattern::Slice {
         start: 0,
         length: None,
-        inner: Box::new(projected),
+        inner: Child::new(projected),
     };
     LookupText {
         text: with_dataset(pattern_to_select_query(&lookup), source.dataset()),
@@ -2684,28 +2700,73 @@ fn driven_nested_rewrite(
     parameter: &str,
     kept_blank: &str,
 ) -> TriplePattern {
-    let term = |term: &TermPattern| match term {
-        TermPattern::Variable(variable) if variable == source => {
-            TermPattern::Variable(Variable::new(parameter))
-        }
-        TermPattern::Triple(inner) => TermPattern::Triple(Box::new(driven_nested_rewrite(
-            inner, source, parameter, kept_blank,
-        ))),
-        TermPattern::BlankNode(label) => {
-            TermPattern::BlankNode(BlankNode::new(format!("{kept_blank}{}", label.as_str())))
-        }
-        other => other.clone(),
-    };
-    TriplePattern {
-        subject: term(&triple.subject),
-        predicate: match &triple.predicate {
+    map_nested_triple(
+        triple,
+        |term| match term {
+            TermPattern::Variable(variable) if variable == source => {
+                TermPattern::Variable(Variable::new(parameter))
+            }
+            TermPattern::BlankNode(label) => {
+                TermPattern::BlankNode(BlankNode::new(format!("{kept_blank}{}", label.as_str())))
+            }
+            other => other.clone(),
+        },
+        |predicate| match predicate {
             NamedNodePattern::Variable(variable) if variable == source => {
                 NamedNodePattern::Variable(Variable::new(parameter))
             }
             other => other.clone(),
         },
-        object: term(&triple.object),
+    )
+}
+
+/// `triple` with every term that is not a quoted triple rewritten by `term` and every
+/// predicate by `predicate`, its quoted triples rebuilt the same way — bottom-up over a
+/// work list, so a triple nested to any depth is rewritten without recursion.
+fn map_nested_triple(
+    triple: &TriplePattern,
+    term: impl Fn(&TermPattern) -> TermPattern,
+    predicate: impl Fn(&NamedNodePattern) -> NamedNodePattern,
+) -> TriplePattern {
+    enum Step<'a> {
+        Enter(&'a TriplePattern),
+        Build(&'a TriplePattern),
     }
+    let mut stack = vec![Step::Enter(triple)];
+    let mut built: Vec<TriplePattern> = Vec::new();
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Enter(triple) => {
+                stack.push(Step::Build(triple));
+                for position in [&triple.object, &triple.subject] {
+                    if let TermPattern::Triple(inner) = position {
+                        stack.push(Step::Enter(inner));
+                    }
+                }
+            }
+            Step::Build(triple) => {
+                // The object's rewrite, when it is a quoted triple, was built last.
+                let object = match &triple.object {
+                    TermPattern::Triple(_) => TermPattern::Triple(Child::new(
+                        built.pop().expect("a quoted object is rewritten first"),
+                    )),
+                    other => term(other),
+                };
+                let subject = match &triple.subject {
+                    TermPattern::Triple(_) => TermPattern::Triple(Child::new(
+                        built.pop().expect("a quoted subject is rewritten first"),
+                    )),
+                    other => term(other),
+                };
+                built.push(TriplePattern {
+                    subject,
+                    predicate: predicate(&triple.predicate),
+                    object,
+                });
+            }
+        }
+    }
+    built.pop().expect("the outermost triple is rewritten last")
 }
 
 /// Every variable and blank node written inside the quoted triple `triple`, its
@@ -2717,19 +2778,24 @@ fn nested_names<'q>(triple: &'q TriplePattern, names: &mut Vec<(bool, &'q str)>)
             names.push(name);
         }
     };
-    if let NamedNodePattern::Variable(variable) = &triple.predicate {
-        record((false, variable.as_str()));
-    }
-    for term in [&triple.subject, &triple.object] {
-        match term {
-            TermPattern::Variable(variable) => record((false, variable.as_str())),
-            TermPattern::BlankNode(blank) => record((true, blank.as_str())),
-            TermPattern::Triple(_) | TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+    // Each triple records its own names before its quoted triples', the subject's
+    // before the object's.
+    let mut pending = vec![triple];
+    while let Some(triple) = pending.pop() {
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            record((false, variable.as_str()));
         }
-    }
-    for term in [&triple.subject, &triple.object] {
-        if let TermPattern::Triple(inner) = term {
-            nested_names(inner, names);
+        for term in [&triple.subject, &triple.object] {
+            match term {
+                TermPattern::Variable(variable) => record((false, variable.as_str())),
+                TermPattern::BlankNode(blank) => record((true, blank.as_str())),
+                TermPattern::Triple(_) | TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+            }
+        }
+        for term in [&triple.object, &triple.subject] {
+            if let TermPattern::Triple(inner) = term {
+                pending.push(inner);
+            }
         }
     }
 }
@@ -2765,16 +2831,15 @@ fn kept_name(term: &TermPattern) -> TermPattern {
 /// parameter wherever it occurs, and every other variable and blank node keeps its
 /// own prefixed name ([`kept_name`]) so every equality the caller wrote survives.
 fn nested_rewrite(triple: &TriplePattern, source: &Variable) -> TriplePattern {
-    let term = |term: &TermPattern| match term {
-        TermPattern::Variable(variable) if variable == source => {
-            TermPattern::Variable(Variable::new(CANDIDATE_NAME))
-        }
-        TermPattern::Triple(inner) => TermPattern::Triple(Box::new(nested_rewrite(inner, source))),
-        other => kept_name(other),
-    };
-    TriplePattern {
-        subject: term(&triple.subject),
-        predicate: match &triple.predicate {
+    map_nested_triple(
+        triple,
+        |term| match term {
+            TermPattern::Variable(variable) if variable == source => {
+                TermPattern::Variable(Variable::new(CANDIDATE_NAME))
+            }
+            other => kept_name(other),
+        },
+        |predicate| match predicate {
             NamedNodePattern::Variable(variable) if variable == source => {
                 NamedNodePattern::Variable(Variable::new(CANDIDATE_NAME))
             }
@@ -2783,8 +2848,7 @@ fn nested_rewrite(triple: &TriplePattern, source: &Variable) -> TriplePattern {
             }
             NamedNodePattern::NamedNode(node) => NamedNodePattern::NamedNode(node.clone()),
         },
-        object: term(&triple.object),
-    }
+    )
 }
 
 /// The number handed to a producer that declares a

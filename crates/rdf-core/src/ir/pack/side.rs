@@ -780,6 +780,7 @@ pub fn capabilities(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TermBox;
     use crate::{RdfDataset, RdfDatasetBuilder, TermId};
     use std::collections::HashSet;
 
@@ -879,9 +880,9 @@ mod tests {
                 iri("r"),
                 TermValue::Iri(RDF_REIFIES.to_owned()),
                 TermValue::Triple {
-                    s: Box::new(iri("s")),
-                    p: Box::new(iri("p")),
-                    o: Box::new(iri("o")),
+                    s: TermBox::new(iri("s")),
+                    p: TermBox::new(iri("p")),
+                    o: TermBox::new(iri("o")),
                 },
                 None,
             )])

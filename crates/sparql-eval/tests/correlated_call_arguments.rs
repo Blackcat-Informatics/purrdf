@@ -29,6 +29,7 @@
 //! shape against SPARQL's bottom-up answer: the relation evaluated FREE on its own,
 //! joined or filtered against the left side afterwards.
 
+use purrdf_core::TermBox;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -93,9 +94,9 @@ impl Kind {
                 scope: BlankScope::DEFAULT,
             },
             Self::Quoted => TermValue::Triple {
-                s: Box::new(TermValue::iri(format!("{EX}a"))),
-                p: Box::new(TermValue::iri(format!("{EX}r"))),
-                o: Box::new(TermValue::iri(format!("{EX}{name}"))),
+                s: TermBox::new(TermValue::iri(format!("{EX}a"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}r"))),
+                o: TermBox::new(TermValue::iri(format!("{EX}{name}"))),
             },
         }
     }

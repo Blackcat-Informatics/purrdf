@@ -61,6 +61,7 @@
 //! child is explored to exhaustion before its parent advances, and the budget is spent one
 //! unit per candidate in the order the candidates are reached.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::TermValue;
@@ -560,9 +561,9 @@ pub(crate) fn substitute(pat: &Pat, bound: &Binding) -> Option<TermValue> {
         Pat::Ground(term) => Some(term.clone()),
         Pat::Var(key) => bound.get(key).cloned(),
         Pat::Triple(inner) => Some(TermValue::Triple {
-            s: Box::new(substitute(&inner[0], bound)?),
-            p: Box::new(substitute(&inner[1], bound)?),
-            o: Box::new(substitute(&inner[2], bound)?),
+            s: TermBox::new(substitute(&inner[0], bound)?),
+            p: TermBox::new(substitute(&inner[1], bound)?),
+            o: TermBox::new(substitute(&inner[2], bound)?),
         }),
     }
 }

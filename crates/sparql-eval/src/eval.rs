@@ -21,6 +21,7 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b).
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -333,7 +334,7 @@ impl PreparedExists {
                     .map(|entry| entry.source);
                 ledger_source.extend(witness_inner_map);
                 let witness_wrapped = Arc::new(GraphPattern::Slice {
-                    inner: witness_inner,
+                    inner: witness_inner.into(),
                     start: 0,
                     length: Some(1),
                 });
@@ -3449,9 +3450,9 @@ fn memoized_term_value<D: DatasetView>(
             }
         }
         purrdf_core::TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(memoized_term_value(dataset, s, datatype_memo)),
-            p: Box::new(memoized_term_value(dataset, p, datatype_memo)),
-            o: Box::new(memoized_term_value(dataset, o, datatype_memo)),
+            s: TermBox::new(memoized_term_value(dataset, s, datatype_memo)),
+            p: TermBox::new(memoized_term_value(dataset, p, datatype_memo)),
+            o: TermBox::new(memoized_term_value(dataset, o, datatype_memo)),
         },
     }
 }
@@ -3603,6 +3604,7 @@ impl RowCheckpoint {
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
+    use purrdf_sparql_algebra::Child;
 
     #[test]
     fn bnode_mint_prefix_rejects_an_illegal_prefix() {
@@ -3814,8 +3816,8 @@ mod tests {
         // LATERAL(Z, Z): the left unit table drives one substituted evaluation of
         // the right unit table, merging to a single binding-nothing solution.
         let pattern = GraphPattern::Lateral {
-            left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-            right: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+            left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+            right: Child::new(GraphPattern::Bgp { patterns: vec![] }),
         };
         let seq = eval(&pattern, &mut ctx).expect("LATERAL of units");
         assert_eq!(seq.len(), 1);
@@ -3867,8 +3869,8 @@ mod tests {
         let outer_for_low_level_check = outer.clone();
         let inner_for_low_level_check = inner.clone();
         let filter = GraphPattern::Filter {
-            expr: Expression::Exists(Box::new(inner)),
-            inner: Box::new(outer),
+            expr: Expression::Exists(Child::new(inner)),
+            inner: Child::new(outer),
         };
 
         let mut ctx = EvalCtx::new(&ds);
@@ -3889,7 +3891,7 @@ mod tests {
         // the "no per-row index rebuild" invariant.
         let mut child_ctx = EvalCtx::new(&ds);
         let outer_seq = eval(&outer_for_low_level_check, &mut child_ctx).expect("outer bgp");
-        let exists_expr = Expression::Exists(Box::new(inner_for_low_level_check));
+        let exists_expr = Expression::Exists(Child::new(inner_for_low_level_check));
         let mut kept = 0;
         for row in &outer_seq.rows {
             if crate::expr::eval_ebv(&exists_expr, row, &outer_seq.schema, &mut child_ctx)
@@ -3982,19 +3984,19 @@ mod tests {
         let knows_bgp = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
         let likes_bgp = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
         let join = GraphPattern::Join {
-            left: Box::new(knows_bgp),
-            right: Box::new(likes_bgp),
+            left: Child::new(knows_bgp),
+            right: Child::new(likes_bgp),
         };
         let extra_bgp = bgp(vp("z"), pred("http://ex/extra"), vp("w"));
         let optional = GraphPattern::LeftJoin {
-            left: Box::new(join),
-            right: Box::new(extra_bgp),
+            left: Child::new(join),
+            right: Child::new(extra_bgp),
             expression: None,
         };
         let bad_bgp = bgp(vp("x"), pred("http://ex/bad"), vp("v"));
         let pattern = GraphPattern::Minus {
-            left: Box::new(optional),
-            right: Box::new(bad_bgp),
+            left: Child::new(optional),
+            right: Child::new(bad_bgp),
         };
 
         let run = |forced: bool| {
@@ -4072,8 +4074,8 @@ mod tests {
         let name_bgp = bgp(vp("x"), pred("http://ex/name"), vp("n"));
         let age_bgp = bgp(vp("x"), pred("http://ex/age"), vp("a"));
         let join = GraphPattern::Join {
-            left: Box::new(name_bgp),
-            right: Box::new(age_bgp),
+            left: Child::new(name_bgp),
+            right: Child::new(age_bgp),
         };
 
         let regex = Expression::FunctionCall(
@@ -4081,11 +4083,12 @@ mod tests {
             vec![
                 Expression::Variable(Variable::new("n")),
                 Expression::Literal(Literal::new_simple("^Name1[0-9][0-9]2$")),
-            ],
+            ]
+            .into(),
         );
         let numeric = Expression::Greater(
-            Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(Literal::new_typed(
+            Child::new(Expression::Variable(Variable::new("a"))),
+            Child::new(Expression::Literal(Literal::new_typed(
                 "40",
                 NamedNode::new_unchecked(XINT),
             ))),
@@ -4093,7 +4096,7 @@ mod tests {
         let cond = Expression::and(regex, numeric);
         let pattern = GraphPattern::Filter {
             expr: cond,
-            inner: Box::new(join),
+            inner: Child::new(join),
         };
 
         let run = |forced: bool| {
@@ -4161,8 +4164,8 @@ mod tests {
         );
         let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
         let pattern = GraphPattern::Filter {
-            expr: Expression::Exists(Box::new(inner)),
-            inner: Box::new(outer),
+            expr: Expression::Exists(Child::new(inner)),
+            inner: Child::new(outer),
         };
 
         let run = |forced: bool| {
@@ -4242,14 +4245,14 @@ mod tests {
         let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
         let right = bgp(vp("y"), pred("http://ex/age"), vp("a"));
         let cond = Expression::Greater(
-            Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(
+            Child::new(Expression::Variable(Variable::new("a"))),
+            Child::new(Expression::Literal(
                 purrdf_sparql_algebra::Literal::new_typed("40", NamedNode::new_unchecked(XINT)),
             )),
         );
         let pattern = GraphPattern::LeftJoin {
-            left: Box::new(left),
-            right: Box::new(right),
+            left: Child::new(left),
+            right: Child::new(right),
             expression: Some(cond),
         };
 
@@ -4344,8 +4347,8 @@ mod tests {
             }],
         };
         GraphPattern::Lateral {
-            left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
-            right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
+            left: Child::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
+            right: Child::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
         }
     }
 

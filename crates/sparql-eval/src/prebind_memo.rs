@@ -51,6 +51,7 @@
 //! same value set. A memo that fails that check is discarded and the run takes the
 //! ordinary path.
 
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, GroundTerm, GroundTriple,
     Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern, Variable,
@@ -583,7 +584,7 @@ fn moved(ground: &GroundTerm) -> GroundTerm {
         ),
         // Every position moves, so a quoted triple whose writability came from a
         // nested blank keeps it and a fully-writable one stays fully writable.
-        GroundTerm::Triple(triple) => GroundTerm::Triple(Box::new(GroundTriple {
+        GroundTerm::Triple(triple) => GroundTerm::Triple(Child::new(GroundTriple {
             subject: moved(&triple.subject),
             predicate: moved_node(&triple.predicate),
             object: moved(&triple.object),

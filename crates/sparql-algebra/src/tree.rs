@@ -1,0 +1,680 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The owning edges of the algebra tree.
+//!
+//! Every place a [`GraphPattern`], [`Expression`] or [`PropertyPathExpression`] owns
+//! another node — and every place a quoted triple term owns its triple — holds it
+//! through one of four edge types:
+//!
+//! * [`Child`] — exactly one boxed node (the operands of a binary operator, the inner
+//!   pattern of a modifier, a quoted triple);
+//! * [`Chain`] — two or more nodes, the operands of an n-ary `||`/`&&`, the arms of a
+//!   `UNION`, the elements of a path sequence or alternative;
+//! * [`NonEmpty`] — one or more nodes, the steps of an arithmetic chain;
+//! * [`Args`] — any number of nodes, an argument list (`COALESCE()` and `x IN ()` are
+//!   valid SPARQL, so these may be empty).
+//!
+//! # Why the edges own the drop
+//!
+//! A tree a million levels deep must be dropped without a million nested calls. The
+//! drop glue the compiler writes for a recursive type recurses, so each edge type
+//! implements [`Drop`] itself: it moves the subtree it owns into a work list and
+//! dismantles that list in a loop, moving each node's own children onto the list
+//! before letting the node go. Every node the loop drops has already given up its
+//! children, so no drop recurses more than a fixed number of frames, however deep
+//! the tree.
+//!
+//! The drop lives on the edges and not on the node enums on purpose: a type that
+//! implements [`Drop`] cannot be destructured by value, and matching a node by value
+//! to move its fields out (`GraphPattern::Join { left, right } => …`) is how every
+//! rewrite over the algebra is written. The node enums implement no [`Drop`], so that
+//! destructuring keeps working; what it moves out is an edge, whose own drop, or its
+//! [`Child::into_inner`] / `into_vec`, takes over from there.
+//!
+//! [`GraphPattern`]: crate::GraphPattern
+//! [`Expression`]: crate::Expression
+//! [`PropertyPathExpression`]: crate::PropertyPathExpression
+
+use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::ops::{Deref, DerefMut};
+
+use crate::owned::{DropWork, Owned, reclaim};
+
+mod sealed {
+    /// Closes [`super::Subtree`] to this crate's node types.
+    pub trait Sealed {}
+}
+
+/// A node type an edge ([`Child`], [`Chain`], [`NonEmpty`], [`Args`]) can own.
+///
+/// Implemented for the algebra's recursive node types and closed to them: the
+/// edge's iterative drop must know how to take every kind of node it can meet apart.
+pub trait Subtree: Sized + sealed::Sealed {
+    /// Move this node onto `work` for the iterative drop, or drop it here when it
+    /// owns no other node.
+    #[doc(hidden)]
+    fn release(self, work: &mut DropWork);
+}
+
+macro_rules! subtree {
+    ($($ty:ty => |$node:ident, $work:ident| $body:expr;)+) => {$(
+        impl sealed::Sealed for $ty {}
+        impl Subtree for $ty {
+            fn release(self, $work: &mut DropWork) {
+                let $node = self;
+                $body
+            }
+        }
+    )+};
+}
+
+subtree! {
+    crate::GraphPattern => |node, work| crate::owned::release_pattern(node, work);
+    crate::Expression => |node, work| crate::owned::release_expr(node, work);
+    crate::PropertyPathExpression => |node, work| crate::owned::release_path(node, work);
+    crate::TriplePattern => |node, work| work.push(Owned::Triple(node));
+    crate::GroundTriple => |node, work| {
+        let crate::GroundTriple { subject, predicate: _, object } = node;
+        crate::owned::release_ground(subject, work);
+        crate::owned::release_ground(object, work);
+    };
+    (crate::ArithmeticOperator, crate::Expression) => |node, work| {
+        crate::owned::release_expr(node.1, work);
+    };
+}
+
+/// Release every node of `nodes` and dismantle what they own.
+fn release_all<T: Subtree>(nodes: Vec<T>) {
+    if nodes.is_empty() {
+        return;
+    }
+    let mut work = DropWork::new();
+    for node in nodes {
+        node.release(&mut work);
+        reclaim(&mut work);
+    }
+}
+
+/// Exactly one boxed node: an operand, an inner pattern, a quoted triple.
+///
+/// Reads like a `Box<T>` — it dereferences to `T` — and is built with [`Child::new`]
+/// or `T::into()`, and taken apart with [`Child::into_inner`]. Its [`Drop`] is
+/// iterative (see the [module docs](self)).
+pub struct Child<T: Subtree>(Option<Box<T>>);
+
+impl<T: Subtree> Child<T> {
+    /// Box `value` as a child.
+    #[must_use]
+    pub fn new(value: T) -> Self {
+        Self(Some(Box::new(value)))
+    }
+
+    /// The child, unboxed.
+    #[must_use]
+    pub fn into_inner(mut self) -> T {
+        *self.take_box()
+    }
+
+    /// The child, still boxed.
+    #[must_use]
+    pub fn into_box(mut self) -> Box<T> {
+        self.take_box()
+    }
+
+    fn take_box(&mut self) -> Box<T> {
+        self.0
+            .take()
+            .expect("a child is emptied only by its own drop")
+    }
+
+    /// The boxed node, taken out for the iterative drop; `None` once taken.
+    pub(crate) fn take(&mut self) -> Option<Box<T>> {
+        self.0.take()
+    }
+}
+
+impl<T: Subtree> Drop for Child<T> {
+    fn drop(&mut self) {
+        if let Some(node) = self.0.take() {
+            let mut work = DropWork::new();
+            (*node).release(&mut work);
+            reclaim(&mut work);
+        }
+    }
+}
+
+impl<T: Subtree> Deref for Child<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.0
+            .as_deref()
+            .expect("a child is emptied only by its own drop")
+    }
+}
+
+impl<T: Subtree> DerefMut for Child<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.0
+            .as_deref_mut()
+            .expect("a child is emptied only by its own drop")
+    }
+}
+
+impl<T: Subtree> AsRef<T> for Child<T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T: Subtree> AsMut<T> for Child<T> {
+    fn as_mut(&mut self) -> &mut T {
+        self
+    }
+}
+
+impl<T: Subtree> core::borrow::Borrow<T> for Child<T> {
+    fn borrow(&self) -> &T {
+        self
+    }
+}
+
+impl<T: Subtree> From<T> for Child<T> {
+    fn from(value: T) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<T: Subtree> From<Box<T>> for Child<T> {
+    fn from(value: Box<T>) -> Self {
+        Self(Some(value))
+    }
+}
+
+impl<T: Subtree + Clone> Clone for Child<T> {
+    fn clone(&self) -> Self {
+        Self::new(T::clone(self))
+    }
+}
+
+impl<T: Subtree + PartialEq> PartialEq for Child<T> {
+    fn eq(&self, other: &Self) -> bool {
+        T::eq(self, other)
+    }
+}
+
+impl<T: Subtree + Eq> Eq for Child<T> {}
+
+impl<T: Subtree + Hash> Hash for Child<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        T::hash(self, state);
+    }
+}
+
+impl<T: Subtree + fmt::Debug> fmt::Debug for Child<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        T::fmt(self, f)
+    }
+}
+
+/// Implements the traits the three list edges share: iteration, conversion back to
+/// a `Vec`, and `Clone`/`==`/`Hash`/`Debug` exactly as the `Vec` they wrap has them.
+macro_rules! list_edge {
+    ($name:ident) => {
+        impl<T: Subtree> $name<T> {
+            /// The nodes, in order, as a `Vec`.
+            #[must_use]
+            pub fn into_vec(mut self) -> Vec<T> {
+                core::mem::take(&mut self.0)
+            }
+
+            /// The nodes, in order.
+            #[must_use]
+            pub fn as_slice(&self) -> &[T] {
+                &self.0
+            }
+
+            /// How many nodes the list has room for before it reallocates.
+            #[must_use]
+            pub fn capacity(&self) -> usize {
+                self.0.capacity()
+            }
+
+            /// The nodes, in order, mutably. The length cannot change through this.
+            #[must_use]
+            pub fn as_mut_slice(&mut self) -> &mut [T] {
+                &mut self.0
+            }
+
+            /// The nodes, in order, taken out for the iterative drop; empty once taken.
+            pub(crate) fn take_nodes(&mut self) -> Vec<T> {
+                core::mem::take(&mut self.0)
+            }
+        }
+
+        impl<T: Subtree> Drop for $name<T> {
+            fn drop(&mut self) {
+                release_all(core::mem::take(&mut self.0));
+            }
+        }
+
+        impl<T: Subtree> IntoIterator for $name<T> {
+            type Item = T;
+            type IntoIter = std::vec::IntoIter<T>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                self.into_vec().into_iter()
+            }
+        }
+
+        impl<'a, T: Subtree> IntoIterator for &'a $name<T> {
+            type Item = &'a T;
+            type IntoIter = core::slice::Iter<'a, T>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                self.0.iter()
+            }
+        }
+
+        impl<'a, T: Subtree> IntoIterator for &'a mut $name<T> {
+            type Item = &'a mut T;
+            type IntoIter = core::slice::IterMut<'a, T>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                self.0.iter_mut()
+            }
+        }
+
+        impl<T: Subtree> AsRef<[T]> for $name<T> {
+            fn as_ref(&self) -> &[T] {
+                &self.0
+            }
+        }
+
+        impl<T: Subtree> From<$name<T>> for Vec<T> {
+            fn from(value: $name<T>) -> Self {
+                value.into_vec()
+            }
+        }
+
+        impl<T: Subtree + Clone> Clone for $name<T> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+
+        impl<T: Subtree + PartialEq> PartialEq for $name<T> {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl<T: Subtree + Eq> Eq for $name<T> {}
+
+        impl<T: Subtree + Hash> Hash for $name<T> {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                self.0.hash(state);
+            }
+        }
+
+        /// Written exactly as the `Vec` of its nodes is.
+        impl<T: Subtree + fmt::Debug> fmt::Debug for $name<T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Debug::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+/// Two or more nodes, in source order: the operands of an n-ary `||` or `&&`, the
+/// arms of a `UNION`, the elements of a path sequence or alternative.
+///
+/// A chain of fewer than two nodes is not representable: [`Chain::new`] takes the
+/// first two, `Chain::try_from` refuses a shorter `Vec` (handing it back), and
+/// nothing removes a node. It dereferences to the slice of its nodes; [`Chain::first`]
+/// and [`Chain::last`] answer a node rather than an `Option`.
+pub struct Chain<T: Subtree>(Vec<T>);
+
+list_edge!(Chain);
+
+impl<T: Subtree> Chain<T> {
+    /// The chain of `nodes`, which the caller has made two or more long.
+    pub(crate) fn from_vec_unchecked(nodes: Vec<T>) -> Self {
+        debug_assert!(nodes.len() >= 2, "a chain holds two or more nodes");
+        Self(nodes)
+    }
+
+    /// The chain `first`, `second`, then `rest` in order.
+    #[must_use]
+    pub fn new(first: T, second: T, rest: impl IntoIterator<Item = T>) -> Self {
+        let rest = rest.into_iter();
+        let mut nodes = Vec::with_capacity(2 + rest.size_hint().0);
+        nodes.push(first);
+        nodes.push(second);
+        nodes.extend(rest);
+        Self(nodes)
+    }
+
+    /// Append `node` to the end of the chain.
+    pub fn push(&mut self, node: T) {
+        self.0.push(node);
+    }
+
+    /// The first node.
+    #[must_use]
+    pub fn first(&self) -> &T {
+        &self.0[0]
+    }
+
+    /// The last node.
+    #[must_use]
+    pub fn last(&self) -> &T {
+        &self.0[self.0.len() - 1]
+    }
+
+    /// The first node and the one or more after it.
+    #[must_use]
+    pub fn split_first(&self) -> (&T, &[T]) {
+        (&self.0[0], &self.0[1..])
+    }
+
+    /// Apply `f` to every node, in order, keeping the chain's length.
+    #[must_use]
+    pub fn map<U: Subtree>(self, f: impl FnMut(T) -> U) -> Chain<U> {
+        Chain(self.into_vec().into_iter().map(f).collect())
+    }
+
+    /// Apply `f` to every node, in order, stopping at the first error.
+    pub fn try_map<U: Subtree, E>(self, f: impl FnMut(T) -> Result<U, E>) -> Result<Chain<U>, E> {
+        self.into_vec()
+            .into_iter()
+            .map(f)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Chain)
+    }
+
+    /// A list of the same length whose nodes are `f` of each borrowed node, in order.
+    #[must_use]
+    pub fn map_ref<U: Subtree>(&self, f: impl FnMut(&T) -> U) -> Chain<U> {
+        Chain(self.0.iter().map(f).collect())
+    }
+
+    /// [`Self::map_ref`], stopping at the first error.
+    pub fn try_map_ref<U: Subtree, E>(
+        &self,
+        f: impl FnMut(&T) -> Result<U, E>,
+    ) -> Result<Chain<U>, E> {
+        self.0
+            .iter()
+            .map(f)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Chain)
+    }
+}
+
+impl<T: Subtree> TryFrom<Vec<T>> for Chain<T> {
+    type Error = Vec<T>;
+
+    /// The chain of `nodes`, or `nodes` back when there are fewer than two.
+    fn try_from(nodes: Vec<T>) -> Result<Self, Vec<T>> {
+        if nodes.len() >= 2 {
+            Ok(Self(nodes))
+        } else {
+            Err(nodes)
+        }
+    }
+}
+
+impl<T: Subtree> Deref for Chain<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: Subtree> DerefMut for Chain<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+/// One or more nodes, in source order: the steps of an arithmetic chain.
+///
+/// An empty one is not representable: [`NonEmpty::new`] takes the first node,
+/// `NonEmpty::try_from` refuses an empty `Vec` (handing it back), and nothing
+/// removes a node. It dereferences to the slice of its nodes; [`NonEmpty::first`] and
+/// [`NonEmpty::last`] answer a node rather than an `Option`.
+pub struct NonEmpty<T: Subtree>(Vec<T>);
+
+list_edge!(NonEmpty);
+
+impl<T: Subtree> NonEmpty<T> {
+    /// The list of `nodes`, which the caller has made one or more long.
+    pub(crate) fn from_vec_unchecked(nodes: Vec<T>) -> Self {
+        debug_assert!(!nodes.is_empty(), "a non-empty list holds a node");
+        Self(nodes)
+    }
+
+    /// The one-node list `first`.
+    #[must_use]
+    pub fn new(first: T) -> Self {
+        Self(vec![first])
+    }
+
+    /// The list `first`, then `rest` in order.
+    #[must_use]
+    pub fn from_parts(first: T, rest: impl IntoIterator<Item = T>) -> Self {
+        let rest = rest.into_iter();
+        let mut nodes = Vec::with_capacity(1 + rest.size_hint().0);
+        nodes.push(first);
+        nodes.extend(rest);
+        Self(nodes)
+    }
+
+    /// Append `node` to the end of the list.
+    pub fn push(&mut self, node: T) {
+        self.0.push(node);
+    }
+
+    /// The first node.
+    #[must_use]
+    pub fn first(&self) -> &T {
+        &self.0[0]
+    }
+
+    /// The last node.
+    #[must_use]
+    pub fn last(&self) -> &T {
+        &self.0[self.0.len() - 1]
+    }
+
+    /// The first node and the ones after it.
+    #[must_use]
+    pub fn split_first(&self) -> (&T, &[T]) {
+        (&self.0[0], &self.0[1..])
+    }
+
+    /// Apply `f` to every node, in order, keeping the list's length.
+    #[must_use]
+    pub fn map<U: Subtree>(self, f: impl FnMut(T) -> U) -> NonEmpty<U> {
+        NonEmpty(self.into_vec().into_iter().map(f).collect())
+    }
+
+    /// Apply `f` to every node, in order, stopping at the first error.
+    pub fn try_map<U: Subtree, E>(
+        self,
+        f: impl FnMut(T) -> Result<U, E>,
+    ) -> Result<NonEmpty<U>, E> {
+        self.into_vec()
+            .into_iter()
+            .map(f)
+            .collect::<Result<Vec<_>, _>>()
+            .map(NonEmpty)
+    }
+
+    /// A list of the same length whose nodes are `f` of each borrowed node, in order.
+    #[must_use]
+    pub fn map_ref<U: Subtree>(&self, f: impl FnMut(&T) -> U) -> NonEmpty<U> {
+        NonEmpty(self.0.iter().map(f).collect())
+    }
+
+    /// [`Self::map_ref`], stopping at the first error.
+    pub fn try_map_ref<U: Subtree, E>(
+        &self,
+        f: impl FnMut(&T) -> Result<U, E>,
+    ) -> Result<NonEmpty<U>, E> {
+        self.0
+            .iter()
+            .map(f)
+            .collect::<Result<Vec<_>, _>>()
+            .map(NonEmpty)
+    }
+}
+
+impl<T: Subtree> TryFrom<Vec<T>> for NonEmpty<T> {
+    type Error = Vec<T>;
+
+    /// The list of `nodes`, or `nodes` back when it is empty.
+    fn try_from(nodes: Vec<T>) -> Result<Self, Vec<T>> {
+        if nodes.is_empty() {
+            Err(nodes)
+        } else {
+            Ok(Self(nodes))
+        }
+    }
+}
+
+impl<T: Subtree> Deref for NonEmpty<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: Subtree> DerefMut for NonEmpty<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+/// Any number of nodes, in source order: the arguments of a function call, the
+/// operands of `COALESCE`, the list of an `IN`.
+///
+/// It dereferences to the `Vec` of its nodes, so it reads and grows like one; it is
+/// built from a `Vec` with `into()`, or collected from an iterator.
+pub struct Args<T: Subtree>(Vec<T>);
+
+list_edge!(Args);
+
+impl<T: Subtree> Args<T> {
+    /// The empty list.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T: Subtree> Default for Args<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Subtree> From<Vec<T>> for Args<T> {
+    fn from(nodes: Vec<T>) -> Self {
+        Self(nodes)
+    }
+}
+
+impl<T: Subtree, const N: usize> From<[T; N]> for Args<T> {
+    fn from(nodes: [T; N]) -> Self {
+        Self(nodes.into())
+    }
+}
+
+impl<T: Subtree> FromIterator<T> for Args<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<T: Subtree> Extend<T> for Args<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl<T: Subtree> Deref for Args<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.0
+    }
+}
+
+impl<T: Subtree> DerefMut for Args<T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        &mut self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Chain, Child, NonEmpty};
+    use crate::{ArithmeticOperator, Expression, Variable};
+
+    fn var(name: &str) -> Expression {
+        Expression::Variable(Variable::new(name))
+    }
+
+    /// A chain refuses a list of one, handing it back, and admits its neighbour of two.
+    #[test]
+    fn a_chain_refuses_fewer_than_two_nodes_and_admits_two() {
+        let refused = Chain::try_from(vec![var("a")]).expect_err("one node is not a chain");
+        assert_eq!(refused, vec![var("a")], "the refused list is handed back");
+        assert!(Chain::<Expression>::try_from(Vec::new()).is_err());
+        let chain = Chain::try_from(vec![var("a"), var("b")]).expect("two nodes are a chain");
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain.first(), &var("a"));
+        assert_eq!(chain.last(), &var("b"));
+    }
+
+    /// A non-empty list refuses no node and admits one.
+    #[test]
+    fn a_non_empty_list_refuses_no_node_and_admits_one() {
+        let refused = NonEmpty::<(ArithmeticOperator, Expression)>::try_from(Vec::new())
+            .expect_err("no step is not a non-empty list");
+        assert_eq!(refused, Vec::new(), "the refused list is handed back");
+        let steps = NonEmpty::try_from(vec![(ArithmeticOperator::Add, var("a"))])
+            .expect("one step is a non-empty list");
+        assert_eq!(steps.first().0, ArithmeticOperator::Add);
+    }
+
+    /// An argument list may be empty, and reads and grows like the `Vec` it wraps.
+    #[test]
+    fn an_argument_list_may_be_empty() {
+        let mut args: Args<Expression> = Vec::new().into();
+        assert!(args.is_empty());
+        args.push(var("a"));
+        assert_eq!(args.into_vec(), vec![var("a")]);
+    }
+
+    /// A child unboxes to the node it was built from, whether built from a value or a
+    /// box, and a chain maps node for node.
+    #[test]
+    fn edges_hand_back_what_they_hold() {
+        assert_eq!(Child::new(var("a")).into_inner(), var("a"));
+        assert_eq!(Child::from(Box::new(var("b"))).into_inner(), var("b"));
+        let renamed = Chain::new(var("a"), var("b"), [var("c")]).map_ref(|e| match e {
+            Expression::Variable(v) => {
+                Expression::Variable(Variable::new(format!("x{}", v.as_str())))
+            }
+            other => other.clone(),
+        });
+        assert_eq!(renamed.into_vec(), vec![var("xa"), var("xb"), var("xc")]);
+    }
+}

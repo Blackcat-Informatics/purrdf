@@ -43,6 +43,7 @@
 
 use crate::algebra::{GraphPattern, Query};
 use crate::ast::{GroundTerm, Variable};
+use crate::tree::Child;
 
 impl Query {
     /// Pre-bind `var` to `value` by injecting a single-row `VALUES { ?var value }`
@@ -76,8 +77,8 @@ impl Query {
         };
         self.map_core_pattern_mut(|core| {
             take_and_replace(core, |core| GraphPattern::Join {
-                left: Box::new(seed),
-                right: Box::new(core),
+                left: Child::new(seed),
+                right: Child::new(core),
             });
         });
     }
@@ -115,7 +116,7 @@ impl Query {
 /// pattern that is *itself* the core (a bare BGP/Join/etc. with no wrapper) is
 /// handed straight to `f`.
 ///
-/// The recursion descends the single-child wrappers that evaluate expressions over
+/// The descent passes the single-child wrappers that evaluate expressions over
 /// their inner rows. `Filter` is included even though it is a graph-pattern node:
 /// `FILTER EXISTS { ?this ... }` must see the pre-bound `?this` in its current
 /// solution row, matching `VALUES { ?this value } FILTER ...` source semantics.
@@ -129,29 +130,32 @@ impl Query {
 /// variant added later has to be handled twice — and a walk that missed it would
 /// still compile and still return an answer, silently seeding at the wrong node.
 ///
-/// Every arm below recurses into a uniquely-owned `Box`, so no `mem::replace` and
-/// no copy-on-write step is needed to get a `&mut` to a child.
+/// Every wrapper holds its inner pattern in a uniquely-owned [`crate::Child`], so no
+/// `mem::replace` and no copy-on-write step is needed to get a `&mut` to it, and the
+/// descent is a loop.
 pub(crate) fn map_core_pattern_mut(pattern: &mut GraphPattern, f: impl FnOnce(&mut GraphPattern)) {
-    match pattern {
-        // `UNFOLD` stacks above the pattern before it exactly as `BIND` does, so
-        // it is descended through for the same reason `Extend` is: the pre-bound
-        // seed belongs BENEATH it, where its expression can read `?this`. Left to
-        // the catch-all below, `UNFOLD($this AS ?e)` in a SHACL-SPARQL constraint
-        // would be seeded as `Join(Values{?this}, Unfold(...))` — the expression
-        // then sees `$this` unbound, denotes no composite, and the constraint
-        // quietly reports nothing rather than reporting a violation.
-        GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner, .. }
-        | GraphPattern::Reduced { inner, .. }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        | GraphPattern::Filter { inner, .. }
-        | GraphPattern::Unfold { inner, .. } => map_core_pattern_mut(inner, f),
-        // The first non-modifier node is the core WHERE pattern.
-        core => f(core),
+    let mut core = pattern;
+    // `UNFOLD` stacks above the pattern before it exactly as `BIND` does, so it is
+    // descended through for the same reason `Extend` is: the pre-bound seed
+    // belongs BENEATH it, where its expression can read `?this`. Stopping at it
+    // would seed `UNFOLD($this AS ?e)` in a SHACL-SPARQL constraint as
+    // `Join(Values{?this}, Unfold(...))` — the expression then sees `$this`
+    // unbound, denotes no composite, and the constraint quietly reports nothing
+    // rather than reporting a violation.
+    while let GraphPattern::Project { inner, .. }
+    | GraphPattern::Distinct { inner, .. }
+    | GraphPattern::Reduced { inner, .. }
+    | GraphPattern::Slice { inner, .. }
+    | GraphPattern::OrderBy { inner, .. }
+    | GraphPattern::Group { inner, .. }
+    | GraphPattern::Extend { inner, .. }
+    | GraphPattern::Filter { inner, .. }
+    | GraphPattern::Unfold { inner, .. } = core
+    {
+        core = inner;
     }
+    // The first non-modifier node is the core WHERE pattern.
+    f(core);
 }
 
 /// Run a by-value rewrite through a `&mut` slot.
@@ -221,7 +225,7 @@ mod tests {
             panic!("projection preserved, got {pattern:?}");
         };
         assert_eq!(variables, vec![this()], "?this still projected");
-        let GraphPattern::Join { left, .. } = *inner else {
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
             panic!("seed join injected below projection");
         };
         assert_seed(&left, "this", "http://ex/focus");
@@ -291,10 +295,11 @@ mod tests {
         let GraphPattern::Project { inner, .. } = pattern else {
             panic!("projection preserved");
         };
-        let GraphPattern::Unfold { inner, .. } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Unfold { inner, .. } = inner else {
             panic!("the UNFOLD node must survive ABOVE the seed, got {inner:?}");
         };
-        let GraphPattern::Join { left, .. } = *inner else {
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
             panic!("the seed joins onto the core pattern beneath the UNFOLD");
         };
         assert_seed(&left, "this", "http://ex/f");
@@ -312,10 +317,10 @@ mod tests {
         let GraphPattern::Project { inner, .. } = pattern else {
             panic!("projection preserved");
         };
-        let GraphPattern::Join { left, .. } = *inner else {
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
             panic!("seed join injected");
         };
-        let GraphPattern::Values { bindings, .. } = *left else {
+        let GraphPattern::Values { bindings, .. } = left.into_inner() else {
             panic!("VALUES seed");
         };
         match &bindings[0][0] {

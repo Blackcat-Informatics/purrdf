@@ -26,6 +26,7 @@ use crate::ast::{
 };
 use crate::error::{ParseError, Result};
 use crate::lexer::{Spanned, Token, tokenize};
+use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -1854,7 +1855,7 @@ impl<'a> Parser<'a, '_> {
         // grouping variable BELOW the Group, so `eval_group` sees a ready column.
         for (var, expr) in modifiers.group_extends {
             p = GraphPattern::Extend {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 variable: var,
                 expression: expr,
             };
@@ -1862,7 +1863,7 @@ impl<'a> Parser<'a, '_> {
         let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
         if has_group {
             p = GraphPattern::Group {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 variables: modifiers.group_by.clone(),
                 aggregates,
             };
@@ -1870,19 +1871,19 @@ impl<'a> Parser<'a, '_> {
         for expr in modifiers.having {
             p = GraphPattern::Filter {
                 expr,
-                inner: Box::new(p),
+                inner: Child::new(p),
             };
         }
         for (var, expr) in select_exprs {
             p = GraphPattern::Extend {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 variable: var,
                 expression: expr,
             };
         }
         if !modifiers.order_by.is_empty() {
             p = GraphPattern::OrderBy {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 expression: modifiers.order_by,
             };
         }
@@ -1896,17 +1897,21 @@ impl<'a> Parser<'a, '_> {
             projected
         };
         p = GraphPattern::Project {
-            inner: Box::new(p),
+            inner: Child::new(p),
             variables,
         };
         if distinct {
-            p = GraphPattern::Distinct { inner: Box::new(p) };
+            p = GraphPattern::Distinct {
+                inner: Child::new(p),
+            };
         } else if reduced {
-            p = GraphPattern::Reduced { inner: Box::new(p) };
+            p = GraphPattern::Reduced {
+                inner: Child::new(p),
+            };
         }
         if modifiers.offset.is_some() || modifiers.limit.is_some() {
             p = GraphPattern::Slice {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 start: modifiers.offset.unwrap_or(0),
                 length: modifiers.limit,
             };
@@ -2020,13 +2025,13 @@ impl<'a> Parser<'a, '_> {
             let mut p = where_pat;
             if !modifiers.order_by.is_empty() {
                 p = GraphPattern::OrderBy {
-                    inner: Box::new(p),
+                    inner: Child::new(p),
                     expression: modifiers.order_by,
                 };
             }
             if modifiers.offset.is_some() || modifiers.limit.is_some() {
                 p = GraphPattern::Slice {
-                    inner: Box::new(p),
+                    inner: Child::new(p),
                     start: modifiers.offset.unwrap_or(0),
                     length: modifiers.limit,
                 };
@@ -2063,13 +2068,13 @@ impl<'a> Parser<'a, '_> {
         let mut p = where_pat;
         if !modifiers.order_by.is_empty() {
             p = GraphPattern::OrderBy {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 expression: modifiers.order_by,
             };
         }
         if modifiers.offset.is_some() || modifiers.limit.is_some() {
             p = GraphPattern::Slice {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 start: modifiers.offset.unwrap_or(0),
                 length: modifiers.limit,
             };
@@ -2788,37 +2793,41 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Walk one DATA triple pattern, rejecting variables (always) and blank nodes
-    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples.
+    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples over a work list,
+    /// reporting the first violation in written order.
     fn check_data_triple(&self, t: &TriplePattern, reject_blank: bool) -> Result<()> {
-        if let NamedNodePattern::Variable(_) = &t.predicate {
-            return Err(ParseError::syntax(
-                "variable predicate in INSERT/DELETE DATA is not allowed",
-                self.span(),
-            ));
-        }
-        self.check_data_term(&t.subject, reject_blank)?;
-        self.check_data_term(&t.object, reject_blank)
-    }
-
-    /// Walk one DATA term pattern, rejecting variables (always) and blank nodes
-    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples.
-    fn check_data_term(&self, t: &TermPattern, reject_blank: bool) -> Result<()> {
-        match t {
-            TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(()),
-            TermPattern::Triple(tp) => self.check_data_triple(tp, reject_blank),
-            TermPattern::Variable(_) => Err(ParseError::syntax(
-                "variable in INSERT/DELETE DATA is not allowed",
-                self.span(),
-            )),
-            TermPattern::BlankNode(_) => {
-                if reject_blank {
-                    Err(ParseError::syntax(
-                        "blank node in DELETE DATA is not allowed",
+        let mut terms: Vec<&TermPattern> = Vec::new();
+        let mut triple = Some(t);
+        loop {
+            if let Some(t) = triple.take() {
+                if let NamedNodePattern::Variable(_) = &t.predicate {
+                    return Err(ParseError::syntax(
+                        "variable predicate in INSERT/DELETE DATA is not allowed",
                         self.span(),
-                    ))
-                } else {
+                    ));
+                }
+                terms.extend([&t.object, &t.subject]);
+            }
+            let Some(term) = terms.pop() else {
+                return Ok(());
+            };
+            match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+                TermPattern::Triple(tp) => triple = Some(tp),
+                TermPattern::Variable(_) => {
+                    return Err(ParseError::syntax(
+                        "variable in INSERT/DELETE DATA is not allowed",
+                        self.span(),
+                    ));
+                }
+                TermPattern::BlankNode(_) => {
                     // INSERT DATA blanks are allowed (minted fresh per request).
-                    Ok(())
+                    if reject_blank {
+                        return Err(ParseError::syntax(
+                            "blank node in DELETE DATA is not allowed",
+                            self.span(),
+                        ));
+                    }
                 }
             }
         }
@@ -2935,8 +2944,8 @@ impl<'a> Parser<'a, '_> {
                 collect_vars(&right, &mut scope);
                 self.note_exists_scope(&right);
                 g = GraphPattern::LeftJoin {
-                    left: Box::new(g),
-                    right: Box::new(right),
+                    left: Child::new(g),
+                    right: Child::new(right),
                     expression,
                 };
             } else if self.eat_kw("LATERAL") {
@@ -2975,8 +2984,8 @@ impl<'a> Parser<'a, '_> {
                 collect_vars(&right, &mut scope);
                 self.note_exists_scope(&right);
                 g = GraphPattern::Lateral {
-                    left: Box::new(g),
-                    right: Box::new(right),
+                    left: Child::new(g),
+                    right: Child::new(right),
                 };
             } else if self.eat_kw("MINUS") {
                 // A `MINUS` right operand contributes NOTHING to the
@@ -2995,15 +3004,15 @@ impl<'a> Parser<'a, '_> {
                 // to the enclosing group's scope — no `collect_vars` call
                 // here, matching `collect_vars`'s own `Minus` arm.
                 g = GraphPattern::Minus {
-                    left: Box::new(g),
-                    right: Box::new(right),
+                    left: Child::new(g),
+                    right: Child::new(right),
                 };
             } else if self.eat_kw("GRAPH") {
                 let name = self.parse_var_or_iri_name()?;
                 let inner = self.parse_group_graph_pattern()?;
                 let graph = GraphPattern::Graph {
                     name,
-                    inner: Box::new(inner),
+                    inner: Child::new(inner),
                 };
                 collect_vars(&graph, &mut scope);
                 self.note_exists_scope(&graph);
@@ -3015,7 +3024,7 @@ impl<'a> Parser<'a, '_> {
                 let is_var_endpoint = matches!(name, NamedNodePattern::Variable(_));
                 let service = GraphPattern::Service {
                     name,
-                    inner: Box::new(inner),
+                    inner: Child::new(inner),
                     silent,
                 };
                 collect_vars(&service, &mut scope);
@@ -3026,8 +3035,8 @@ impl<'a> Parser<'a, '_> {
                 // LATERAL join. A fixed-IRI endpoint stays a plain join.
                 g = if is_var_endpoint {
                     GraphPattern::Lateral {
-                        left: Box::new(g),
-                        right: Box::new(service),
+                        left: Child::new(g),
+                        right: Child::new(service),
                     }
                 } else {
                     join(g, service)
@@ -3068,7 +3077,7 @@ impl<'a> Parser<'a, '_> {
                 scope.note(&variable);
                 self.note_exists_scope_var(&variable);
                 g = GraphPattern::Extend {
-                    inner: Box::new(g),
+                    inner: Child::new(g),
                     variable,
                     expression,
                 };
@@ -3123,7 +3132,7 @@ impl<'a> Parser<'a, '_> {
                     self.note_exists_scope_var(variable);
                 }
                 g = GraphPattern::Unfold {
-                    inner: Box::new(g),
+                    inner: Child::new(g),
                     expression,
                     element,
                     companion,
@@ -3160,7 +3169,7 @@ impl<'a> Parser<'a, '_> {
         for expr in filters {
             g = GraphPattern::Filter {
                 expr,
-                inner: Box::new(g),
+                inner: Child::new(g),
             };
         }
         Ok(g)
@@ -3520,7 +3529,7 @@ impl<'a> Parser<'a, '_> {
         if is_triple_term {
             self.expect(&Token::RParen)?;
             self.expect(&Token::TripleClose)?;
-            return Ok(TermPattern::Triple(Box::new(inner)));
+            return Ok(TermPattern::Triple(Child::new(inner)));
         }
         // Reifying triple: optional `~ reifier`, else a fresh blank reifier.
         let reifier = if self.eat(&Token::Tilde) {
@@ -3614,7 +3623,7 @@ impl<'a> Parser<'a, '_> {
         triples.push(TriplePattern {
             subject: reifier.clone(),
             predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REIFIES)),
-            object: TermPattern::Triple(Box::new(t.clone())),
+            object: TermPattern::Triple(Child::new(t.clone())),
         });
     }
 
@@ -3844,7 +3853,7 @@ impl<'a> Parser<'a, '_> {
         if self.eat(&Token::Caret) {
             let (elt, height) = self.measured(Self::parse_path_elt)?;
             self.charge_height("property path", height + 1)?;
-            Ok(PropertyPathExpression::Reverse(Box::new(elt)))
+            Ok(PropertyPathExpression::Reverse(Child::new(elt)))
         } else {
             self.parse_path_elt()
         }
@@ -3862,15 +3871,15 @@ impl<'a> Parser<'a, '_> {
         Ok(match self.peek() {
             Some(Token::Star) => {
                 self.pos += 1;
-                PropertyPathExpression::ZeroOrMore(Box::new(primary))
+                PropertyPathExpression::ZeroOrMore(Child::new(primary))
             }
             Some(Token::Plus) => {
                 self.pos += 1;
-                PropertyPathExpression::OneOrMore(Box::new(primary))
+                PropertyPathExpression::OneOrMore(Child::new(primary))
             }
             Some(Token::Question) => {
                 self.pos += 1;
-                PropertyPathExpression::ZeroOrOne(Box::new(primary))
+                PropertyPathExpression::ZeroOrOne(Child::new(primary))
             }
             // `{n}` / `{n,}` / `{n,m}` / `{,m}` — bounded repetition (a PurRDF
             // extension beyond SPARQL 1.1 §9; symmetric parse for the serializer).
@@ -3924,7 +3933,7 @@ impl<'a> Parser<'a, '_> {
             ));
         }
         Ok(PropertyPathExpression::Range {
-            inner: Box::new(primary),
+            inner: Child::new(primary),
             min,
             max,
         })
@@ -4044,7 +4053,7 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::TripleOpen) => {
                 let t = self.nested("triple term", Self::parse_quoted_triple)?;
-                Ok(TermPattern::Triple(Box::new(t)))
+                Ok(TermPattern::Triple(Child::new(t)))
             }
             other => Err(ParseError::syntax(
                 format!("expected an RDF term, found {other:?}"),
@@ -4256,7 +4265,7 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::TripleOpen) => {
                 let t = self.nested("triple term", Self::parse_ground_triple)?;
-                Ok(GroundTerm::Triple(Box::new(t)))
+                Ok(GroundTerm::Triple(Child::new(t)))
             }
             // Every other legal ground term — a string, a boolean, or a numeral
             // (optionally signed: `-1`, `+0.5`) — is `parse_literal`'s grammar;
@@ -4569,10 +4578,10 @@ impl<'a> Parser<'a, '_> {
             // `!=` builds two levels: `Not(Equal(l, r))`.
             let levels = if op == "!=" { 2 } else { 1 };
             self.charge_height("expression", levels + left_height.max(right_height))?;
-            let (l, r) = (Box::new(left), Box::new(right));
+            let (l, r) = (Child::new(left), Child::new(right));
             return Ok(match op {
                 "=" => Expression::Equal(l, r),
-                "!=" => Expression::Not(Box::new(Expression::Equal(l, r))),
+                "!=" => Expression::Not(Child::new(Expression::Equal(l, r))),
                 "<" => Expression::Less(l, r),
                 ">" => Expression::Greater(l, r),
                 "<=" => Expression::LessOrEqual(l, r),
@@ -4583,15 +4592,15 @@ impl<'a> Parser<'a, '_> {
             self.pos += 1;
             let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
             self.charge_height("expression", 1 + left_height.max(list_height))?;
-            return Ok(Expression::In(Box::new(left), list));
+            return Ok(Expression::In(Child::new(left), list.into()));
         }
         if self.peek_kw("NOT") && self.peek2_kw("IN") {
             self.pos += 2;
             let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
             self.charge_height("expression", 2 + left_height.max(list_height))?;
-            return Ok(Expression::Not(Box::new(Expression::In(
-                Box::new(left),
-                list,
+            return Ok(Expression::Not(Child::new(Expression::In(
+                Child::new(left),
+                list.into(),
             ))));
         }
         Ok(left)
@@ -4645,13 +4654,13 @@ impl<'a> Parser<'a, '_> {
     ) -> Result<Expression> {
         if self.eat(&Token::Bang) {
             let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
-            Ok(Expression::Not(Box::new(operand)))
+            Ok(Expression::Not(Child::new(operand)))
         } else if self.eat(&Token::Plus) {
             let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
-            Ok(Expression::UnaryPlus(Box::new(operand)))
+            Ok(Expression::UnaryPlus(Child::new(operand)))
         } else if self.eat(&Token::Minus) {
             let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
-            Ok(Expression::UnaryMinus(Box::new(operand)))
+            Ok(Expression::UnaryMinus(Child::new(operand)))
         } else {
             self.parse_primary_with_aggs(aggs)
         }
@@ -4696,7 +4705,7 @@ impl<'a> Parser<'a, '_> {
         let o = self.parse_primary_with_aggs(aggs)?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::TripleClose)?;
-        Ok(Expression::FunctionCall(Function::Triple, vec![s, p, o]))
+        Ok(Expression::FunctionCall(Function::Triple, [s, p, o].into()))
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression> {
@@ -4792,7 +4801,7 @@ impl<'a> Parser<'a, '_> {
                 }
                 return Ok(Expression::FunctionCall(
                     Function::Cdt(crate::algebra::CdtCall { fn_kind, iri }),
-                    args,
+                    args.into(),
                 ));
             }
             // An IRI in call position under ANY configured extension-function namespace
@@ -4825,7 +4834,7 @@ impl<'a> Parser<'a, '_> {
                 Function::Custom(node)
             };
             let args = self.parse_arg_list(aggs)?;
-            Ok(Expression::FunctionCall(func, args))
+            Ok(Expression::FunctionCall(func, args.into()))
         } else {
             Ok(Expression::NamedNode(node))
         }
@@ -4863,19 +4872,19 @@ impl<'a> Parser<'a, '_> {
                 expect_arity(&args, 3, "IF", self.span())?;
                 let mut it = args.into_iter();
                 Ok(Expression::If(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
+                    Child::new(it.next().unwrap()),
+                    Child::new(it.next().unwrap()),
+                    Child::new(it.next().unwrap()),
                 ))
             }
             "COALESCE" => {
                 self.pos += 1;
-                Ok(Expression::Coalesce(self.parse_arg_list(aggs)?))
+                Ok(Expression::Coalesce(self.parse_arg_list(aggs)?.into()))
             }
             "EXISTS" => {
                 self.pos += 1;
                 let body = self.nested("EXISTS", Self::parse_exists_body)?;
-                Ok(Expression::Exists(Box::new(body)))
+                Ok(Expression::Exists(Child::new(body)))
             }
             "NOT" => {
                 self.pos += 1;
@@ -4884,7 +4893,7 @@ impl<'a> Parser<'a, '_> {
                     self.measured(|p| p.nested("NOT EXISTS", Self::parse_exists_body))?;
                 // `Not(Exists(…))`: one level above the one `nested` charged.
                 self.charge_height("expression", height + 1)?;
-                Ok(Expression::Not(Box::new(Expression::Exists(Box::new(
+                Ok(Expression::Not(Child::new(Expression::Exists(Child::new(
                     body,
                 )))))
             }
@@ -4894,8 +4903,8 @@ impl<'a> Parser<'a, '_> {
                 expect_arity(&args, 2, "sameTerm", self.span())?;
                 let mut it = args.into_iter();
                 Ok(Expression::SameTerm(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
+                    Child::new(it.next().unwrap()),
+                    Child::new(it.next().unwrap()),
                 ))
             }
             _ => {
@@ -4908,7 +4917,7 @@ impl<'a> Parser<'a, '_> {
                     if func == Function::Adjust {
                         expect_arity(&args, 2, "ADJUST", self.span())?;
                     }
-                    Ok(Expression::FunctionCall(func, args))
+                    Ok(Expression::FunctionCall(func, args.into()))
                 } else {
                     Err(ParseError::unsupported(format!(
                         "function or keyword {name}"
@@ -5385,8 +5394,8 @@ impl BlockSink {
             let residual: Vec<TriplePattern> = triples.by_ref().take(at - taken).collect();
             taken = at;
             g = GraphPattern::Lateral {
-                left: Box::new(join(g, GraphPattern::Bgp { patterns: residual })),
-                right: Box::new(GraphPattern::PropertyFunction(call)),
+                left: Child::new(join(g, GraphPattern::Bgp { patterns: residual })),
+                right: Child::new(GraphPattern::PropertyFunction(call)),
             };
         }
         g = join(
@@ -5446,8 +5455,8 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
             GraphPattern::Bgp { patterns }
         }
         (l, r) => GraphPattern::Join {
-            left: Box::new(l),
-            right: Box::new(r),
+            left: Child::new(l),
+            right: Child::new(r),
         },
     }
 }
@@ -5496,13 +5505,17 @@ fn scope_template(
 /// `Join`/`Lateral` spines), which is all the template callers need to tell a
 /// property-function refusal from a property-path one.
 fn block_has_property_function(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::PropertyFunction(_) => true,
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            block_has_property_function(left) || block_has_property_function(right)
+    let mut pending = vec![p];
+    while let Some(p) = pending.pop() {
+        match p {
+            GraphPattern::PropertyFunction(_) => return true,
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                pending.extend([&**right, &**left]);
+            }
+            _ => {}
         }
-        _ => false,
     }
+    false
 }
 
 /// If a property path is length-1 (a single predicate), return it as a triple
@@ -5518,7 +5531,7 @@ fn simple_predicate(path: &PropertyPathExpression) -> Option<NamedNodePattern> {
 /// `LeftJoin` join condition (§18.2.2.3 "filter-in-optional").
 fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) {
     match p {
-        GraphPattern::Filter { expr, inner } => (*inner, Some(expr)),
+        GraphPattern::Filter { expr, inner } => (inner.into_inner(), Some(expr)),
         other => (other, None),
     }
 }
@@ -5582,120 +5595,132 @@ pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
     scope.into_vec()
 }
 
-fn collect_term_vars(t: &TermPattern, out: &mut VarScope) {
-    match t {
-        TermPattern::Variable(v) => out.note(v),
-        TermPattern::Triple(tp) => {
-            collect_term_vars(&tp.subject, out);
-            if let NamedNodePattern::Variable(v) = &tp.predicate {
-                out.note(v);
-            }
-            collect_term_vars(&tp.object, out);
-        }
-        _ => {}
-    }
+/// One entry of [`collect_vars`]'s work list.
+enum VarStep<'a> {
+    /// A pattern whose in-scope variables are still to be noted.
+    Pattern(&'a GraphPattern),
+    /// A term whose variables are still to be noted.
+    Term(&'a TermPattern),
+    /// A variable to note.
+    Note(&'a Variable),
 }
 
-fn collect_triple_vars(tp: &TriplePattern, out: &mut VarScope) {
-    collect_term_vars(&tp.subject, out);
+/// Queue a triple pattern's variables: subject, predicate, object.
+fn push_triple_vars<'a>(tp: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>) {
+    pending.push(VarStep::Term(&tp.object));
     if let NamedNodePattern::Variable(v) = &tp.predicate {
-        out.note(v);
+        pending.push(VarStep::Note(v));
     }
-    collect_term_vars(&tp.object, out);
+    pending.push(VarStep::Term(&tp.subject));
 }
 
+/// Note the variables `p` makes visible in its enclosing group, in the order a
+/// left-to-right reading of it introduces them.
 fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
-    match p {
-        GraphPattern::Bgp { patterns } => {
-            for tp in patterns {
-                collect_triple_vars(tp, out);
-            }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            collect_term_vars(subject, out);
-            collect_term_vars(object, out);
-        }
-        // Every argument variable of a property function — on either side — is
-        // in scope in the enclosing group: the arguments are the call's inputs
-        // AND its bindings.
-        GraphPattern::PropertyFunction(call) => {
-            for t in call.subject_args.iter().chain(&call.object_args) {
-                collect_term_vars(t, out);
-            }
-        }
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            collect_vars(left, out);
-            collect_vars(right, out);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_vars(arm, out);
-            }
-        }
-        // SPARQL §18.2.1: variables occurring only in the right operand of
-        // MINUS are not in scope in the enclosing group graph pattern, so we
-        // descend into `left` only.
-        GraphPattern::Minus { left, .. } => {
-            collect_vars(left, out);
-        }
-        GraphPattern::LeftJoin { left, right, .. } => {
-            collect_vars(left, out);
-            collect_vars(right, out);
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => collect_vars(inner, out),
-        GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
-            if let NamedNodePattern::Variable(v) = name {
+    let mut pending = vec![VarStep::Pattern(p)];
+    note_vars(&mut pending, out);
+}
+
+/// Drain `pending`, noting each variable as it is reached. Every entry pushes what
+/// follows it in reverse, so the work list pops them in written order.
+fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
+    while let Some(step) = pending.pop() {
+        let p = match step {
+            VarStep::Note(v) => {
                 out.note(v);
+                continue;
             }
-            collect_vars(inner, out);
-        }
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => {
-            collect_vars(inner, out);
-            out.note(variable);
-        }
-        // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
-        // enclosing group, exactly like `BIND`'s single one: `SELECT *`
-        // projects them and a later `FILTER` in the same group sees them.
-        GraphPattern::Unfold {
-            inner,
-            element,
-            companion,
-            ..
-        } => {
-            collect_vars(inner, out);
-            out.note(element);
-            if let Some(companion) = companion {
-                out.note(companion);
+            VarStep::Term(t) => {
+                match t {
+                    TermPattern::Variable(v) => out.note(v),
+                    TermPattern::Triple(tp) => push_triple_vars(tp, pending),
+                    _ => {}
+                }
+                continue;
             }
-        }
-        GraphPattern::Values { variables, .. } => {
-            for v in variables {
-                out.note(v);
+            VarStep::Pattern(p) => p,
+        };
+        match p {
+            GraphPattern::Bgp { patterns } => {
+                for tp in patterns.iter().rev() {
+                    push_triple_vars(tp, pending);
+                }
             }
-        }
-        GraphPattern::Project { variables, .. } => {
-            for v in variables {
-                out.note(v);
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                pending.extend([VarStep::Term(object), VarStep::Term(subject)]);
             }
-        }
-        GraphPattern::Group {
-            variables,
-            aggregates,
-            ..
-        } => {
-            for v in variables {
-                out.note(v);
+            // Every argument variable of a property function — on either side — is
+            // in scope in the enclosing group: the arguments are the call's inputs
+            // AND its bindings.
+            GraphPattern::PropertyFunction(call) => {
+                pending.extend(
+                    call.subject_args
+                        .iter()
+                        .chain(&call.object_args)
+                        .rev()
+                        .map(VarStep::Term),
+                );
             }
-            for (v, _) in aggregates {
-                out.note(v);
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([VarStep::Pattern(right), VarStep::Pattern(left)]);
+            }
+            GraphPattern::Union { arms } => {
+                pending.extend(arms.iter().rev().map(VarStep::Pattern));
+            }
+            // SPARQL §18.2.1: variables occurring only in the right operand of
+            // MINUS are not in scope in the enclosing group graph pattern, so we
+            // descend into `left` only.
+            GraphPattern::Minus { left, .. } => pending.push(VarStep::Pattern(left)),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push(VarStep::Pattern(inner)),
+            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+                pending.push(VarStep::Pattern(inner));
+                if let NamedNodePattern::Variable(v) = name {
+                    pending.push(VarStep::Note(v));
+                }
+            }
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
+                pending.extend([VarStep::Note(variable), VarStep::Pattern(inner)]);
+            }
+            // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
+            // enclosing group, exactly like `BIND`'s single one: `SELECT *`
+            // projects them and a later `FILTER` in the same group sees them.
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                if let Some(companion) = companion {
+                    pending.push(VarStep::Note(companion));
+                }
+                pending.extend([VarStep::Note(element), VarStep::Pattern(inner)]);
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                for v in variables {
+                    out.note(v);
+                }
+            }
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                for v in variables {
+                    out.note(v);
+                }
+                for (v, _) in aggregates {
+                    out.note(v);
+                }
             }
         }
     }
@@ -6003,116 +6028,119 @@ fn find_scope_conflict<'a>(
     scope: &[Variable],
     pattern: &'a GraphPattern,
 ) -> Option<(&'a Variable, ScopeIntro)> {
-    match pattern {
-        // Leaves: nothing is introduced.
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::PropertyFunction(_) => None,
-        // Binary nodes are transparent to scope: recurse both operands at the
-        // SAME scope level (see the scope-level argument above).
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            find_scope_conflict(scope, left).or_else(|| find_scope_conflict(scope, right))
-        }
-        GraphPattern::Union { arms } => arms.iter().find_map(|arm| find_scope_conflict(scope, arm)),
-        // `MINUS` is the one binary node that is NOT scope-transparent on its
-        // right operand: §18.2.1 puts a MINUS-right-only variable out of
-        // scope, and §18.5's evaluation only ever uses the right side for the
-        // compatibility test — its bindings are discarded, never carried
-        // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
-        // MINUS right operand can never be observed as a rebinding, at ANY
-        // depth, not only under a `SELECT *` sub-select (which was one route
-        // to this same shape, not a separate rule). Only the left operand is
-        // walked.
-        GraphPattern::Minus { left, .. } => find_scope_conflict(scope, left),
-        // Unary wrappers are transparent to scope; any expression operand is
-        // never visited.
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => find_scope_conflict(scope, inner),
-        // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
-        // condition all lower to `Extend` — a fresh binding at this scope
-        // level.
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => {
-            if scope.contains(variable) {
-                Some((variable, ScopeIntro::Bind))
-            } else {
-                find_scope_conflict(scope, inner)
+    // The scopes in force: the outer one, and each narrowing a sub-SELECT's
+    // projection made. A pending pattern names the scope it is checked against.
+    let mut scopes: Vec<Vec<Variable>> = vec![scope.to_vec()];
+    let mut pending: Vec<(&'a GraphPattern, usize)> = vec![(pattern, 0)];
+    while let Some((pattern, at)) = pending.pop() {
+        let scope = &scopes[at];
+        match pattern {
+            // Leaves: nothing is introduced.
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            // Binary nodes are transparent to scope: both operands are checked at
+            // the SAME scope level (see the scope-level argument above), left first.
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([(&**right, at), (&**left, at)]);
             }
-        }
-        // `UNFOLD` introduces one or two fresh bindings at this scope level,
-        // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
-        // side that re-introduces an outer variable through `UNFOLD` is the
-        // same conflict, reported in declaration order (element, then
-        // companion). Its expression operand is never visited, for the reason
-        // stated for `Extend`'s above.
-        GraphPattern::Unfold {
-            inner,
-            element,
-            companion,
-            ..
-        } => {
-            for variable in std::iter::once(element).chain(companion.as_ref()) {
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev().map(|arm| (arm, at))),
+            // `MINUS` is the one binary node that is NOT scope-transparent on its
+            // right operand: §18.2.1 puts a MINUS-right-only variable out of
+            // scope, and §18.5's evaluation only ever uses the right side for the
+            // compatibility test — its bindings are discarded, never carried
+            // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
+            // MINUS right operand can never be observed as a rebinding, at ANY
+            // depth, not only under a `SELECT *` sub-select (which was one route
+            // to this same shape, not a separate rule). Only the left operand is
+            // walked.
+            GraphPattern::Minus { left, .. } => pending.push((left, at)),
+            // Unary wrappers are transparent to scope; any expression operand is
+            // never visited.
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push((inner, at)),
+            // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
+            // condition all lower to `Extend` — a fresh binding at this scope
+            // level.
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
                 if scope.contains(variable) {
-                    return Some((variable, ScopeIntro::Unfold));
+                    return Some((variable, ScopeIntro::Bind));
                 }
+                pending.push((inner, at));
             }
-            find_scope_conflict(scope, inner)
-        }
-        // `VALUES`: the first declared column that collides, in declaration
-        // order.
-        GraphPattern::Values { variables, .. } => {
-            for v in variables {
-                if scope.contains(v) {
+            // `UNFOLD` introduces one or two fresh bindings at this scope level,
+            // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
+            // side that re-introduces an outer variable through `UNFOLD` is the
+            // same conflict, reported in declaration order (element, then
+            // companion). Its expression operand is never visited, for the reason
+            // stated for `Extend`'s above.
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                for variable in std::iter::once(element).chain(companion.as_ref()) {
+                    if scope.contains(variable) {
+                        return Some((variable, ScopeIntro::Unfold));
+                    }
+                }
+                pending.push((inner, at));
+            }
+            // `VALUES`: the first declared column that collides, in declaration
+            // order.
+            GraphPattern::Values { variables, .. } => {
+                if let Some(v) = variables.iter().find(|v| scope.contains(v)) {
                     return Some((v, ScopeIntro::Values));
                 }
             }
-            None
-        }
-        // A sub-SELECT's projection is the one scope boundary in the
-        // grammar: narrow to the variables it actually carries out,
-        // preserving `scope`'s own order, and stop once nothing survives
-        // the narrowing — nothing beneath an empty narrowed scope could ever
-        // be observed as a rebinding of an outer variable. Projecting is not
-        // introducing: the projection's own `(expr AS ?v)` extends live
-        // beneath it and are caught, narrowed, by the `Extend` arm above.
-        GraphPattern::Project { inner, variables } => {
-            let narrowed: Vec<Variable> = scope
-                .iter()
-                .filter(|v| variables.contains(*v))
-                .cloned()
-                .collect();
-            if narrowed.is_empty() {
-                None
-            } else {
-                find_scope_conflict(&narrowed, inner)
-            }
-        }
-        // `GROUP BY`'s aggregate output variables are fresh bindings at this
-        // scope level (see "Group's synthetic targets" above); then the
-        // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
-        // `Extend`s directly beneath `Group` — and nothing past it, the
-        // pattern being grouped is never walked.
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            for (v, _) in aggregates {
-                if scope.contains(v) {
-                    return Some((v, ScopeIntro::Bind));
+            // A sub-SELECT's projection is the one scope boundary in the
+            // grammar: narrow to the variables it actually carries out,
+            // preserving `scope`'s own order, and stop once nothing survives
+            // the narrowing — nothing beneath an empty narrowed scope could ever
+            // be observed as a rebinding of an outer variable. Projecting is not
+            // introducing: the projection's own `(expr AS ?v)` extends live
+            // beneath it and are caught, narrowed, by the `Extend` arm above.
+            GraphPattern::Project { inner, variables } => {
+                let narrowed: Vec<Variable> = scope
+                    .iter()
+                    .filter(|v| variables.contains(*v))
+                    .cloned()
+                    .collect();
+                if !narrowed.is_empty() {
+                    scopes.push(narrowed);
+                    pending.push((inner, scopes.len() - 1));
                 }
             }
-            find_group_extend_conflict(inner, variables, scope)
+            // `GROUP BY`'s aggregate output variables are fresh bindings at this
+            // scope level (see "Group's synthetic targets" above); then the
+            // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
+            // `Extend`s directly beneath `Group` — and nothing past it, the
+            // pattern being grouped is never walked.
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                if let Some((v, _)) = aggregates.iter().find(|(v, _)| scope.contains(v)) {
+                    return Some((v, ScopeIntro::Bind));
+                }
+                if let Some(conflict) = find_group_extend_conflict(inner, variables, scope) {
+                    return Some(conflict);
+                }
+            }
         }
     }
+    None
 }
 
 /// Walk the chain of `Extend` nodes the parser lowers each expression-valued
@@ -6126,33 +6154,32 @@ fn find_scope_conflict<'a>(
 /// this walker never descends into (mirrors [`collect_vars`]'s own
 /// non-descent into `Group`'s `inner`).
 ///
-/// Recurses before checking the current node, so the first conflict
-/// reported is the earliest-DECLARED `GROUP BY (expr AS ?v)` condition
-/// (the innermost `Extend`, closest to the ungrouped pattern), preserving
-/// the walker's left-to-right determinism contract.
+/// The first conflict reported is the earliest-DECLARED `GROUP BY (expr AS ?v)`
+/// condition (the innermost `Extend`, closest to the ungrouped pattern),
+/// preserving the walker's left-to-right determinism contract.
 fn find_group_extend_conflict<'a>(
-    inner: &'a GraphPattern,
+    mut inner: &'a GraphPattern,
     variables: &[Variable],
     lhs_scope: &[Variable],
 ) -> Option<(&'a Variable, ScopeIntro)> {
-    let GraphPattern::Extend {
+    let mut chain: Vec<&'a Variable> = Vec::new();
+    while let GraphPattern::Extend {
         inner: next,
         variable,
         ..
     } = inner
-    else {
-        return None;
-    };
-    if !variables.contains(variable) {
-        return None;
-    }
-    find_group_extend_conflict(next, variables, lhs_scope).or_else(|| {
-        if lhs_scope.contains(variable) {
-            Some((variable, ScopeIntro::Bind))
-        } else {
-            None
+    {
+        if !variables.contains(variable) {
+            break;
         }
-    })
+        chain.push(variable);
+        inner = next;
+    }
+    chain
+        .into_iter()
+        .rev()
+        .find(|variable| lhs_scope.contains(variable))
+        .map(|variable| (variable, ScopeIntro::Bind))
 }
 
 /// Collect the labels of every blank node in a run of quad patterns, descending
@@ -6165,17 +6192,15 @@ fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::
 }
 
 fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
-    collect_term_bnode_labels(&t.subject, out);
-    collect_term_bnode_labels(&t.object, out);
-}
-
-fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSet<String>) {
-    match t {
-        TermPattern::BlankNode(b) => {
-            out.insert(b.as_str().to_owned());
+    let mut pending = vec![&t.object, &t.subject];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(b) => {
+                out.insert(b.as_str().to_owned());
+            }
+            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            _ => {}
         }
-        TermPattern::Triple(tp) => collect_triple_bnode_labels(tp, out),
-        _ => {}
     }
 }
 
@@ -6183,19 +6208,20 @@ fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSe
 /// RDF 1.2 quoted triples) is a blank node. Blank nodes are disallowed in DELETE
 /// templates and `DELETE WHERE` (SPARQL 1.1 Update §3.1.3 / §3.1.3.2).
 fn reject_blank_in_triple_pattern(t: &TriplePattern, at: usize) -> Result<()> {
-    reject_blank_in_term_pattern(&t.subject, at)?;
-    reject_blank_in_term_pattern(&t.object, at)
-}
-
-fn reject_blank_in_term_pattern(t: &TermPattern, at: usize) -> Result<()> {
-    match t {
-        TermPattern::BlankNode(_) => Err(ParseError::syntax(
-            "blank node in a DELETE template is not allowed",
-            at,
-        )),
-        TermPattern::Triple(tp) => reject_blank_in_triple_pattern(tp, at),
-        _ => Ok(()),
+    let mut pending = vec![&t.object, &t.subject];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => {
+                return Err(ParseError::syntax(
+                    "blank node in a DELETE template is not allowed",
+                    at,
+                ));
+            }
+            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            _ => {}
+        }
     }
+    Ok(())
 }
 
 /// Render an [`IriError`] as a typed [`ParseError::Iri`].
@@ -6460,6 +6486,7 @@ fn builtin_function(upper: &str) -> Option<Function> {
 mod tests {
     use super::*;
     use crate::algebra::{PurrdfCall, PurrdfFn};
+    use crate::tree::{Chain, NonEmpty};
     use pretty_assertions::assert_eq;
 
     const GM: &str =
@@ -6674,7 +6701,7 @@ mod tests {
     /// Strip the outer `Project` wrapper to reach the WHERE algebra.
     fn unproject(p: GraphPattern) -> GraphPattern {
         match p {
-            GraphPattern::Project { inner, .. } => *inner,
+            GraphPattern::Project { inner, .. } => inner.into_inner(),
             other => other,
         }
     }
@@ -7468,14 +7495,15 @@ mod tests {
         assert_eq!(
             filter_expr("SELECT * WHERE { FILTER((?x + ?y) * ?z > 0) }"),
             Expression::Greater(
-                Box::new(Expression::Arithmetic(
-                    Box::new(x()),
-                    vec![
+                Child::new(Expression::Arithmetic(
+                    Child::new(x()),
+                    NonEmpty::try_from(vec![
                         (ArithmeticOperator::Add, y()),
                         (ArithmeticOperator::Multiply, z())
-                    ],
+                    ])
+                    .expect("a nonempty of enough nodes"),
                 )),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::Literal(Literal::new_typed(
                     "0",
                     NamedNode::new_unchecked(XSD_INTEGER)
                 ))),
@@ -7484,23 +7512,31 @@ mod tests {
         assert_eq!(
             filter_expr("SELECT * WHERE { FILTER(?x - (?y - ?z)) }"),
             Expression::Arithmetic(
-                Box::new(x()),
-                vec![(
+                Child::new(x()),
+                NonEmpty::try_from(vec![(
                     ArithmeticOperator::Subtract,
                     Expression::Arithmetic(
-                        Box::new(y()),
-                        vec![(ArithmeticOperator::Subtract, z())]
+                        Child::new(y()),
+                        NonEmpty::try_from(vec![(ArithmeticOperator::Subtract, z())])
+                            .expect("one or more steps")
                     )
-                )],
+                )])
+                .expect("a nonempty of enough nodes"),
             )
         );
         assert_eq!(
             filter_expr("SELECT * WHERE { FILTER((?x || ?y) || ?z) }"),
-            Expression::Or(vec![x(), y(), z()])
+            Expression::Or(Chain::try_from(vec![x(), y(), z()]).expect("two or more nodes"))
         );
         assert_eq!(
             filter_expr("SELECT * WHERE { FILTER(?x || (?y || ?z)) }"),
-            Expression::Or(vec![x(), Expression::Or(vec![y(), z()])])
+            Expression::Or(
+                Chain::try_from(vec![
+                    x(),
+                    Expression::Or(Chain::try_from(vec![y(), z()]).expect("two or more nodes"))
+                ])
+                .expect("two or more nodes")
+            )
         );
     }
 
@@ -7555,29 +7591,52 @@ mod tests {
         };
         assert_eq!(
             q("ex:a/ex:b|ex:c/ex:d|ex:e"),
-            Alt(vec![
-                Seq(vec![p("a"), p("b")]),
-                Seq(vec![p("c"), p("d")]),
+            Alt(Chain::try_from(vec![
+                Seq(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                Seq(Chain::try_from(vec![p("c"), p("d")]).expect("two or more nodes")),
                 p("e")
             ])
+            .expect("a chain of enough nodes"))
         );
         assert_eq!(
             q("(ex:a/ex:b)|ex:c/ex:d"),
-            Alt(vec![Seq(vec![p("a"), p("b")]), Seq(vec![p("c"), p("d")])])
+            Alt(Chain::try_from(vec![
+                Seq(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                Seq(Chain::try_from(vec![p("c"), p("d")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
         );
-        assert_eq!(q("(ex:a/ex:b)/ex:c"), Seq(vec![p("a"), p("b"), p("c")]));
+        assert_eq!(
+            q("(ex:a/ex:b)/ex:c"),
+            Seq(Chain::try_from(vec![p("a"), p("b"), p("c")]).expect("two or more nodes"))
+        );
         assert_eq!(
             q("ex:a/(ex:b/ex:c)"),
-            Seq(vec![p("a"), Seq(vec![p("b"), p("c")])])
+            Seq(Chain::try_from(vec![
+                p("a"),
+                Seq(Chain::try_from(vec![p("b"), p("c")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
         );
-        assert_eq!(q("(ex:a|ex:b)|ex:c"), Alt(vec![p("a"), p("b"), p("c")]));
+        assert_eq!(
+            q("(ex:a|ex:b)|ex:c"),
+            Alt(Chain::try_from(vec![p("a"), p("b"), p("c")]).expect("two or more nodes"))
+        );
         assert_eq!(
             q("ex:a|(ex:b|ex:c)"),
-            Alt(vec![p("a"), Alt(vec![p("b"), p("c")])])
+            Alt(Chain::try_from(vec![
+                p("a"),
+                Alt(Chain::try_from(vec![p("b"), p("c")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
         );
         assert_eq!(
             q("(ex:a|ex:b)/ex:c"),
-            Seq(vec![Alt(vec![p("a"), p("b")]), p("c")])
+            Seq(Chain::try_from(vec![
+                Alt(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                p("c")
+            ])
+            .expect("two or more nodes"))
         );
     }
 
@@ -7994,7 +8053,7 @@ mod tests {
             variables,
             aggregates,
             ..
-        } = *inner
+        } = inner.into_inner()
         else {
             panic!("expected Group under Extend");
         };
@@ -8037,16 +8096,17 @@ mod tests {
             order[0]
         );
         // Walk down: Extend → Group.
+        let inner = inner.into_inner();
         let GraphPattern::Extend {
             inner: group_inner,
             variable,
             ..
-        } = *inner
+        } = inner
         else {
             panic!("expected Extend under OrderBy, got {inner:?}");
         };
         assert_eq!(variable, Variable::new("c"));
-        let GraphPattern::Group { aggregates, .. } = *group_inner else {
+        let GraphPattern::Group { aggregates, .. } = group_inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         // The aggregate lifted from ORDER BY DESC(COUNT(?x)) must appear in the
@@ -8088,7 +8148,8 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Filter { expr, inner: group } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Filter { expr, inner: group } = inner else {
             panic!("expected Filter (HAVING), got {inner:?}");
         };
         assert!(
@@ -8116,10 +8177,11 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
+        let inner = inner.into_inner();
         let GraphPattern::Filter {
             expr: outer_expr,
             inner: mid,
-        } = *inner
+        } = inner
         else {
             panic!("expected outer Filter (2nd HAVING condition), got {inner:?}");
         };
@@ -8127,10 +8189,11 @@ mod tests {
             matches!(outer_expr, Expression::Exists(_)),
             "expected the 2nd condition (EXISTS) outermost, got {outer_expr:?}"
         );
+        let mid = mid.into_inner();
         let GraphPattern::Filter {
             expr: inner_expr,
             inner: group,
-        } = *mid
+        } = mid
         else {
             panic!("expected inner Filter (1st HAVING condition), got {mid:?}");
         };
@@ -9142,11 +9205,12 @@ mod tests {
         };
         assert_eq!(variable, Variable::new("n"));
         // Inner is the Group node.
+        let inner = inner.into_inner();
         let GraphPattern::Group {
             variables,
             aggregates,
             ..
-        } = *inner
+        } = inner
         else {
             panic!("expected Group under Extend, got {inner:?}");
         };
@@ -9192,7 +9256,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -9217,7 +9281,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -9239,7 +9303,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert!(matches!(
@@ -9269,7 +9333,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -9300,7 +9364,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates[0].1.scalarvals[0].0, "P");
@@ -9317,7 +9381,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         let scalarvals = &aggregates[0].1.scalarvals;
@@ -9341,7 +9405,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         let scalarvals = &aggregates[0].1.scalarvals;
@@ -9388,10 +9452,12 @@ mod tests {
         let GraphPattern::Project { inner, .. } = where_pat else {
             panic!("expected Project, got {where_pat:?}");
         };
-        let GraphPattern::Join { right, .. } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Join { right, .. } = inner else {
             panic!("expected the trailing VALUES joined in, got {inner:?}");
         };
-        let GraphPattern::Values { bindings, .. } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Values { bindings, .. } = right else {
             panic!("expected Values, got {right:?}");
         };
         assert_eq!(bindings.len(), 4);
@@ -9444,7 +9510,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -9482,7 +9548,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -9500,7 +9566,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates[0].1.separator(), Some("|"));
@@ -9877,7 +9943,8 @@ mod tests {
         let GraphPattern::Project { inner, .. } = pattern else {
             panic!("a projection");
         };
-        let GraphPattern::Bgp { patterns } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Bgp { patterns } = inner else {
             panic!("one basic graph pattern, got {inner:?}");
         };
         let (TermPattern::BlankNode(anon), TermPattern::BlankNode(written)) =
@@ -9925,7 +9992,7 @@ mod tests {
         // §19.6 still applies when the blank label is nested inside an RDF 1.2
         // quoted triple term: reusing `_:b` across two INSERT DATA operations is
         // illegal even though the label never appears at top level. This exercises
-        // the `TermPattern::Triple` descent in `collect_term_bnode_labels`.
+        // the `TermPattern::Triple` descent in `collect_triple_bnode_labels`.
         let err = update_err(concat!(
             "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> } ; ",
             "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> }",
@@ -10474,7 +10541,7 @@ mod tests {
         );
         // Strip Project, then the select-expr Extend for ?c, to reach the Group.
         let group = match unproject(select_pattern(&q)) {
-            GraphPattern::Extend { inner, .. } => *inner,
+            GraphPattern::Extend { inner, .. } => inner.into_inner(),
             other => other,
         };
         match group {
@@ -10482,7 +10549,7 @@ mod tests {
                 inner, variables, ..
             } => {
                 assert_eq!(variables, vec![Variable::new("z")]);
-                match *inner {
+                match inner.into_inner() {
                     GraphPattern::Extend { variable, .. } => {
                         assert_eq!(variable, Variable::new("z"));
                     }
@@ -10498,7 +10565,7 @@ mod tests {
         // `GROUP BY STR(?a)` (no AS) mints a synthetic grouping variable.
         let q = format!("{GM}SELECT (COUNT(*) AS ?c) WHERE {{ ?r purrdf:a ?a }} GROUP BY STR(?a)");
         let group = match unproject(select_pattern(&q)) {
-            GraphPattern::Extend { inner, .. } => *inner,
+            GraphPattern::Extend { inner, .. } => inner.into_inner(),
             other => other,
         };
         match group {
@@ -10732,13 +10799,15 @@ mod tests {
         let GraphPattern::Lateral { left, right } = where_pat else {
             panic!("expected Lateral, got {where_pat:?}");
         };
-        let GraphPattern::Bgp { patterns: lp } = *left else {
+        let left = left.into_inner();
+        let GraphPattern::Bgp { patterns: lp } = left else {
             panic!("expected the left to be the preceding BGP");
         };
         assert_eq!(lp.len(), 1);
         assert_eq!(lp[0].subject, TermPattern::Variable(Variable::new("s")));
         assert_eq!(lp[0].object, TermPattern::Variable(Variable::new("o")));
-        let GraphPattern::Bgp { patterns: rp } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Bgp { patterns: rp } = right else {
             panic!("expected the right to be the LATERAL body's BGP");
         };
         assert_eq!(rp.len(), 1);
@@ -10756,22 +10825,24 @@ mod tests {
         let GraphPattern::Lateral { left, right } = where_pat else {
             panic!("expected the outermost node to be Lateral, got {where_pat:?}");
         };
-        let GraphPattern::Bgp { patterns } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Bgp { patterns } = right else {
             panic!("expected the outermost right to be `?c purrdf:r ?d`");
         };
         assert_eq!(
             patterns[0].subject,
             TermPattern::Variable(Variable::new("c"))
         );
+        let left = left.into_inner();
         let GraphPattern::Lateral {
             left: inner_left,
             right: inner_right,
-        } = *left
+        } = left
         else {
             panic!("expected the outermost left to itself be a Lateral");
         };
         assert!(matches!(*inner_left, GraphPattern::Bgp { .. }));
-        let GraphPattern::Bgp { patterns: irp } = *inner_right else {
+        let GraphPattern::Bgp { patterns: irp } = inner_right.into_inner() else {
             panic!("expected the inner right to be `?b purrdf:q ?c`");
         };
         assert_eq!(irp[0].subject, TermPattern::Variable(Variable::new("b")));
@@ -12267,7 +12338,7 @@ mod tests {
         let Expression::Less(left, _) = bound_expr(&q) else {
             panic!("expected a `<` comparison");
         };
-        let Expression::Literal(literal) = *left else {
+        let Expression::Literal(literal) = left.into_inner() else {
             panic!("expected a literal operand");
         };
         assert_eq!(literal.value(), "1");
@@ -12485,8 +12556,8 @@ mod tests {
         assert_eq!(
             p,
             GraphPattern::Lateral {
-                left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-                right: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
                     iri: format!("{PF_NS}related"),
                     subject_args: vec![pf_var("s")],
                     object_args: vec![pf_var("o")],

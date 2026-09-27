@@ -3,6 +3,7 @@
 
 //! Generic RDF-to-columnar projection.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{
@@ -204,9 +205,9 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                 }
             }
             TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.resolve(s)?),
-                p: Box::new(self.resolve(p)?),
-                o: Box::new(self.resolve(o)?),
+                s: TermBox::new(self.resolve(s)?),
+                p: TermBox::new(self.resolve(p)?),
+                o: TermBox::new(self.resolve(o)?),
             },
         };
         self.active.remove(&id);

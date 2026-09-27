@@ -43,6 +43,7 @@
 //! `RdfLiteral::language_tagged` build one. Both are public; see their docs for
 //! which is which and for the SPARQL 1.1 §17.2 reading of the [`None`].
 
+use purrdf_core::TermBox;
 use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
 
 use crate::error::EvalError;
@@ -611,9 +612,9 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(term_id_to_value(dataset, s)),
-            p: Box::new(term_id_to_value(dataset, p)),
-            o: Box::new(term_id_to_value(dataset, o)),
+            s: TermBox::new(term_id_to_value(dataset, s)),
+            p: TermBox::new(term_id_to_value(dataset, p)),
+            o: TermBox::new(term_id_to_value(dataset, o)),
         },
     }
 }
@@ -622,6 +623,7 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
@@ -792,9 +794,9 @@ mod tests {
     fn the_gate_recurses_through_triple_terms() {
         let ds = dataset_with_one_iri();
         let quoted = |tag: &str| TermValue::Triple {
-            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
-            p: Box::new(TermValue::Iri("https://example.org/p".to_owned())),
-            o: Box::new(TermValue::Literal {
+            s: TermBox::new(TermValue::Iri("https://example.org/s".to_owned())),
+            p: TermBox::new(TermValue::Iri("https://example.org/p".to_owned())),
+            o: TermBox::new(TermValue::Literal {
                 lexical_form: "x".to_owned(),
                 datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
                 language: Some(tag.to_owned()),

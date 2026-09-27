@@ -12,7 +12,7 @@
 //! - `deep/optional_spine/<n>` — `n` sibling `OPTIONAL` groups: a `LeftJoin` spine
 //!   `n` levels tall, built by a loop in the parser.
 //! - `deep/nested_calls/<n>` — `ABS(ABS(…?o…))` `n` calls deep in a `FILTER`, the
-//!   node kind whose derived `Clone` and `Debug` cost the most stack a level.
+//!   calls nested through their argument lists.
 //! - `deep/nested_groups/<n>` — `{ { … } }` `n` groups deep around a `FILTER`.
 //! - `wide/bgp_4096` — one basic graph pattern of 4 096 triple patterns.
 //! - `wide/union_1024` — 1 024 `UNION` arms.
@@ -27,10 +27,11 @@
 //! - `debug` — `format!("{:?}")`;
 //! - `serialize` — `pattern_to_select_query` over the pattern under the projection.
 //!
-//! [`DEEP_LEVELS`] is the list of deep heights; extending it is one line. Every
-//! height must parse on the bench thread (the main thread): a tree the parser returns
-//! is walkable from the frame that parsed it, and each is parsed here before sampling.
-//! All IRIs are `example.org` fixtures.
+//! [`DEEP_LEVELS`] is the list of deep heights; extending it is one line. Each tree is
+//! parsed once, before sampling, on a thread with [`PARSE_STACK_BYTES`] of stack, which
+//! the parser's recursive descent needs for the deepest heights; every walk then runs
+//! on the bench thread, since none of them recurses. All IRIs are `example.org`
+//! fixtures.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-algebra --bench algebra_walks` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
@@ -44,7 +45,11 @@ use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser, pattern_to_select
 const EX: &str = "http://example.org/";
 
 /// The heights every deep tree is measured at.
-const DEEP_LEVELS: &[usize] = &[64, 512];
+const DEEP_LEVELS: &[usize] = &[64, 512, 100_000];
+
+/// The stack the trees are parsed on: room for the parser's recursive descent through
+/// the deepest of [`DEEP_LEVELS`].
+const PARSE_STACK_BYTES: usize = 2 << 30;
 
 /// `open` written `n` times around `core`, closed by `close` written `n` times.
 fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
@@ -123,11 +128,20 @@ fn hash_of(query: &Query) -> u64 {
     hasher.finish()
 }
 
+/// `text`, parsed on a thread with [`PARSE_STACK_BYTES`] of stack.
+fn parse(id: &str, text: &str) -> Query {
+    let text = text.to_owned();
+    std::thread::Builder::new()
+        .stack_size(PARSE_STACK_BYTES)
+        .spawn(move || SparqlParser::new().parse_query(&text))
+        .expect("the parsing thread starts")
+        .join()
+        .expect("the parse does not panic")
+        .unwrap_or_else(|error| panic!("{id} parses: {error}"))
+}
+
 fn bench_tree(c: &mut Criterion, id: &str, text: &str) {
-    let parser = SparqlParser::new();
-    let tree = parser
-        .parse_query(text)
-        .unwrap_or_else(|error| panic!("{id} parses on the bench thread: {error}"));
+    let tree = parse(id, text);
     let copy = tree.clone();
     assert!(tree == copy, "{id}: a clone equals its original");
     assert_eq!(

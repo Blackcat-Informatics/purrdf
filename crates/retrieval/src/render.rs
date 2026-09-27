@@ -48,6 +48,7 @@
 //! exists.
 
 use core::fmt::Write as _;
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 
 use purrdf_core::{RdfTextDirection, TermValue};
@@ -471,9 +472,9 @@ impl<'a> Cursor<'a> {
             ));
         }
         Ok(TermValue::Triple {
-            s: Box::new(subject),
-            p: Box::new(predicate),
-            o: Box::new(object),
+            s: TermBox::new(subject),
+            p: TermBox::new(predicate),
+            o: TermBox::new(object),
         })
     }
 
@@ -696,6 +697,7 @@ pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> Str
 #[cfg(test)]
 mod tests {
     use super::{RenderError, decode_term, sparql_term};
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfTextDirection, TermValue};
 
     fn rendered(value: &TermValue) -> String {
@@ -824,9 +826,9 @@ mod tests {
     #[test]
     fn a_triple_term_renders_in_its_value_form() {
         let value = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(TermValue::simple_literal("o")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::simple_literal("o")),
         };
         assert_eq!(
             rendered(&value),
@@ -854,9 +856,9 @@ mod tests {
                 direction: Some(RdfTextDirection::Rtl),
             },
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             let text = rendered(&value);

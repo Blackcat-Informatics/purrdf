@@ -20,6 +20,7 @@
 //! halves, because a gate that refused `x-purrdf-afrikaans` or `en-fr-jura`
 //! would be a worse bug than the one it closes.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -383,9 +384,9 @@ fn a_hand_built_algebra_is_judged_at_admission() {
         let subject = Variable::new("s".to_owned());
         let query = Query::Select {
             pattern: GraphPattern::Project {
-                inner: Box::new(GraphPattern::Path {
+                inner: Child::new(GraphPattern::Path {
                     subject: TermPattern::Variable(subject.clone()),
-                    path: PropertyPathExpression::ZeroOrMore(Box::new(
+                    path: PropertyPathExpression::ZeroOrMore(Child::new(
                         PropertyPathExpression::NamedNode(
                             NamedNode::new(format!("{EX}p")).expect("a valid predicate IRI"),
                         ),
