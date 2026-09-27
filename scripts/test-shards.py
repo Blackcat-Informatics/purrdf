@@ -145,7 +145,9 @@ def coverage_problems(members: set[str], shards: dict[str, tuple[str, ...]]) -> 
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="The one list of how CI splits `cargo test --workspace` across runners."
+    )
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument(
         "--matrix", action="store_true", help="print the shard names as a JSON list"

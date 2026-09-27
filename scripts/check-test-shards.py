@@ -37,7 +37,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yaml"
 
-_spec = importlib.util.spec_from_file_location("test_shards", REPO_ROOT / "scripts" / "test-shards.py")
+_SHARDS_SCRIPT = REPO_ROOT / "scripts" / "test-shards.py"
+_spec = importlib.util.spec_from_file_location("test_shards", _SHARDS_SCRIPT)
+if _spec is None or _spec.loader is None:
+    sys.exit(f"FAIL: cannot load the shard list from {_SHARDS_SCRIPT}")
 test_shards = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(test_shards)
 
@@ -172,7 +175,9 @@ def self_test() -> int:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="Refuse a CI test split that lets any workspace crate escape testing."
+    )
     parser.add_argument("--self-test", action="store_true", help="prove every refusal fires")
     args = parser.parse_args(argv)
     return self_test() if args.self_test else check()
