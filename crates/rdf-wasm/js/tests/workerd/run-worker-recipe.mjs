@@ -129,6 +129,47 @@ const PAIR_COUNT =
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+/** Diagnostics, printed before the assertions they explain. */
+function diagnostics(lines) {
+  for (const line of lines) console.log(`[workerd diagnostics] ${line}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.map((line) => `- ${line}`).join("\n")}\n`);
+  }
+}
+
+/**
+ * For each candidate yield primitive the Worker has, whether a request dispatched while
+ * a spinner awaits that primitive between chunks of synchronous work is served before
+ * the spinner finishes, and at which of its turns.
+ */
+async function yieldExperiment(mf, candidates) {
+  const turns = 100;
+  const units = 20;
+  const rows = [`yield experiment (${turns} turns of ${units} work units each):`];
+  for (const name of candidates) {
+    const started = performance.now();
+    const spinQuery = new URLSearchParams({ primitive: name, turns: String(turns), work: String(units) });
+    let spinDone = null;
+    let pingDone = null;
+    const spin = mf.dispatchFetch(`${WORKER}/__spin?${spinQuery}`).then(async (response) => {
+      await response.text();
+      spinDone = performance.now() - started;
+    });
+    await sleep(30);
+    const ping = mf.dispatchFetch(`${WORKER}/__ping`).then(async (response) => {
+      const body = await response.json();
+      pingDone = performance.now() - started;
+      return body;
+    });
+    const [, pinged] = await Promise.all([spin, ping]);
+    rows.push(
+      `  ${name.padEnd(24)} spin ${Math.round(spinDone)} ms, ping answered at ${Math.round(pingDone)} ms, ` +
+        `servedAtTurn ${pinged.servedAtTurn}, interleaved ${pingDone < spinDone && pinged.servedAtTurn !== null}`,
+    );
+  }
+  return rows;
+}
+
 function summary(lines) {
   console.log(lines.join("\n"));
   if (process.env.GITHUB_STEP_SUMMARY) {
@@ -195,6 +236,13 @@ async function main() {
   try {
     // The runtime gives the package what the asynchronous lane needs.
     const probe = await (await mf.dispatchFetch(`${WORKER}/__probe`)).json();
+    diagnostics([
+      `probe: hasAsyncQueries() = ${probe.hasAsyncQueries}, asyncYieldPrimitive() = ${probe.primitive}`,
+      `probe: typeof setImmediate = ${probe.typeofSetImmediate}, typeof MessageChannel = ${probe.typeofMessageChannel}, ` +
+        `typeof scheduler.wait = ${probe.typeofSchedulerWait}, typeof scheduler.yield = ${probe.typeofSchedulerYield}`,
+      `probe: navigator.userAgent = ${JSON.stringify(probe.userAgent)}`,
+    ]);
+    diagnostics(await yieldExperiment(mf, probe.candidates));
     assert.equal(probe.hasAsyncQueries, true, "workerd provides JSPI and a yield primitive");
     assert.ok(
       ["setImmediate", "MessageChannel"].includes(probe.primitive),
@@ -251,26 +299,41 @@ async function main() {
       if (longAloneMs >= 400 || size >= 4000) break;
       size *= 2;
     }
+    const lane = await (await mf.dispatchFetch(`${WORKER}/__async?size=${size}`)).json();
+    diagnostics([
+      `long query: ${size} nodes, ${Math.round(longAloneMs)} ms alone through the recipe`,
+      `long query on the async lane in the Worker: ${JSON.stringify(lane)}`,
+    ]);
     assert.ok(longAloneMs >= 400, `the long query runs long enough to overlap (${longAloneMs} ms)`);
     const head = Math.min(100, longAloneMs / 4);
 
     // The asynchronous lane: the short request is served while the long one runs.
     const finished = [];
+    const timeline = {};
+    const longStarted = performance.now();
+    const at = () => Math.round(performance.now() - longStarted);
     const longRun = post(long).then(async (response) => {
-      assert.equal(response.status, 200);
+      timeline.longStatus = response.status;
       await response.text();
+      timeline.longFinished = at();
       finished.push("long");
     });
     await sleep(head);
     const shortStarted = performance.now();
+    timeline.shortSent = at();
     const shortRun = post(SHORT).then(async (response) => {
-      assert.equal(response.status, 200);
+      timeline.shortStatus = response.status;
       await response.text();
+      timeline.shortFinished = at();
       finished.push("short");
     });
-    await shortRun;
+    await Promise.all([shortRun, longRun]);
     const shortMs = performance.now() - shortStarted;
-    await longRun;
+    diagnostics([
+      `async lane timeline (ms from the long request): ${JSON.stringify(timeline)}; order ${JSON.stringify(finished)}`,
+    ]);
+    assert.equal(timeline.longStatus, 200);
+    assert.equal(timeline.shortStatus, 200);
     assert.deepEqual(finished, ["short", "long"], "the short request was served during the long query");
 
     // The control: the same query on the synchronous lane never turns the event loop, so
