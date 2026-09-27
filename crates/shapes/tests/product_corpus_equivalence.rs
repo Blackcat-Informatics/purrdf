@@ -203,11 +203,10 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// # What it counts
 ///
 /// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 169 of the
-/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`]. `validator-001`, which
-/// imports DASH, is among them in both suites: its shapes graph is loaded with the
-/// vendored DASH document and SHACL vocabulary supplied through the import table,
-/// and packed and restored as the merged graph. The other 195 come from the SHACL
-/// 1.0 suite and the
+/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`]. `validator-001` is among
+/// them in both suites: its `owl:imports <http://datashapes.org/dash>` sits on a node
+/// that is not an import anchor, so it is data, and the shapes graph loads with an
+/// empty import table. The other 195 come from the SHACL 1.0 suite and the
 /// first-party corpus. Among them are the first-party case whose shapes graph
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
@@ -342,7 +341,7 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
         &doc_prefixes,
         None,
         case.shapes_graph_iri.clone(),
-        &shacl_corpora::w3c_case_imports(&shapes_dataset),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
 

@@ -417,15 +417,13 @@ comparing values. They are counted on their own line,
 `non-canonical-expected-decimal`, not among the passes.
 
 `sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
-imports DASH (`<http://datashapes.org/dash>`), and DASH imports the SHACL
-namespace. PurRDF fetches nothing, so the harness supplies both documents
-through the import table, exactly as a caller would: the document served at the
-DASH IRI, vendored and digest-pinned under `vectors/dash/`, and the vendored
-W3C SHACL 1.2 vocabulary. The case then passes by name. Some DASH declarations
-are not well-formed SHACL 1.2, such as an ASK validator under
-`sh:nodeValidator` and a `sh:SPARQLFunction` parameter named `value`. No shape
-of the case reaches them, so the load accepts them as inert defects, and
-`purrdf shapes lint` reports each as a finding.
+passes by name with no import supplied. Its
+`owl:imports <http://datashapes.org/dash>` sits on a node that is neither the
+document's own IRI nor an `owl:Ontology`, nor names one as its
+`owl:versionIRI`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core
+the triple is data, not an import (see
+[`owl:imports` in a shapes graph](#owlimports-in-a-shapes-graph)). The harness
+loads the case with an empty import table.
 
 SPARQL 1.2 RL grammar rule [2],
 `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is

@@ -91,10 +91,10 @@ const TOTAL_CASES: usize = 376;
 ///   about `inference-rules/rules-entailment-validation`'s shapes graph, so the
 ///   merge changes no rule and no validation result.
 ///
-/// `sparql/component/validator-001`, once in each vendored suite, imports DASH; both
-/// runs load it with the vendored DASH document supplied through the import table
-/// (`shacl_corpora::w3c_case_imports`), and it is compared on a report like every
-/// other case.
+/// `sparql/component/validator-001`, once in each vendored suite, carries an
+/// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
+/// so the triple is data; both runs load it with an empty import table, and it is
+/// compared on a report like every other case.
 const COMPARED_ON_REPORT: usize = 364;
 
 /// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared
@@ -133,7 +133,7 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
         &prefixes,
         input.box_role_vocab.clone(),
         input.shapes_graph.clone(),
-        &shacl_corpora::w3c_case_imports(&dataset),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     Ok((dataset, shapes))

@@ -623,14 +623,16 @@ walked past.
 
 **What changed.** A declaration nothing reaches is not walked past by validation — it
 is never evaluated at all, and no report can differ because of it. Libraries declare
-far more than a shapes graph uses, and DASH, the document the approved W3C test
-`sparql/component/validator-001` imports, declares an ASK validator under
-`sh:nodeValidator` for `sh:HasValueConstraintComponent`, a `MINUS` in a pre-bound
-alternative for `sh:EqualsConstraintComponent`, an ASK `sh:propertyValidator` for
-`dash:SubSetOfConstraintComponent` and a `sh:SPARQLFunction` parameter named `value`.
-None of them is reached by that test, whose approved result is exactly what the engine
-produces with DASH loaded. Refusing the load refused a validation nothing ill-formed
-takes part in: over-refusal. And the SHOULD is still honoured where it is paid for
+far more than a shapes graph uses: DASH (`<http://datashapes.org/dash>`) declares an
+ASK validator under `sh:nodeValidator` for `sh:HasValueConstraintComponent`, a `MINUS`
+in a pre-bound alternative for `sh:EqualsConstraintComponent`, an ASK
+`sh:propertyValidator` for `dash:SubSetOfConstraintComponent` and a `sh:SPARQLFunction`
+parameter named `value`. (The approved W3C test `sparql/component/validator-001` names
+DASH in an `owl:imports` triple, but on a node that is not an import anchor, so under
+OWL 2 §3.1.2 and SHACL 1.2 Core that triple is data: the test imports nothing and passes
+with no import supplied — see the entry below.) Refusing the load of a shapes graph that
+imports such a library but reaches none of those declarations refused a validation
+nothing ill-formed takes part in: over-refusal. And the SHOULD is still honoured where it is paid for
 once — the cold certify surface.
 
 **The rule now.** Loading (the hot admit) judges a declaration's well-formedness where

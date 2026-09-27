@@ -129,11 +129,11 @@ result spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`,
 expected value is correct, and the suite does not say whether "equal" means term
 or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six by
 substituting the canonical spelling, which for them equals value comparison. They
-are counted apart from the passes. `sparql/component/validator-001` imports DASH;
-the harness supplies the vendored document served at its IRI (`vectors/dash/`)
-and the W3C SHACL 1.2 vocabulary DASH imports through the import table, and the
-case passes by name. SPARQL
-1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
+are counted apart from the passes. `sparql/component/validator-001` passes by
+name with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits
+on a node that is neither the document's own IRI nor an `owl:Ontology`, so under
+OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the triple is data, not an
+import. SPARQL 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
 `data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
 well; `docs/CONFORMANCE.md` has the live numbers.
 

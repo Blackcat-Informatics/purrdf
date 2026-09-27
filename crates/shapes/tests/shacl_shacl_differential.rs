@@ -217,7 +217,7 @@ fn purrdf_refusal(input: &Input) -> Option<String> {
         &input.prefixes,
         input.box_vocab.clone(),
         input.graph_iri.clone(),
-        &shacl_corpora::w3c_case_imports(&input.dataset),
+        &ShapesImports::new(),
     )
     .err()
     .map(String::from)
@@ -524,8 +524,8 @@ const BASE_INPUTS: usize = 376;
 ///   list-for-single-value kinds its property shape's `sh:minCount` (2), and the
 ///   property shape gains a misspelled predicate (1, refused under `unknown-term`).
 ///
-/// * `sparql/component/validator-001`, once in each vendored suite, loads with the
-///   vendored DASH document supplied for its import: the list-for-single-value kind
+/// * `sparql/component/validator-001`, once in each vendored suite, loads with an
+///   empty import table, its `owl:imports` being data: the list-for-single-value kind
 ///   rewrites a parameter declaration's `sh:datatype` (1 each) and its shape gains a
 ///   misspelled predicate (1 each, refused under `unknown-term`).
 ///

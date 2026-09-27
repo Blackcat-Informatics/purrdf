@@ -61,7 +61,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::RdfDataset;
-use purrdf_shapes::ShapesImports;
 use purrdf_shapes::data::{GraphFilter, native_quads};
 
 pub(crate) mod node_expr_grading;
@@ -343,72 +342,6 @@ pub(crate) fn norm(t: &Term) -> String {
 }
 
 // ── IRI ↔ path mapping ────────────────────────────────────────────────────────
-
-// ── The vendored suites' owl:imports ─────────────────────────────────────────
-
-/// DASH, the TopQuadrant library the vendored W3C `sparql/component/validator-001`
-/// cases (SHACL 1.0 and SHACL 1.2) import.
-pub(crate) const DASH: &str = "http://datashapes.org/dash";
-
-/// The SHACL namespace, which DASH imports.
-pub(crate) const SHACL_NAMESPACE: &str = "http://www.w3.org/ns/shacl#";
-
-/// The document served at [`DASH`], vendored by `scripts/vendor-dash.py`.
-pub(crate) const DASH_DOCUMENT: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/dash/dash.ttl");
-
-/// The W3C SHACL 1.2 vocabulary, vendored by `scripts/vendor-shacl12.py`: the document
-/// that declares [`SHACL_NAMESPACE`] an ontology.
-pub(crate) const SHACL_VOCABULARY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../vectors/shacl12/vocabularies/shacl.ttl"
-);
-
-/// The document the harness supplies for an `owl:imports` of `iri`, if it supplies one.
-fn supplied_document(iri: &str) -> Option<&'static str> {
-    match iri {
-        DASH => Some(DASH_DOCUMENT),
-        SHACL_NAMESPACE => Some(SHACL_VOCABULARY),
-        _ => None,
-    }
-}
-
-/// The import table a vendored W3C case's shapes graph loads with: for every
-/// `owl:imports` in its closure that the graph does not already resolve itself, the
-/// vendored document the harness supplies for it.
-///
-/// PurRDF refuses a shapes graph whose imports closure is not in hand. A harness is a
-/// caller like any other, so it resolves imports the way a caller does: by supplying
-/// documents through the production import table ([`ShapesImports`]). The closure is
-/// followed to its end — DASH itself imports the SHACL namespace — and a document is
-/// supplied only for an import the closure reaches, since the table refuses one nothing
-/// imports. The prefix idiom the suites use (`owl:imports` of a node the case describes
-/// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. Any
-/// other import panics: a newly vendored case with an import has to be resolved here on
-/// purpose, not skipped.
-pub(crate) fn w3c_case_imports(dataset: &RdfDataset) -> ShapesImports {
-    let mut imports = ShapesImports::new();
-    loop {
-        let unresolved = imports.import_map().closure(dataset).unresolved().to_vec();
-        if unresolved.is_empty() {
-            return imports;
-        }
-        for iri in unresolved {
-            let path = supplied_document(&iri).unwrap_or_else(|| {
-                panic!(
-                    "a vendored case's owl:imports closure reaches <{iri}>, which the harness \
-                     does not supply a document for; vendor it and resolve it in \
-                     `supplied_document`"
-                )
-            });
-            let turtle = fs::read_to_string(path)
-                .unwrap_or_else(|e| panic!("cannot read the vendored document {path}: {e}"));
-            imports
-                .insert_turtle(&iri, &turtle)
-                .unwrap_or_else(|e| panic!("the vendored document for <{iri}> loads: {e}"));
-        }
-    }
-}
 
 pub(crate) fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())

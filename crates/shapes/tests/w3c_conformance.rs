@@ -44,10 +44,11 @@
 //!   parameter the case runs under, and the report must echo them;
 //! - `mf:result sht:Failure` means the validator must REJECT the test input
 //!   (any engine `Err` passes; a successful validation fails);
-//! - a case whose shapes graph imports an ontology (`validator-001`, which imports
-//!   DASH, which imports the SHACL namespace) loads with the vendored documents
-//!   supplied through the production import table (`shacl_corpora::w3c_case_imports`)
-//!   and is graded like every other case.
+//! - every case loads with an empty import table. `validator-001` writes
+//!   `owl:imports <http://datashapes.org/dash>` on a node that is neither the
+//!   document's own IRI nor an `owl:Ontology`, so under OWL 2's mapping to RDF
+//!   (§3.1.2) and SHACL 1.2 Core the triple is data, not an import; it is graded
+//!   like every other case.
 //!
 //! ## Xfail ledger
 //!

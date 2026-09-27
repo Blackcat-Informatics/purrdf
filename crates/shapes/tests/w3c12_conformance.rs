@@ -287,7 +287,7 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         &doc_prefixes,
         None,
         std::slice::from_ref(&tc.expr),
-        &shacl_corpora::w3c_case_imports(&tc.dataset),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes/node-expression parse error: {e}"))?;
     let expr = exprs
@@ -355,7 +355,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         &doc_prefixes,
         None,
         Some(tc.shapes_graph_iri.clone()),
-        &shacl_corpora::w3c_case_imports(&shapes_dataset),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data_dataset = if tc.data_path == tc.shapes_path {
@@ -1656,55 +1656,104 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
         .expect("a produced detail the expectation does not state is not graded");
 }
 
-/// `validator-001` imports DASH, and DASH imports the SHACL namespace. The harness
-/// supplies both vendored documents through the production import table, and the case
-/// then agrees with its approved report by name. The neighbour proves the table is
-/// what resolves them: the same shapes graph loaded with an EMPTY table is refused,
-/// naming exactly DASH, and the table the harness builds supplies exactly DASH and the
-/// SHACL namespace.
+/// `validator-001` writes `owl:imports <http://datashapes.org/dash>` on a node — in the
+/// SHACL 1.0 suite `<http://datashapes.org/sh/tests/sparql/component/validator-001.test>`,
+/// in the SHACL 1.2 suite `<http://example.com/ns#>` — that is neither the document's own
+/// IRI nor an `owl:Ontology` (nor names one as its `owl:versionIRI`). Under OWL 2's mapping to RDF
+/// (§3.1.2) and SHACL 1.2 Core that triple is data, not an import. So in BOTH vendored
+/// suites the case agrees with its approved report by name with an EMPTY import table,
+/// and resolving its shapes graph under its own IRI reaches no document: the resolved
+/// shapes graph is the parsed one, the same `Arc`, and the `owl:imports` triple is in it
+/// as written.
+///
+/// The control reads the same file with that one node typed `owl:Ontology`. The triple
+/// is then an import, and the same empty table refuses the graph naming exactly DASH —
+/// so the pass is the anchor rule reading the triple as data, not a loader that ignores
+/// `owl:imports`.
 #[test]
-fn validator_001_loads_dash_through_the_import_table_and_passes() {
-    let cases = shacl12_cases();
-    let case = cases
+fn validator_001_passes_in_both_suites_with_no_import_supplied() {
+    const ID: &str = "sparql/component/validator-001";
+    const DASH: &str = "http://datashapes.org/dash";
+    const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+
+    let suite12 = shacl12_cases();
+    let Body::Validate(tc12) = &suite12
         .iter()
-        .find(|c| c.id == "sparql/component/validator-001")
-        .expect("validator-001 is discovered");
-    let Body::Validate(tc) = &case.body else {
+        .find(|c| c.id == ID)
+        .expect("validator-001 is discovered in the SHACL 1.2 suite")
+        .body
+    else {
         panic!("validator-001 is an sht:Validate test");
     };
-    shacl_corpora::report_grading::run_validate_case(tc)
-        .expect("validator-001 agrees with its approved report");
-
-    let document = text_ingest::parse_turtle_document(
-        &fs::read_to_string(&tc.shapes_path).expect("the case file reads"),
-        Some(&file_iri(&tc.shapes_path)),
-    )
-    .expect("the case file parses");
-    let Err(purrdf_shapes::ShapesError::Imports(purrdf_shapes::ShapesImportError::Unresolved {
-        iris,
-    })) = shapes::from_dataset_with_base(
-        &document.dataset,
-        None,
-        &document.prefixes,
-        None,
-        None,
-        &purrdf_shapes::ShapesImports::new(),
-    )
-    else {
-        panic!("without the import table the shapes graph is refused");
-    };
-    assert_eq!(iris, [shacl_corpora::DASH]);
-    let table = shacl_corpora::w3c_case_imports(&document.dataset);
-    let supplied: Vec<String> = table
-        .import_map()
-        .closure(&document.dataset)
-        .documents()
+    let suite10 = shacl_corpora::w3c_cases();
+    let tc10 = suite10
         .iter()
-        .map(|(iri, _)| iri.clone())
-        .collect();
-    assert_eq!(
-        supplied,
-        [shacl_corpora::DASH, shacl_corpora::SHACL_NAMESPACE],
-        "the harness supplies exactly DASH and the SHACL namespace"
-    );
+        .find(|c| c.id == ID)
+        .expect("validator-001 is discovered in the SHACL 1.0 suite");
+
+    let empty = purrdf_shapes::ShapesImports::new();
+    let iri = |value: &str| Term::NamedNode(NamedNode::new_unchecked(value));
+    for (suite, tc, subject) in [
+        (
+            "SHACL 1.0",
+            tc10,
+            "http://datashapes.org/sh/tests/sparql/component/validator-001.test",
+        ),
+        ("SHACL 1.2", tc12, "http://example.com/ns#"),
+    ] {
+        shacl_corpora::report_grading::run_validate_case(tc).unwrap_or_else(|e| {
+            panic!("{suite}: validator-001 agrees with its approved report: {e}")
+        });
+
+        let text = fs::read_to_string(&tc.shapes_path).expect("the case file reads");
+        let own_iri = file_iri(&tc.shapes_path);
+        let document = text_ingest::parse_turtle_document(&text, Some(&own_iri))
+            .expect("the case file parses");
+        let resolved = purrdf_shapes::resolve_shapes_imports(
+            &document.dataset,
+            &document.prefixes,
+            &[own_iri.as_str()],
+            &empty,
+        )
+        .unwrap_or_else(|e| panic!("{suite}: an empty table resolves the shapes graph: {e}"));
+        assert!(
+            Arc::ptr_eq(&resolved.dataset, &document.dataset),
+            "{suite}: the closure reached no document, so the shapes graph is the parsed one"
+        );
+        assert_eq!(
+            native_quads(
+                resolved.dataset.as_ref(),
+                Some(&iri(subject)),
+                Some(&iri(OWL_IMPORTS)),
+                Some(&iri(DASH)),
+                GraphFilter::AnyGraph,
+            )
+            .len(),
+            1,
+            "{suite}: the owl:imports triple is in the shapes graph as data"
+        );
+
+        let anchored =
+            format!("{text}\n<{subject}> a <http://www.w3.org/2002/07/owl#Ontology> .\n");
+        let control = text_ingest::parse_turtle_document(&anchored, Some(&own_iri))
+            .expect("the control parses");
+        let Err(purrdf_shapes::ShapesError::Imports(
+            purrdf_shapes::ShapesImportError::Unresolved { iris },
+        )) = shapes::from_dataset_with_base(
+            &control.dataset,
+            Some(&own_iri),
+            &control.prefixes,
+            None,
+            None,
+            &empty,
+        )
+        else {
+            panic!("{suite}: with its subject an owl:Ontology the triple is an import");
+        };
+        assert_eq!(
+            iris,
+            [DASH],
+            "{suite}: the control is refused for exactly DASH"
+        );
+    }
 }

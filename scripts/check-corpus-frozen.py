@@ -46,8 +46,6 @@ from pathlib import Path
 # against, together with its crate-local runtime copy under
 # `crates/shapes/spec` (the same vocabulary bytes, guarded separately because
 # it sits inside a published crate rather than the workspace `vectors/` tree)
-# — and the DASH document served at `http://datashapes.org/dash`, which the SHACL
-# harnesses supply for the approved W3C test that imports it
 # — all declared byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
@@ -67,7 +65,6 @@ GUARDED_ROOTS: dict[str, str] = {
     "vectors/sparql-governors": (
         "scripts/conformance-frozen/vectors-sparql-governors.sha256"
     ),
-    "vectors/dash": "scripts/conformance-frozen/vectors-dash.sha256",
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
     "vectors/shacl12": "scripts/conformance-frozen/vectors-shacl12.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",

@@ -90,7 +90,8 @@ type LoadedShapes = (
     Result<purrdf_shapes::shapes::Shapes, purrdf_shapes::ShapesError>,
 );
 
-/// Read and parse a case's shapes graph and load it, with the harness's import table.
+/// Read and parse a case's shapes graph and load it with an empty import table: no
+/// vendored case's `owl:imports` sits on an import anchor, so none needs a document.
 fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
@@ -109,7 +110,7 @@ fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
         &doc_prefixes,
         None,
         tc.shapes_graph_iri.clone(),
-        &super::w3c_case_imports(&shapes_dataset),
+        &purrdf_shapes::ShapesImports::new(),
     );
     Ok((shapes_dataset, shapes))
 }

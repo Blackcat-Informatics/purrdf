@@ -763,11 +763,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`, `"42.0"`,
   `"00"`) where the expected value is correct, and they are graded by substituting
   the XSD 1.1 canonical spelling, which for these six equals value comparison.
-  `validator-001` imports DASH, which imports the SHACL namespace: the harnesses of
-  both suites supply the document served at the DASH IRI, vendored under
-  `vectors/dash/` by `scripts/vendor-dash.py` and digest-pinned, and the W3C SHACL
-  1.2 vocabulary through the import table, and the case passes by name in both
-  (129 / 129 in the SHACL 1.0 suite). The expected-failure ledger is empty. The 3 entries of vendored files no manifest includes are graded
+  `validator-001` passes by name in both suites (129 / 129 in the SHACL 1.0 suite)
+  with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits on a
+  node that is neither the document's IRI nor an `owl:Ontology`, so it is data, and
+  the harnesses load it with an empty import table. The expected-failure ledger is empty. The 3 entries of vendored files no manifest includes are graded
   and reported apart. The matrix gains a SHACL 1.2 row and a row for the unlisted
   files, and the prepared-product equivalence row now covers the SHACL 1.2
   `sht:Validate` entries (364 shapes graphs). Beside it,
