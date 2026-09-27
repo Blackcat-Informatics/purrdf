@@ -510,10 +510,15 @@ pub(super) fn is_match(
                     behind,
                     ..
                 } => {
-                    ensure_slots(live_slots, state_slots(&state).saturating_mul(2))?;
-                    let mut child = state.clone();
-                    child.backward = *behind;
-                    child.tasks = vec![Task::Match(body)];
+                    let child_slots = state.captures.len().saturating_add(1);
+                    ensure_slots(live_slots, state_slots(&state).saturating_add(child_slots))?;
+                    let child = State {
+                        pos: state.pos,
+                        tasks: vec![Task::Match(body)],
+                        captures: state.captures.clone(),
+                        flags: state.flags,
+                        backward: *behind,
+                    };
                     live_slots += state_slots(&state) + state_slots(&child);
                     frames.push(Frame {
                         states: vec![child],
@@ -527,5 +532,40 @@ pub(super) fn is_match(
         ensure_slots(live_slots, state_slots(&state))?;
         live_slots += state_slots(&state);
         frames.last_mut().expect("frame").states.push(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ast, MAX_VM_SLOTS, MatchLimits, PatternError, is_match};
+
+    #[test]
+    fn lookaround_accounts_for_child_instruction_at_slot_limit() {
+        let assertion = Ast::Look {
+            offset: 0,
+            behind: false,
+            positive: true,
+            body: Box::new(Ast::Empty),
+        };
+        // A retained parent and its child each own capture_count + 1 cells;
+        // the child also owns its pending instruction.
+        assert_eq!(
+            is_match(
+                &assertion,
+                "",
+                &mut MatchLimits::default(),
+                MAX_VM_SLOTS / 2 - 2
+            ),
+            Ok(true)
+        );
+        assert!(matches!(
+            is_match(
+                &assertion,
+                "",
+                &mut MatchLimits::default(),
+                MAX_VM_SLOTS / 2 - 1
+            ),
+            Err(PatternError::Resource { .. })
+        ));
     }
 }
