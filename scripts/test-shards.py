@@ -19,13 +19,15 @@ test surface runs, and the union of the shards is the workspace run. There is no
 target-level list to fall out of date.
 
 The grouping follows the dependency chain, because every leg pays for building
-the libraries its packages depend on before any of their tests compile:
+the libraries its packages depend on before any of their tests compile, and is
+balanced by measured cold-runner wall time (compile plus run), not by crate count:
 
 * `kernel`   -- everything below the SPARQL evaluator: leaves, `purrdf-core`,
                 the Datalog substrate, the entailment engine, results, algebra, GTS;
-* `eval`     -- the evaluator and the retrieval stack built directly on it,
-                including the HNSW determinism suite (the second-longest test run);
-* `rdf`      -- the codec crate and the leaves that need only it;
+* `eval`     -- the evaluator (the heaviest test build in the workspace) and
+                HNSW, whose determinism suite is the second-longest test run;
+* `rdf`      -- the codec crate, the leaves that need only it, and the text and
+                retrieval stack, which needs the evaluator the codec already builds;
 * `shapes`   -- the validators and everything that needs `purrdf-shapes`;
 * `hosts`    -- the umbrella crate (whose doctests link every member), the CLI,
                 the wasm and Python bindings and the conformance harness, all of
@@ -68,16 +70,16 @@ SHARDS: dict[str, tuple[str, ...]] = {
     ),
     "eval": (
         "purrdf-hnsw",
-        "purrdf-retrieval",
         "purrdf-sparql-eval",
-        "purrdf-text",
     ),
     "rdf": (
         "purrdf-json",
         "purrdf-markdown",
         "purrdf-rdf",
+        "purrdf-retrieval",
         "purrdf-shex",
         "purrdf-slice",
+        "purrdf-text",
     ),
     "shapes": (
         "purrdf-bench",
