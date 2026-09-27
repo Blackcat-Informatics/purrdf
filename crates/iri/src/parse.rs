@@ -84,6 +84,130 @@ impl Iri {
     pub fn has_scheme(&self) -> bool {
         self.scheme.is_some()
     }
+
+    /// The URI this IRI maps to under RFC 3987 §3.1.
+    ///
+    /// Every non-ASCII code point (a `ucschar` or `iprivate`) is replaced by
+    /// the `%HH` escapes of its UTF-8 octets, in upper-case hexadecimal; ASCII,
+    /// including existing escapes, is kept as it is. A host that contains
+    /// non-ASCII is instead replaced by its IDNA ASCII form
+    /// ([`idna::to_ascii_mapped`](crate::idna::to_ascii_mapped)) when it has
+    /// one, and percent-encoded like the other components when it does not —
+    /// the two conversions §3.1 permits for an `ireg-name`. An all-ASCII IRI
+    /// maps to itself, and the result always parses under
+    /// [`parse_uri`](crate::parse_uri).
+    ///
+    /// This is a separate, explicit step: parsing never applies it, because
+    /// RFC 3987 compares IRIs code point by code point.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let iri = purrdf_iri::parse("http://r\u{e9}sum\u{e9}.example.org/caf\u{e9}?q=\u{10300}")?;
+    /// let uri = iri.to_uri();
+    /// assert_eq!(
+    ///     uri.as_str(),
+    ///     "http://xn--rsum-bpad.example.org/caf%C3%A9?q=%F0%90%8C%80"
+    /// );
+    /// assert!(purrdf_iri::parse_uri(uri.as_str()).is_ok());
+    /// # Ok::<(), purrdf_iri::IriError>(())
+    /// ```
+    #[must_use]
+    pub fn to_uri(&self) -> Self {
+        if self.text.is_ascii() {
+            return self.clone();
+        }
+        let mut text = String::with_capacity(self.text.len() * 3);
+        let scheme = self.scheme.clone().map(|r| {
+            text.push_str(&self.text[r]);
+            let span = 0..text.len();
+            text.push(':');
+            span
+        });
+        let authority = self.authority.clone().map(|r| {
+            text.push_str("//");
+            let start = text.len();
+            authority_to_uri(&self.text[r], &mut text);
+            start..text.len()
+        });
+        let start = text.len();
+        percent_encode_non_ascii(self.path(), &mut text);
+        let path = start..text.len();
+        let query = self.query().map(|q| {
+            text.push('?');
+            let start = text.len();
+            percent_encode_non_ascii(q, &mut text);
+            start..text.len()
+        });
+        let fragment = self.fragment().map(|f| {
+            text.push('#');
+            let start = text.len();
+            percent_encode_non_ascii(f, &mut text);
+            start..text.len()
+        });
+        Self {
+            text,
+            scheme,
+            authority,
+            path,
+            query,
+            fragment,
+        }
+    }
+}
+
+/// RFC 3987 §3.1 step 2 over one component: every non-ASCII code point becomes
+/// the upper-case `%HH` escapes of its UTF-8 octets.
+fn percent_encode_non_ascii(component: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for c in component.chars() {
+        if c.is_ascii() {
+            out.push(c);
+            continue;
+        }
+        let mut utf8 = [0_u8; 4];
+        for &octet in c.encode_utf8(&mut utf8).as_bytes() {
+            out.push('%');
+            out.push(char::from(HEX[usize::from(octet >> 4)]));
+            out.push(char::from(HEX[usize::from(octet & 0x0F)]));
+        }
+    }
+}
+
+/// The URI form of a validated authority: userinfo and port percent-encoded,
+/// an internationalized `ireg-name` converted by IDNA where it can be and
+/// percent-encoded where it cannot.
+fn authority_to_uri(authority: &str, out: &mut String) {
+    let (userinfo, host_port) = match find_first_byte(authority.as_bytes(), b'@') {
+        Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+        None => (None, authority),
+    };
+    if let Some(userinfo) = userinfo {
+        percent_encode_non_ascii(userinfo, out);
+        out.push('@');
+    }
+    // The same host/port split `validate_authority` makes: a bracketed
+    // IP-literal is ASCII and passes through; otherwise the port follows the
+    // last `:`.
+    let (host, port) = if host_port.starts_with('[') {
+        (host_port, None)
+    } else {
+        match host_port.rfind(':') {
+            Some(colon) => (&host_port[..colon], Some(&host_port[colon + 1..])),
+            None => (host_port, None),
+        }
+    };
+    if host.is_ascii() {
+        out.push_str(host);
+    } else if let Some(ascii) = crate::idna::to_ascii_mapped(host) {
+        out.push_str(&ascii);
+    } else {
+        percent_encode_non_ascii(host, out);
+    }
+    if let Some(port) = port {
+        out.push(':');
+        out.push_str(port);
+    }
 }
 
 impl core::fmt::Display for Iri {

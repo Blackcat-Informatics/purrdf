@@ -46,6 +46,10 @@ it.
 | `langtag_corpus.rs` | **RFC 5646 Appendix A** worked examples (well-formed, and the invalid set split along the §2.2.9 well-formed/valid line), the closed **§2.2.8** grandfathered list, and boundary vectors derived from the **§2.1** ABNF | `Language-Tag` well-formedness corpus; every refusal is paired with an accepted neighbor. Every vector here is either a string the RFC itself prints (Appendix A, the §2.2.8 list) or one derived by naming a §2.1 production and stepping one character or one repetition across its bound; no vector is taken from, checked against, or suggested by any implementation's test corpus. See the clean-room note below for the three that once were. |
 | `langtag_differential.rs` + `langtag_differential_vectors.txt` | **Inputs**: generated independently by a systematic sweep over the **RFC 5646 §2.1** ABNF (each of the seven `langtag` sections swept across its admissible shapes, its length/character boundaries and impostors just outside them — as a reduced full cartesian product, as one axis at full breadth in three contexts, and as every adjacent axis pair), plus the closed **§2.2.8** grandfathered list and the **Appendix A** worked examples with case variants, plus structural inputs (empty, hyphen placement, over-length subtags, non-ASCII, C0 controls). **Verdicts**: labelled once by `oxilangtag` 0.1.6 (`LanguageTag::parse(..).is_ok()`) run as a one-time external oracle over those inputs. | Frozen differential acceptance table (3935 vectors) that makes the "same accepted language as the replaced dependency" claim **falsifiable**. See the fidelity note below on what was and was not taken from upstream. |
 | `host_differential.rs` + `host_differential_vectors.txt` | **Inputs**: 20,000 distinct address-shaped strings drawn from the testkit choice stream under a fixed seed (dotted quads whose octets straddle 255 and carry leading zeros; colon-separated hex groups, compressed and not, with dotted tails and zones; point mutations). **Verdicts**: the `ipv4` and `ipv6` format checks `purrdf-jsonschema` carried before it called `purrdf_iri::host`, recorded once while they existed. | Frozen differential acceptance table for **RFC 3986 §3.2.2** `IPv4address` and `IPv6address` (20,000 vectors, two verdicts each). See the note below. |
+| `idna.rs` — IdnaTestV2 lanes | **`IdnaTestV2.txt` 17.0.0** (Unicode, Inc.), vendored verbatim at `crates/iri/unicode/17.0.0/`; its header's FORMAT section defines the columns | Two lanes (`to_ascii`, `to_ascii_mapped`) through one committed row filter whose every excluded class cites an RFC 5891/5892 clause; zero failures and the included counts are asserted. See the note below. |
+| `idna.rs` — Punycode | **RFC 3492 §7.1** sample strings (A)–(S), code points and Punycode as printed | Both directions; the RFC's mixed-case annotation is ignored where the encoder is compared. |
+| `idna.rs` — `to_uri` | **RFC 3987 §3.1** examples (the `ireg-name` ToASCII variant, the `%09` path, the supplementary-plane path) | Each result re-parses under `parse_uri` to the same spans. |
+| `idna.rs` — refusals | Boundaries derived from the RFC 5890 §2.3.1 lengths, RFC 5891 §4.2 label rules, RFC 5892 Appendix A and RFC 5893 §2 | Every refusal is paired with an accepted neighbour. |
 
 ## Fidelity statement
 
@@ -131,3 +135,28 @@ The same answers decide an address in a URI: an input the table accepts as
 `IPv4address` is a host `parse_uri` accepts, and one it accepts as
 `IPv6address` is an IP-literal `parse_uri` accepts, while one it refuses is
 refused inside brackets unless it begins with the `v` of an `IPvFuture`.
+
+## The IdnaTestV2 row filter
+
+`IdnaTestV2.txt` is the UTS 46 test file, and UTS 46 is not IDNA2008: it
+maps input with its own table, accepts some characters IDNA2008 disallows,
+and does not test CONTEXTO rules. So the file is an oracle for this crate only
+through the filter `Row::verdict` in `idna.rs`, which is one predicate over
+the source, toUnicode, toAsciiN and status columns. With 6391 data rows:
+
+* **Unmapped lane** (`to_ascii(source)`): 2960 rows included. Excluded:
+  2 ill-formed (an unpaired surrogate; RFC 5891 §4.1/§5.2 input is Unicode),
+  3363 mapped by UTS 46 (RFC 5891 §5.2: mapping is the application's),
+  14 holding a CONTEXTO code point where UTS 46 accepts (RFC 5891 §4.2.3.3,
+  RFC 5892 Appendix A), 52 holding a code point outside RFC 5892 §2.1
+  LetterDigits that no earlier rule admits where UTS 46 accepts (RFC 5892 §3).
+* **Mapped lane** (`to_ascii_mapped(source)`): 6202 rows included. Excluded:
+  2 ill-formed, 32 CONTEXTO, 140 outside LetterDigits, and two named mapping
+  differences (RFC 5891 §5.2): 2 rows holding U+1E9E, which NFKC_Casefold folds
+  to `ss`, and 13 rows whose only UTS 46 objection is a tag character that
+  NFKC_Casefold erases.
+
+The rows excluded as outside LetterDigits are still checked: both functions
+must refuse them. The General_Category that decides that class is read from
+the vendored `UnicodeData.txt` by the test itself, independently of the
+generated tables under test.

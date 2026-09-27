@@ -10,6 +10,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **iri:** `purrdf_iri::idna`, IDNA2008 without third-party code: RFC 5891
+  label validation over the RFC 5892 derived property, the Appendix A
+  contextual rules, the RFC 5893 Bidi rule, RFC 3492 Punycode between A-labels
+  and U-labels, and `map`, a local mapping step (RFC 5891 §5.2) that applies
+  Unicode's NFKC_Casefold to DISALLOWED code points only, leaving code points
+  IDNA2008 already permits (for example ß, ς, ZWJ and ZWNJ) and unassigned
+  ones unchanged, maps U+3002 IDEOGRAPHIC FULL STOP to `.`, leaves unmapped
+  any code point whose image would introduce a `.`, and then normalizes to
+  NFC; it is not the UTS 46 mapping. The tables are generated from the
+  Unicode 17.0.0 database vendored under `crates/iri/unicode/`, and
+  IdnaTestV2.txt passes with zero failures on the rows the committed filter
+  includes (2960 without mapping, 6202 with it).
+- **iri:** `Iri::to_uri`, the RFC 3987 §3.1 mapping of an IRI to a URI:
+  `ToASCII` of the host and percent-encoding of every other non-ASCII code
+  point. The result always re-parses under `parse_uri`.
+- **text:** `purrdf_text::unicode`, the analyzer's own Unicode layer: full
+  case folding, NFD/NFC/NFKD/NFKC and UAX 29 word boundaries, generated from
+  the vendored database. `caseless`, `unicode-normalization`,
+  `unicode-segmentation` and `tinyvec` leave the dependency graph.
+
 - **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
   ranked-retrieval surface computes with. The module holds:
   - `Scalar`, `Bound` and `Bounded`, which moved here from
@@ -408,6 +428,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   stratum to `"unavailable"` or `"membership"`, a compiled answer's planned
   resolution carries `"sharing_weights"`, and `retrieval.crossing_rank_at` computes
   a crossing rank from raw weights.
+
+### Changed
+
+- **text:** the analyzer profile is `purrdf-compatibility-caseless-uax29-v2`.
+  Case folding moves from `CaseFolding.txt` 16.0.0 to 17.0.0, level with the
+  normalization and word-break tables, and the word filter's alphanumeric
+  predicate comes from the generated tables rather than the toolchain's
+  `char` tables. `unicode_versions()` reports 17.0.0 for all four tables. The
+  fold changes on exactly the 28 code points whose `CaseFolding.txt` entries
+  differ between the two releases (Latin Extended-D letters and the Beria
+  Erfe script), so an index built under v1 fingerprints differently.
+- **text:** a letter or digit followed by `MidLetter`, `MidNumLet` or
+  `Single_Quote`, ZERO WIDTH JOINER and a pictograph now segments as UAX 29
+  rule WB6 requires, breaking before the punctuation.
+- **jsonschema:** `uri-template` admits `'` in a literal, as RFC 6570
+  verified erratum 6937 corrects the `literals` rule to.
 
 ### Measured
 

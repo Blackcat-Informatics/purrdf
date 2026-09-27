@@ -214,6 +214,14 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "deranged": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
     "num-conv": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
     "powerfmt": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    # The analyzer's Unicode layer, generated from the vendored database in
+    # crates/iri/unicode/; `cargo tree --locked --target all -i` showed each
+    # held only by purrdf-text (tinyvec through unicode-normalization alone).
+    "caseless": "purrdf_text::unicode::case_fold (CaseFolding.txt C + F)",
+    "unicode-normalization": "purrdf_text::unicode::{nfd, nfc, nfkd, nfkc} (UAX 15)",
+    "unicode-segmentation": "purrdf_text::unicode::{word_bounds, word_indices} (UAX 29)",
+    "tinyvec": "purrdf_text::unicode (no inline-buffer crate is needed)",
+    "tinyvec_macros": "purrdf_text::unicode (no inline-buffer crate is needed)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

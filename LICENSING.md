@@ -108,6 +108,43 @@ whole repository:
   `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against committed
   freeze manifests, so vendored bytes cannot be edited in place.
 
+## Unicode data compiled into published crates
+
+Three published crates compile tables generated from the Unicode Character
+Database, and so ship Unicode, Inc. data under the
+[Unicode License v3](./LICENSES/Unicode-3.0.txt) (`Unicode-3.0`) alongside
+Blackcat Informatics® code. Their package metadata declares the combined
+expression:
+
+```text
+(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0
+```
+
+You choose one of the three first-party licences as usual; the Unicode-3.0
+terms apply in addition, to the data.
+
+| Crate | Generated file | Generator | Source data |
+|---|---|---|---|
+| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-iri --example gen_idna_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0) |
+| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-text --example gen_unicode_text_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+
+Each generated file carries the SPDX header
+
+```text
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-FileCopyrightText: Unicode, Inc. <https://www.unicode.org>
+SPDX-License-Identifier: (MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0
+```
+
+written by its generator, and `scripts/check-generated.sh` holds each file
+byte-equal to its generator's output. `scripts/check-licenses.py` registers
+each of these files as deliberately carrying the combined expression, so any
+other first-party file that declares it is still reported. The vendored database
+files themselves are verbatim Unicode data (`Unicode-3.0` only), declared by
+`crates/iri/unicode/REUSE.toml` and `crates/rdf-core/vendor/unicode/`'s
+`.license` sidecars.
+
 ## Proprietary / commercial licensing
 
 The open licenses above are offered **in addition to — not in place of** —

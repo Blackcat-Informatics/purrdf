@@ -74,6 +74,8 @@ mod ranking;
 mod relation;
 mod score;
 mod term_bytes;
+pub mod unicode;
+mod unicode_tables;
 
 pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_versions};
 pub use error::TextError;
@@ -92,7 +94,7 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 
 /// Exact-token analyzer identity; Unicode versions are bound by the index's
 /// analyzer fingerprint. This identity promises no substring matching.
-pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v1";
+pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v2";
 
 pub use ranking::{
     DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,

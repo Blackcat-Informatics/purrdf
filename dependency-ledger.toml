@@ -19,6 +19,13 @@
 # the removed package and fails.
 
 [inhouse_names]
+caseless = [
+    # "Compatibility caseless" is the Unicode Standard's own term (UAX 21,
+    # definition D146) for the form the analyzer computes, and it names the
+    # analyzer profile; a line holding a `caseless::` path or naming the crate
+    # in backquotes is not matched here.
+    '^(?!.*caseless::)(?!.*`caseless`).*\b(?:compatibility[ -]caseless|caseless match)',
+]
 rand = [
     # SPARQL's RAND() function: the evaluator's parallel-safety test binds the
     # call expression to a local named after it.

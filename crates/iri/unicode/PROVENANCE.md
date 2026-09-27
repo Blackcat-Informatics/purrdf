@@ -25,6 +25,21 @@ From `https://www.unicode.org/Public/17.0.0/ucd/`:
 - `emoji/emoji-data.txt`
 - `extracted/DerivedJoiningType.txt`, `extracted/DerivedBidiClass.txt`
 
+Added 2026-09-27, from the same directory, for the RFC 5892 derived property
+(Join_Control, Noncharacter_Code_Point, White_Space; Hangul_Syllable_Type; the
+three IgnorableBlocks):
+
+- `PropList.txt` — `https://www.unicode.org/Public/17.0.0/ucd/PropList.txt`,
+  header `PropList-17.0.0.txt`, dated 2025-06-30, SHA-256
+  `130dcddcaadaf071008bdfce1e7743e04fdfbc910886f017d9f9ac931d8c64dd`
+- `HangulSyllableType.txt` —
+  `https://www.unicode.org/Public/17.0.0/ucd/HangulSyllableType.txt`, header
+  `HangulSyllableType-17.0.0.txt`, dated 2025-01-27, SHA-256
+  `5a57450afde0d082bc5026f7458649eac3b615490cc7e3d916b0367f1593c0e3`
+- `Blocks.txt` — `https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt`, header
+  `Blocks-17.0.0.txt`, dated 2025-08-01, SHA-256
+  `c0edefaf1a19771e830a82735472716af6bf3c3975f6c2a23ffbe2580fbbcb15`
+
 From `https://www.unicode.org/Public/17.0.0/idna/`:
 
 - `IdnaTestV2.txt`

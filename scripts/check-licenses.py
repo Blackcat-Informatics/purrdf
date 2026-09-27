@@ -194,6 +194,13 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     # terms that suit documentation rather than code. Its configuration declares the
     # license of the thing it builds, which is not the license of the tree.
     "docs/book/book.toml": "CC-BY-4.0",
+    # Generated from the Unicode Character Database, so the Unicode-3.0 terms
+    # apply to the tables beside the project's own offer (see LICENSING.md,
+    # "Unicode data compiled into published crates"). Each is a generator's
+    # output, and its generator writes this header.
+    "crates/iri/src/idna_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/rdf-core/src/xsd_regex/blocks.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
 }
 
 

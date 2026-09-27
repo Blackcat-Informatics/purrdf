@@ -29,6 +29,10 @@ CURIE/prefix handling.
   percent-encoding, and dot-segment normalization; idempotent.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
+- **IDNA2008** — `idna`: RFC 5891 host-name validation over the RFC 5892
+  derived property, contextual rules and the RFC 5893 Bidi rule, RFC 3492
+  Punycode, and `Iri::to_uri` (RFC 3987 §3.1). Tables are generated from the
+  vendored Unicode 17.0.0 database.
 - **JSON string escape law** — `json_escape`, the one RFC 8259 §7 string-body
   escaper every PurRDF JSON writer shares, over a chunked clean-run scan.
 - **Hard-fail** — malformed input is a typed `IriError`, never a degraded
@@ -57,8 +61,9 @@ assert_eq!(
 );
 ```
 
-The one `Option`-returning surface is CURIE expansion, where `None` is a
-*semantic* "not a CURIE / undeclared prefix" signal.
+The `Option`-returning surfaces are CURIE expansion, where `None` is a
+*semantic* "not a CURIE / undeclared prefix" signal, and the IDNA conversions,
+where `None` is the protocol's own "not a valid name".
 
 ## Part of PurRDF
 
@@ -80,3 +85,10 @@ Licensed under any one of the following, at your option:
 - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
+
+The IDNA tables compiled into this crate are derived from the Unicode Character
+Database, so the crate's licence expression is
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0`: the Unicode-3.0 terms
+([`LICENSES/Unicode-3.0.txt`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSES/Unicode-3.0.txt))
+apply alongside whichever of the three you choose. See
+[`LICENSING.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).
