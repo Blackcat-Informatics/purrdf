@@ -132,6 +132,7 @@ terms apply in addition, to the data.
 | `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0) |
 | `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-text --example gen_unicode_text_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
 | `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-jsonschema --example gen_ecma_property_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
 
 Each generated file carries the SPDX header
 

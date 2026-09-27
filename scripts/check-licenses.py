@@ -213,6 +213,7 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     "crates/rdf-core/src/xsd_regex/blocks.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
     "crates/jsonschema/src/ecma/property_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/jsonschema/src/ecma/unicode_ranges.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
 }
 
 
