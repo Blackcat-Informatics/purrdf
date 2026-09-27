@@ -53,6 +53,11 @@
 //!   [`terminals::find_first_json_string_special`],
 //!   [`terminals::find_first_xml_special`]): portable chunked scans that find
 //!   the first byte of a class sixteen bytes at a time.
+//! * **Host syntax** — [`host`], the RFC 3986 §3.2.2 `IPv4address`,
+//!   `IPv6address` and `reg-name` productions as predicates. Every authority
+//!   [`parse`] accepts has its host decided by them, and they are public so a
+//!   surface that asks the same question (a JSON Schema `ipv4` format, a mail
+//!   address literal) asks it here instead of carrying a second address parser.
 //! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
 //!   body escaper every PurRDF JSON writer shares, over the JSON string-body
 //!   scanner above. It lives in this leaf because it is the one crate every
@@ -136,6 +141,7 @@
 mod base;
 mod curie;
 mod error;
+pub mod host;
 pub mod json_escape;
 pub mod langtag;
 mod normalize;
