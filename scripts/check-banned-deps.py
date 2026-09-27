@@ -2,69 +2,28 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-"""Fail if a replaced third-party dependency re-enters the workspace closure.
+"""Fail if an eliminated third-party package re-enters the dependency surface.
 
-Two independent rules, matched to how each dependency was actually replaced:
+``BANNED_ANY_EDGE`` records the complete removed dependency inventory,
+including the ox-family and ``hex``. Every one is forbidden on runtime,
+build, dev/test and transitive
+edges. The check reads **every git-tracked Cargo.lock**, including the lock of
+an excluded test fixture, and names the violating lockfile in its error. A
+root-only scan would miss a stale resolution in an excluded workspace.
 
-* **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
-  ``petgraph``, ``tempfile``, ``proptest`` (with the random-number,
-  fork-mode and bit-set stack it alone pulled in), ``boon`` (with the
-  URL, IDNA and ICU4X stack it alone pulled in), ``datatest-stable``
-  (with the path, runner and regex stack it alone pulled in) and
-  ``wasm-bindgen-test`` (with its attribute macro, descriptor crate, async
-  executor, coverage hook and console colours, which nothing else pulled in;
-  its replacement is ``purrdf_testkit::harness`` run on wasm32 by
-  ``scripts/wasm-test-runner.sh``; the futures stack that ``js-sys``'s ``std``
-  feature pulled in is banned alongside it, since the workspace takes
-  ``js-sys`` without default features) have a first-party replacement good for
-  every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
-  dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
-  (never ``Cargo.toml``), which records the full resolved closure, so a
-  reintroduction through a dev-dependency or a transitive edge is caught the
-  same way as a direct one.
+The independent manifest scan reads every git-tracked Cargo.toml and every
+manifest declared by the root workspace, including new members not yet added
+to git. It checks dependency aliases by their ``package`` name as well as
+ordinary keys, across normal, build, dev/test, target and workspace tables.
+This catches a forbidden direct declaration even before an excluded workspace
+has a lockfile. A committed first-party manifest is not necessarily a member
+of the root workspace: ``crates/gts/fuzz`` is excluded.
 
-  It reads **every** ``Cargo.lock`` tracked by git, not just the root one.
-  A directory in the root manifest's ``exclude`` list (``crates/gts/fuzz``,
-  should it ever commit a lock) is its own workspace root with its own
-  resolution, so a root-only scan is blind to exactly the corners least likely
-  to be noticed — an excluded crate's lock once drifted to a stale resolution
-  carrying ``oxilangtag`` and nothing said so. Each failure names the lock it came
-  from, so the message points at the file to fix.
-
-* **Direct-edge ban** (``BANNED_DIRECT_ONLY``): ``hex`` was removed only from
-  PurRDF's own first-party surface (``core::fmt::LowerHex`` replaced it). A
-  third-party crate that itself depends on ``hex`` transitively is not this
-  gate's business to police — banning that would fail ``make check`` the day
-  any upstream dependency happens to use ``hex`` internally, with no fix
-  available in this repository. That would be over-refusal: rejecting an edge
-  that was never PurRDF's own. So this rule does NOT scan ``Cargo.lock`` at
-  all; it reads first-party manifests directly (``[dependencies]``,
-  ``[dev-dependencies]``, ``[build-dependencies]``, their
-  ``[target.'cfg(...)'.*]`` equivalents, and any ``[workspace.dependencies]``
-  table), and only fails if one of them names the package directly. Widening
-  the tier-1 scan to every committed lock does NOT widen this one: tier 2
-  still never opens a lockfile, so the over-refusal the tier split exists to
-  prevent stays prevented.
-
-  "First-party manifest" is **not** "workspace member". A first-party root
-  is committed but deliberately kept out of the root workspace via its
-  ``exclude`` list — ``crates/gts/fuzz`` — and a member-only scan cannot see
-  it, so a direct ``hex`` in such a root once passed the gate silently. That is the
-  same corner the tier-1 scan had to be widened for. The manifest set is
-  therefore the union of two derivations, so neither can narrow it alone:
-
-  1. every ``Cargo.toml`` tracked by git (basename match), which picks up a
-     third excluded root added later without anyone remembering this file; and
-  2. the manifests the root ``Cargo.toml`` declares — ``[workspace] members``,
-     each ``[workspace] exclude`` root's own manifest, and the members that
-     root declares in its own ``[workspace]`` table — which picks up a
-     brand-new crate that is a member already but not yet ``git add``-ed.
-
-  Derivation 1 is safe only because this repository vendors no third-party
-  Rust source: every committed ``Cargo.toml`` is PurRDF's own, so scanning all
-  of them refuses nothing that was not PurRDF's edge to begin with. If vendored
-  source is ever committed, the answer is an explicit allowlist for those
-  paths, never a narrowing back to workspace members.
+The manifest set is the union of the git-tracked set and the root workspace's
+declared member/excluded-root set. The repository vendors no third-party Rust
+source, so each tracked manifest is a first-party declaration. If vendored
+Rust source is ever committed, its provenance must be handled explicitly; the
+scan must not silently narrow to workspace members.
 
 **Substitution.** A ``[patch]``/``[replace]`` override that redirects a
 banned name to a different source is scanned for too: ``[[patch.unused]]``
@@ -136,13 +95,24 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "oxrdf": "purrdf-core",
     "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
+    "thiserror": "plain error types and std::error::Error implementations",
+    "thiserror-impl": "plain error types and std::error::Error implementations (thiserror macro backend)",
     "tempfile": "purrdf_testkit::{TempDir, NamedTempFile} (temp_dir!/temp_file!, for_unit_test)",
+    "insta": "purrdf_testkit::assert_golden! (byte-exact checked-in goldens)",
+    # The previous insta snapshot UI's own transitive closure.
+    "console": "purrdf_testkit::assert_golden! (no interactive snapshot UI)",
+    "encode_unicode": "purrdf_testkit::assert_golden! (no terminal Unicode encoder)",
+    "similar": "purrdf_testkit::assert_golden! (no snapshot diff engine)",
+    "pretty_assertions": "ordinary Rust assertions and purrdf_testkit goldens",
+    "diff": "ordinary Rust assertions (no assertion diff engine)",
+    "yansi": "ordinary Rust assertions (no coloured assertion output)",
     "proptest": "purrdf_testkit::prop (the choice-sequence property harness, prop_test!)",
     # proptest's own closure: its RNG stack, its fork/timeout runner and its
     # array helpers. Nothing else in the graph pulled any of them in.
     "rand": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
     "rand_chacha": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
     "rand_xorshift": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
+    "rand_core": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream (old signature optional edge also left)",
     "ppv-lite86": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
     "unarray": "purrdf_testkit::prop (no array strategies are needed)",
     "rusty-fork": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
@@ -219,11 +189,30 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "pin-project-lite": "js-sys with default-features = false (its `std` feature pulled it in)",
     "slab": "js-sys with default-features = false (its `std` feature pulled it in)",
     "md-5": "purrdf_hash::md5 (RFC 1321)",
+    "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
     "sha1": "purrdf_hash::sha1 (FIPS 180-4)",
     "sha3": "purrdf_hash::sha3 (FIPS 202)",
     # sha3's permutation crate; nothing else in the graph pulled it in.
     "keccak": "purrdf_hash::sha3::keccak_f1600 (FIPS 202 Keccak-f[1600])",
     "ahash": "purrdf_hash::fixed::FixedHasher",
+    # The old hashbrown 0.15 resolution pulled these in; the current
+    # hashbrown resolution does not. Banning every removed lockfile name also
+    # keeps the old hashbrown closure from silently returning.
+    "allocator-api2": "current hashbrown resolution (no allocator-api2 edge)",
+    "foldhash": "purrdf_hash::fixed::FixedHasher (old hashbrown 0.15 closure)",
+    "version_check": "const and build-time declarations (old ahash/generic-array version probe)",
+    # RustCrypto 0.11 and ed25519-dalek 3 removed the older 0.10/0.7 crypto
+    # trait and key-encoding closure from the published graph.
+    "generic-array": "RustCrypto 0.11 hybrid-array-backed traits",
+    "opaque-debug": "current RustCrypto GHash/POLYVAL implementation",
+    "pkcs8": "ed25519-dalek 3 native key handling (no PKCS#8 import path)",
+    "spki": "ed25519-dalek 3 native key handling (no SPKI import path)",
+    "der": "ed25519-dalek 3 native key handling (no DER import path)",
+    "base64ct": "ed25519-dalek 3 native key handling (old SPKI closure)",
+    # These old optional resolutions vanished along with the replaced test
+    # and RNG stacks. They remain forbidden even on target-specific edges.
+    "libm": "current num-traits configuration and purrdf_testkit wasm harness",
+    "wasi": "purrdf_testkit::rng (old getrandom 0.2 target closure)",
     "filetime": "std::fs::File::set_times (purrdf-gts restores file and directory mtimes)",
     "memmap2": "purrdf_cli::mmap::Mmap (read-only mmap/munmap through libc)",
     "rustix": "purrdf_cli::mmap (memfd_create and fcntl F_ADD_SEALS/F_GET_SEALS through libc)",
@@ -264,15 +253,9 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "tinyvec_macros": "purrdf_text::unicode (no inline-buffer crate is needed)",
 }
 
-# Package name -> first-party replacement. Banned only as a DIRECT dependency
-# of a workspace member or of the shared `[workspace.dependencies]` table; a
-# transitive third-party use is out of scope (see module docstring).
+# Reserved for a future direct-only removal, if one is ever authorized.
+# Every current removal is an any-edge ban, including hex and rand_core.
 BANNED_DIRECT_ONLY: dict[str, str] = {
-    "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
-    # proptest's rand_core 0.9 left with it; rand_core 0.6 stays in Cargo.lock as
-    # an optional dependency of `signature` (under ed25519-dalek), so only a
-    # direct edge is refused.
-    "rand_core": "purrdf_testkit::prop's in-house SplitMix64/xoshiro256** stream",
 }
 
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")
@@ -408,20 +391,44 @@ def substitution_offenders(lock_text: str) -> list[str]:
 
 
 def direct_dependency_names(manifest: dict) -> set[str]:
-    """Every dependency name a single manifest table (or the root
-    ``[workspace]`` table) declares directly.
+    """Every real package name a manifest declares directly.
 
     Covers the top-level ``dependencies``/``dev-dependencies``/
     ``build-dependencies`` tables plus the same three tables nested under any
-    ``[target.'cfg(...)'.*]`` platform gate, so a platform-gated direct
-    dependency is not invisible to the check.
+    ``[target.'cfg(...)'.*]`` platform gate. A renamed dependency's ``package``
+    value is the resolved package name; its local alias must not hide a ban.
     """
     names: set[str] = set()
+
+    def add_table(table: dict) -> None:
+        for alias, declaration in table.items():
+            if isinstance(declaration, dict):
+                names.add(declaration.get("package", alias))
+            else:
+                names.add(alias)
+
     for key in DEP_TABLE_KEYS:
-        names.update(manifest.get(key, {}).keys())
+        add_table(manifest.get(key, {}))
     for target_table in manifest.get("target", {}).values():
         for key in DEP_TABLE_KEYS:
-            names.update(target_table.get(key, {}).keys())
+            add_table(target_table.get(key, {}))
+    return names
+
+
+def manifest_override_names(manifest: dict) -> set[str]:
+    """Real package names declared by manifest ``[patch]``/``[replace]``.
+
+    The lockfile scan catches a resolved or unused patch. This independent
+    scan also covers an excluded workspace with no committed lock yet.
+    """
+    names: set[str] = set()
+    for patches in manifest.get("patch", {}).values():
+        for alias, declaration in patches.items():
+            names.add(declaration.get("package", alias) if isinstance(declaration, dict) else alias)
+    for key, declaration in manifest.get("replace", {}).items():
+        names.add(key.split(":", 1)[0])
+        if isinstance(declaration, dict) and "package" in declaration:
+            names.add(declaration["package"])
     return names
 
 
@@ -513,28 +520,30 @@ def first_party_manifests(root: Path) -> list[str]:
     return sorted(path for path in manifests if (root / path).is_file())
 
 
-def direct_edge_offenders(root: Path) -> dict[str, list[str]]:
-    """Tier-2 names found as a direct dependency, mapped to the declaring
-    manifest path(s).
+def direct_edge_offenders(
+    root: Path, banned: dict[str, str] | None = None
+) -> dict[str, list[str]]:
+    """Banned declarations mapped to their first-party manifest paths.
 
-    Reads first-party manifests only — never ``Cargo.lock`` — so a transitive
-    third-party use of a ``BANNED_DIRECT_ONLY`` package is invisible to this
-    function by construction, not by accident. Each manifest contributes both
-    its own direct dependency tables and, if it is a workspace root, its
-    ``[workspace.dependencies]`` table, which is a direct first-party edge in
-    exactly the same sense.
+    The default checks all current any-edge bans and any future direct-only
+    bans. ``banned`` permits a synthetic direct-only self-test without adding
+    a fake package to the production ban list.
     """
+    if banned is None:
+        banned = BANNED_ANY_EDGE | BANNED_DIRECT_ONLY
     offenders: dict[str, list[str]] = {}
 
     for manifest_path in first_party_manifests(root):
         manifest = tomllib.loads((root / manifest_path).read_text(encoding="utf-8"))
-        workspace_deps = set(manifest.get("workspace", {}).get("dependencies", {}))
-        for name in sorted(workspace_deps & BANNED_DIRECT_ONLY.keys()):
+        workspace_deps = direct_dependency_names(
+            {"dependencies": manifest.get("workspace", {}).get("dependencies", {})}
+        )
+        for name in sorted(workspace_deps & banned.keys()):
             offenders.setdefault(name, []).append(
                 f"{manifest_path} [workspace.dependencies]"
             )
-        declared = direct_dependency_names(manifest)
-        for name in sorted(declared & BANNED_DIRECT_ONLY.keys()):
+        declared = direct_dependency_names(manifest) | manifest_override_names(manifest)
+        for name in sorted(declared & banned.keys()):
             offenders.setdefault(name, []).append(manifest_path)
 
     return offenders
@@ -1204,12 +1213,16 @@ def self_test() -> int:
     if any_edge_offenders(petgraph_lock) != ["petgraph"]:
         failures.append("petgraph in the lock was not flagged (tier-1 regression)")
 
-    # --- (A) tier-2 direct-hex rule fails when a workspace member declares
-    #     hex directly (top-level, dev-only, build-only, and target-gated).
+    # --- (A) the independent manifest scan catches any-edge bans on direct
+    #     declarations, including the former direct-only hex ban, in every
+    #     dependency table and through a renamed Cargo dependency.
     direct_variants = {
         "top-level dependencies": {"dependencies": {"hex": {"version": "0.4"}}},
         "dev-dependencies": {"dev-dependencies": {"hex": {"version": "0.4"}}},
         "build-dependencies": {"build-dependencies": {"hex": {"version": "0.4"}}},
+        "renamed dependency": {
+            "dependencies": {"renamed_hex": {"package": "hex", "version": "0.4"}}
+        },
         "target-gated dependencies": {
             "target": {
                 "cfg(not(target_arch = \"wasm32\"))": {
@@ -1222,11 +1235,16 @@ def self_test() -> int:
         if "hex" not in direct_dependency_names(manifest):
             failures.append(f"direct hex dependency ({label}) was not flagged")
 
-    # --- (A) tier-2 direct-hex rule does NOT fail when hex is absent from
-    #     every workspace member's own manifest, even if Cargo.lock resolves
-    #     hex transitively (pulled in by some unrelated third-party crate).
-    #     THIS IS THE OVER-REFUSAL CHECK: tier-2 must never consult
-    #     Cargo.lock, so a transitive-only hex can never reach it.
+    # A synthetic name keeps the direct-only scanner contract covered even
+    # though no production dependency has an authorized direct-only exception.
+    synthetic = "synthetic-direct-only"
+    if synthetic not in direct_dependency_names(
+        {"dependencies": {"alias": {"package": synthetic, "version": "1"}}}
+    ):
+        failures.append("a renamed synthetic direct-only dependency was missed")
+
+    # A transitive hex is now forbidden too: the root and fixture locks have
+    # no such package, so the removal applies to the complete closure.
     transitive_only_lock = (
         'name = "serde"\n'
         'name = "some-third-party-crate"\n'
@@ -1237,13 +1255,16 @@ def self_test() -> int:
         'version = "0.4.3"\n'
     )
     clean_member_manifest = {"dependencies": {"serde": {"workspace": True}}}
-    if direct_dependency_names(clean_member_manifest) & BANNED_DIRECT_ONLY.keys():
-        failures.append("a clean member manifest was flagged for hex")
-    if any_edge_offenders(transitive_only_lock):
-        failures.append(
-            "transitive-only hex in Cargo.lock was flagged by the any-edge "
-            "scan; hex must only be checked via direct manifest declarations"
-        )
+    if direct_dependency_names(clean_member_manifest) & BANNED_ANY_EDGE.keys():
+        failures.append("a clean member manifest was flagged")
+    if any_edge_offenders(transitive_only_lock) != ["hex"]:
+        failures.append("transitive hex was not flagged by the any-edge ban")
+    if any_edge_offenders('name = "rand_core"\n') != ["rand_core"]:
+        failures.append("transitive rand_core was not flagged by the any-edge ban")
+    if manifest_override_names({"patch": {"crates-io": {"alias": {"package": "hex"}}}}) != {"hex"}:
+        failures.append("a renamed patch declaration was not flagged")
+    if manifest_override_names({"replace": {"hex:0.4.3": {"path": "../hex"}}}) != {"hex"}:
+        failures.append("a replace declaration was not flagged")
 
     # --- (B) substitution: a [[patch.unused]] block naming a banned package.
     patch_unused_lock = (
@@ -1427,8 +1448,8 @@ def self_test() -> int:
 
     # --- (D) THE REGRESSION THIS TIER-2 WIDENING EXISTS FOR: the excluded
     #     first-party roots are git-tracked but are NOT workspace members, so
-    #     a members-only scan cannot see them. A direct `hex` in either one
-    #     passed the gate silently before they were included.
+    #     a members-only scan cannot see them. A direct banned package in
+    #     either one passed the gate silently before they were included.
     excluded_roots = [
         "crates/gts/fuzz/Cargo.toml",
     ]
@@ -1458,16 +1479,8 @@ def self_test() -> int:
                 f"(found {len(scanned)})"
             )
 
-        # --- (D) THE OVER-REFUSAL CHECK for the widened manifest set. Two
-        #     halves. First, tier 2 must still read manifests and ONLY
-        #     manifests: if a lockfile ever reached this set, a transitive
-        #     third-party `hex` would start failing the gate with no fix
-        #     available here — the exact over-refusal the tier split exists to
-        #     prevent. Second, every newly reached manifest must be readable,
-        #     so widening the scan cannot turn a parse error into a gate
-        #     outage. Whether a first-party manifest legitimately *declares* a
-        #     banned package is main()'s verdict to report, not something this
-        #     self-test silently exempts.
+        # --- (D) Manifest discovery must return only readable manifests;
+        #     the independent lock scan handles the transitive closure.
         for scanned_path in scanned:
             if scanned_path.rsplit("/", 1)[-1] != "Cargo.toml":
                 failures.append(
@@ -1532,12 +1545,12 @@ def main() -> int:
 
     direct = direct_edge_offenders(REPO_ROOT)
     for name in sorted(direct):
-        replacement = BANNED_DIRECT_ONLY[name]
+        replacement = (BANNED_ANY_EDGE | BANNED_DIRECT_ONLY)[name]
         files = ", ".join(direct[name])
         failures.append(
             f"FAIL: `{name}` is a direct dependency of {files}; it was "
             f"replaced by {replacement} and must not be reintroduced as a "
-            "first-party edge (a transitive third-party use is not flagged)"
+            "first-party edge"
         )
 
     try:
