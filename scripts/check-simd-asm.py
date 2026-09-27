@@ -1354,8 +1354,11 @@ def failure_tail(stderr: str, lines: int = 40) -> str:
 
 def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tuple[str, ...]) -> list[list[str]]:
     """The cargo invocations for one configuration: one build, then one per rlib-only package."""
+    # `--color never`: the provenance checks read cargo's `Running` lines, and a
+    # coloured stream (CARGO_TERM_COLOR=always, which CI's toolchain action sets)
+    # wraps each in escape codes that no line pattern matches.
     common = [
-        "-v", "--message-format=json-render-diagnostics", "--release", "--locked",
+        "-v", "--color", "never", "--message-format=json-render-diagnostics", "--release", "--locked",
         "--lib", "--target", config.triple,
         "--config", "profile.release.lto=false", "--config", "profile.release.codegen-units=1",
     ]
@@ -2048,6 +2051,7 @@ def self_test() -> int:
     expect(len(cmds) == 2 and cmds[0][:2] == ["cargo", "build"] and cmds[1][:2] == ["cargo", "rustc"], f"one build plus one rustc per rlib package: {cmds}")
     expect(cmds[1][-4:] == ["-p", "demo-wasm", "--crate-type", "rlib"] and "--target" in cmds[1] and "--lib" in cmds[1], f"the rlib build names its package and crate type: {cmds[1]}")
     expect(len(build_commands(CONFIG_BY_NAME["x86_64"], ("demo",), ())) == 1, "no rlib package, one command")
+    expect(all(c[c.index("--color") + 1] == "never" for c in cmds), f"every build asks cargo for an uncoloured stream: {cmds}")
 
     # -- a wrong-typed field is a named manifest error, never a coercion; its neighbour loads
     base_measure = _manifest_dict()["site"][0]["measure"][0]
