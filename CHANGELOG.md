@@ -10,6 +10,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **sparql-eval:** `protocol::FailureCode`, the exhaustive set of ways an operation
+  behind a SPARQL Protocol endpoint can fail. `EvalError`, `LoadError` and
+  `RemoteError` convert into it, `FailureCode::from_diagnostic_code` reads an engine
+  diagnostic's code, and `protocol::problem_for` is the one mapping to the HTTP
+  problem a host answers with (`Problem { status, code, detail }`, the detail either
+  the failure's own words, a fixed description, or an internal one logged under a
+  correlation id). A new failure cannot compile until it has a status. The default
+  request timeout and user agent are public (`remote_http::DEFAULT_TIMEOUT`,
+  `DEFAULT_USER_AGENT`).
+
+- **wasm:** every error the package throws for a failure it classifies carries its
+  stable code as `error.code` — the engine diagnostic's own, a job's stop or fault
+  (`native-sparql-cancelled`, `native-sparql-deadline`,
+  `native-sparql-not-acceptable`, `native-sparql-update-in-flight`,
+  `native-sparql-host-fault`), or the package's own refusals (`purrdf-wasm-options`,
+  `purrdf-wasm-usage`, `purrdf-wasm-serialize`, `purrdf-wasm-entailment`,
+  `purrdf-wasm-extension-environment`, `purrdf-wasm-shacl`,
+  `purrdf-wasm-shacl-product-refusal`). `SparqlProtocolRequest.problemFor(error,
+  cancelled)` answers a failure with its RFC 9457 problem, and
+  `SparqlProtocolRequest.statusTitle(status)` gives a status's reason phrase.
+  `Dataset.snapshot()` returns an independent copy of a dataset, and
+  `ServiceCatalog.copy()` an independent copy of a catalog. The asynchronous
+  runtime's statuses are exported enums: `RunStatus`, `SuspendStatus`,
+  `DeliveryStatus` and `EffectKind`.
+
 - **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
   ranked-retrieval surface computes with. The module holds:
   - `Scalar`, `Bound` and `Bounded`, which moved here from
@@ -439,9 +464,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     `evidence.async.silenced` records it. A handler that throws has faulted, and the
     fault fails the job even under `SILENT`;
   - `catalog`, a `ServiceCatalog` (deny by default, one profile per endpoint, an
-    optional fallback, `carriesCredential`, `authorizeLoad`) that authorizes each
-    request before the handler is called, and `localServices`, endpoints answered in
-    process from a `Dataset`;
+    optional fallback) that authorizes each `SERVICE` request, each `LOAD` source and
+    each location a `LOAD` is redirected to before the handler is called, and bounds
+    each request by its profile's `timeoutMs`; and `localServices`, endpoints answered
+    in process from a `Dataset`;
   - `signal`, an `AbortSignal` observed at every yield and every effect. It is the
     only way to cancel a twin: passing `cancel` is a `TypeError`;
   - `yieldEveryPolls` (default 65 536; `0` yields at every poll). A job gives the
@@ -458,11 +484,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     size as the synchronous lane's, so the host-stack budget (see Fixed) binds at
     the same depth on both lanes and on every region.
 
-  Asynchronous updates on one dataset run one at a time and commit only if the
-  dataset was not mutated while they ran; `Dataset.id` and `Dataset.generation`
-  expose the identity and mutation count that check reads. Governed outcomes and
-  twin errors carry `evidence.async` (polls, yields, effects, time waited per
-  effect kind, freeze/evaluate/serialize time, stack high-water mark).
+  One asynchronous update of a dataset may be in flight at a time — another begun
+  meanwhile is refused with `native-sparql-update-in-flight` — and an update commits
+  only if the dataset was not mutated while it ran; `Dataset.id` and
+  `Dataset.generation` expose the identity and mutation count that check reads. A
+  `LOAD` redirect is followed by the job itself (`{ kind: "redirect", location }`),
+  re-authorized against the catalog at every hop, up to five hops. A job answers a
+  `SERVICE` request it repeats from its own memo when the first answer was rows, and
+  concurrent jobs share one host call for the same request when the joining job's
+  deadline falls no later than the call's. Every error a twin rejects with carries
+  its stable code as `error.code`. Governed outcomes and twin errors carry
+  `evidence.async` (polls, yields, effects, time waited per effect kind,
+  freeze/evaluate/serialize time, stack high-water mark).
   `hasAsyncQueries()` reports JSPI support; without it every twin rejects before
   touching wasm and the synchronous API is unchanged. JSPI is on by default in
   Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and Cloudflare
@@ -475,35 +508,41 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **cloudflare:** a new package subpath, `@blackcatinformatics/purrdf/cloudflare`.
   `createFetchServiceResolver` answers `SERVICE` with `fetch`, or with a service
-  binding chosen by origin. It sends the catalog profile's headers and credential,
-  bounds each request by a timeout, and reports network errors, timeouts and
-  non-2xx responses as transport failures. Its optional Cache API layer is keyed by
-  a digest of the endpoint, query, `Accept` header and headers, and a credentialed
-  request is never cached. `createFetchLoadResolver` answers `LOAD` after the
-  catalog authorizes the source. `handleSparqlRequest` answers one SPARQL 1.1
+  binding chosen by origin, bounded by the query's own abandonment signal (the
+  catalog profile's `timeoutMs` or the deadline). It sends the catalog profile's
+  headers and credential, and reports network errors, abandoned requests and non-2xx
+  responses as transport failures. Its optional Cache API layer is keyed by a digest
+  of the endpoint, query, `Accept` header and headers; a request the job marks not
+  `cacheable` (one carrying a credential) never touches it, and a failed
+  `cache.match` or `cache.put` is the request's transport failure.
+  `createFetchLoadResolver` fetches each `LOAD` hop the job authorized and answers a
+  redirect for the job to follow. `handleSparqlRequest` answers one SPARQL 1.1
   Protocol request. It requires governors with a deadline. The statuses are
   200/204, 400/405/415 for a malformed request, 406 when no acceptable format can
-  carry the result, 422 for a deterministic ceiling, 503 for a deadline or
-  cancellation, and 500 for an evaluation failure, and a partial answer is never
-  sent with a 200. Errors are
+  carry the result, 409 when another update of the dataset is in flight, 422 for a
+  deterministic ceiling, 503 for a deadline or cancellation, and 500 for an
+  evaluation failure, and a partial answer is never sent with a 200. Errors are
   `application/problem+json` bodies with a stable `code`, `Server-Timing` reports
   the job's phases, and CORS headers are sent only when configured.
-  - Each failure answers with its own status and the engine's own diagnostic code as
-    `code`. A `SERVICE` endpoint the catalog or the resolver's own policy refuses to
-    contact is a 403 (`native-sparql-service-denied`,
-    `native-sparql-service-host-denied`), and so is a `LOAD` source the catalog does
-    not authorize (`native-sparql-load-denied`). A `SERVICE` endpoint or `LOAD`
-    source that was contacted and gave no usable answer, whether by a network error,
-    a timeout, an HTTP error status, a redirect or an undecodable body, is a 502
-    (`native-sparql-service-failed`, `native-sparql-load-failed`). A 403 or 502
-    carries a fixed `detail` for its code, never the engine's message, which would
-    echo the catalog's policy or a resolver's or remote's own words. A `SERVICE` or
-    `LOAD` no resolver reaches (`native-sparql-service-unconfigured`,
-    `native-sparql-load-no-resolver`), a `resolveLoad` answer that is not one
-    (`native-sparql-load-fault`), and a rejection no engine code classifies
-    (`InternalError`) are a 500 with a fixed `detail` and a `correlationId`, and the
-    real error goes to `onInternalError`. Every other evaluation failure is a 500
-    whose `code` is the engine's code, never a JavaScript error class name.
+  - Each failure answers with the status Rust maps its code to
+    (`SparqlProtocolRequest.problemFor`), and the engine's own diagnostic code as
+    `code`. An operation that does not parse is a 400 under its parse code. A
+    `SERVICE` endpoint the catalog or the resolver's own policy refuses to contact is
+    a 403 (`native-sparql-service-denied`, `native-sparql-service-host-denied`), and
+    so is a `LOAD` source the catalog does not authorize (`native-sparql-load-denied`)
+    or the resolver's own policy refuses (`native-sparql-load-host-denied`). A
+    `SERVICE` endpoint or `LOAD` source that was contacted and gave no usable answer,
+    whether by a network error, a timeout, an HTTP error status, a redirect or an
+    undecodable body, is a 502 (`native-sparql-service-failed`,
+    `native-sparql-load-failed`, `native-sparql-load-decode`). A 403 or 502 carries a
+    fixed `detail` for its code, never the engine's message, which would echo the
+    catalog's policy or a resolver's or remote's own words. A `SERVICE` or `LOAD` no
+    resolver reaches (`native-sparql-service-unconfigured`,
+    `native-sparql-load-no-resolver`), and a host fault or an exception no code
+    classifies (`InternalError`) are a 500 with a fixed `detail` and a
+    `correlationId`, and the real error goes to `onInternalError`. Every other
+    evaluation failure is a 500 whose `code` is the engine's code, never a JavaScript
+    error class name.
   `maxRemoteRequests` bounds the subrequests a request makes, because every
   `SERVICE` request and `LOAD` is charged before it reaches a handler.
 
@@ -621,6 +660,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **sparql-eval:** `ServiceCatalog::authorize` named the `query` capability as the one
+  withheld when no profile covered the endpoint, whatever the request needed; it now
+  names the first capability the request needs, so a `LOAD` fetch refused by an empty
+  catalog reads as withholding `network`.
 
 - **sparql-eval:** nested correlated `FILTER EXISTS` / `NOT EXISTS` cost time and
   memory cubic in the nesting depth: each level's per-row substitution copied every
@@ -2396,6 +2440,48 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   built by this one and must be re-planned.
 
 ### Changed
+
+- **BREAKING** **sparql-eval, wasm:** the parser's shadow-stack refusal carries its own
+  code, `native-sparql-parse-stack-exhausted`, in place of
+  `native-sparql-query-parse`/`native-sparql-update-parse`, so a host tells it from a
+  syntax error without reading the message. A `LOAD` the host's own policy refused
+  (`LoadError::HostDenied`) is `native-sparql-load-host-denied`, apart from the
+  catalog's `native-sparql-load-denied`.
+
+- **BREAKING** **wasm:** asynchronous policy lives in Rust. The asynchronous twins'
+  options are validated against each operation's table by
+  `AsyncJobOptions.fromJs(kind, options, serviceHandler, loadHandler, argument)`; the
+  per-field `AsyncJobOptions` setters are gone. `ServiceCatalog.carriesCredential`,
+  `ServiceCatalog.authorizeLoad` and `LoadAuthorization` are removed: a job authorizes
+  every `LOAD` source and redirect against its catalog before the handler is called,
+  and a `SERVICE` effect says whether it is `cacheable`. `resolveLoad` receives the
+  hop's `accept`, `userAgent`, `headers` and `timeoutMs`, and may answer
+  `{ kind: "redirect", location }`. A `LOAD` document that does not parse is
+  `native-sparql-load-decode`, no longer `native-sparql-load-failed`. An
+  asynchronous update begun while another update of the same dataset is in flight is
+  refused (`native-sparql-update-in-flight`) instead of queued. A job reuses a
+  repeated `SERVICE` request's answer only when it was rows; a failure is asked
+  again. The deadline instant is the job's: every effect names when it is abandoned
+  (`abandonAfterMs`, its request's timeout or the deadline, whichever is sooner) and
+  a profile `timeoutMs` past 2 147 483 647 is refused. `AsyncEffectKind` is renamed
+  `EffectKind`; `AsyncJob.takeError`, `AsyncJob.tripDeadline` and
+  `AsyncJob.deliverBindings` are removed in favour of `errorCode`/`errorMessage`,
+  `expireEffect`, and the shared-exchange deliveries. `Dataset.queryAsync` takes
+  `queryRawAsync`'s options. The synchronous methods run the same operation
+  implementation as their twins, metered and with no source; their results are
+  unchanged.
+
+- **BREAKING** **cloudflare:** `createFetchServiceResolver` no longer takes `catalog`,
+  `timeoutMs`, `waitUntil` or `onCacheError`: the catalog and each request's timeout
+  (the profile's `timeoutMs`) are the job's, a failed `cache.match` or `cache.put` is
+  the request's transport failure rather than a miss, and a request the job marks not
+  `cacheable` bypasses the cache rather than failing. `createFetchLoadResolver` no
+  longer takes `catalog`, `timeoutMs` or `maxRedirects`: it fetches one hop and hands a
+  redirect back to the job, which follows up to five. `handleSparqlRequest` answers
+  an operation that does not parse with its parse code
+  (`native-sparql-query-parse`, …) instead of re-parsing it for `MalformedOperation`,
+  a conflicting update with a 409, and a `LOAD` the host's policy refused with
+  `native-sparql-load-host-denied`.
 
 - **BREAKING** **wasm:** the synchronous lane refuses some requests it used to
   answer. Every recursive level of a request is now charged its measured cost to V8's
