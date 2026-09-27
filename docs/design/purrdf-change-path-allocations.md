@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 49 |
-| custom `sh:ask` component | 112 |
-| custom `sh:select` component | 62 |
-| `sh:expression` function call | 123 |
+| `sh:sparql` constraint | 47 |
+| custom `sh:ask` component | 106 |
+| custom `sh:select` component | 60 |
+| `sh:expression` function call | 119 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 66 |
-| custom `sh:ask` component, governed | 134 |
-| custom `sh:select` component, governed | 79 |
-| `sh:expression` function call, governed | 148 |
+| `sh:sparql` constraint, governed | 64 |
+| custom `sh:ask` component, governed | 128 |
+| custom `sh:select` component, governed | 77 |
+| `sh:expression` function call, governed | 144 |
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in
@@ -509,18 +509,12 @@ only, and reached the `EXISTS` patterns an expression can hide by handing each
 expression attached to a pattern node to a second iterative walk with a pending
 vector of its own — allocated, and grown once as soon as a function call pushed
 its name and its argument: two allocations per attached expression, per run. The
-check now measures the tree through `GraphPattern::validate_height`, which walks
-patterns, expressions, paths and terms on one shared stack, so those two are gone.
-The shared stack now holds expression and term nodes too, which on these fixtures
-costs it one growth at the first node with two children — a growth the
-pattern-only stack paid as well wherever the pattern itself branched. The net is
-two per evaluation, and four where a focus node runs two: 49 / 112 / 62 / 123
-ungoverned, 66 / 134 / 79 / 148 governed, and 208 on the `&str`-door `sh:ask`
-fallback lane (from 212). The prepared `sh:ask` component nets one per run rather
-than two because its pattern is a lone `FILTER` over an empty group, a chain the
-pattern-only stack walked without ever growing, so there the shared stack's growth
-is new. Restoring the pattern-only walk and nothing else reproduces the previous
-figures exactly.
+check now measures the tree through the evaluator's height admission
+(`purrdf_sparql_eval`'s `stack::height`), which walks patterns, expressions, paths
+and terms on one shared stack whose first thirty-two pending nodes live inline, so
+on these fixtures it allocates nothing at all: 47 / 106 / 60 / 119 ungoverned,
+64 / 128 / 77 / 144 governed, and 202 on the `&str`-door `sh:ask` fallback lane
+(from 212).
 
 An id is meaningful only against the dataset that minted it, so the door makes a
 cross-dataset binding impossible rather than merely refused: the id and the view

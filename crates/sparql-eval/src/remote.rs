@@ -165,10 +165,8 @@ pub enum RemoteError {
     /// response removes the positional-prefix/resumption claim even though the lower
     /// answer bound remains sound. `SERVICE SILENT` swallows neither variant.
     GovernedAfterCompletion(TrippedGovernor),
-    /// An in-process source ran out of stack parsing or evaluating the forwarded body:
-    /// the [`EvalError::StackExhausted`] of that evaluation, or the
-    /// [`purrdf_sparql_algebra::ParseError::StackExhausted`] of its re-parse, naming the
-    /// construct.
+    /// An in-process source ran out of stack evaluating the forwarded body: the
+    /// [`EvalError::StackExhausted`] of that evaluation, naming the construct.
     ///
     /// Never silenced: the body nests deeper than the stack of the thread evaluating it
     /// can hold, which is a fact about this host rather than about the invocation, and
@@ -176,8 +174,7 @@ pub enum RemoteError {
     StackExhausted(&'static str),
     /// On `wasm32`, an in-process source's forwarded body nests deeper than the
     /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
-    /// evaluation, or the [`purrdf_sparql_algebra::ParseError::HostStackExhausted`] of
-    /// its re-parse, naming the construct.
+    /// evaluation, naming the construct.
     ///
     /// Never silenced, for the reason [`Self::StackExhausted`] is not.
     HostStackExhausted(&'static str),
@@ -1149,21 +1146,9 @@ pub(crate) fn evaluate_in_memory(
         max_intermediate_cells,
         ..
     } = request;
-    // The re-parse runs at whatever depth the `SERVICE` sits, so it can run out of stack
-    // on a body the parser admitted higher up. That is this host's stack, not the endpoint:
-    // the same stack refusal the body's evaluation would raise, never a decode failure
-    // `SILENT` could swallow into the join identity.
     let parsed = purrdf_sparql_algebra::SparqlParser::new()
         .parse_query(query_text)
-        .map_err(|e| match e {
-            purrdf_sparql_algebra::ParseError::StackExhausted { construct, .. } => {
-                RemoteError::StackExhausted(construct)
-            }
-            purrdf_sparql_algebra::ParseError::HostStackExhausted { construct, .. } => {
-                RemoteError::HostStackExhausted(construct)
-            }
-            other => RemoteError::Decode(other.to_string()),
-        })?;
+        .map_err(|e| RemoteError::Decode(e.to_string()))?;
     // Evaluated here without the engine's admission, so the one rewrite admission
     // makes that changes answers rather than refusing — a blank node label shared by
     // two pieces of one basic graph pattern is one variable — is applied here too.
@@ -2841,67 +2826,34 @@ mod tests {
             .map_err(|e| e.to_string())
     }
 
-    /// Whether the parser admits `text` with about `bytes` of stack left below this
-    /// call (to within one 4 KiB frame), measured with the guard's own
-    /// [`purrdf_stack::remaining`] rather than trusting the size a thread asked for.
-    ///
-    /// Where the descent lands depends on where it starts, so two probes compare only
-    /// when they start from the same frame of the same thread.
-    fn parses_with_stack_left(bytes: usize, text: &str) -> bool {
-        if purrdf_stack::remaining() <= bytes {
-            return purrdf_sparql_algebra::SparqlParser::new()
-                .parse_query(text)
-                .is_ok();
-        }
-        let frame = core::hint::black_box([0_u8; 4096]);
-        let admitted = parses_with_stack_left(bytes, text);
-        core::hint::black_box(&frame);
-        admitted
-    }
-
-    /// On one thread, with every probe started from one frame: the least stack left, to
-    /// within 4 KiB, on which the parser admits `admitted`'s forwarded text, and whether
-    /// it admits `other`'s forwarded text on that same stack.
-    ///
-    /// Probes on separate threads would each land within a frame of the requested
-    /// amount, but not the same frame, so a size found on one thread could be a frame
-    /// more or less on the next.
-    fn other_admitted_on_least_stack(admitted: &GraphPattern, other: &GraphPattern) -> bool {
-        const MOST: usize = 64 * 1024 * 1024;
-        let admitted = purrdf_sparql_algebra::pattern_to_select_query(admitted);
-        let other = purrdf_sparql_algebra::pattern_to_select_query(other);
-        std::thread::Builder::new()
-            .stack_size(MOST + 1024 * 1024)
-            .spawn(move || {
-                let (mut lo, mut hi) = (0_usize, MOST);
-                assert!(parses_with_stack_left(hi, &admitted), "admitted on 64 MiB");
-                while hi - lo > 4096 {
-                    let mid = lo.midpoint(hi);
-                    if parses_with_stack_left(mid, &admitted) {
-                        hi = mid;
-                    } else {
-                        lo = mid;
-                    }
+    /// How deeply `pattern`'s forwarded text nests braces: the most `{` open at once.
+    fn forwarded_brace_depth(pattern: &GraphPattern) -> usize {
+        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        let (mut open, mut deepest) = (0_usize, 0_usize);
+        for byte in text.bytes() {
+            match byte {
+                b'{' => {
+                    open += 1;
+                    deepest = deepest.max(open);
                 }
-                parses_with_stack_left(hi, &other)
-            })
-            .expect("spawn")
-            .join()
-            .expect("the parsing thread returned rather than aborting")
+                b'}' => open = open.saturating_sub(1),
+                _ => {}
+            }
+        }
+        deepest
     }
 
     #[test]
     fn a_block_joined_beside_filters_is_forwarded_beneath_them_and_admitted() {
         // 120 nested groups, admitted as written. Joined beside each group's filters, the
-        // block would force a brace per group — twice the nesting — and on the stack the
-        // flat text needs, that text is refused; moved beneath the filters, which do not
-        // read `?t`, it is written flat.
+        // block would force a brace per group — twice the nesting; moved beneath the
+        // filters, which do not read `?t`, it is written flat.
         let injected = inject(&doubly_filtered_body(120, false), &triple_block(), false);
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded beneath the filters");
         assert!(
-            !other_admitted_on_least_stack(&sanitized, &injected),
-            "the block beside the filters needs more stack than beneath them"
+            forwarded_brace_depth(&injected) > forwarded_brace_depth(&sanitized),
+            "the block beside the filters nests deeper than beneath them"
         );
         // The one level's shape: the block is joined to the triple, under both filters.
         let GraphPattern::Graph { inner, .. } = &sanitized else {
@@ -2928,8 +2880,8 @@ mod tests {
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded without the repeated block");
         assert!(
-            !other_admitted_on_least_stack(&sanitized, &injected),
-            "the block beside the reading filter needs more stack than the text without it"
+            forwarded_brace_depth(&injected) > forwarded_brace_depth(&sanitized),
+            "the block beside the reading filter nests deeper than the text without it"
         );
         let GraphPattern::Graph { inner, .. } = &sanitized else {
             panic!("the outermost group is a GRAPH");

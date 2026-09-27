@@ -11,127 +11,6 @@ use crate::{
     ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
 };
 
-/// How deeply triple terms may nest on `wasm32`: as deep as [`crate::WASM_HOST_STACK_BUDGET`]
-/// admits them written alone, 2 048 levels. A built tree is held to what a parsed one can
-/// be, for the host engine's call stack the walks over it run on.
-pub(crate) const WASM_TRIPLE_TERM_DEPTH: usize =
-    crate::WASM_HOST_STACK_BUDGET / crate::parser::host_stack_cost("triple term");
-
-/// The tallest tree admitted on `wasm32`, in every node kind: the parser's height count,
-/// with room for what a parsed tree holds that its count does not see — a triple term is
-/// one level of the parser's count and two here (its term and its triple), and each of
-/// the nested groups may carry up to eight wrapper nodes.
-const WASM_STRUCTURAL_LIMIT: usize = crate::parser::WASM_TREE_HEIGHT_LIMIT
-    + 2 * WASM_TRIPLE_TERM_DEPTH
-    + 8 * crate::WASM_GRAPH_PATTERN_DEPTH;
-
-/// The tallest run of expression and path nodes admitted on `wasm32`: the parser's
-/// height count, with room for the second node some written levels build.
-const WASM_VALUE_LIMIT: usize = crate::parser::WASM_TREE_HEIGHT_LIMIT + 256;
-
-/// How deep a node sits: in every node kind (`structural`, the height a walk over the
-/// tree descends), in expression and path nodes (`values`), and in triple terms
-/// (`terms`: pattern and `VALUES` triple terms, and `TRIPLE` calls, which build one).
-#[derive(Clone, Copy)]
-struct Depth {
-    structural: usize,
-    values: usize,
-    terms: usize,
-}
-
-impl Depth {
-    const ROOT: Self = Self {
-        structural: 1,
-        values: 0,
-        terms: 0,
-    };
-
-    /// The depth of `node`'s children. An `ORDER BY` key and an aggregate are counted
-    /// as part of the node that holds them, not as a level of their own.
-    fn below(self, node: NodeRef<'_>) -> Self {
-        Self {
-            structural: self.structural
-                + usize::from(!matches!(node, NodeRef::Order(_) | NodeRef::Aggregate(_))),
-            values: self.values + usize::from(matches!(node, NodeRef::Expr(_) | NodeRef::Path(_))),
-            terms: self.terms + usize::from(node.is_triple_term()),
-        }
-    }
-
-    /// Push `node`'s children onto `stack`, each at `self`.
-    fn push_children<'a>(self, node: NodeRef<'a>, stack: &mut Vec<(NodeRef<'a>, Self)>) {
-        node.for_each_child(|child| stack.push((child, self)));
-    }
-
-    /// Admit a node this deep, or refuse the tree.
-    ///
-    /// A tree is admitted only if every walk over it — the evaluator's analyses, its
-    /// copies, its drop — fits the stack left here, at the per-level charge the parser
-    /// builds trees under ([`crate::parser::walkable`]): a compiler-built tree is held to
-    /// what a parsed one is, and the limit is the thread's real capacity. `fits` is the
-    /// tallest level already found to fit, so the stack is read once per level of
-    /// height rather than once per node.
-    ///
-    /// On `wasm32` the host engine's call stack, which no measurement reaches, also
-    /// bounds the walks: the parser's height and host-stack counts, applied to built
-    /// trees (see [`WASM_STRUCTURAL_LIMIT`] and [`WASM_TRIPLE_TERM_DEPTH`]).
-    fn admit(self, fits: &mut usize) -> Result<()> {
-        if self.structural > *fits {
-            if !crate::parser::walkable(self.structural) {
-                return Err(ParseError::StackExhausted {
-                    construct: "query algebra",
-                    at: 0,
-                });
-            }
-            *fits = self.structural;
-        }
-        if cfg!(target_arch = "wasm32")
-            && (self.structural > WASM_STRUCTURAL_LIMIT
-                || self.values > WASM_VALUE_LIMIT
-                || self.terms > WASM_TRIPLE_TERM_DEPTH)
-        {
-            return Err(ParseError::HostStackExhausted {
-                construct: "query algebra",
-                at: 0,
-            });
-        }
-        Ok(())
-    }
-}
-
-impl GraphPattern {
-    /// Refuse this pattern when it is too tall for the walks over it: the height half of
-    /// [`Query::validate`], without its checks of IRIs, variables and literals, for a
-    /// pattern about to be evaluated where the stack left may differ from where it was
-    /// admitted — a raw pattern handed to the evaluator, a prepared query run on another
-    /// thread, a pre-bound copy.
-    ///
-    /// Walks borrowed nodes iteratively, so it needs no more stack than it measures.
-    /// Returns how deeply the pattern's triple terms nest — pattern and `VALUES` triple
-    /// terms, and `TRIPLE` calls, each of which builds one around its arguments — so an
-    /// evaluator can reserve the stack walks over them take (see
-    /// [`purrdf_stack::reserve`]); `0` when the pattern has none.
-    ///
-    /// # Errors
-    ///
-    /// [`ParseError::StackExhausted`] when a walk as tall as the pattern (every node
-    /// kind counted: patterns, expressions, paths, terms) does not fit the stack left
-    /// on the calling thread past [`purrdf_stack::MARGIN_BYTES`], at the parser's
-    /// per-level charge; on `wasm32`, [`ParseError::HostStackExhausted`] when it is also
-    /// past the parser's host-stack counts.
-    pub fn validate_height(&self) -> Result<usize> {
-        let mut stack = vec![(NodeRef::Pattern(self), Depth::ROOT)];
-        let mut fits = 0;
-        let mut terms = 0;
-        while let Some((node, depth)) = stack.pop() {
-            depth.admit(&mut fits)?;
-            let below = depth.below(node);
-            terms = terms.max(below.terms);
-            below.push_children(node, &mut stack);
-        }
-        Ok(terms)
-    }
-}
-
 impl TermPattern {
     /// How many triple terms this term's longest chain holds, the outermost included:
     /// `0` for an IRI, blank node, literal or variable, `1` for `<<( ?s ?p ?o )>>`, `2`
@@ -188,12 +67,12 @@ impl Query {
     /// Blank labels remain opaque identifiers, including scope-qualified labels.
     /// Registry admission belongs to the evaluator, which owns those registries.
     ///
+    /// Walks the tree over a work list, so a tree of any height is checked without
+    /// recursion; how tall a tree may be to be *evaluated* is the evaluator's to decide.
+    ///
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, and malformed typed calls or ranges; and,
-    /// with [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
-    /// the stack the calling thread has left (on `wasm32`, one past the parser's
-    /// host-stack counts with [`ParseError::HostStackExhausted`]). How deeply triple terms nest is bounded by that stack alone.
+    /// collisions, and malformed typed calls or ranges.
     pub fn validate(&self) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
@@ -227,14 +106,14 @@ impl Query {
         if let Some(base) = base {
             purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
         }
-        let mut stack = vec![(NodeRef::Pattern(pattern), Depth::ROOT)];
+        let mut stack = vec![NodeRef::Pattern(pattern)];
         match self {
             Self::Construct { template, .. } => {
                 for quad in template {
                     if let Some(graph) = &quad.graph {
                         named(graph)?;
                     }
-                    stack.push((NodeRef::Triple(&quad.triple), Depth::ROOT));
+                    stack.push(NodeRef::Triple(&quad.triple));
                 }
             }
             Self::Describe { targets, .. } => {
@@ -244,14 +123,9 @@ impl Query {
             }
             Self::Select { .. } | Self::Ask { .. } => {}
         }
-        // The tallest level whose walk has been found to fit the stack: every node no
-        // deeper than it needs no second look, so the stack is read once per level of
-        // height rather than once per node.
-        let mut fits = 0;
-        while let Some((node, depth)) = stack.pop() {
-            depth.admit(&mut fits)?;
+        while let Some(node) = stack.pop() {
             check(node)?;
-            depth.below(node).push_children(node, &mut stack);
+            node.for_each_child(|child| stack.push(child));
         }
         Ok(())
     }

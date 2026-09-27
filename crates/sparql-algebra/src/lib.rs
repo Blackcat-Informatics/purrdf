@@ -101,14 +101,9 @@ pub use ast::{
     QuadPattern, TermPattern, TriplePattern, Variable,
 };
 pub use error::{ParseError, Result};
-#[allow(
-    deprecated,
-    reason = "the deprecated limits stay exported so code naming them still compiles"
-)]
-pub use parser::{MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES};
 pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
-    WASM_GRAPH_PATTERN_DEPTH, WASM_HOST_STACK_BUDGET, builtin_function_keyword,
+    builtin_function_keyword,
 };
 pub use serialize::pattern_to_select_query;
 pub use tree::{Args, Chain, Child, NonEmpty, Subtree};

@@ -8,9 +8,10 @@
 //! instance's memory in an unknown state. A bound on how deeply a request may nest does
 //! not bound the stack handling it needs — a level of one construct can cost a hundred
 //! times a level of another, and the thread it runs on may be small — so the SPARQL
-//! parser (`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) measure the
-//! stack actually left at every recursive entry and refuse, typed, when less than
-//! [`MARGIN_BYTES`] remain. This crate is that measurement, in one place: one floor per
+//! evaluator (`purrdf-sparql-eval`) measures the stack actually left at every recursive
+//! entry and refuses, typed, when less than [`MARGIN_BYTES`] remain. (The SPARQL parser,
+//! `purrdf-sparql-algebra`, keeps a request's nesting on heap-allocated stacks and does
+//! not recurse on it.) This crate is that measurement, in one place: one floor per
 //! thread, one margin, the walk scopes that let a recursion with no error channel refuse
 //! too ([`walk`], [`walk_is_low`]), the stack a computation keeps out of reach of its
 //! own checks for walks it knows it will make ([`reserve`], [`widen`]), and the functions
@@ -59,7 +60,7 @@
 //! A check refuses when less than [`MARGIN_BYTES`] remain, so the margin must hold the
 //! deepest chain of frames any guarded path can push *between two checks*, plus the
 //! non-recursive work that runs after the last one. See [`MARGIN_BYTES`] for the measured
-//! figures, for the evaluator and for the parser.
+//! figures.
 //!
 //! # Walk scopes
 //!
@@ -122,22 +123,7 @@ mod platform;
 ///   requests, governed ones, updates and in-process `SERVICE` calls found no other abort
 ///   in the evaluator.
 ///
-/// **The parser** checks at its one recursion guard, which every production that can
-/// reach itself again enters through, so what is left between two checks is one written
-/// level of one construct (at most a sub-`SELECT`'s 8.5 KiB), its leaves, and the walks
-/// over a finished operator or property-path chain — which a loop builds at no stack
-/// cost, and which the parser builds only where a walk of its whole height fits the
-/// stack left past this margin. Swept the same way — the margin lowered, the stack left
-/// for a parse stepped by 2 KiB from 20 KiB, over every recursive production nested 127
-/// levels deep and 380- to 511-operator expression and path chains, when chains were
-/// still binary trees that recursed once per operator, at the top and 120 levels
-/// down — a 48 KiB margin aborted on a 510-step property-path chain and a 64 KiB one
-/// answered or refused every run; at 128 KiB, a 4 KiB-step sweep from 32 KiB to 828 KiB
-/// left found no abort. The parser's own tests sweep forms nested hundreds of levels
-/// deep the same way, and walk every tree they parse from the frame that parsed it.
-///
-/// 128 KiB is eight times the evaluator's widest interval and twice the parser's. The
-/// rest is room for what the sweeps cannot see: host code a leaf calls (a registered
+/// 128 KiB is eight times the evaluator's widest interval. The rest is room for what the sweeps cannot see: host code a leaf calls (a registered
 /// function, relation or aggregate, a `SERVICE` transport), and the derived copy and
 /// comparison of terms up to 128 triple-term levels deep (a computation walking deeper
 /// ones keeps what they take out of reach with [`reserve`]). It
@@ -159,11 +145,7 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// reached was 11 064 bytes above the floor — 5 320 bytes past the point the check
 /// refuses at. Only address-taken locals live on the shadow stack, so its levels are
 /// smaller than their native twins, and host code (a JavaScript function or resolver)
-/// runs on the engine's own stack, not on this one. **The parser's** frames cost 0.37 to
-/// 0.45 of their native size on the shadow stack — at most 3.2 KiB for a written
-/// sub-`SELECT` level, 1.8 KiB for a built-in call — so its widest native interval, the
-/// walks over a 510-step path chain when chains were binary (between 48 and 64 KiB),
-/// comes to under 29 KiB at those ratios.
+/// runs on the engine's own stack, not on this one.
 ///
 /// 64 KiB is twelve times the measured interval. It leaves the synchronous lane 960 KiB
 /// of its 1 MiB — 63 nested `FILTER EXISTS`, which reached 96% of the stack before the
@@ -171,9 +153,9 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// trap and corrupt the instance — and an asynchronous job's poll-time guard band lies
 /// below it (half of it, above the job's region's base), so a job's checked frames are
 /// refused here, with the same typed error the synchronous lane gives, before any poll
-/// could reach the band, which stops only polling frames no check guards. The parser checks against the same margin, so a parse deeper
-/// than a lane's shadow stack is refused there too; the host engine's own call stack,
-/// which this crate cannot read, the SPARQL parser bounds with a budget of its own.
+/// could reach the band, which stops only polling frames no check guards. The host
+/// engine's own call stack, which this crate cannot read, the SPARQL evaluator bounds with
+/// a budget of its own.
 #[cfg(target_arch = "wasm32")]
 pub const MARGIN_BYTES: usize = 64 * 1024;
 
@@ -490,8 +472,7 @@ impl Drop for Reserve {
 /// Once a level has refused, the rest of the walk must not go on computing over the
 /// placeholder it left — a later level could trip an internal consistency assertion on a
 /// tree it half-built — so the refusal also replaces the running context's floor with
-/// [`EXHAUSTED`]: every check in that context, in every walk, in the evaluator and in the
-/// parser alike, then refuses at once, and the walk unwinds to this scope level by level
+/// [`EXHAUSTED`]: every check in that context, in every walk, then refuses at once, and the walk unwinds to this scope level by level
 /// without doing any more work. The real floor is put back when the scope closes.
 ///
 /// Scopes nest: the enclosing scope's state (and, after a refusal, the floor) is put back

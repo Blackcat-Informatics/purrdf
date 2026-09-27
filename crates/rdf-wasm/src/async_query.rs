@@ -59,7 +59,7 @@
 //! by counting call sites.
 //!
 //! Inside the region two guards read one measurement. The run installs the region's base
-//! as the stack floor the parser's and evaluator's guards measure against, with no walk
+//! as the stack floor the evaluator's guards measure against, with no walk
 //! scope open (`purrdf_stack::replace_context`, which swaps the floor and the evaluator's
 //! walk-scope state together), puts the context's own back before every suspension,
 //! reinstalls the job's on every resumption (recording the resuming context's as the one
@@ -68,10 +68,10 @@
 //! suspended is against the stack actually running, and a walk scope the job suspends
 //! inside (a property path's traversal polls, and so yields) stays the job's: nothing
 //! that runs while it waits latches a refusal in it, and the jobs close their scopes in
-//! whatever order they are resumed. The parser and the evaluator check that
-//! measurement at every recursive step — an operator chain, a nested `EXISTS` walk, a
-//! property path's traversal — and refuse with their own typed errors
-//! (`native-sparql-evaluation-stack-exhausted`, the parser's stack refusal) while
+//! whatever order they are resumed. The evaluator checks that measurement at every
+//! recursive step — an operator chain, a nested `EXISTS` walk, a property path's
+//! traversal — and refuses with its own typed error
+//! (`native-sparql-evaluation-stack-exhausted`) while
 //! `purrdf_stack::MARGIN_BYTES` (64 KiB) are still left: the very refusal the synchronous
 //! twin gives, with the region's size and `stackBytes` named as the remedy. The
 //! [`JspiStopWatch`] is the last resort beneath them, for polling frames no check guards:
@@ -86,8 +86,8 @@
 //! into the region's fault. The poll also records the low-water mark, reported as
 //! [`AsyncEvidence::stack_high_water_bytes`].
 //!
-//! Work that neither polls nor is the evaluator's — parsing, serializing — can still
-//! recurse past the base between two polls. Beneath every base lies an overrun zone
+//! Work that neither polls nor is the evaluator's can still recurse past the base between
+//! two polls. Beneath every base lies an overrun zone
 //! ([`STACK_OVERRUN_ZONE_BYTES`], filled with a known byte) that absorbs such frames
 //! inside the job's own allocation. The first poll after one sees the canary it
 //! overwrote and stops the job with the same typed exhaustion error; when the run
@@ -286,17 +286,17 @@ const DEFAULT_YIELD_EVERY_POLLS: u32 = 65_536;
 const DEFAULT_STACK_BYTES: u32 = 2 * 1024 * 1024;
 
 /// The smallest region a job may run on: 512 KiB, so a job always has at least 448 KiB
-/// of stack above the point the parser's and evaluator's checks refuse at.
+/// of stack above the point the evaluator's checks refuse at.
 const MIN_STACK_BYTES: u32 = 512 * 1024;
 
-/// The guard band at the base of a region: half the margin the parser's and evaluator's
-/// checks refuse at. A poll whose frame reaches it stops the job — with the region's
+/// The guard band at the base of a region: half the margin the evaluator's checks refuse
+/// at. A poll whose frame reaches it stops the job — with the region's
 /// fault — before a deeper frame can leave the region.
 ///
 /// It must lie below the margin. Every check measures against the region's base (the
 /// floor [`JobInner::run`] installs, raised by whatever the evaluation reserved) and
 /// refuses once less than [`purrdf_stack::MARGIN_BYTES`] are left, so a frame that
-/// checks is refused with the evaluator's (or parser's) own typed error — the refusal
+/// checks is refused with the evaluator's own typed error — the refusal
 /// its synchronous twin gives — at least `MARGIN_BYTES - STACK_GUARD_BYTES` above the
 /// band. Only frames that poll but never check can reach the band; a band wider than the
 /// margin would pre-empt every typed refusal with this fault instead.
@@ -309,10 +309,9 @@ const _: () = assert!(
 
 /// The overrun zone below every region's base: 1 MiB.
 ///
-/// The guard band only stops frames that *poll*, and the parser's and evaluator's own
-/// stack guards only frames that parse or evaluate. Work that is none of these —
-/// serializing the answer, the walks over a parsed tree — can recurse past the region's
-/// base, and below the base lies other heap memory: an overrun there would corrupt it silently. So
+/// The guard band only stops frames that *poll*, and the evaluator's own stack guards only
+/// frames that evaluate. Work that is neither can recurse past the region's base, and
+/// below the base lies other heap memory: an overrun there would corrupt it silently. So
 /// every region is allocated with this many bytes beneath its base, filled with
 /// [`STACK_ZONE_FILL`], and inspected when the run returns (see [`StackRegion::overrun`]):
 /// an overrun that stayed above the zone's floor ([`STACK_OVERRUN_FLOOR_BYTES`]) touched

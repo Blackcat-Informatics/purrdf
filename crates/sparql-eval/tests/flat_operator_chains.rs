@@ -397,28 +397,30 @@ fn tall(levels: usize) -> String {
     format!("SELECT ?s WHERE {{ ?s <{EX}p> ?v FILTER({expression}) }}")
 }
 
-/// Assert `result` is a typed stack refusal: the parser's, or the evaluator's.
+/// Assert `result` is the evaluator's typed stack refusal.
 fn assert_stack_refusal(result: Result<SparqlResult, RdfDiagnostic>, what: &str) {
     let diagnostic = result.expect_err(&format!("{what} is refused"));
     assert!(
-        diagnostic.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-            || diagnostic.message.contains("SPARQL parse stack exhausted"),
+        diagnostic.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
         "{what}: {diagnostic:?}"
     );
 }
 
-/// What really nests is bounded by the stack, not by a count: brackets and groups
-/// past the removed 128-level recursion budget, and an operator tree past the removed
-/// 512-level height budget, answer on a test thread — with the one subject its
-/// innermost condition names, not the whole dataset — and nested ten thousand deep they
-/// are the typed stack refusal.
+/// What really nests is bounded by the stack, not by a count. Brackets, and groups
+/// around a single element, build no node: nested ten thousand deep they answer on a
+/// test thread — with the one subject the innermost condition names, not the whole
+/// dataset. An operator tree past 512 levels of height answers there too, and one
+/// seventy thousand levels tall is the evaluator's typed stack refusal.
 #[test]
 fn true_nesting_is_bounded_by_the_stack() {
     assert_eq!(sorted_rows(run(&bracketed(200))), vec![row(&[("s", "a")])]);
-    assert_stack_refusal(run(&bracketed(10_000)), "10 000 nested brackets");
+    assert_eq!(
+        sorted_rows(run(&bracketed(10_000))),
+        vec![row(&[("s", "a")])]
+    );
 
     assert_eq!(sorted_rows(run(&grouped(200))), vec![row(&[("s", "b")])]);
-    assert_stack_refusal(run(&grouped(10_000)), "10 000 nested groups");
+    assert_eq!(sorted_rows(run(&grouped(10_000))), vec![row(&[("s", "b")])]);
 
     assert_eq!(sorted_rows(run(&tall(75))), vec![row(&[("s", "a")])]);
     assert_stack_refusal(run(&tall(10_000)), "a 70 000-level operator tree");

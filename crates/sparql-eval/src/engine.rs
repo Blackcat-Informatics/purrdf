@@ -262,11 +262,9 @@ fn plan_payload_bytes(
 /// reads as strictness, and a caller that only prepares a plan gets an error for a
 /// plan that was always legal to prepare.
 ///
-/// The stack-safety backstop admission DOES need is already here:
-/// [`purrdf_sparql_algebra::Query::validate`] refuses, iteratively and typed, a tree
-/// whose walks do not fit the stack left on the admitting thread, before the recursive
-/// feasibility pass below descends it — the parser's own measure, so a query the
-/// parser built on this thread passes it.
+/// The stack-safety backstop admission DOES need is already here: [`admit_structure`]
+/// refuses, iteratively and typed, a tree whose walks do not fit the stack left on the
+/// admitting thread, before the recursive feasibility pass below descends it.
 ///
 /// `parameters` are the variables a prepared execution will bind on every run — see
 /// [`NativeSparqlEngine::prepare_execution`] — and are counted as bound where that
@@ -278,7 +276,7 @@ fn admit_algebra(
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
     reach: ShaclPrebinding,
 ) -> Result<Option<Query>, RdfDiagnostic> {
-    query.validate().map_err(algebra_diagnostic)?;
+    admit_structure(query)?;
     crate::property_fn_plan::plan_query(query, relations, aggregates, parameters, reach)
         .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
@@ -578,7 +576,7 @@ impl PlanCache {
         }
         let parsed = parser
             .parse_query_with(query, options)
-            .map_err(|e| parse_diagnostic(e, "native-sparql-query-parse"))?;
+            .map_err(|e| parse_diagnostic(&e, "native-sparql-query-parse"))?;
         let planned = admit_algebra(
             &parsed,
             relations,
@@ -1675,7 +1673,7 @@ impl NativeSparqlEngine {
         let options = env.parser_options();
         parser
             .parse_update_with(request.query, options)
-            .map_err(|e| parse_diagnostic(e, "native-sparql-update-parse"))
+            .map_err(|e| parse_diagnostic(&e, "native-sparql-update-parse"))
     }
 
     /// The one **ungoverned** options-carrying UPDATE entry, parameterized by
@@ -3615,58 +3613,42 @@ fn check_prepared_registries_unchanged(
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`).
+/// An [`RdfDiagnostic`] if the algebra is invalid or too tall for the stack left (see
+/// [`admit_structure`]).
 fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
-    prepared.query.validate().map_err(algebra_diagnostic)
+    admit_structure(&prepared.query)
 }
 
-/// The diagnostic for request text the parser refused: `code` (the query or update parse
-/// code), except for the two stack refusals. A request past the `wasm32` host-stack
-/// budget ([`purrdf_sparql_algebra::ParseError::HostStackExhausted`]) carries
-/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`] — no stack a caller sizes answers it —
-/// and one past the parsing thread's own stack
-/// ([`purrdf_sparql_algebra::ParseError::StackExhausted`]) carries
-/// [`crate::EvalError::PARSE_STACK_EXHAUSTED_CODE`], which a larger stack answers; a host
-/// reads either code rather than a parse failure's.
-fn parse_diagnostic(error: purrdf_sparql_algebra::ParseError, code: &'static str) -> RdfDiagnostic {
-    if matches!(
-        error,
-        purrdf_sparql_algebra::ParseError::HostStackExhausted { .. }
-    ) {
-        let error = crate::error::EvalError::from(error);
-        return RdfDiagnostic::error(eval_diagnostic_code(&error, code), error.to_string());
-    }
-    if matches!(
-        error,
-        purrdf_sparql_algebra::ParseError::StackExhausted { .. }
-    ) {
-        return RdfDiagnostic::error(
-            crate::error::EvalError::PARSE_STACK_EXHAUSTED_CODE,
-            error.to_string(),
-        );
-    }
+/// The diagnostic for request text the parser refused: `code`, the query or update parse
+/// code.
+fn parse_diagnostic(
+    error: &purrdf_sparql_algebra::ParseError,
+    code: &'static str,
+) -> RdfDiagnostic {
     RdfDiagnostic::error(code, error.to_string())
 }
 
-/// The diagnostic for an algebra [`purrdf_sparql_algebra::Query::validate`] refused: a
-/// tree too tall for the stack left is the evaluation's own stack refusal
+/// Admit `query`'s structure: its height against the stack left here, for the recursive
+/// passes that walk it next ([`crate::stack::height::admit_query`]), then
+/// [`purrdf_sparql_algebra::Query::validate`]'s invariants.
+///
+/// # Errors
+///
+/// A tree too tall for the stack left is the evaluation's own stack refusal
 /// ([`crate::EvalError::STACK_EXHAUSTED_CODE`], which tells a host a larger stack answers
 /// it), one past the `wasm32` host-stack bounds is
-/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`], and every other refusal is
-/// `native-sparql-algebra`.
-fn algebra_diagnostic(error: purrdf_sparql_algebra::ParseError) -> RdfDiagnostic {
-    if matches!(
-        error,
-        purrdf_sparql_algebra::ParseError::StackExhausted { .. }
-            | purrdf_sparql_algebra::ParseError::HostStackExhausted { .. }
-    ) {
-        let error = crate::error::EvalError::from(error);
-        return RdfDiagnostic::error(
+/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`], and every refusal of
+/// [`purrdf_sparql_algebra::Query::validate`] is `native-sparql-algebra`.
+fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
+    crate::stack::height::admit_query(query).map_err(|error| {
+        RdfDiagnostic::error(
             eval_diagnostic_code(&error, "native-sparql-algebra"),
             error.to_string(),
-        );
-    }
-    RdfDiagnostic::error("native-sparql-algebra", error.to_string())
+        )
+    })?;
+    query
+        .validate()
+        .map_err(|error| RdfDiagnostic::error("native-sparql-algebra", error.to_string()))
 }
 
 /// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
@@ -6955,7 +6937,7 @@ mod tests {
                 );
 
                 // Ten thousand levels prepare here too — admission is this thread's
-                // measure — but their walks need 5 MB at the parser's 512-byte charge,
+                // measure — but their walks need 5 MB at the admission's 512-byte charge,
                 // more than the C library hands a 256 KiB request, so the same plan
                 // evaluated there is the evaluation's own typed stack refusal. The
                 // plan is built and dropped here, where its drop fits.

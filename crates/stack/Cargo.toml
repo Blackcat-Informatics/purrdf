@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-stack"
-description = "How much stack the running thread has left — natively from the operating system's thread limit, on wasm32 from the shadow stack against an installable floor — and the margin the SPARQL parser and evaluator refuse at instead of overflowing"
+description = "How much stack the running thread has left — natively from the operating system's thread limit, on wasm32 from the shadow stack against an installable floor — and the margin the SPARQL evaluator refuses at instead of overflowing"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

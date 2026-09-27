@@ -157,12 +157,12 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// setup (a fresh solution buffer, the interned egress) is not free. What this pin
 /// claims is narrower and achievable — that the cost is a FIXED constant, independent
 /// of how many times the execution has already run — which is what
-/// `re_running_a_prepared_execution_costs_27_allocations` asserts against it, at every
+/// `re_running_a_prepared_execution_costs_25_allocations` asserts against it, at every
 /// one of [`MEASURED_RUNS`] consecutive steady-state runs. If this ever moves,
 /// re-measure with `without_memo_verification` bracketing the window exactly as the
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 27;
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 25;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
@@ -213,7 +213,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
 }
 
 #[test]
-fn re_running_a_prepared_execution_costs_27_allocations() {
+fn re_running_a_prepared_execution_costs_25_allocations() {
     let ds = dataset(8);
     assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
@@ -472,20 +472,20 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 ///   per IRI in the query and now asks `purrdf_iri::is_absolute`, which runs the
 ///   identical grammar over a borrow — one heap `String` per IRI per call, gone.
 ///
-/// Measured on this revision at **59**, against **65** before those two changes, over
-/// [`PREPARED_PLAN_QUERY`]'s three distinct IRIs — and the six decompose exactly,
-/// each half isolated by reverting one change at a time and re-measuring:
+/// Measured on this revision at **56**, against **65** without the three changes below,
+/// over [`PREPARED_PLAN_QUERY`]'s three distinct IRIs — and the nine decompose exactly,
+/// each part isolated by reverting one change at a time and re-measuring:
 ///
 /// * 65 → 62 when the IRI admission stopped owning: **three**, one `String` per IRI
 ///   occurrence in the algebra, which is why this fixture's query carries three
 ///   distinct IRIs rather than one;
 /// * 62 → 59 when the duplicate nesting walk went: **three**, the traversal stack
 ///   that second walk allocated and grew on every call.
-/// * 59 → 58 when the per-evaluation walk that remained stopped counting graph-pattern
-///   levels and measured the whole plan's height against the stack instead
-///   (`GraphPattern::validate_height`): **one**, measured with each walk alone in
-///   place — the old walk costs this fixture 59, the new one 58.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 58;
+/// * 59 → 56 with the height admission (`stack::height`) keeping a shallow plan's
+///   pending nodes inline, for the per-call admission beside `Query::validate` and the
+///   per-evaluation one alike: **three**, the traversal stack the per-evaluation walk
+///   grew, and neither admission allocates for this fixture.
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 56;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

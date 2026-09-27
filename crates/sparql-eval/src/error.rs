@@ -320,10 +320,10 @@ pub enum EvalError {
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 
     /// The request nests deeper than the stack of the thread evaluating it can hold:
-    /// `construct` was about to be evaluated — or parsed a level deeper, when the parse
-    /// is the one that ran out ([`ParseError::StackExhausted`]) — with less than
+    /// `construct` was about to be evaluated with less than
     /// [`purrdf_stack::MARGIN_BYTES`] of stack left, or the plan (`"query algebra"`) is
-    /// too tall for the walks over it to fit the stack its evaluation starts on.
+    /// too tall for the evaluator's walks over it to fit the stack its evaluation starts
+    /// on.
     ///
     /// Its own variant because nothing about the request is malformed and nothing about
     /// the data is wrong: the same request answers
@@ -339,10 +339,10 @@ pub enum EvalError {
     },
 
     /// On `wasm32`, the request nests deeper than the JavaScript engine's own call
-    /// stack holds: the parser's host-stack budget refused it
-    /// ([`ParseError::HostStackExhausted`]), or its graph patterns nest deeper than
-    /// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] levels, the depth that budget
-    /// admits (`construct` is then `"graph pattern"`). Never raised on another target.
+    /// stack holds: the plan is past the host-stack bounds of its admission
+    /// (`construct` is then `"query algebra"`), or its graph patterns nest deeper than
+    /// the depth the host-stack budget admits (`construct` is then `"graph pattern"`).
+    /// Never raised on another target.
     ///
     /// Its own variant rather than [`Self::StackExhausted`] because no stack a caller
     /// sizes answers it: the engine's call stack is about 984 KiB under V8 on the
@@ -609,8 +609,8 @@ impl core::fmt::Display for EvalError {
                  budgeted for a request, {} nested graph patterns at most, the same on the \
                  synchronous and the asynchronous lane; a larger stackBytes does not raise \
                  it); nest the request less deeply",
-                purrdf_sparql_algebra::WASM_HOST_STACK_BUDGET,
-                purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH
+                crate::stack::height::WASM_HOST_STACK_BUDGET,
+                crate::stack::height::WASM_GRAPH_PATTERN_DEPTH
             ),
         }
     }
@@ -619,18 +619,9 @@ impl core::fmt::Display for EvalError {
 impl std::error::Error for EvalError {}
 
 impl From<ParseError> for EvalError {
-    /// A parse that ran out of stack is [`EvalError::StackExhausted`], with the
-    /// diagnostic code a host reads to know a larger stack answers the request; one past
-    /// the host-stack budget is [`EvalError::HostStackExhausted`]; every other parse
-    /// failure is [`EvalError::Parse`].
+    /// A parse failure is [`EvalError::Parse`].
     fn from(err: ParseError) -> Self {
-        match err {
-            ParseError::StackExhausted { construct, .. } => Self::StackExhausted { construct },
-            ParseError::HostStackExhausted { construct, .. } => {
-                Self::HostStackExhausted { construct }
-            }
-            other => Self::Parse(other.to_string()),
-        }
+        Self::Parse(err.to_string())
     }
 }
 
@@ -708,8 +699,7 @@ mod tests {
     }
 
     /// The host-stack refusal has its own code, and its message names the budget and
-    /// no larger stack as a remedy: no stack a caller sizes raises it. The parser's
-    /// refusal converts to it, and the shadow-stack one does not.
+    /// no larger stack as a remedy: no stack a caller sizes raises it.
     #[test]
     fn host_stack_exhausted_carries_its_own_code_and_names_no_larger_stack() {
         let e = EvalError::HostStackExhausted {
@@ -729,23 +719,5 @@ mod tests {
         );
         assert!(text.ends_with("nest the request less deeply"), "{text}");
         assert!(!text.contains("thread"), "{text}");
-        assert_eq!(
-            EvalError::from(ParseError::HostStackExhausted {
-                construct: "bracketted expression",
-                at: 3,
-            }),
-            EvalError::HostStackExhausted {
-                construct: "bracketted expression"
-            }
-        );
-        assert_eq!(
-            EvalError::from(ParseError::StackExhausted {
-                construct: "bracketted expression",
-                at: 3,
-            }),
-            EvalError::StackExhausted {
-                construct: "bracketted expression"
-            }
-        );
     }
 }

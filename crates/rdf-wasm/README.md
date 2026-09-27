@@ -172,8 +172,8 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   each job's shadow-stack region and `evidence.async` reports what the job did, its stack
   high-water mark included. It does not raise the budget kept under V8's own call stack,
   which is the same size on both lanes: a request past it
-  (`native-sparql-host-stack-exhausted`, 637 nested parentheses or 283 nested groups on
-  either lane) must nest less deeply. A job that overruns its region's guard zone poisons the instance.
+  (`native-sparql-host-stack-exhausted`, graph patterns nested past 284 levels on either
+  lane) must nest less deeply. A job that overruns its region's guard zone poisons the instance.
 - **Hosts** — JSPI is on by default in Chrome and Edge 137+, Firefox 139+, Safari 27,
   Node 24.20+ and Cloudflare Workers (workerd). `hasAsyncQueries()` reports it; without
   it the twins reject before touching wasm and the synchronous API is unchanged. On

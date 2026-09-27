@@ -817,25 +817,24 @@ where
 /// Every recursive step of the evaluation measures the stack it has left and refuses,
 /// typed, when it runs low; what this guards is the rest — the walks with no stack check
 /// that run once over the whole plan before its first operator (planning, blank-node
-/// scoping, the endpoint and parallel analyses), and the derived copies, comparisons and
-/// drops of the tree. So the whole tree is measured, iteratively, against the stack the
-/// evaluation starts on ([`GraphPattern::validate_height`], the parser's own per-level
-/// charge): a parsed query, a prepared one run on another thread and a pattern built
-/// through [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
+/// scoping, the endpoint and parallel analyses). So the whole tree is measured,
+/// iteratively, against the stack the evaluation starts on ([`crate::stack::height`]): a
+/// parsed query, a prepared one run on another thread and a pattern built through
+/// [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
 /// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
 /// where it does not.
 ///
 /// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
 /// evaluation's recursion too, so graph patterns nested deeper than
-/// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
+/// [`crate::stack::height::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
 /// [`crate::EvalError::HostStackExhausted`].
 ///
 /// Returns how deeply the pattern's triple terms nest, for the reserve walks over them
 /// take ([`crate::stack::reserve_terms`]).
 pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize, crate::EvalError> {
-    let terms = root.validate_height().map_err(crate::EvalError::from)?;
+    let terms = crate::stack::height::admit_pattern(root)?;
     if cfg!(target_arch = "wasm32") {
-        let limit = purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH;
+        let limit = crate::stack::height::WASM_GRAPH_PATTERN_DEPTH;
         let mut stack = vec![(root, 1_usize)];
         while let Some((node, depth)) = stack.pop() {
             if depth > limit {

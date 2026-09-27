@@ -7,10 +7,11 @@ How much stack the running thread has left, for the PurRDF SPARQL stack.
 
 Running out of stack is not an error anywhere: natively the process aborts, and
 on `wasm32-unknown-unknown` the shadow stack runs below its floor and traps with
-the instance's memory in an unknown state. The SPARQL parser
-(`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) therefore measure
-the stack actually left at every recursive entry and refuse, typed, when less
-than `MARGIN_BYTES` remain. This crate is that measurement, in one place:
+the instance's memory in an unknown state. The SPARQL evaluator
+(`purrdf-sparql-eval`) therefore measures the stack actually left at every
+recursive entry and refuses, typed, when less than `MARGIN_BYTES` remain. (The
+SPARQL parser, `purrdf-sparql-algebra`, does not recurse on a request's nesting
+and needs no such check.) This crate is that measurement, in one place:
 
 * `remaining` — the bytes left below the calling frame before the thread's
   stack floor.
