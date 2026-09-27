@@ -663,11 +663,11 @@ const walkAnswer = (engine, ds, depth) => {
         .sort(),
     };
   } catch (error) {
-    // Far past the limit the parser refuses before the evaluator is reached (the
-    // host-stack budget); either is typed, and the pair below asserts the evaluator's own refusal at the limit.
+    // Far past the limit the host-stack budget refuses before evaluation starts; either
+    // refusal is typed, and the pair below asserts the evaluator's own refusal at the limit.
     assert.match(
       error.message,
-      /native-sparql-evaluation-stack-exhausted|SPARQL parse stack exhausted|native-sparql-host-stack-exhausted/,
+      /native-sparql-evaluation-stack-exhausted|native-sparql-host-stack-exhausted/,
       `${depth} nested FILTER NOT EXISTS: a typed stack refusal, not a trap`,
     );
     return { refused: error.message };

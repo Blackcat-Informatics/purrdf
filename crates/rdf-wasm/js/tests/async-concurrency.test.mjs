@@ -487,48 +487,26 @@ test("admitted nesting too deep for the smallest region is a typed error there, 
   assert.equal(code(asyncRefusal), code(syncRefusal), asyncRefusal);
 });
 
-// Nesting is bounded by the stacks a job runs on, not by a count: its region's shadow
-// stack, which the parser and evaluator measure, and V8's own suspendable stack, which
-// the host-stack budget stands in for. A FILTER nested 10 000 parentheses deep would
-// recurse through the parser without a poll, far past any region. On the smallest region
-// the parser's measurement of the region refuses it first, naming the region and
-// stackBytes; on a 64 MiB region, where the shadow stack never binds, the host-stack
-// budget refuses it with exactly the synchronous lane's text, naming no stackBytes remedy
-// — V8 gives a job's suspendable stack the same size as the synchronous lane's (the
-// smaller of `--stack-size` and `--wasm-stack-switching-stack-size`, 984 KiB by default),
-// and no region size changes it. Either way the instance is not poisoned.
+// Brackets build no node: a FILTER nested 10 000 parentheses deep parses to the same
+// expression as one pair, keeps its nesting in the parser's heap stacks rather than on
+// either stack a job runs on, and so answers on the smallest region, on the default and
+// on a 64 MiB one, and on the synchronous lane — with exactly the rows one pair answers.
+// Each job leaves the stack pointer idle and the instance unpoisoned.
 const parenthesizedFilter = (depth) =>
   `SELECT ?s WHERE { ?s <${EX}p> ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
 
-test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on every region, and the instance is not poisoned", async () => {
+test("a FILTER nested 10 000 parentheses deep answers what one pair answers, on every region and both lanes", async () => {
   const engine = new QueryEngine();
   const chain = Dataset.parse(CHAIN, "nquads");
-  // Twice: a trap or an overrun of the region's zone would poison the instance, and the
-  // second job would reject with the poison instead of the parser's refusal.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    await assert.rejects(
-      engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes: SMALL_REGION }),
-      (error) => {
-        assert.match(error.message, /^error native-sparql-parse-stack-exhausted: SPARQL parse stack exhausted .*bracketted expression/);
-        assert.equal(error.code, "native-sparql-parse-stack-exhausted");
-        assert.ok(error.message.endsWith(SMALL_REGION_HINT), error.message);
-        return true;
-      },
-    );
-    assert.equal(stackPointer(), IDLE);
-  }
-  let syncText;
-  try {
-    engine.select(chain, parenthesizedFilter(10_000));
-  } catch (error) {
-    syncText = error.message;
-  }
-  assert.match(syncText, HOST_STACK_REFUSAL);
-  for (const stackBytes of [undefined, 64 * 1024 * 1024]) {
-    await assert.rejects(engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes }), (error) => {
-      assert.equal(error.message, syncText, `the region of ${stackBytes ?? "the default"} bytes`);
-      return true;
-    });
+  const expected = engine.select(chain, parenthesizedFilter(1)).rowCount;
+  assert.ok(expected > 0, "the shallow neighbour answers rows");
+  assert.equal(engine.select(chain, parenthesizedFilter(10_000)).rowCount, expected);
+  assert.equal(stackPointer(), IDLE);
+  // Twice on the smallest region: a trap or an overrun of the region would poison the
+  // instance, and the second job would reject with the poison instead of answering.
+  for (const stackBytes of [SMALL_REGION, SMALL_REGION, undefined, 64 * 1024 * 1024]) {
+    const answer = await engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes });
+    assert.equal(answer.rowCount, expected, `the region of ${stackBytes ?? "the default"} bytes`);
     assert.equal(stackPointer(), IDLE);
   }
   // The instance is intact on both lanes.

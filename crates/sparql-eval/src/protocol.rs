@@ -1130,8 +1130,6 @@ pub enum FailureCode {
     QueryParse,
     /// The update text does not parse.
     UpdateParse,
-    /// The request nests deeper than the stack parsing it can hold.
-    ParseStackExhausted,
     /// On `wasm32`, the request nests deeper than the JavaScript engine's call stack holds.
     HostStackExhausted,
     /// A well-formed construct the engine refuses to evaluate as written.
@@ -1185,10 +1183,9 @@ pub enum FailureCode {
 
 impl FailureCode {
     /// Every variant, in declaration order.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 25] = [
         Self::QueryParse,
         Self::UpdateParse,
-        Self::ParseStackExhausted,
         Self::HostStackExhausted,
         Self::Unsupported,
         Self::CustomFunction,
@@ -1220,7 +1217,6 @@ impl FailureCode {
         match self {
             Self::QueryParse => "native-sparql-query-parse",
             Self::UpdateParse => "native-sparql-update-parse",
-            Self::ParseStackExhausted => EvalError::PARSE_STACK_EXHAUSTED_CODE,
             Self::HostStackExhausted => EvalError::HOST_STACK_EXHAUSTED_CODE,
             Self::Unsupported => EvalError::UNSUPPORTED_CODE,
             Self::CustomFunction => UnsupportedKind::CustomFunction.code(),
@@ -1388,7 +1384,6 @@ pub const fn problem_for(code: FailureCode) -> Problem {
     let (status, detail) = match code {
         FailureCode::QueryParse
         | FailureCode::UpdateParse
-        | FailureCode::ParseStackExhausted
         | FailureCode::HostStackExhausted
         | FailureCode::Unsupported
         | FailureCode::CustomFunction

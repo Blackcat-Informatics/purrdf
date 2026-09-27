@@ -224,16 +224,11 @@ impl JobError {
         &self.diagnostic.code
     }
 
-    /// Whether this is a shadow-stack refusal a larger stack answers: the evaluator's or
-    /// the parser's, each measured against the stack the lane ran on. The host-stack
-    /// refusal is not one: no lane's stack size changes the JavaScript engine's own.
+    /// Whether this is the shadow-stack refusal a larger stack answers: the evaluator's,
+    /// measured against the stack the lane ran on. The host-stack refusal is not one: no
+    /// lane's stack size changes the JavaScript engine's own.
     fn is_shadow_stack_refusal(&self) -> bool {
-        self.kind == JobErrorKind::Error
-            && [
-                EvalError::STACK_EXHAUSTED_CODE,
-                EvalError::PARSE_STACK_EXHAUSTED_CODE,
-            ]
-            .contains(&self.code())
+        self.kind == JobErrorKind::Error && self.code() == EvalError::STACK_EXHAUSTED_CODE
     }
 
     /// The message a JavaScript caller reads, with `lane`'s remedy appended to a stack
@@ -753,31 +748,27 @@ impl OperationInput<'_> {
 mod tests {
     use super::*;
 
-    /// A stack refusal gains its lane's remedy by its code; every neighbour — the
+    /// The stack refusal gains its lane's remedy by its code; every neighbour — the
     /// host-stack refusal, another parse failure, an evaluation failure, a fault quoting
     /// the code — keeps its words.
     #[test]
-    fn only_the_shadow_stack_refusals_gain_their_lanes_remedy() {
+    fn only_the_shadow_stack_refusal_gains_its_lanes_remedy() {
         let region = Lane::Async {
             region_bytes: 524_288,
         };
-        for code in [
-            EvalError::STACK_EXHAUSTED_CODE,
-            EvalError::PARSE_STACK_EXHAUSTED_CODE,
-        ] {
-            let error = JobError::diagnostic(RdfDiagnostic::error(code, "nested too deeply"));
-            assert_eq!(
-                error.rendered(region),
-                format!(
-                    "error {code}: nested too deeply; this asynchronous job ran on a stack \
-                     region of 524288 bytes — run it with a larger stackBytes"
-                )
-            );
-            assert_eq!(
-                error.rendered(Lane::Sync),
-                format!("error {code}: nested too deeply{SYNC_STACK_REMEDY}")
-            );
-        }
+        let code = EvalError::STACK_EXHAUSTED_CODE;
+        let error = JobError::diagnostic(RdfDiagnostic::error(code, "nested too deeply"));
+        assert_eq!(
+            error.rendered(region),
+            format!(
+                "error {code}: nested too deeply; this asynchronous job ran on a stack \
+                 region of 524288 bytes — run it with a larger stackBytes"
+            )
+        );
+        assert_eq!(
+            error.rendered(Lane::Sync),
+            format!("error {code}: nested too deeply{SYNC_STACK_REMEDY}")
+        );
         for error in [
             JobError::diagnostic(RdfDiagnostic::error(
                 EvalError::HOST_STACK_EXHAUSTED_CODE,
@@ -785,7 +776,7 @@ mod tests {
             )),
             JobError::diagnostic(RdfDiagnostic::error(
                 "native-sparql-query-parse",
-                "SPARQL syntax error at byte 9: SPARQL parse stack exhausted is not a keyword",
+                "SPARQL syntax error at byte 9: native-sparql-evaluation-stack-exhausted is not a keyword",
             )),
             JobError::diagnostic(RdfDiagnostic::error(
                 "native-sparql-query-eval",

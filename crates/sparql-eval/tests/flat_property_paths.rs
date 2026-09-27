@@ -499,12 +499,12 @@ fn modified_steps_inside_a_long_chain_keep_their_meaning() {
     assert_eq!(neighbour, vec![row(&["n3000"])]);
 }
 
-/// Assert `result` is a typed stack refusal: the parser's, or the evaluator's.
+/// Assert `result` is the evaluator's typed stack refusal.
 fn assert_stack_refusal(result: Result<SparqlResult, RdfDiagnostic>, what: &str) {
     let diagnostic = result.expect_err(&format!("{what} is refused"));
-    assert!(
-        diagnostic.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-            || diagnostic.message.contains("SPARQL parse stack exhausted"),
+    assert_eq!(
+        diagnostic.code,
+        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
         "{what}: {diagnostic:?}"
     );
 }

@@ -152,9 +152,9 @@ export interface SparqlEndpointOptions {
  *
  * - `400`, an operation that does not parse or that the engine refuses to evaluate as
  *   written (`detail` is the engine's message): `"native-sparql-query-parse"`,
- *   `"native-sparql-update-parse"`, `"native-sparql-parse-stack-exhausted"`,
- *   `"native-sparql-unsupported"`, `"native-sparql-custom-function"`,
- *   `"native-sparql-quoted-triple-term-variable"`, `"native-sparql-host-stack-exhausted"`;
+ *   `"native-sparql-update-parse"`, `"native-sparql-unsupported"`,
+ *   `"native-sparql-custom-function"`, `"native-sparql-quoted-triple-term-variable"`,
+ *   `"native-sparql-host-stack-exhausted"`;
  * - `403`, the host refused to contact a `SERVICE` endpoint or `LOAD` source the request
  *   named: `"native-sparql-service-denied"` and `"native-sparql-load-denied"` (the catalog
  *   withheld a capability), `"native-sparql-service-host-denied"` and

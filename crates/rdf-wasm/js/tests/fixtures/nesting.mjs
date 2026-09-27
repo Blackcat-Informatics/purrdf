@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 
 export const STACK_REFUSAL =
-  /SPARQL parse stack exhausted|evaluation stack exhausted|stack region exhausted|host call stack budget exceeded/;
+  /evaluation stack exhausted|stack region exhausted|host call stack budget exceeded/;
 /**
  * The host-stack refusal: the budget kept under the JavaScript engine's own call stack,
  * the same on both lanes and on every region, so it names no stackBytes remedy.

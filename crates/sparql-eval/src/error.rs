@@ -481,12 +481,6 @@ impl EvalError {
     /// answers it.
     pub const HOST_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-host-stack-exhausted";
 
-    /// The stable, machine-readable diagnostic code the parser's shadow-stack refusal
-    /// ([`ParseError::StackExhausted`]) carries at the `SparqlEngine` boundary, under a
-    /// query parse and an update parse alike: the request nests deeper than the stack
-    /// parsing it can hold, and a larger stack answers it.
-    pub const PARSE_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-parse-stack-exhausted";
-
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
     pub(crate) fn relation_incomplete(iri: impl Into<String>, reason: impl Into<String>) -> Self {

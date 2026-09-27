@@ -621,9 +621,6 @@ On the synchronous lane the same refusal names the asynchronous twin and a large
 `stackBytes` as the remedy instead. Parsing keeps a request's nesting in linear memory
 and spends neither stack on it.
 
-The parser's refusal carries its own code, `native-sparql-parse-stack-exhausted`, apart
-from a syntax error's `native-sparql-query-parse`.
-
 A region sizes only the shadow stack in linear memory. Every wasm call also takes frames
 on the JavaScript engine's own call stack, which no wasm code can read, and V8 (Node.js,
 Chromium, Cloudflare Workers) gives a job's suspendable stack the same size as the
@@ -724,7 +721,7 @@ pieces:
 | `200` | — | a query answered, with the negotiated document |
 | `204` | — | an update applied |
 | `400` | the protocol refusal's name | a malformed request, or dataset parameters applied to an operation that does not parse |
-| `400` | `native-sparql-query-parse`, `native-sparql-update-parse`, `native-sparql-parse-stack-exhausted` | the operation does not parse; `detail` is the parser's message |
+| `400` | `native-sparql-query-parse`, `native-sparql-update-parse` | the operation does not parse; `detail` is the parser's message |
 | `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, nesting past the host-stack budget); `detail` is the engine's message |
 | `403` | `native-sparql-service-denied` | the catalog withholds a capability from a `SERVICE` endpoint the query names; no endpoint was contacted |
 | `403` | `native-sparql-service-host-denied` | `resolveService` refused the request by its own policy (`{ kind: "denied" }`); no endpoint was contacted |
