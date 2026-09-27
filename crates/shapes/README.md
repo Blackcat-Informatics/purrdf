@@ -119,13 +119,14 @@ its `unexecuted` section as a finding.
 engine has no JavaScript engine. A shape that reaches SHACL-JS is refused with
 `ShapesError::ShaclJs`: `sh:js` or a SHACL-JS type on the shape, a `sh:JSTarget`
 or an instance of a `sh:JSTargetType` as its target, a `sh:JSRule` among its
-rules, a constraint component whose selected validator is a `sh:JSValidator`
-with no SPARQL validator beside it ("The values of sh:validator must be
-ASK-based validators", SHACL 1.2 SPARQL Extensions), and a call to a
-`sh:JSFunction` from a node expression or from SPARQL the shape runs. SHACL-JS
-that no shape reaches is declared vocabulary and loads inert, so a library that
-declares `sh:JSValidator`s beside SPARQL ones loads when its SPARQL declarations
-are well-formed.
+rules, and a call to a `sh:JSFunction` from a node expression or from SPARQL the
+shape runs. A `sh:JSLibrary` or a `sh:JSFunction` nothing calls is declared
+vocabulary and loads inert. A `sh:JSValidator` attached to a constraint
+component is not: "The values of sh:validator must be ASK-based validators", and
+the values of `sh:nodeValidator` and `sh:propertyValidator` "must be SELECT-based
+validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
+ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
+whether or not a shape uses the component.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL

@@ -45,15 +45,13 @@
 //! `unexecuted` section. The same query as the selected validator of a custom component
 //! a shape uses refuses the load ([`crate::ShapesError::Prebinding`]).
 //!
-//! # A SHACL-JS validator is inert vocabulary
+//! # A SHACL-JS validator is not a validator of any attachment
 //!
-//! A SHACL JavaScript Extensions `sh:JSValidator` is declared vocabulary, not a load
-//! error: libraries such as DASH declare them beside SPARQL validators, and this engine
-//! never runs one. On a built-in it is listed here as a
-//! [`ValidatorLanguage::JavaScript`] alternative, never parsed and never run. On a
-//! custom component it is refused only where a shape uses the component and the
-//! validator SHACL selects for that shape is JavaScript-only; a use with a SPARQL
-//! validator to select runs that one.
+//! A SHACL JavaScript Extensions `sh:JSValidator` is neither ASK- nor SELECT-based, so as
+//! a value of `sh:validator`, `sh:nodeValidator` or `sh:propertyValidator` it violates
+//! the attachment's class rule exactly as an untyped node does, and refuses the load
+//! ([`crate::ShapesError::IllFormed`]) on a built-in as on a custom component. It is
+//! never an alternative, so no language label names it.
 
 use crate::term::Term;
 
@@ -64,20 +62,15 @@ pub enum ValidatorLanguage {
     SparqlAsk,
     /// A SHACL instance of `sh:SPARQLSelectValidator`.
     SparqlSelect,
-    /// A SHACL JavaScript Extensions `sh:JSValidator`: declared vocabulary this engine
-    /// neither parses nor runs.
-    JavaScript,
 }
 
 impl ValidatorLanguage {
-    /// The stable kebab-case label every host prints: `sparql-ask`, `sparql-select` or
-    /// `javascript`.
+    /// The stable kebab-case label every host prints: `sparql-ask` or `sparql-select`.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::SparqlAsk => "sparql-ask",
             Self::SparqlSelect => "sparql-select",
-            Self::JavaScript => "javascript",
         }
     }
 }

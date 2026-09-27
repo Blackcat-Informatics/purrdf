@@ -78,10 +78,15 @@ The terms the SHACL vocabularies define and the engine refuses by name are:
   evaluate them. The refusal is `ShapesError::ShaclJs`, and it applies where a
   shape reaches SHACL-JS: `sh:js` or a SHACL-JS type on the shape, a
   `sh:JSTarget` or an instance of a `sh:JSTargetType` as its target, a
-  `sh:JSRule` among its rules, a constraint component whose selected validator
-  is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
-  `sh:JSFunction` from a node expression or from SPARQL the shape runs. A
-  library that only declares SHACL-JS loads, and those declarations are inert;
+  `sh:JSRule` among its rules, and a call to a `sh:JSFunction` from a node
+  expression or from SPARQL the shape runs. A library that only declares
+  `sh:JSLibrary`s and `sh:JSFunction`s nothing calls loads, and those
+  declarations are inert. A `sh:JSValidator` attached to a constraint component
+  is not inert: it is neither an ASK- nor a SELECT-based validator, so as a
+  value of `sh:validator` (`validator-class`), `sh:nodeValidator`
+  (`nodeValidator-class`) or `sh:propertyValidator` (`propertyValidator-class`)
+  it makes the shapes graph ill-formed, and the load fails with
+  `ShapesError::IllFormed` whether or not a shape uses the component;
 - `sh:describe` and `sh:update` on a shape, a node expression, a SPARQL-based
   constraint, a validator or a rule. The SHACL 1.2 vocabulary declares them as
   the queries of `sh:SPARQLDescribeExecutable` and `sh:SPARQLUpdateExecutable`,
@@ -381,11 +386,12 @@ resolves each declaration against the engine's table of what it implements:
   component, and the engine's own is the one that runs. Vocabularies such as
   DASH declare them for SHACL Core components. A SPARQL alternative must be a
   well-formed SPARQL validator of its attachment: an ASK validator under
-  `sh:propertyValidator` (`propertyValidator-class`) or an unparsable query
+  `sh:propertyValidator` (`propertyValidator-class`), a SHACL-JS
+  `sh:JSValidator` under any attachment (`validator-class`,
+  `nodeValidator-class`, `propertyValidator-class`) or an unparsable query
   (`ask-sparql`) fails the load. It is never executed, so its query may call a
   function the engine does not have, and a `MINUS` in its pre-bound query does
-  not fail the load: `purrdf shapes lint` lists it under `unexecuted`. A
-  SHACL-JS `sh:JSValidator` alternative is inert: never parsed and never run;
+  not fail the load: `purrdf shapes lint` lists it under `unexecuted`;
 - any other `sh:` statement on a built-in's declaration fails the load, except
   `sh:message`, `sh:labelTemplate` and the non-validating characteristics
   (`sh:name`, `sh:description`, …): `sh:severity` on

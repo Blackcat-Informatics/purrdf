@@ -160,36 +160,56 @@ fn a_shacl_js_constraint_is_a_typed_refusal_and_its_sparql_equivalent_validates(
     );
 }
 
-/// A constraint component whose validator is a SHACL-JS `sh:JSValidator` is refused
-/// with the same typed error, naming the validator; the same component with a SPARQL
-/// ASK validator loads and its constraint is observed failing at `ex:a` only.
+/// A constraint component whose validator is a SHACL-JS `sh:JSValidator` violates the
+/// attachment's class rule — "The values of sh:validator must be ASK-based validators",
+/// "The values of sh:propertyValidator must be SELECT-based validators" — so it refuses
+/// the load, typed `ShapesError::IllFormed`, naming the rule and the validator, whether
+/// or not a shape uses the component, and whether the attachment is the generic or a
+/// scoped one. The neighbour is the same component with a SPARQL ASK validator: it
+/// loads and its constraint is observed failing at `ex:a` only.
 #[test]
-fn a_shacl_js_validator_is_a_typed_refusal_and_its_ask_equivalent_validates() {
-    let component = |validator: &str| {
+fn a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates() {
+    let component = |attachment: &str, validator: &str, shape: &str| {
         format!(
             "ex:HasC a sh:ConstraintComponent ;
                sh:parameter [ sh:path ex:needs ] ;
-               sh:validator ex:V .
+               {attachment} ex:V .
              ex:V {validator} .
-             ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
-               sh:property [ sh:path ex:p ; ex:needs 1 ] ."
+             {shape}"
         )
     };
-    let js = component(
-        "a sh:JSValidator ; sh:jsFunctionName \"hasC\" ;
-         sh:jsLibrary [ sh:jsLibraryURL \"https://example.org/hasC.js\"^^xsd:anyURI ]",
-    );
-    let error = parse_shapes(&format!("{PREFIXES}{js}"), None)
-        .expect_err("a SHACL-JS validator is refused at load");
-    let Some(refusal) = error.as_shacl_js() else {
-        panic!("the refusal is typed ShapesError::ShaclJs: {error:?}");
-    };
-    assert_eq!(refusal.term(), "http://www.w3.org/ns/shacl#JSValidator");
-    assert_eq!(refusal.node(), "<http://example.org/ns#V>");
+    let js = "a sh:JSValidator ; sh:jsFunctionName \"hasC\" ;
+         sh:jsLibrary [ sh:jsLibraryURL \"https://example.org/hasC.js\"^^xsd:anyURI ]";
+    let used = "ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+               sh:property [ sh:path ex:p ; ex:needs 1 ] .";
+    for (attachment, rule) in [
+        ("sh:validator", "validator-class"),
+        ("sh:propertyValidator", "propertyValidator-class"),
+        ("sh:nodeValidator", "nodeValidator-class"),
+    ] {
+        for shape in [used, ""] {
+            let error = load_error(&component(attachment, js, shape));
+            let refusal = error
+                .as_ill_formed()
+                .unwrap_or_else(|| panic!("typed ShapesError::IllFormed: {error:?}"));
+            assert_eq!(refusal.violations().len(), 1, "{refusal}");
+            let violation = &refusal.violations()[0];
+            assert_eq!(violation.rule(), Some(rule), "{refusal}");
+            assert!(
+                violation
+                    .declaration()
+                    .starts_with("validator <http://example.org/ns#V> of the constraint component"),
+                "{refusal}"
+            );
+            assert!(violation.message().contains("sh:JSValidator"), "{refusal}");
+        }
+    }
 
     let ask = component(
+        "sh:validator",
         "a sh:SPARQLAskValidator ;
          sh:ask \"ASK { FILTER ($value >= $needs) }\"",
+        used,
     );
     let report = validate(&ask, "ex:a ex:p 0 . ex:b ex:p 2 .");
     assert_eq!(
@@ -201,12 +221,57 @@ fn a_shacl_js_validator_is_a_typed_refusal_and_its_ask_equivalent_validates() {
     );
 }
 
+/// The class rules constrain every value of an attachment, not only a component's: a
+/// SHACL-JS validator, or an untyped node, as the `sh:validator` of a node that is no
+/// constraint component (a blank-node one included, which the registry does not read
+/// as a component) refuses the load with `validator-class`. The neighbour, an ASK
+/// validator on the same owner, loads, and the shape beside it is observed firing.
+#[test]
+fn a_validator_of_a_non_component_owner_is_judged_by_the_class_rules() {
+    let shapes = |owner: &str, validator: &str| {
+        format!(
+            "{owner} sh:validator [ {validator} ] .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+               sh:property [ sh:path ex:p ; sh:minCount 1 ] ."
+        )
+    };
+    let owners = [
+        "ex:NotAComponent",
+        "[ a sh:ConstraintComponent ; sh:parameter [ sh:path ex:anon ] ]",
+    ];
+    for owner in owners {
+        for validator in [
+            "a sh:JSValidator ; sh:jsFunctionName \"f\"",
+            "sh:ask \"ASK { }\"",
+        ] {
+            let error = load_error(&shapes(owner, validator));
+            let refusal = error
+                .as_ill_formed()
+                .unwrap_or_else(|| panic!("typed ShapesError::IllFormed: {error:?}"));
+            assert_eq!(refusal.violations().len(), 1, "{refusal}");
+            assert_eq!(
+                refusal.violations()[0].rule(),
+                Some("validator-class"),
+                "{refusal}"
+            );
+        }
+        let report = validate(
+            &shapes(owner, "a sh:SPARQLAskValidator ; sh:ask \"ASK { }\""),
+            "ex:b ex:p 1 .",
+        );
+        assert_eq!(
+            results(&report),
+            vec![("<http://example.org/ns#a>".to_owned(), String::new())]
+        );
+    }
+}
+
 /// SHACL-JS declarations a library ships — a `sh:JSLibrary`, a `sh:JSFunction` and a
-/// `sh:SPARQLFunction` whose body calls it, a `sh:JSTargetType`, a `sh:JSRule` no shape
-/// names, a constraint component whose only
-/// validator is a `sh:JSValidator`, a `sh:JSValidator` alternative on a built-in, and a
-/// component with both a SPARQL and a SHACL-JS validator — the way DASH declares
-/// them. Each is only vocabulary until a shape reaches it.
+/// `sh:SPARQLFunction` whose body calls it, a `sh:JSTargetType` and a `sh:JSRule` no
+/// shape names — beside an ordinary SPARQL-based component. Each is only vocabulary
+/// until a shape reaches it. (A `sh:JSValidator` attached to a component is not
+/// vocabulary but a class-rule violation: see
+/// `a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates`.)
 const SHACL_JS_LIBRARY: &str = r#"
 ex:lib a sh:JSLibrary ; sh:jsLibraryURL "https://example.org/lib.js"^^xsd:anyURI .
 ex:jsFn a sh:JSFunction ; sh:jsFunctionName "jsFn" ; sh:jsLibrary ex:lib ;
@@ -216,17 +281,9 @@ ex:JsTargetType a sh:JSTargetType ; sh:jsFunctionName "targets" ; sh:jsLibrary e
 ex:unnamedRule a sh:JSRule ; sh:jsFunctionName "infer" ; sh:jsLibrary ex:lib .
 ex:viaSparql a sh:SPARQLFunction ; sh:parameter [ sh:path ex:x ] ; sh:returnType xsd:boolean ;
   sh:select "SELECT (<http://example.org/ns#jsFn>($x) AS ?result) WHERE { }" .
-ex:JsOnlyComponent a sh:ConstraintComponent ;
-  sh:parameter [ sh:path ex:jsOnly ] ;
-  sh:validator ex:jsOnlyValidator .
-ex:jsOnlyValidator a sh:JSValidator ; sh:jsFunctionName "jsOnly" ; sh:jsLibrary ex:lib .
-sh:MinLengthConstraintComponent a sh:ConstraintComponent ;
-  sh:parameter [ sh:path sh:minLength ; sh:datatype xsd:integer ] ;
-  sh:validator [ a sh:JSValidator ; sh:jsFunctionName "minLength" ; sh:jsLibrary ex:lib ] .
 ex:NonEmptyComponent a sh:ConstraintComponent ;
   sh:parameter [ sh:path ex:nonEmpty ] ;
-  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) > 0) }" ] ;
-  sh:validator [ a sh:JSValidator ; sh:jsFunctionName "nonEmpty" ; sh:jsLibrary ex:lib ] .
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) > 0) }" ] .
 "#;
 
 /// The shape every SHACL-JS neighbour validates with: `sh:minCount` and `sh:minLength`
@@ -239,10 +296,9 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
 /// A shapes graph that DECLARES SHACL-JS no shape reaches loads, with the
 /// declarations inert, and its ordinary constraints are honoured. The oracle observes
 /// all three: `ex:a` lacks `ex:p` (`sh:minCount`), `ex:b`'s `"x"` is too short
-/// (`sh:minLength`, whose SHACL-JS alternative did not replace it) and its `""` is empty
-/// (`ex:nonEmpty`, whose SPARQL validator ran beside the inert SHACL-JS one), while
-/// `ex:b`'s `"long"` passes all three. Without the library the report is the same, so
-/// the declarations neither added nor suppressed a result.
+/// (`sh:minLength`) and its `""` is empty (`ex:nonEmpty`, the library's SPARQL-based
+/// component), while `ex:b`'s `"long"` passes all three. Without the SHACL-JS
+/// declarations the report is the same, so they neither added nor suppressed a result.
 #[test]
 fn declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire() {
     let data = r#"ex:b ex:p "x", "", "long" ."#;
@@ -306,30 +362,14 @@ fn declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire() {
 /// `ShapesError::ShaclJs` naming the extension, beside the same library that loads
 /// while nothing reaches it (see
 /// `declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire`): a
-/// shape using the component whose only validator is a `sh:JSValidator`, a property
-/// shape using a component whose `sh:propertyValidator` is SHACL-JS (SHACL selects the
-/// scoped attachment when present, so the generic SPARQL validator is not a fallback),
-/// a `sh:JSTarget`, a target of a `sh:JSTargetType`, a `sh:JSRule` on the shape, a
-/// node expression calling the `sh:JSFunction`, a SPARQL constraint calling it, and a
-/// SPARQL constraint calling the `sh:SPARQLFunction` whose body calls it.
+/// `sh:JSTarget`, a target of a `sh:JSTargetType`, a `sh:JSRule` on the shape, a node
+/// expression calling the `sh:JSFunction`, a SPARQL constraint calling it, and a SPARQL
+/// constraint calling the `sh:SPARQLFunction` whose body calls it. (A `sh:JSValidator`
+/// attached to a component refuses the load as ill-formed before any shape is read:
+/// see `a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates`.)
 #[test]
 fn every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal() {
-    let cases: [(&str, &str, &str); 8] = [
-        (
-            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:jsOnly true .",
-            "<http://example.org/ns#jsOnlyValidator>",
-            "http://www.w3.org/ns/shacl#JSValidator",
-        ),
-        (
-            "ex:Scoped a sh:ConstraintComponent ; sh:parameter [ sh:path ex:scoped ] ;
-               sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK { }\" ] ;
-               sh:propertyValidator ex:scopedJs .
-             ex:scopedJs a sh:JSValidator ; sh:jsFunctionName \"scoped\" ; sh:jsLibrary ex:lib .
-             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-               sh:property [ sh:path ex:p ; ex:scoped true ] .",
-            "<http://example.org/ns#scopedJs>",
-            "http://www.w3.org/ns/shacl#JSValidator",
-        ),
+    let cases: [(&str, &str, &str); 6] = [
         (
             "ex:S a sh:NodeShape ;
                sh:target [ a sh:JSTarget ; sh:jsFunctionName \"t\" ; sh:jsLibrary ex:lib ] ;

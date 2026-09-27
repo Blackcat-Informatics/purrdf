@@ -147,19 +147,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   which names the node and the SHACL-JS term, instead of `ShapesError::Invalid`.
   A shape reaches SHACL-JS through `sh:js` or a SHACL-JS type on the shape, a
   `sh:JSTarget` or an instance of a `sh:JSTargetType` as its `sh:target`, a
-  `sh:JSRule` among its rules, a constraint component whose selected validator
-  is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
-  `sh:JSFunction` from a node expression or from SPARQL the shape runs,
-  directly or through a `sh:SPARQLFunction`. SHACL-JS is a 2017 Working Group
-  Note, not SHACL 1.2. A shapes graph that only declares SHACL-JS now loads
-  with those declarations inert: `sh:JSLibrary`s,
-  `sh:JSFunction`s nothing calls, `sh:JSValidator`s of components no shape
-  uses or beside a SPARQL validator SHACL selects instead, and `sh:JSValidator`
-  alternatives on built-in components, which the lint report lists with the
-  `javascript` language. `ShapesError` gains the variant, so an exhaustive
-  match on it must name it; `purrdf-validate` re-exports `ShaclJsRefusal`, and
-  `ValidatorLanguage` gains `JavaScript`. The Python, WebAssembly, C and
-  command-line hosts report it with the same message as before.
+  `sh:JSRule` among its rules, and a call to a `sh:JSFunction` from a node
+  expression or from SPARQL the shape runs, directly or through a
+  `sh:SPARQLFunction`. SHACL-JS is a 2017 Working Group Note, not SHACL 1.2. A
+  shapes graph that only declares `sh:JSLibrary`s and `sh:JSFunction`s nothing
+  calls now loads with those declarations inert. `ShapesError` gains the
+  variant, so an exhaustive match on it must name it; `purrdf-validate`
+  re-exports `ShaclJsRefusal`. The Python, WebAssembly, C and command-line
+  hosts report it with the same message as before.
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** a SHACL-JS
+  `sh:JSValidator` attached to a constraint component fails the load as
+  `ShapesError::IllFormed`, naming the syntax rule, on built-in and custom
+  components alike and whether or not a shape uses the component. SHACL 1.2
+  SPARQL Extensions: "The values of sh:validator must be ASK-based validators"
+  (`validator-class`), and the values of `sh:nodeValidator` and
+  `sh:propertyValidator` "must be SELECT-based validators"
+  (`nodeValidator-class`, `propertyValidator-class`). A `sh:JSValidator` is
+  neither, and Core's ill-formed SHOULD is read as a MUST. Such a graph used to
+  load, and `shapes lint` reported it clean. The class rules also judge a value
+  of those properties whose subject is not a component the registry reads (an
+  untyped owner, a blank-node component). `ValidatorLanguage` has no
+  `JavaScript` variant, and no host's lint `validators` section prints a
+  `javascript` label.
 - **sparql-algebra:** `Query::custom_function_calls` lists the IRI of every
   extension function a query calls, anywhere in its algebra.
 - **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
@@ -2780,13 +2789,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   contradicting signature is still a mismatch, and a validator that is not a
   well-formed SPARQL validator of its attachment — an untyped node, an ASK validator
   under `sh:nodeValidator` or `sh:propertyValidator`, a SELECT validator under
-  `sh:validator`, an unparsable query — is refused. A SHACL-JS `sh:JSValidator` is
-  an inert alternative, never parsed and never run. Newly refused: an `sh:`
+  `sh:validator`, an unparsable query, a SHACL-JS `sh:JSValidator` under any
+  attachment — is refused. Newly refused: an `sh:`
   statement on a built-in's declaration other than its signature, its validators,
   `sh:message`, `sh:labelTemplate` or a non-validating characteristic (`sh:severity`
   on `sh:MinCountConstraintComponent`, for one), which the native implementation
-  would not honour. A `sh:JSValidator` of a custom component is refused with the
-  SHACL-JS reason only where a shape uses the component and SHACL selects it.
+  would not honour.
 
 - **BREAKING** **shapes, validate, cli, python, wasm, capi:** a SHACL-SPARQL or SHACL-AF
   declaration that violates a syntax rule refuses the load whether or not any shape

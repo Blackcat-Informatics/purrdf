@@ -130,14 +130,16 @@ impl std::error::Error for ShapesError {
 /// refused rather than validated as if it were absent. The equivalent SHACL-SPARQL
 /// constraint (`sh:sparql` with a `sh:select` query) loads.
 ///
-/// Only a construct a shape REACHES is refused: SHACL-JS on the shape itself (`sh:js`, a
-/// SHACL-JS type), a `sh:JSTarget` or a target whose type is a `sh:JSTargetType`, a
-/// `sh:JSRule` among its rules, a use of a constraint component whose selected
-/// validator is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
-/// `sh:JSFunction` from a node expression or from reachable SPARQL. A library that only
-/// DECLARES SHACL-JS — `sh:JSLibrary`s, `sh:JSFunction`s, `sh:JSValidator`s of
-/// components no shape uses, SHACL-JS alternatives on built-in components — loads, and
-/// those declarations are inert.
+/// Only a construct a shape REACHES is refused here: SHACL-JS on the shape itself
+/// (`sh:js`, a SHACL-JS type), a `sh:JSTarget` or a target whose type is a
+/// `sh:JSTargetType`, a `sh:JSRule` among its rules, and a call to a `sh:JSFunction` from
+/// a node expression or from reachable SPARQL. A library that only DECLARES such
+/// constructs — `sh:JSLibrary`s, `sh:JSFunction`s nothing calls — loads, and those
+/// declarations are inert. A `sh:JSValidator` attached to a component is different: as a
+/// value of `sh:validator`, `sh:nodeValidator` or `sh:propertyValidator` it violates the
+/// attachment's class rule (SHACL 1.2 SPARQL Extensions: "The values of sh:validator must
+/// be ASK-based validators", likewise SELECT-based for the scoped attachments), so it is
+/// refused as [`ShapesError::IllFormed`] whether or not a shape reaches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShaclJsRefusal {
     node: String,

@@ -83,7 +83,9 @@ pub enum TermClass {
     /// Extensions). Using it where the loader looks — on a shape, a node expression, a
     /// SPARQL-based constraint or a rule a shape names — is a load error carrying this
     /// reason, never a silent no-op. On a declaration no shape reaches (a
-    /// `sh:JSLibrary`, a `sh:JSFunction`, a `sh:JSValidator`) it is inert vocabulary.
+    /// `sh:JSLibrary`, a `sh:JSFunction` nothing calls) it is inert vocabulary. A
+    /// `sh:JSValidator` is never a validator of a component's attachment: as one it is a
+    /// class-rule violation, not inert.
     Refused(&'static str),
 }
 

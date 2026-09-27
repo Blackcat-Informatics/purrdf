@@ -700,30 +700,6 @@ impl Parser<'_> {
                 continue;
             }
 
-            // A use whose selected validators are all SHACL-JS is a constraint this
-            // engine cannot evaluate: refused, never skipped. A component that only
-            // DECLARES a `sh:JSValidator` beside a SPARQL one, or that no shape uses,
-            // loads with the JavaScript validator inert.
-            if let Some((attachment, validator)) = component.javascript_only(is_property_shape) {
-                return Err(self.refuse_shacl_js(
-                    validator,
-                    crate::components::JS_VALIDATOR,
-                    format!(
-                        "shape {id} uses constraint component <{component_id}>, and the \
-                         validator SHACL selects for it on a {kind} shape is <{attachment}> \
-                         {validator}, a sh:JSValidator: {why}; the shape is refused rather \
-                         than validated as if the constraint were absent",
-                        component_id = component.id.as_str(),
-                        kind = if is_property_shape {
-                            "property"
-                        } else {
-                            "node"
-                        },
-                        why = crate::spec::census::JS,
-                    ),
-                ));
-            }
-
             // Scope-specific validators take precedence over the generic ASK
             // fallback (SHACL-SPARQL §4.2.3).
             let scoped = if is_property_shape {

@@ -33,21 +33,12 @@ use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
 
 /// `sh:JSValidator`, the SHACL JavaScript Extensions validator class. Not a SHACL 1.2
-/// term, so it has no `model::sh` constant; it is named here so a validator of that
-/// class is recognised as inert vocabulary where it is declared, and refused, with the
-/// reason, where a shape would run it.
-pub(crate) const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
-
-/// What a declared validator is: a SPARQL validator of one query form, or a SHACL-JS
-/// `sh:JSValidator`.
-#[derive(Debug, Clone, Copy)]
-enum DeclaredKind {
-    /// A SPARQL validator of this query form.
-    Sparql(ValidatorKind),
-    /// A SHACL JavaScript Extensions validator: declared vocabulary this engine cannot
-    /// run.
-    JavaScript,
-}
+/// term, so it has no `model::sh` constant; it is named here so the refusal of a
+/// validator of that class says what it is. It is not a validator of any attachment:
+/// "The values of sh:validator must be ASK-based validators" and the values of
+/// `sh:nodeValidator` / `sh:propertyValidator` "must be SELECT-based validators"
+/// (SHACL 1.2 SPARQL Extensions, "Summary of Syntax Rules").
+const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone, Copy)]
@@ -127,49 +118,10 @@ pub(crate) struct Component {
     pub property_validators: Vec<Validator>,
     /// Generic validators (`sh:validator`).
     pub validators: Vec<Validator>,
-    /// The SHACL-JS `sh:JSValidator`s the component declares, as `(attachment,
-    /// validator node)` in attachment order and canonical term order within one. They
-    /// are inert: a shape that uses the component runs one of its SPARQL validators,
-    /// and only a use whose selected attachment offers nothing but these is refused
-    /// (see [`Self::javascript_only`]).
-    pub javascript: Vec<(&'static str, Term)>,
     /// The `sh:message` values declared on the component node.
     pub messages: Vec<Literal>,
     /// Optional severity declared on the component node.
     pub severity: Option<Severity>,
-}
-
-impl Component {
-    /// The SHACL-JS validator a use of this component in a property shape
-    /// (`is_property_shape`) or a node shape would have to run, as `(attachment,
-    /// validator node)`, or `None` when SHACL selects a SPARQL validator or none.
-    ///
-    /// SHACL 1.2 SPARQL Extensions, "Validators": "For node shapes, use one of the values
-    /// of sh:nodeValidator, if present. For property shapes, use one of the values of
-    /// sh:propertyValidator, if present. Otherwise, use one of the values of
-    /// sh:validator." A `sh:JSValidator` is a value of its attachment, so it makes the
-    /// scoped attachment present; "one of the values" then picks a SPARQL validator when
-    /// the selected attachment has one, and a selected attachment offering only
-    /// `sh:JSValidator`s is a constraint this engine cannot evaluate.
-    pub(crate) fn javascript_only(&self, is_property_shape: bool) -> Option<(&'static str, &Term)> {
-        let (scoped_attachment, scoped) = if is_property_shape {
-            (sh::PROPERTY_VALIDATOR, &self.property_validators)
-        } else {
-            (sh::NODE_VALIDATOR, &self.node_validators)
-        };
-        let javascript_on = |attachment: &str| {
-            self.javascript
-                .iter()
-                .find(|(declared, _)| *declared == attachment)
-                .map(|(declared, node)| (*declared, node))
-        };
-        match javascript_on(scoped_attachment) {
-            Some(javascript) if scoped.is_empty() => Some(javascript),
-            Some(_) => None,
-            None if scoped.is_empty() && self.validators.is_empty() => javascript_on(sh::VALIDATOR),
-            None => None,
-        }
-    }
 }
 
 /// Registry of custom constraint components keyed by component IRI string.
@@ -220,10 +172,11 @@ impl ComponentRegistry {
     /// of a built-in component that contradicts its signature, a malformed
     /// `sh:message`.
     ///
-    /// A SHACL-JS `sh:JSValidator` is declared vocabulary, not a load error: a
-    /// built-in's is an alternative like any other, and a custom component's is
-    /// recorded in [`Component::javascript`] and refused only where a shape would run
-    /// it.
+    /// A value of an attachment that is not a SPARQL validator of the attachment's query
+    /// form — a SHACL-JS `sh:JSValidator` included — is a syntax-rule violation like any
+    /// other, collected into [`Self::ill_formed`]. So is one declared by a subject the
+    /// registry does not read as a component: the class rules name the attachment, not
+    /// its subject.
     pub(crate) fn parse_collecting(
         data: &RdfDataset,
         prefixes: &PrefixResolver,
@@ -289,7 +242,7 @@ impl ComponentRegistry {
                     let declaration =
                         builtin_validator_declaration(&validator, component.as_str(), attachment);
                     let language = match kind {
-                        Ok(DeclaredKind::Sparql(kind)) => {
+                        Ok(kind) => {
                             match parse_validator(
                                 data,
                                 prefixes,
@@ -321,9 +274,6 @@ impl ComponentRegistry {
                                 ValidatorKind::Select => ValidatorLanguage::SparqlSelect,
                             }
                         }
-                        // Never run, and never parsed: this engine has no JavaScript
-                        // engine, and the native implementation is the one that runs.
-                        Ok(DeclaredKind::JavaScript) => ValidatorLanguage::JavaScript,
                         Err((rule, message)) => {
                             ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
                             continue;
@@ -364,6 +314,44 @@ impl ComponentRegistry {
             }
             let id = component.id.as_str().to_owned();
             registry.components.insert(id, component);
+        }
+        // The class rules constrain every value of an attachment, whatever declares it:
+        // a subject read above as a component was judged there, and every other subject
+        // of `sh:validator`, `sh:nodeValidator` or `sh:propertyValidator` is judged here,
+        // so no ill-formed validator loads because its owner is not a component.
+        let mut owners: Vec<Term> = Vec::new();
+        for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+            let predicate = Term::NamedNode(NamedNode::from(attachment));
+            for (subject, _, _) in
+                native_quads(data, None, Some(&predicate), None, GraphFilter::AnyGraph)
+            {
+                if !matches!(&subject, Term::NamedNode(iri) if seen.contains(iri.as_str())) {
+                    owners.push(subject);
+                }
+            }
+        }
+        crate::term::sort_terms_canonical(&mut owners);
+        owners.dedup();
+        for owner in owners {
+            for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+                let mut nodes = objects_of(data, &owner, attachment);
+                crate::term::sort_terms_canonical(&mut nodes);
+                for node in nodes {
+                    if let Err((rule, message)) = attachment_class(
+                        data,
+                        &owner.to_string(),
+                        attachment,
+                        &node,
+                        &mut subclass_memo,
+                    ) {
+                        ill_formed.push(IllFormedDeclaration::new(
+                            format!("validator {node} of {owner}, via <{attachment}>"),
+                            rule,
+                            message,
+                        ));
+                    }
+                }
+            }
         }
         registry.alternatives.sort();
         registry.alternative_prebinding.sort();
@@ -908,24 +896,20 @@ fn is_subclass_of(
     result
 }
 
-/// What `validator`'s `rdf:type` declarations make it, respecting subclasses of
-/// `sh:SPARQLAskValidator`, `sh:SPARQLSelectValidator` and `sh:JSValidator`.
-///
-/// A SHACL-JS `sh:JSValidator` is [`DeclaredKind::JavaScript`]: SHACL 1.2 SPARQL
-/// Extensions says "The values of sh:validator must be ASK-based validators" (likewise
-/// SELECT-based for the scoped attachments), so this engine never runs one, but a
-/// validator nothing runs is declared vocabulary — a library such as DASH declares
-/// them beside SPARQL validators of the same component. Where a shape would run one,
-/// the use is refused (see [`Component::javascript_only`]).
+/// The query form `validator`'s `rdf:type` declarations make it, respecting subclasses
+/// of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
 ///
 /// # Errors
 ///
-/// A validator typed as both ASK and SELECT, and one typed as none of the three.
+/// A validator typed as both ASK and SELECT, and one typed as neither — a SHACL-JS
+/// `sh:JSValidator` among them, which is named as such: SHACL 1.2 SPARQL Extensions
+/// admits only ASK-based validators as values of `sh:validator` and SELECT-based ones as
+/// values of `sh:nodeValidator` and `sh:propertyValidator`.
 fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
     memo: &mut FastMap<(String, String), bool>,
-) -> Result<DeclaredKind, String> {
+) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
     let mut is_js = false;
@@ -941,23 +925,18 @@ fn validator_kind(
         (true, true) => Err(format!(
             "validator {validator} is typed as both ASK and SELECT"
         )),
-        (true, false) => Ok(DeclaredKind::Sparql(ValidatorKind::Ask)),
-        (false, true) => Ok(DeclaredKind::Sparql(ValidatorKind::Select)),
-        (false, false) if is_js => Ok(DeclaredKind::JavaScript),
+        (true, false) => Ok(ValidatorKind::Ask),
+        (false, true) => Ok(ValidatorKind::Select),
+        (false, false) if is_js => Err(format!(
+            "validator {validator} is a sh:JSValidator of the SHACL JavaScript Extensions, \
+             which is not a SPARQL validator: it must be typed as sh:SPARQLAskValidator or \
+             sh:SPARQLSelectValidator (or a subclass)"
+        )),
         (false, false) => Err(format!(
             "validator {validator} must be typed as sh:SPARQLAskValidator or \
              sh:SPARQLSelectValidator (or a subclass)"
         )),
     }
-}
-
-/// Whether `validator` is a SHACL-JS validator — a SHACL instance of `sh:JSValidator`
-/// typed as no SPARQL validator — and so inert vocabulary wherever nothing selects it.
-pub(crate) fn is_javascript_validator(data: &RdfDataset, validator: &Term) -> bool {
-    matches!(
-        validator_kind(data, validator, &mut FastMap::default()),
-        Ok(DeclaredKind::JavaScript)
-    )
 }
 
 /// The syntax rule that makes the values of `attachment` validators of one form:
@@ -979,46 +958,58 @@ fn class_rule(attachment: &str) -> &'static str {
 /// one its attachment takes: "The values of sh:nodeValidator must be SELECT-based
 /// validators", "The values of sh:propertyValidator must be SELECT-based validators",
 /// "The values of sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL
-/// Extensions). A SHACL-JS `sh:JSValidator` is not judged by those rules here: SHACL-JS
-/// extends the attachments with its own validator class, and a use that would run one is
-/// refused where the shape is read (see [`Component::javascript_only`]).
+/// Extensions). A SHACL-JS `sh:JSValidator` is judged by the same rules: it is neither
+/// ASK- nor SELECT-based, so it is a violation under every attachment.
 fn declared_validators(
     data: &RdfDataset,
     component: &Term,
     memo: &mut FastMap<(String, String), bool>,
-) -> Vec<(&'static str, Term, Result<DeclaredKind, Violation>)> {
+) -> Vec<(&'static str, Term, Result<ValidatorKind, Violation>)> {
     let mut out = Vec::new();
     for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
         let mut nodes = objects_of(data, component, attachment);
         crate::term::sort_terms_canonical(&mut nodes);
-        let expects_ask = attachment == sh::VALIDATOR;
         for node in nodes {
-            let kind = validator_kind(data, &node, memo)
-                .map_err(|e| {
-                    (
-                        Some(class_rule(attachment)),
-                        format!("component {component} validator {node}: {e}"),
-                    )
-                })
-                .and_then(|kind| match kind {
-                    DeclaredKind::Sparql(form)
-                        if matches!(form, ValidatorKind::Ask) != expects_ask =>
-                    {
-                        Err((
-                            Some(class_rule(attachment)),
-                            format!(
-                                "component {component} {attachment} requires {} validators, \
-                                 and {node} is {form:?}",
-                                if expects_ask { "ASK" } else { "SELECT" },
-                            ),
-                        ))
-                    }
-                    kind => Ok(kind),
-                });
+            let kind = attachment_class(
+                data,
+                &format!("component {component}"),
+                attachment,
+                &node,
+                memo,
+            );
             out.push((attachment, node, kind));
         }
     }
     out
+}
+
+/// `node`'s query form, judged as a value of `attachment` declared by `owner` (rendered
+/// for the message): the [`Violation`] of the attachment's class rule when
+/// [`validator_kind`] refuses it or its form is not the one the attachment takes.
+fn attachment_class(
+    data: &RdfDataset,
+    owner: &str,
+    attachment: &'static str,
+    node: &Term,
+    memo: &mut FastMap<(String, String), bool>,
+) -> Result<ValidatorKind, Violation> {
+    let expects_ask = attachment == sh::VALIDATOR;
+    let form = validator_kind(data, node, memo).map_err(|e| {
+        (
+            Some(class_rule(attachment)),
+            format!("{owner} validator {node}: {e}"),
+        )
+    })?;
+    if matches!(form, ValidatorKind::Ask) == expects_ask {
+        return Ok(form);
+    }
+    Err((
+        Some(class_rule(attachment)),
+        format!(
+            "{owner} {attachment} requires {} validators, and {node} is {form:?}",
+            if expects_ask { "ASK" } else { "SELECT" },
+        ),
+    ))
 }
 
 /// Whether `name` is a SPARQL `VARNAME` and not one of the reserved names banned
@@ -1233,15 +1224,10 @@ fn parse_component(
     let mut node_validators = Vec::new();
     let mut property_validators = Vec::new();
     let mut validators = Vec::new();
-    let mut javascript = Vec::new();
     for (attachment, node, kind) in declared_validators(data, component, subclass_memo) {
         let declaration = custom_validator_declaration(&node, component_iri, attachment);
         let kind = match kind {
-            Ok(DeclaredKind::Sparql(kind)) => kind,
-            Ok(DeclaredKind::JavaScript) => {
-                javascript.push((attachment, node));
-                continue;
-            }
+            Ok(kind) => kind,
             Err((rule, message)) => {
                 ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
                 continue;
@@ -1277,7 +1263,6 @@ fn parse_component(
         node_validators,
         property_validators,
         validators,
-        javascript,
         messages,
         severity,
     })
@@ -1352,7 +1337,6 @@ mod tests {
             }],
             property_validators: vec![],
             validators: vec![],
-            javascript: vec![],
             messages: vec![],
             severity: None,
         };

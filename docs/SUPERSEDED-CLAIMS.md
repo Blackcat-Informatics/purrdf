@@ -758,3 +758,46 @@ and `a_data_graph_alone_anchors_nothing_and_a_data_graph_ontology_does` in
 (`crates/entail/src/entails/imports.rs`), and
 `a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does`
 (`crates/validate/tests/shapes_owl_imports.rs`).
+
+### A SHACL-JS validator is inert vocabulary where it is declared
+
+**Was stated in** `crates/shapes/src/validator_alternatives.rs`, the module
+documentation of the built-in alternatives:
+
+> A SHACL JavaScript Extensions `sh:JSValidator` is declared vocabulary, not a load
+> error: libraries such as DASH declare them beside SPARQL validators, and this engine
+> never runs one. On a built-in it is listed here as a `ValidatorLanguage::JavaScript`
+> alternative, never parsed and never run. On a custom component it is refused only
+> where a shape uses the component and the validator SHACL selects for that shape is
+> JavaScript-only; a use with a SPARQL validator to select runs that one.
+
+**Why it was believed.** SHACL-JS extends the three attachments with its own validator
+class, and a validator nothing runs looked like vocabulary. So a component's
+`sh:JSValidator` was exempted from the attachment's class rule, like a `sh:JSFunction`
+nothing calls.
+
+**What changed.** The class rules of SHACL 1.2 SPARQL Extensions have no such exemption:
+"The values of sh:validator must be ASK-based validators" (`validator-class`), and the
+values of `sh:nodeValidator` and `sh:propertyValidator` "must be SELECT-based
+validators" (`nodeValidator-class`, `propertyValidator-class`). A `sh:JSValidator` is
+neither, so a graph that attaches one is ill-formed. SHACL 1.2 Core's "A SHACL processor
+SHOULD produce a failure in this case" has no reachability qualifier, and PurRDF treats
+that SHOULD as a MUST. Under the old reading `shapes lint` reported such a graph clean.
+A `sh:JSFunction` or `sh:JSLibrary` is not attached through those properties, so no
+syntax rule reaches it.
+
+**The rule now.** A value of an attachment that is not a SPARQL validator of the
+attachment's query form — a `sh:JSValidator` included — refuses the load as
+`ShapesError::IllFormed`, naming the rule. That holds on built-in and custom components,
+whether or not a shape reaches it, and on every other subject of those properties.
+`ValidatorLanguage` has no JavaScript variant. A `sh:JSFunction` or `sh:JSLibrary`
+nothing reaches stays inert, and a SHACL-JS construct a shape reaches stays refused as
+`ShapesError::ShaclJs`. Pinned by
+`a_javascript_validator_on_a_builtin_is_ill_formed_under_every_attachment` and
+`a_custom_components_javascript_validator_is_ill_formed_reached_or_not`
+(`crates/shapes/tests/spec_linker.rs`), and by
+`a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates`,
+`a_validator_of_a_non_component_owner_is_judged_by_the_class_rules`,
+`declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire` and
+`every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal`
+(`crates/shapes/tests/shapes_graph_wellformedness.rs`).
