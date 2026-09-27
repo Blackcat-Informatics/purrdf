@@ -50,6 +50,8 @@ purrdf-iri = { workspace = true }
 # Default features (std) re-enabled; the workspace-level entry is
 # default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
+# Lowercase hex rendering of those SHA-256 digests.
+purrdf-hash = { workspace = true }
 # The prefix-consistency lint scans authored `.ttl` / `.rq` sources for `@prefix` /
 # `PREFIX` declarations with a regex, to police registry-prefix shadowing. External
 # published crate (already in the workspace lockfile, used by purrdf-validate/purrdf-shapes),

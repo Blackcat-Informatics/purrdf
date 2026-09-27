@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot"
+description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, and lowercase hex rendering"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -48,4 +48,11 @@ harness = false
 # (`make wasm-test`).
 [[test]]
 name = "digest_differential"
+harness = false
+
+# Base16 rendering: RFC 4648 vectors and every encoding path against the
+# portable one. On the same runner, so `make wasm-test` executes the wasm32
+# `simd128` kernel as well as the portable path.
+[[test]]
+name = "hex"
 harness = false

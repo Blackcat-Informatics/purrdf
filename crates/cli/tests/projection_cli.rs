@@ -759,7 +759,7 @@ fn attached_ro_crate_carries_payload_and_preview_through_the_cli() {
     let first_bytes = std::fs::read(&first).expect("first crate");
     assert_eq!(first_bytes, std::fs::read(&second).expect("second crate"));
     assert_eq!(
-        format!("{:x}", Sha256::digest(&first_bytes)),
+        format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(&first_bytes))),
         ATTACHED_ARCHIVE_SHA256
     );
     let package =

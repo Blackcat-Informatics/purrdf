@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Digest throughput at 64 B, 1 KiB and 1 MiB, per algorithm and per path the
-//! host can run. Report-only; not a gate.
+//! host can run, and base16 encoding throughput per path, plus `hex::Lower`
+//! rendering a 32-byte digest. Report-only; not a gate.
 
 #![allow(missing_docs)] // criterion_main! generates an undocumented `main`
 
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use purrdf_hash::backend::{Crc32Backend, Sha1Backend};
+use purrdf_hash::backend::{Crc32Backend, HexBackend, Sha1Backend};
+use purrdf_hash::hex::Lower;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 
@@ -62,5 +64,35 @@ fn digests(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, digests);
+fn hex(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hex");
+    for backend in HexBackend::ALL {
+        if !backend.is_available() {
+            continue;
+        }
+        for (len, label) in [(32, "32B"), (1024, "1KiB"), (1 << 20, "1MiB")] {
+            let data = input(len);
+            let mut out = vec![0u8; 2 * len];
+            group.throughput(Throughput::Bytes(len as u64));
+            group.bench_with_input(BenchmarkId::new(backend.name(), label), &data, |b, data| {
+                b.iter(|| backend.encode(black_box(data), black_box(&mut out)));
+            });
+        }
+    }
+    // The call-site shape: a digest written into a reserved `String`.
+    let digest = input(32);
+    let mut text = String::with_capacity(128);
+    group.throughput(Throughput::Bytes(32));
+    group.bench_function("lower-display/32B", |b| {
+        b.iter(|| {
+            use std::fmt::Write as _;
+            text.clear();
+            let _ = write!(text, "{}", Lower(black_box(&digest)));
+            text.len()
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, digests, hex);
 criterion_main!(benches);

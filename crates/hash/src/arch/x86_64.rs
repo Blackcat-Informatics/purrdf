@@ -1,19 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! x86-64 kernels: SHA-1 on the SHA extensions, CRC-32 on `pclmulqdq`.
+//! x86-64 kernels: SHA-1 on the SHA extensions, CRC-32 on `pclmulqdq`,
+//! base16 encoding on SSSE3 `pshufb`.
 
 use core::arch::x86_64::{
-    __m128i, _mm_add_epi32, _mm_clmulepi64_si128, _mm_cvtsi32_si128, _mm_cvtsi64_si128,
-    _mm_cvtsi128_si64, _mm_extract_epi32, _mm_extract_epi64, _mm_loadu_si128, _mm_set_epi8,
-    _mm_set_epi32, _mm_set_epi64x, _mm_setzero_si128, _mm_sha1msg1_epu32, _mm_sha1msg2_epu32,
-    _mm_sha1nexte_epu32, _mm_sha1rnds4_epu32, _mm_shuffle_epi8, _mm_srli_si128, _mm_unpackhi_epi64,
-    _mm_xor_si128,
+    __m128i, _mm_add_epi32, _mm_and_si128, _mm_clmulepi64_si128, _mm_cvtsi32_si128,
+    _mm_cvtsi64_si128, _mm_cvtsi128_si64, _mm_extract_epi32, _mm_extract_epi64, _mm_loadu_si128,
+    _mm_set_epi8, _mm_set_epi32, _mm_set_epi64x, _mm_set1_epi8, _mm_setzero_si128,
+    _mm_sha1msg1_epu32, _mm_sha1msg2_epu32, _mm_sha1nexte_epu32, _mm_sha1rnds4_epu32,
+    _mm_shuffle_epi8, _mm_srli_epi16, _mm_srli_si128, _mm_storeu_si128, _mm_unpackhi_epi8,
+    _mm_unpackhi_epi64, _mm_unpacklo_epi8, _mm_xor_si128,
 };
 use std::is_x86_feature_detected;
 
-use super::{Crc32Update, Sha1Blocks};
+use super::{Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{FOLD, update_portable};
+use crate::hex::{ALPHABET, encode_portable};
 
 /// Sixteen bytes as a vector. Safe to call from any function compiled with
 /// SSE2, which every x86-64 processor has.
@@ -22,6 +25,15 @@ fn load(bytes: &[u8; 16]) -> __m128i {
     // SAFETY: `bytes` is sixteen readable bytes, and `_mm_loadu_si128` has no
     // alignment requirement; SSE2 is part of the x86-64 baseline.
     unsafe { _mm_loadu_si128(bytes.as_ptr().cast()) }
+}
+
+/// Writes a vector's sixteen bytes. Safe to call from any function compiled
+/// with SSE2, which every x86-64 processor has.
+#[inline]
+fn store(bytes: &mut [u8; 16], vector: __m128i) {
+    // SAFETY: `bytes` is sixteen writable bytes, and `_mm_storeu_si128` has
+    // no alignment requirement; SSE2 is part of the x86-64 baseline.
+    unsafe { _mm_storeu_si128(bytes.as_mut_ptr().cast(), vector) }
 }
 
 // --- SHA-1 ----------------------------------------------------------------
@@ -192,4 +204,44 @@ fn reduce(acc: __m128i) -> u32 {
     let qp = _mm_clmulepi64_si128::<0x10>(_mm_cvtsi64_si128(q as i64), barrett);
     let qp_low = (_mm_cvtsi128_si64(qp) as u64 >> 63) | ((_mm_extract_epi64::<1>(qp) as u64) << 1);
     ((r >> 32) ^ qp_low) as u32
+}
+
+// --- Base16 ---------------------------------------------------------------
+
+/// The SSSE3 base16 encoder, if this processor has `ssse3`.
+pub(crate) fn hex_x86_ssse3() -> Option<HexEncode> {
+    is_x86_feature_detected!("ssse3").then_some(hex_encode as HexEncode)
+}
+
+fn hex_encode(input: &[u8], output: &mut [u8]) {
+    // SAFETY: this function escapes the module only through `hex_x86_ssse3`,
+    // which returns it after detecting `ssse3`, the one feature the kernel is
+    // compiled for beyond the SSE2 baseline.
+    unsafe { hex_kernel(input, output) }
+}
+
+/// Sixteen input bytes per step: the high and low nibbles of every byte,
+/// each looked up in the alphabet with `pshufb`, then interleaved high-first
+/// into thirty-two characters. The tail after the last whole step is
+/// encoded by the portable table.
+#[target_feature(enable = "ssse3")]
+fn hex_kernel(input: &[u8], output: &mut [u8]) {
+    let alphabet = load(ALPHABET);
+    let low_nibble = _mm_set1_epi8(0x0f);
+    let (chunks, tail) = input.as_chunks::<16>();
+    let (pairs, _) = output.as_chunks_mut::<32>();
+    for (chunk, pair) in chunks.iter().zip(pairs.iter_mut()) {
+        let bytes = load(chunk);
+        // A 16-bit shift moves the neighbouring byte's low bits into each
+        // byte's top nibble; the mask discards them.
+        let high = _mm_and_si128(_mm_srli_epi16::<4>(bytes), low_nibble);
+        let low = _mm_and_si128(bytes, low_nibble);
+        let high = _mm_shuffle_epi8(alphabet, high);
+        let low = _mm_shuffle_epi8(alphabet, low);
+        let (halves, _) = pair.as_chunks_mut::<16>();
+        store(&mut halves[0], _mm_unpacklo_epi8(high, low));
+        store(&mut halves[1], _mm_unpackhi_epi8(high, low));
+    }
+    let done = chunks.len() * 16;
+    encode_portable(tail, &mut output[2 * done..]);
 }

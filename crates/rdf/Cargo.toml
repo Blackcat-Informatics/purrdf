@@ -100,6 +100,8 @@ memchr = { workspace = true }
 # own canonicalizer — the workspace-level entry is default-features = false
 # for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
+# Lowercase hex rendering of those SHA-256 digests.
+purrdf-hash = { workspace = true }
 
 # Maintainer-only golden-capture binary. Freezes the native
 # SPARQL engine over the corpus as committed goldens under

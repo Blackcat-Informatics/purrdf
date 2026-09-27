@@ -2,27 +2,39 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Armv8 kernels: SHA-1 on the SHA1 instructions, CRC-32 on the CRC32
-//! instructions, alone or behind `pmull` folding.
+//! instructions, alone or behind `pmull` folding, base16 encoding on the NEON
+//! table lookup `tbl`.
 
 use core::arch::aarch64::{
-    __crc32b, __crc32d, uint32x4_t, uint64x2_t, vaddq_u32, vdupq_n_u32, vdupq_n_u64, veorq_u64,
-    vgetq_lane_u32, vgetq_lane_u64, vld1q_u8, vmull_p64, vreinterpretq_u32_u8,
-    vreinterpretq_u64_p128, vreinterpretq_u64_u8, vrev32q_u8, vsetq_lane_u32, vsetq_lane_u64,
-    vsha1cq_u32, vsha1h_u32, vsha1mq_u32, vsha1pq_u32, vsha1su0q_u32, vsha1su1q_u32,
+    __crc32b, __crc32d, uint8x16_t, uint32x4_t, uint64x2_t, vaddq_u32, vandq_u8, vdupq_n_u8,
+    vdupq_n_u32, vdupq_n_u64, veorq_u64, vgetq_lane_u32, vgetq_lane_u64, vld1q_u8, vmull_p64,
+    vqtbl1q_u8, vreinterpretq_u32_u8, vreinterpretq_u64_p128, vreinterpretq_u64_u8, vrev32q_u8,
+    vsetq_lane_u32, vsetq_lane_u64, vsha1cq_u32, vsha1h_u32, vsha1mq_u32, vsha1pq_u32,
+    vsha1su0q_u32, vsha1su1q_u32, vshrq_n_u8, vst1q_u8, vzip1q_u8, vzip2q_u8,
 };
 use std::arch::is_aarch64_feature_detected;
 
-use super::{Crc32Update, Sha1Blocks};
+use super::{Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::FOLD;
+use crate::hex::{ALPHABET, encode_portable};
 use crate::sha1::K;
 
 /// Sixteen bytes as a vector, byte `i` in lane `i`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn load(bytes: &[u8; 16]) -> core::arch::aarch64::uint8x16_t {
+fn load(bytes: &[u8; 16]) -> uint8x16_t {
     // SAFETY: `bytes` is sixteen readable bytes; `vld1q_u8` needs only byte
     // alignment.
     unsafe { vld1q_u8(bytes.as_ptr()) }
+}
+
+/// Writes a vector's sixteen lanes, lane `i` to byte `i`.
+#[inline]
+#[target_feature(enable = "neon")]
+fn store(bytes: &mut [u8; 16], vector: uint8x16_t) {
+    // SAFETY: `bytes` is sixteen writable bytes; `vst1q_u8` needs only byte
+    // alignment.
+    unsafe { vst1q_u8(bytes.as_mut_ptr(), vector) }
 }
 
 // --- SHA-1 ----------------------------------------------------------------
@@ -200,4 +212,41 @@ fn crc32_pmull_kernel(register: u32, data: &[u8]) -> u32 {
         vgetq_lane_u64::<1>(single),
     );
     crc32_crc_kernel(reduced, tail)
+}
+
+// --- Base16 ---------------------------------------------------------------
+
+/// The NEON base16 encoder, if this processor has NEON (the AArch64
+/// baseline, absent only on soft-float targets).
+pub(crate) fn hex_aarch64_neon() -> Option<HexEncode> {
+    is_aarch64_feature_detected!("neon").then_some(hex_encode as HexEncode)
+}
+
+fn hex_encode(input: &[u8], output: &mut [u8]) {
+    // SAFETY: this function escapes the module only through
+    // `hex_aarch64_neon`, which returns it after detecting `neon`, the one
+    // feature the kernel is compiled for.
+    unsafe { hex_kernel(input, output) }
+}
+
+/// Sixteen input bytes per step: the high and low nibbles of every byte,
+/// each looked up in the alphabet with `tbl`, then zipped high-first into
+/// thirty-two characters. The tail after the last whole step is encoded by
+/// the portable table.
+#[target_feature(enable = "neon")]
+fn hex_kernel(input: &[u8], output: &mut [u8]) {
+    let alphabet = load(ALPHABET);
+    let low_nibble = vdupq_n_u8(0x0f);
+    let (chunks, tail) = input.as_chunks::<16>();
+    let (pairs, _) = output.as_chunks_mut::<32>();
+    for (chunk, pair) in chunks.iter().zip(pairs.iter_mut()) {
+        let bytes = load(chunk);
+        let high = vqtbl1q_u8(alphabet, vshrq_n_u8::<4>(bytes));
+        let low = vqtbl1q_u8(alphabet, vandq_u8(bytes, low_nibble));
+        let (halves, _) = pair.as_chunks_mut::<16>();
+        store(&mut halves[0], vzip1q_u8(high, low));
+        store(&mut halves[1], vzip2q_u8(high, low));
+    }
+    let done = chunks.len() * 16;
+    encode_portable(tail, &mut output[2 * done..]);
 }

@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The named execution paths of SHA-1 and CRC-32, for tests and benches.
+//! The named execution paths of SHA-1, CRC-32 and base16 encoding, for
+//! tests and benches.
 //!
 //! Not a stable interface. Every path computes the same bytes; this module
 //! exists so a test can run each path the host supports and compare it with
 //! the others and with the frozen vectors, and so a bench can time each one.
 //! MD5 and SHA-3 have a single, portable path.
 
-use crate::arch::{self, Crc32Update, Sha1Blocks};
+use crate::arch::{self, Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{self, Crc32};
 use crate::sha1::Sha1;
 
@@ -141,6 +142,79 @@ impl Crc32Backend {
             Self::X86Pclmulqdq => arch::crc32_x86_pclmulqdq(),
             Self::Aarch64Crc32 => arch::crc32_aarch64_crc32(),
             Self::Aarch64Pmull => arch::crc32_aarch64_pmull(),
+        }
+    }
+}
+
+/// A base16 encoding path, the one [`hex::Lower`](crate::hex::Lower) renders
+/// through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HexBackend {
+    /// A sixteen-entry alphabet table; always available.
+    Portable,
+    /// SSSE3 `pshufb` nibble lookup, x86-64 with `ssse3`.
+    X86Ssse3,
+    /// NEON `tbl` nibble lookup.
+    Aarch64Neon,
+    /// wasm `i8x16.swizzle` nibble lookup, in a build with `simd128` enabled.
+    Wasm32Simd128,
+}
+
+impl HexBackend {
+    /// Every path, in order of preference (the last is always available).
+    pub const ALL: [Self; 4] = [
+        Self::X86Ssse3,
+        Self::Aarch64Neon,
+        Self::Wasm32Simd128,
+        Self::Portable,
+    ];
+
+    /// The path's name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::X86Ssse3 => "x86-ssse3",
+            Self::Aarch64Neon => "aarch64-neon",
+            Self::Wasm32Simd128 => "wasm32-simd128",
+        }
+    }
+
+    /// Whether this processor and build can run the path.
+    pub fn is_available(self) -> bool {
+        self.encode_fn_if_available().is_some()
+    }
+
+    /// The path [`hex::Lower`](crate::hex::Lower) uses on this processor.
+    pub fn selected() -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|backend| backend.is_available())
+            .unwrap_or(Self::Portable)
+    }
+
+    /// Writes the lowercase base16 encoding of `input` into `output` on this
+    /// path. `None`, writing nothing, when the processor cannot run the path
+    /// or `output` is not exactly twice as long as `input`.
+    pub fn encode(self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        if Some(output.len()) != input.len().checked_mul(2) {
+            return None;
+        }
+        self.encode_fn_if_available()
+            .map(|encode| encode(input, output))
+    }
+
+    /// This path's encoder, or the portable one when it is unavailable.
+    pub(crate) fn encode_fn(self) -> HexEncode {
+        self.encode_fn_if_available()
+            .unwrap_or(crate::hex::encode_portable)
+    }
+
+    fn encode_fn_if_available(self) -> Option<HexEncode> {
+        match self {
+            Self::Portable => Some(crate::hex::encode_portable),
+            Self::X86Ssse3 => arch::hex_x86_ssse3(),
+            Self::Aarch64Neon => arch::hex_aarch64_neon(),
+            Self::Wasm32Simd128 => arch::hex_wasm32_simd128(),
         }
     }
 }

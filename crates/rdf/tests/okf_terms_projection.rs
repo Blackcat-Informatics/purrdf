@@ -107,7 +107,7 @@ fn sha256(bytes: &[u8]) -> String {
     // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
     // test directory already spells it — one idiom for "SHA-256 as lowercase
     // hex" across the suite rather than a per-file accumulate loop.
-    format!("{:x}", Sha256::digest(bytes))
+    format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(bytes)))
 }
 
 #[test]

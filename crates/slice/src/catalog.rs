@@ -387,7 +387,7 @@ fn collect_artifacts(
 
 fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
+    format!("{}", purrdf_hash::hex::Lower(&digest))
 }
 
 fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {

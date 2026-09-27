@@ -10,6 +10,9 @@
 //! | [`sha3`] | SHA3-224, SHA3-256, SHA3-384, SHA3-512 and Keccak-f\[1600\] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
 //! | [`crc32`] | CRC-32/ISO-HDLC | the reflected polynomial `0xEDB88320` | a `u32` |
 //!
+//! [`hex::Lower`] renders any byte string, a digest included, as lowercase
+//! base16 (RFC 4648 §8) through `Display`, without allocating.
+//!
 //! Every hasher has a one-shot associated function (`Md5::digest(data)`) and a
 //! streaming form (`new`, `update`, `finalize`); both give the same answer for
 //! every way of splitting the input. Every hasher also implements the
@@ -23,7 +26,9 @@
 //! instructions, whenever the processor reports them at run time; otherwise
 //! the portable code runs. Every path computes the same bytes. MD5 is a single
 //! serial dependency chain and SHA-3's Keccak-f\[1600\] needs 64-bit lane
-//! rotates most vector units lack, so both are portable scalar code.
+//! rotates most vector units lack, so both are portable scalar code. Base16
+//! encoding runs on SSSE3 when detected, on NEON, or on wasm `simd128` when
+//! the build enables it.
 //!
 //! # Scope
 //!
@@ -46,6 +51,7 @@ mod arch;
 #[doc(hidden)]
 pub mod backend;
 pub mod crc32;
+pub mod hex;
 pub mod md5;
 pub mod sha1;
 pub mod sha3;
