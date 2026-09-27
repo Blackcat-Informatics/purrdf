@@ -1543,11 +1543,7 @@ export interface AsyncJobError extends Error {
 export function hasAsyncQueries(): boolean;
 
 /** The macrotask primitive asynchronous jobs yield through, or `undefined` when none exists. */
-export function asyncYieldPrimitive():
-  | "scheduler.yield"
-  | "setImmediate"
-  | "MessageChannel"
-  | undefined;
+export function asyncYieldPrimitive(): "setImmediate" | "MessageChannel" | undefined;
 
 /**
  * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)

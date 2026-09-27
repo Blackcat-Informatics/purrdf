@@ -11,7 +11,6 @@ await ready();
 
 const report = {
   setImmediate: typeof globalThis.setImmediate,
-  scheduler: typeof globalThis.scheduler,
   hasAsyncQueries: hasAsyncQueries(),
   primitive: asyncYieldPrimitive(),
   ...(await measureYielding(new QueryEngine(), 1000)),

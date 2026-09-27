@@ -67,7 +67,7 @@ export const NO_JSPI_MESSAGE =
 
 const NO_YIELD_MESSAGE =
   "asynchronous queries need a macrotask primitive to yield to the event loop " +
-  "(scheduler.yield, setImmediate or MessageChannel), and this JavaScript environment " +
+  "(setImmediate or MessageChannel), and this JavaScript environment " +
   "provides none; the synchronous API is unaffected";
 
 const NOT_INSTALLED_MESSAGE =
@@ -135,11 +135,12 @@ const encoder = new TextEncoder();
 
 const yielder = chooseYield();
 
+// `scheduler.yield()` is deliberately not a candidate. It resumes as a prioritized
+// continuation that runs ahead of ordinary tasks of the same priority, so a job that
+// keeps yielding through it never lets a timer, a message or a network task run — in a
+// browser that starves the very fetch responses a concurrent job awaits. Both primitives
+// below queue an ordinary task behind the ones already waiting.
 function chooseYield() {
-  const scheduler = globalThis.scheduler;
-  if (scheduler != null && typeof scheduler.yield === "function") {
-    return { name: "scheduler.yield", once: () => scheduler.yield() };
-  }
   if (typeof globalThis.setImmediate === "function") {
     const setImmediate = globalThis.setImmediate;
     return {
@@ -303,9 +304,8 @@ export function assertNotPoisoned() {
 }
 
 /**
- * The macrotask primitive jobs yield through — `"scheduler.yield"`, `"setImmediate"` or
- * `"MessageChannel"`, chosen once when this module loads — or `undefined` when none
- * exists.
+ * The macrotask primitive jobs yield through — `"setImmediate"` or `"MessageChannel"`,
+ * chosen once when this module loads — or `undefined` when neither exists.
  */
 export function asyncYieldPrimitive() {
   return yielder?.name;

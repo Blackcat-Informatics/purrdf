@@ -500,9 +500,11 @@ parse is the `LOAD`'s own failure.
 A job counts the evaluator's governor polls and gives the event loop one turn every
 `yieldEveryPolls` polls: 65 536 by default, and `0` yields at every poll. The count, not
 the clock, decides when to yield. It yields through one macrotask primitive, chosen when
-the module loads and reported by `asyncYieldPrimitive()`: `scheduler.yield`,
-`setImmediate` or `MessageChannel`, in that order of preference. Only evaluation yields
-(an entailment closure included). Freezing the dataset before the job and serializing
+the module loads and reported by `asyncYieldPrimitive()`: `setImmediate`, or a
+`MessageChannel` round trip where there is none (a browser, for one). It never uses
+`scheduler.yield`: that resumes as a prioritized continuation ahead of ordinary tasks, so
+a job yielding through it would starve timers, messages and the fetch responses other
+jobs await. Only evaluation yields (an entailment closure included). Freezing the dataset before the job and serializing
 the result after are linear passes that run to completion. `evidence.async` reports
 what each phase cost (`freezeMs`, `evaluateMs`, `serializeMs`).
 

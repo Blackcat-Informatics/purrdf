@@ -246,8 +246,7 @@ const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o 
 
 // The asynchronous twins.
 const asyncAvailable: boolean = hasAsyncQueries();
-const yieldPrimitive: "scheduler.yield" | "setImmediate" | "MessageChannel" | undefined =
-  asyncYieldPrimitive();
+const yieldPrimitive: "setImmediate" | "MessageChannel" | undefined = asyncYieldPrimitive();
 configureAsync({ maxConcurrentJobs: 8 });
 const profile: ServiceProfileJson = {
   capabilities: ["query", "network"],

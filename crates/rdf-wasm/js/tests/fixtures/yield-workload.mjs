@@ -31,7 +31,10 @@ export function expectedCrossCount(size) {
 
 /**
  * Run `CROSS_COUNT` once synchronously and once through `queryGovernedAsync` with
- * `yieldEveryPolls: 1024`, counting the ticks of a 5 ms interval during each.
+ * `yieldEveryPolls: 64`, counting the ticks of a 5 ms interval during each. Node delivers
+ * up to a thousand queued `MessagePort` messages in one event-loop turn, so at 1 024 the
+ * `MessageChannel` fallback came round to the timer phase only once in the whole run;
+ * at 64 it comes round often enough that a tick count of zero means starvation.
  */
 export async function measureYielding(engine, size) {
   const dataset = crossDataset(size);
@@ -44,7 +47,7 @@ export async function measureYielding(engine, size) {
     const syncCount = sync.rows.take(0).c.value;
     const syncTicks = ticks;
     ticks = 0;
-    const outcome = await engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 1024 });
+    const outcome = await engine.queryGovernedAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 64 });
     const asyncTicks = ticks;
     return {
       syncCount,

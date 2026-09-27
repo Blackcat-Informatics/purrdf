@@ -836,10 +836,7 @@ test("a long query yields to the event loop", async () => {
   assert.equal(measured.asyncCount, measured.syncCount);
   assert.ok(measured.asyncTicks > 0, `the interval ticked ${measured.asyncTicks} times during the async run`);
   assert.ok(measured.yields > 0, `evidence.async.yields = ${measured.yields}`);
-  assert.ok(
-    ["scheduler.yield", "setImmediate"].includes(asyncYieldPrimitive()),
-    `a preferred macrotask primitive is chosen here (${asyncYieldPrimitive()})`,
-  );
+  assert.equal(asyncYieldPrimitive(), "setImmediate", "Node's preferred macrotask primitive is chosen");
 });
 
 // A dataset whose three-way self cross product cannot finish in any time a test would
@@ -1381,11 +1378,11 @@ test("concurrent updates on one dataset are serialized", async () => {
 // ---------------------------------------------------------------------------
 
 /** Run a fixture script in a child `node` with `--import <preload>`; its one JSON line. */
-function runChild(preload, script) {
+function runChild(preload, script, env = {}) {
   const child = spawnSync(
     process.execPath,
     ["--import", fileURLToPath(new URL(`./fixtures/${preload}`, import.meta.url)), fileURLToPath(new URL(`./fixtures/${script}`, import.meta.url))],
-    { encoding: "utf8", timeout: 120_000 },
+    { encoding: "utf8", timeout: 120_000, env: { ...process.env, ...env } },
   );
   assert.equal(child.status, 0, `the child exited ${child.status}: ${child.stderr}`);
   return JSON.parse(child.stdout.trim());
@@ -1417,7 +1414,6 @@ test("async methods hard-fail without JSPI", async () => {
 test("the yield primitive falls back to MessageChannel", () => {
   const report = runChild("no-macrotask-preload.mjs", "message-channel-child.mjs");
   assert.equal(report.setImmediate, "undefined");
-  assert.equal(report.scheduler, "undefined");
   assert.equal(report.hasAsyncQueries, true);
   assert.equal(report.primitive, "MessageChannel");
   // The long-query yielding assertions, unchanged, over the fallback primitive.
@@ -1427,6 +1423,37 @@ test("the yield primitive falls back to MessageChannel", () => {
   assert.equal(report.asyncCount, report.syncCount);
   assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times`);
   assert.ok(report.yields > 0);
+});
+
+// A browser's `scheduler.yield()` resumes as a prioritized continuation, ahead of every
+// ordinary task, so a job that kept yielding through it would never let a timer, a
+// message or a fetch response run. The preload models that priority at its limit and
+// removes `setImmediate`, as a browser page has it.
+test("a scheduler.yield with continuation priority is never the yield primitive", () => {
+  const report = runChild("continuation-scheduler-preload.mjs", "continuation-scheduler-child.mjs");
+  assert.equal(report.setImmediate, "undefined");
+  assert.equal(report.scheduler, "function", "the continuation-priority scheduler.yield is installed");
+  // The oracle can see starvation: yielding through the installed primitive turns no timer.
+  assert.ok(report.schedulerYieldTurns > 0);
+  assert.equal(report.schedulerYieldTicks, 0, "yielding through scheduler.yield starves the timer");
+  assert.equal(report.hasAsyncQueries, true);
+  assert.equal(report.primitive, "MessageChannel");
+  assert.equal(report.syncCount, expectedCrossCount(1000));
+  assert.equal(report.syncTicks, 0, "the synchronous control never turns the event loop");
+  assert.equal(report.asyncCount, report.syncCount);
+  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
+});
+
+test("setImmediate is preferred where it exists, beside a scheduler.yield", () => {
+  const report = runChild("continuation-scheduler-preload.mjs", "continuation-scheduler-child.mjs", {
+    PURRDF_TEST_KEEP_SET_IMMEDIATE: "1",
+  });
+  assert.equal(report.setImmediate, "function");
+  assert.equal(report.scheduler, "function");
+  assert.equal(report.primitive, "setImmediate");
+  assert.equal(report.syncTicks, 0);
+  assert.equal(report.asyncCount, expectedCrossCount(1000));
+  assert.ok(report.asyncTicks > 0, `the interval ticked ${report.asyncTicks} times during queryAsync`);
 });
 
 // ---------------------------------------------------------------------------

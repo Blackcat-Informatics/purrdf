@@ -445,7 +445,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     only way to cancel a twin: passing `cancel` is a `TypeError`;
   - `yieldEveryPolls` (default 65 536; `0` yields at every poll). A job gives the
     event loop one turn per that many governor polls, counted rather than timed,
-    through the macrotask primitive `asyncYieldPrimitive()` reports;
+    through the macrotask primitive `asyncYieldPrimitive()` reports: `setImmediate`,
+    else a `MessageChannel` round trip. `scheduler.yield` is never used, because its
+    prioritized continuation runs ahead of ordinary tasks and a job yielding through
+    it would starve timers, messages and network responses;
   - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region. It
     sizes the shadow stack only: V8 gives a job's suspendable call stack the same
     size as the synchronous lane's, so the host-stack budget (see Fixed) binds at

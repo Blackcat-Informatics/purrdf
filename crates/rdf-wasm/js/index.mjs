@@ -1171,8 +1171,8 @@ export function hasAsyncQueries() {
 
 /**
  * The macrotask primitive asynchronous jobs yield to the event loop through —
- * `"scheduler.yield"`, `"setImmediate"` or `"MessageChannel"` — or `undefined` when the
- * environment has none.
+ * `"setImmediate"` or `"MessageChannel"` — or `undefined` when the environment has
+ * neither.
  */
 export function asyncYieldPrimitive() {
   assertNotPoisoned();
