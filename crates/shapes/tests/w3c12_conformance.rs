@@ -469,16 +469,25 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
 
 // ── srlt:* ────────────────────────────────────────────────────────────────────
 
-/// Grade one SPARQL 1.2 RL entry, requiring every negative entry to fail at the stage
-/// its type names — a negative syntax test in the parser, a negative well-formedness
-/// test in the §4.2 check of a document that parses, a negative stratification test in
-/// the §4.4 stratifier of a well-formed rule set — so a test cannot pass by failing for
-/// some other reason. The suite README: "All the test are syntactically legal, i.e.
-/// conform to the SPARQL-RL Rules grammar" (well-formedness), "All the test are
-/// syntactically legal and well-formed" (stratification); and a positive syntax test is
-/// "regardless of well-formedness and stratification".
+/// Grade one SPARQL 1.2 RL entry through [`srl::check`] — the production check-only
+/// entry point every host exposes (`purrdf rules --srl FILE --check`, Python
+/// `check_rules`, WebAssembly `shaclCheckRules`, C `purrdf_shacl_check_rules`) — never
+/// through harness-private stage calls.
 ///
-/// An evaluation entry parses and checks the rule set, runs SPARQL 1.2 RL's infer
+/// A positive entry must be ACCEPTED at the [`srl::CheckLevel`] its type asks about: a
+/// positive syntax test at [`srl::CheckLevel::Syntax`] (the suite: "regardless of
+/// well-formedness and stratification" — fourteen of them are not stratifiable, and one is
+/// not well formed), a positive well-formedness test at [`srl::CheckLevel::WellFormed`] (two
+/// are not stratifiable), a positive stratification test at [`srl::CheckLevel::Stratified`].
+/// A negative entry must be REFUSED at the full [`srl::CheckLevel::Stratified`] check, by
+/// the stage its type names — a negative syntax test in the parser, a negative
+/// well-formedness test in the §4.2 check of a document that parses, a negative
+/// stratification test in the §4.4 stratifier of a well-formed rule set — so a test cannot
+/// pass by failing for some other reason. The suite README: "All the test are
+/// syntactically legal, i.e. conform to the SPARQL-RL Rules grammar" (well-formedness),
+/// "All the test are syntactically legal and well-formed" (stratification).
+///
+/// An evaluation entry is checked by the same function, runs SPARQL 1.2 RL's infer
 /// operation over `srlt:data`, and compares the INFERENCE graph — "The result of an
 /// evaluation test is the inference graph" — with `mf:result` under RDF isomorphism
 /// (RDFC-1.0 canonical N-Quads).
@@ -486,11 +495,12 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
     let text = fs::read_to_string(&tc.ruleset)
         .map_err(|e| format!("cannot read {}: {e}", tc.ruleset.display()))?;
     let base = file_iri(&tc.ruleset);
-    let parsed = srl::parse(&text, Some(&base));
-    let expect_stage = |outcome: Result<(), SrlError>, stage: &str| -> Result<(), String> {
-        match outcome {
+    let check = |level| srl::check(&text, Some(&base), &[], level);
+    let positive = |level| check(level).map(drop).map_err(|e| e.to_string());
+    let expect_stage = |stage: &str| -> Result<(), String> {
+        match &check(srl::CheckLevel::Stratified) {
             Err(error) => {
-                let actual = srl_stage(&error);
+                let actual = srl_stage(error);
                 if actual == stage {
                     Ok(())
                 } else {
@@ -499,35 +509,22 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
                     ))
                 }
             }
-            Ok(()) => Err(format!(
+            Ok(_) => Err(format!(
                 "expected a {stage} failure, but every stage accepted it"
             )),
         }
     };
     match tc.kind {
-        SrlKind::PositiveSyntax => parsed.map(drop).map_err(|e| e.to_string()),
-        SrlKind::NegativeSyntax => expect_stage(parsed.map(drop), "syntax"),
-        SrlKind::PositiveWellFormedness => parsed
-            .and_then(|document| document.check_well_formed())
-            .map_err(|e| e.to_string()),
-        SrlKind::NegativeWellFormedness => {
-            let document = parsed.map_err(|e| format!("the document must parse: {e}"))?;
-            expect_stage(document.check_well_formed(), "well-formedness")
-        }
-        SrlKind::PositiveStratification => {
-            let document = parsed.map_err(|e| e.to_string())?;
-            document.check_well_formed().map_err(|e| e.to_string())?;
-            document.stratify().map(drop).map_err(|e| e.to_string())
-        }
-        SrlKind::NegativeStratification => {
-            let document = parsed.map_err(|e| format!("the document must parse: {e}"))?;
-            document
-                .check_well_formed()
-                .map_err(|e| format!("the rule set must be well formed: {e}"))?;
-            expect_stage(document.stratify().map(drop), "stratification")
-        }
+        SrlKind::PositiveSyntax => positive(srl::CheckLevel::Syntax),
+        SrlKind::PositiveWellFormedness => positive(srl::CheckLevel::WellFormed),
+        SrlKind::PositiveStratification => positive(srl::CheckLevel::Stratified),
+        SrlKind::NegativeSyntax => expect_stage("syntax"),
+        SrlKind::NegativeWellFormedness => expect_stage("well-formedness"),
+        SrlKind::NegativeStratification => expect_stage("stratification"),
         SrlKind::Eval => {
-            let document = srl::parse_and_check(&text, Some(&base)).map_err(|e| e.to_string())?;
+            let document = check(srl::CheckLevel::Stratified)
+                .map_err(|e| e.to_string())?
+                .into_document();
             let (Some(data), Some(result)) = (&tc.data, &tc.result) else {
                 return Err("an evaluation entry has srlt:data and mf:result".to_owned());
             };
@@ -558,7 +555,7 @@ fn srl_stage(error: &SrlError) -> &'static str {
         SrlError::Syntax { .. } => "syntax",
         SrlError::WellFormedness { .. } => "well-formedness",
         SrlError::Stratification { .. } => "stratification",
-        SrlError::Import { .. } => "import",
+        SrlError::Import { .. } | SrlError::UnreachedImports { .. } => "import",
         _ => "evaluation",
     }
 }

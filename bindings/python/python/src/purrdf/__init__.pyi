@@ -1855,6 +1855,23 @@ class shapes:
         max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
     ) -> dict[str, str | None]: ...
+    # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
+    # closure resolved from `imports`, well-formedness and stratification — every
+    # static check apply_rules(srl=...) applies before it runs — with no data graph
+    # read and no rule run. `level` is "syntax", "well-formed" or "stratified" (None),
+    # each including the ones before it; any other name raises ValueError. Returns
+    # {"level", "rules" (each rule described by its IRI or position), "data_triples",
+    # "imported" (imported rule-set IRIs, in read order), "versions" (the VERSION
+    # labels), "strata" (layer count; None below "stratified"), "summary" (the one
+    # line every host reports)}. A refused rule set raises ValueError naming the stage.
+    @staticmethod
+    def check_rules(
+        srl: str,
+        *,
+        srl_base: str | None = None,
+        imports: Sequence[tuple[str, str]] = ...,
+        level: str | None = None,
+    ) -> dict[str, builtins.object]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
     # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
     # sequence order. The expression is named exactly one way: `expr` is an absolute

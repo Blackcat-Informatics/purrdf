@@ -823,11 +823,23 @@ does), or an `IMPORTS` of the SRL rule set. PurRDF fetches nothing. An import no
 pair resolves is refused (exit `1`), and a pair nothing imports is a usage
 error (exit `2`).
 
+**`--check[=LEVEL]`** checks the `--srl` rule set and evaluates nothing: no
+data graph is read and no rule runs. `LEVEL` is how far the check goes, each
+level including the ones before it: `syntax` (the SPARQL 1.2 RL grammar, for the
+rule set and every document its `--import` closure reads), `well-formed` (every
+rule, imported ones included, is well formed) or `stratified` (the combined rule
+set can be stratified). Bare `--check` is `--check=stratified`, which is every
+static check a run applies before it evaluates. A rule set that passes writes one
+summary line to stdout and exits `0`; one a check refuses exits `1` with an
+error naming the stage. The imports resolve exactly as a run's do. `IN`, `OUT`,
+`--from`, `--to`, `--base`, `--explain` and the four limits configure an
+evaluation, so they are usage errors beside `--check`.
+
 **Exit codes.** `0` when the rule set ran to completion, whether or not it
-inferred anything. `1` for a malformed document, an ill-formed or
-unstratifiable rule set, a `sh:ruleProcessor` this engine does not handle, a
-rule that fails during execution, or a passed round limit. `2` for a usage
-error.
+inferred anything, or passed `--check`. `1` for a malformed document, an
+ill-formed or unstratifiable rule set, a `sh:ruleProcessor` this engine does not
+handle, a rule that fails during execution, or a passed round limit. `2` for a
+usage error.
 
 ```sh
 # The SHACL rules of a shapes graph, N-Triples on stdout.
@@ -838,6 +850,9 @@ purrdf rules --srl closure.srl --explain=proof.txt --to turtle data.ttl inferred
 
 # An untrusted rule set: fail fast rather than run long.
 purrdf rules --srl untrusted.srl --max-term-generating-rounds 64 --to ntriples data.ttl
+
+# Check a rule set without running it; --check=syntax asks the grammar alone.
+purrdf rules --srl closure.srl --import https://example.org/lib=lib.srl --check
 ```
 
 ## `node-expr`

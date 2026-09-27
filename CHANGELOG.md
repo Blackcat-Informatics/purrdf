@@ -10,6 +10,36 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, cli, python, wasm, capi:** a SPARQL 1.2 RL rule set can be
+  checked without being evaluated, on every host. `purrdf_shapes::srl::check(text,
+  base, imports, level)` applies the static checks up to a `CheckLevel` — `Syntax`
+  (the §7 grammar, for the rule set and every document its `IMPORTS` closure reads),
+  `WellFormed` (§4.2, imported rules included) or `Stratified` (§4.4, the default) —
+  resolving the closure from the same import table a rules run takes, reading no
+  base graph and running no rule, and returns a `CheckedRuleSet` (the combined rule
+  set, the imported IRIs, the strata, and the one-line `summary()` every host
+  reports) or the `SrlError` of the stage that refused. The hosts: `purrdf rules
+  --srl FILE --check[=syntax|well-formed|stratified]` (bare `--check` is
+  `stratified`; one summary line on stdout, exit 1 naming the stage for a refused
+  rule set, exit 2 for an unused `--import` pair and for the data, output, proof and
+  limit flags a check never consumes), Python `purrdf.shapes.check_rules(srl, *,
+  srl_base, imports, level)`, WebAssembly `shaclCheckRules(srl, srlBase?, importIris?,
+  importDocuments?, level?)` returning `ShaclRulesCheck`, and C
+  `purrdf_shacl_check_rules(srl, srl_base_iri, level, import_iris, import_documents,
+  import_count, out_summary, out_error)` with the `PurrdfSrlCheckLevel` discriminant
+  (riding the unshipped `0.8.0` ABI bump). `purrdf_validate::check_rules` and
+  `parse_check_level` are the shared boundary. Every host's SPARQL 1.2 RL rules run
+  now passes through the same check at `Stratified` before it evaluates, so a run
+  refuses exactly what a check refuses. The W3C SPARQL 1.2 RL harness grades every
+  syntax, well-formedness and stratification entry through `srl::check` — a positive
+  entry at the level its type asks about, a negative one at the full check by the
+  stage its type names — and a new CLI test drives every one of those entries, and
+  every evaluation entry's rule set, through the built `purrdf rules --check`; the
+  counts are unchanged (538 passed plus 6 non-canonical decimals). Fourteen positive
+  syntax entries are not stratifiable and one is not well formed, so bare `--check`
+  refuses exactly those fifteen, by a later stage, while `--check=syntax` accepts
+  them.
+
 - **core, shapes, validate, cli, python, wasm, capi (BREAKING):** a data graph's
   `sh:shapesGraph` links are part of the shapes graph that validates it (SHACL 1.2
   Core §6.4, whose SHOULD PurRDF reads as a MUST). A `sh:shapesGraph` whose subject is

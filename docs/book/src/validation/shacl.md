@@ -946,13 +946,14 @@ wasm-clean Rust.
 
 ## Rules, node expressions and certifying a shapes graph
 
-Three tools sit beside validation. Every host reaches the same library entry
+Four tools sit beside validation. Every host reaches the same library entry
 point, so the command line, Python, WebAssembly and C cannot disagree about the
 answer.
 
 | Tool | Rust | CLI | Python (`purrdf.shapes`) | WebAssembly | C ABI |
 |---|---|---|---|---|---|
 | Run rules, write the inference graph | `purrdf_shapes::infer`, `srl::infer` | `purrdf rules` | `apply_rules` | `shaclApplyRules` | `purrdf_shacl_apply_rules` |
+| Check a SPARQL 1.2 RL rule set, run nothing | `srl::check` | `purrdf rules --srl FILE --check` | `check_rules` | `shaclCheckRules` | `purrdf_shacl_check_rules` |
 | Evaluate one node expression | `free_expression::evaluate` | `purrdf node-expr` | `eval_node_expr` | `shaclEvalNodeExpr` | `purrdf_shacl_eval_node_expr` |
 | Certify a shapes graph | `lint::lint` | `purrdf shapes lint` | `lint_shapes` | `shaclLintShapes` | `purrdf_shacl_lint_shapes` |
 
@@ -1018,6 +1019,28 @@ out = purrdf.shapes.apply_rules(data_nt, shapes_ttl, explain=True,
 print(out["inferred"])   # the inference graph, N-Triples
 print(out["proof"])      # the proof text
 out = purrdf.shapes.apply_rules(data_nt, srl=srl_text)  # SPARQL 1.2 RL
+```
+
+**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without being
+run. The check applies the static checks up to a level, and each level includes
+the ones before it. `syntax` checks the SPARQL 1.2 RL grammar, for the rule set
+and every document its `IMPORTS` closure reads. `well-formed` also checks that
+every rule, imported ones included, is well formed. `stratified` also checks that
+the combined rule set can be stratified. It is the default, and it is exactly the
+set of checks a rules run applies before it evaluates: every host's rules run
+passes through the same check first. The imports resolve from the same import
+table a run takes. No data graph is read and no rule runs. A rule set that passes
+returns its rules, data-block triple count, imported rule sets, `VERSION` labels
+and strata, and a one-line summary every host prints alike. A refused rule set
+fails with the error of the stage that refused it. The W3C SPARQL 1.2 RL suite's
+syntax, well-formedness and stratification tests are graded through this check.
+A positive syntax test is valid "regardless of well-formedness and
+stratification", so it is graded at `syntax`. Fifteen of them fail the full
+check, by a later stage.
+
+```sh
+purrdf rules --srl closure.srl --check              # every static check
+purrdf rules --srl closure.srl --check=syntax       # the grammar alone
 ```
 
 **Node expressions.** One node expression of a shapes graph is evaluated

@@ -90,7 +90,10 @@ const reparsed = Dataset.parse(nq, "nquads");
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples. Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
   SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
-  on request, its proof), `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, …)`
+  on request, its proof), `shaclCheckRules(srl, srlBase?, importIris?,
+  importDocuments?, level?)` checks a SPARQL 1.2 RL rule set to a level (`syntax`,
+  `well-formed`, or `stratified` by default) without running it,
+  `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, …)`
   evaluates one node expression, named by IRI or label, by a walk from a named node
   (`exprAt` / `exprVia`), or inline as Turtle (`exprTurtle`), and
   `shaclLintShapes(shapesTtl)` certifies a shapes graph against the W3C

@@ -93,7 +93,8 @@ tempfile = { workspace = true }
 # product codec directly, it calls through `purrdf-validate`.
 purrdf-shapes = { workspace = true }
 # The shared W3C SHACL 1.2 corpus reader (`crates/shapes/tests/shacl_corpora`), which
-# `w3c_node_expr_cli` includes to run every `sht:EvalNodeExpr` entry through the built
+# `w3c_node_expr_cli` and `w3c_srl_check_cli` include to run every `sht:EvalNodeExpr` entry
+# and every SPARQL 1.2 RL entry through the built
 # binary, reads `sht:ignoreOrder` as an `xsd:boolean` through it. Test-only.
 purrdf-xsd = { workspace = true }
 # Authors the `.gts` fixtures the GTS-ingestion integration tests feed to the binary.

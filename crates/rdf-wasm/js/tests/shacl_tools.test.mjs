@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution coverage of the shapes-graph tools reached through the PUBLIC
-// package root (`../index.mjs`): `shaclApplyRules`, `shaclEvalNodeExpr` and
-// `shaclLintShapes`. Every shapes graph carries the W3C SHACL 1.2 declaration of
+// package root (`../index.mjs`): `shaclApplyRules`, `shaclCheckRules`, `shaclEvalNodeExpr`
+// and `shaclLintShapes`. Every shapes graph carries the W3C SHACL 1.2 declaration of
 // `sh:SPARQLExprExpression` verbatim — a built-in declared as a
 // `sh:NamedParameterExpressionFunction` with no `sh:bodyExpression`, which is not a
 // bodiless custom function — beside shapes that call `sh:sparqlExpr` with `sh:prefixes`.
@@ -11,7 +11,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ready, shaclApplyRules, shaclEvalNodeExpr, shaclLintShapes } from "../index.mjs";
+import {
+  ready,
+  shaclApplyRules,
+  shaclCheckRules,
+  shaclEvalNodeExpr,
+  shaclLintShapes,
+} from "../index.mjs";
 
 await ready();
 
@@ -366,4 +372,59 @@ ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
   );
   assert.equal(raised.inferred.split("\n").length - 1, COPIED);
   raised.free();
+});
+
+test("wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing", () => {
+  const importing =
+    'PREFIX ex: <http://example.org/ns#>\nVERSION "1.2"\nIMPORTS <http://example.org/more>\n' +
+    "RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n";
+  const imported =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+  const checked = shaclCheckRules(importing, undefined, ["http://example.org/more"], [imported]);
+  assert.equal(checked.level, "stratified");
+  assert.equal(checked.rules.length, 2);
+  assert.equal(checked.dataTriples, 1);
+  assert.deepEqual(checked.imported, ["http://example.org/more"]);
+  assert.deepEqual(checked.versions, ["1.2"]);
+  assert.equal(checked.strata, 1);
+  assert.equal(
+    checked.summary,
+    "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 2 rules, " +
+      '1 data triple, 1 imported rule set, 1 stratum, VERSION "1.2"',
+  );
+  checked.free();
+  // Without the table entry the import is unresolved: refused by name.
+  assert.throws(
+    () => shaclCheckRules(importing),
+    (error) => error.message.startsWith("SPARQL 1.2 RL import <http://example.org/more> failed"),
+  );
+
+  // A self-negating rule is syntactically valid and well formed but not stratifiable; its
+  // neighbour, differing only in the negated predicate, passes every level.
+  const cyclic =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+  const acyclic =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+  for (const level of ["syntax", "well-formed"]) {
+    const below = shaclCheckRules(cyclic, undefined, undefined, undefined, level);
+    assert.equal(below.level, level);
+    assert.equal(below.strata, undefined);
+    below.free();
+  }
+  assert.throws(
+    () => shaclCheckRules(cyclic),
+    (error) => error.message.includes("is not stratifiable"),
+  );
+  const fine = shaclCheckRules(acyclic);
+  assert.equal(fine.strata, 1);
+  fine.free();
+  // Not SPARQL 1.2 RL at all, and an unknown level.
+  assert.throws(
+    () => shaclCheckRules("RULE {", undefined, undefined, undefined, "syntax"),
+    (error) => error.message.startsWith("SPARQL 1.2 RL syntax error"),
+  );
+  assert.throws(
+    () => shaclCheckRules(acyclic, undefined, undefined, undefined, "stratify"),
+    (error) => error.message.includes("is not a SPARQL 1.2 RL check level"),
+  );
 });

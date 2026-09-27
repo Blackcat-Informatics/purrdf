@@ -16,7 +16,9 @@
 //! 4. [`RuleSetDocument::stratify`] — §4.4 "Stratification": [`SrlError::Stratification`].
 //!
 //! [`parse_and_check`] runs 1, 3 and 4 (a document with imports is not stratified until
-//! they are resolved), and [`infer`] — "Infer is the operation that applies a rule set to
+//! they are resolved); [`check`] runs all four from an import table, well-formedness again
+//! over the imported rules, and evaluates nothing — the check-only entry point every host
+//! exposes; and [`infer`] — "Infer is the operation that applies a rule set to
 //! a given base graph and produces an inference graph containing inferred triples" —
 //! runs 3 and 4 before §6 "Rule Set Evaluation".
 //!
@@ -286,6 +288,208 @@ pub fn parse_and_check(text: &str, base: Option<&str>) -> Result<RuleSetDocument
     Ok(document)
 }
 
+/// How far [`check`] takes a rule set: each level is one of SPARQL 1.2 RL's conformance
+/// questions, and each includes the ones before it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CheckLevel {
+    /// §7: "A conforming SRL document is an RDF string that conforms to the grammar
+    /// starting with the RuleSet production" — the document and every document its
+    /// `IMPORTS` closure reads. The question a W3C positive syntax test asks, "regardless
+    /// of well-formedness and stratification".
+    Syntax,
+    /// [`Self::Syntax`], and §4.2: "A rule set is a well-formed rule set if and only if all
+    /// rules of the rule set are well-formed rules" — the imported rules included.
+    WellFormed,
+    /// [`Self::WellFormed`], and §4.4: the combined rule set can be stratified. Every static
+    /// check [`infer`] applies before it evaluates, so a rule set accepted at this level is
+    /// one [`infer`] will not refuse before reading the base graph. The default.
+    #[default]
+    Stratified,
+}
+
+impl CheckLevel {
+    /// Every level, in order.
+    pub const ALL: [Self; 3] = [Self::Syntax, Self::WellFormed, Self::Stratified];
+
+    /// The level's name, as every host spells it: `syntax`, `well-formed`, `stratified`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Syntax => "syntax",
+            Self::WellFormed => "well-formed",
+            Self::Stratified => "stratified",
+        }
+    }
+
+    /// The level [`Self::name`] spells, or `None`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.name() == name)
+    }
+
+    /// What an accepted rule set is at this level, for [`CheckedRuleSet::summary`].
+    const fn verdict(self) -> &'static str {
+        match self {
+            Self::Syntax => "is syntactically valid",
+            Self::WellFormed => "is well formed",
+            Self::Stratified => "is well formed and stratified",
+        }
+    }
+}
+
+impl fmt::Display for CheckLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The static checks SPARQL 1.2 RL applies to a rule set before §6 "Rule Set Evaluation",
+/// up to `level`, and nothing else: the §7 grammar, the §4.5 `IMPORTS` closure resolved
+/// from `imports` (each imported document held to the grammar), then — from
+/// [`CheckLevel::WellFormed`] — §4.2 well-formedness of every rule, imported ones
+/// included, then — at [`CheckLevel::Stratified`] — §4.4 stratification of the combined
+/// rule set. No base graph is read and no rule is evaluated.
+///
+/// This is the check-only entry point every PurRDF host exposes (`purrdf rules --srl FILE
+/// --check[=LEVEL]`, Python `check_rules`, WebAssembly `shaclCheckRules`, C
+/// `purrdf_shacl_check_rules`), and every host's rules run passes through it at
+/// [`CheckLevel::Stratified`] before it evaluates: a rule set accepted there is exactly one
+/// [`infer`] will not refuse statically, and one refused there is refused by every rules
+/// run with the same error.
+///
+/// `base` is the rule set's base IRI from outside it, as [`parse`] takes it. `imports` is
+/// the import table [`RuleSetDocument::resolve_import_table`] resolves the `IMPORTS`
+/// closure from — the empty table still refuses a rule set that imports anything, and an
+/// entry the closure never reaches is refused as unused.
+///
+/// # Errors
+///
+/// [`SrlError::Syntax`], [`SrlError::Import`], [`SrlError::UnreachedImports`],
+/// [`SrlError::WellFormedness`], [`SrlError::Stratification`] — each naming the stage that
+/// refused, so a caller can tell a document the grammar refuses from a rule set that is
+/// ill formed from one that cannot be stratified.
+pub fn check(
+    text: &str,
+    base: Option<&str>,
+    imports: &[(&str, &str)],
+    level: CheckLevel,
+) -> Result<CheckedRuleSet, SrlError> {
+    let document = parse(text, base)?;
+    if level >= CheckLevel::WellFormed {
+        // The importer's own rules first, so an ill-formed rule is named before an import
+        // that cannot be resolved — the order a rules run has always refused in.
+        document.check_well_formed()?;
+    }
+    let (document, imported) = document.resolve_import_table_listing(imports)?;
+    if level >= CheckLevel::WellFormed && !imported.is_empty() {
+        // The combined rule set: an imported rule is a rule of the set an evaluation runs,
+        // so it is held to §4.2 exactly as the importer's own are (its error names its
+        // document).
+        document.check_well_formed()?;
+    }
+    let strata = if level >= CheckLevel::Stratified {
+        Some(document.stratify()?)
+    } else {
+        None
+    };
+    Ok(CheckedRuleSet {
+        level,
+        document,
+        imported,
+        strata,
+    })
+}
+
+/// A SPARQL 1.2 RL rule set [`check`] accepted at its [`CheckLevel`]: parsed with its
+/// imports resolved and combined, and — as the level asks — well formed and stratified.
+#[derive(Debug, Clone)]
+pub struct CheckedRuleSet {
+    /// The level it was checked to.
+    level: CheckLevel,
+    /// The combined rule set, imports resolved.
+    document: RuleSetDocument,
+    /// The imported rule sets' IRIs, in the order §A read them.
+    imported: Vec<String>,
+    /// The stratification of the combined rule set, when the level asked for it.
+    strata: Option<Vec<Stratum>>,
+}
+
+impl CheckedRuleSet {
+    /// The level the rule set was checked to.
+    #[must_use]
+    pub const fn level(&self) -> CheckLevel {
+        self.level
+    }
+
+    /// The combined rule set — the importer's rules, then every imported rule — which
+    /// [`infer`] takes when the level was [`CheckLevel::Stratified`].
+    #[must_use]
+    pub fn document(&self) -> &RuleSetDocument {
+        &self.document
+    }
+
+    /// The combined rule set, owned.
+    #[must_use]
+    pub fn into_document(self) -> RuleSetDocument {
+        self.document
+    }
+
+    /// The IRIs of the imported rule sets, each once, in the order they were read.
+    #[must_use]
+    pub fn imported(&self) -> &[String] {
+        &self.imported
+    }
+
+    /// The stratification layers of the combined rule set (§4.4.2), or `None` below
+    /// [`CheckLevel::Stratified`], which does not stratify.
+    #[must_use]
+    pub fn strata(&self) -> Option<&[Stratum]> {
+        self.strata.as_deref()
+    }
+
+    /// The one-line summary every host reports for an accepted rule set: the level it
+    /// passed, the counts of rules, data-block triples, imported rule sets and (when
+    /// stratified) strata, and the `VERSION` labels.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        fn plural(count: usize, one: &str, many: &str) -> String {
+            format!("{count} {}", if count == 1 { one } else { many })
+        }
+        let versions = if self.document.versions.is_empty() {
+            "no VERSION".to_owned()
+        } else {
+            format!(
+                "VERSION {}",
+                self.document
+                    .versions
+                    .iter()
+                    .map(|label| format!("\"{label}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let mut counts = vec![
+            plural(self.document.rules.len(), "rule", "rules"),
+            plural(self.document.data.len(), "data triple", "data triples"),
+            plural(
+                self.imported.len(),
+                "imported rule set",
+                "imported rule sets",
+            ),
+        ];
+        if let Some(strata) = &self.strata {
+            counts.push(plural(strata.len(), "stratum", "strata"));
+        }
+        counts.push(versions);
+        format!(
+            "SPARQL 1.2 RL rule set {} (level {}): {}",
+            self.level.verdict(),
+            self.level.name(),
+            counts.join(", ")
+        )
+    }
+}
+
 /// Options for [`infer`]: the four rule-evaluation limits, and how the host names their
 /// knobs.
 #[derive(Debug, Clone)]
@@ -515,7 +719,18 @@ impl RuleSetDocument {
     /// [`SrlError::Import`]: the resolver declines or fails, or an imported document is
     /// not a SPARQL-RL Document.
     pub fn resolve_imports(&self, resolver: &mut dyn ImportResolver) -> Result<Self, SrlError> {
+        self.resolve_imports_listing(resolver)
+            .map(|(merged, _)| merged)
+    }
+
+    /// [`Self::resolve_imports`], also answering the IRIs of the rule sets it read, in
+    /// the order it read them.
+    fn resolve_imports_listing(
+        &self,
+        resolver: &mut dyn ImportResolver,
+    ) -> Result<(Self, Vec<String>), SrlError> {
         let mut visited: Vec<String> = self.location.iter().cloned().collect();
+        let preloaded = visited.len();
         let mut merged = Self {
             rules: self.rules.clone(),
             data: self.data.clone(),
@@ -531,7 +746,8 @@ impl RuleSetDocument {
             &mut merged,
             &mut imported,
         )?;
-        Ok(merged)
+        visited.drain(..preloaded);
+        Ok((merged, visited))
     }
 }
 
@@ -558,6 +774,15 @@ impl RuleSetDocument {
     /// an entry that is not a SPARQL-RL document; [`SrlError::UnreachedImports`] for
     /// entries the closure never names.
     pub fn resolve_import_table(&self, table: &[(&str, &str)]) -> Result<Self, SrlError> {
+        self.resolve_import_table_listing(table)
+            .map(|(merged, _)| merged)
+    }
+
+    /// [`Self::resolve_import_table`], also answering the IRIs of the rule sets it read.
+    fn resolve_import_table_listing(
+        &self,
+        table: &[(&str, &str)],
+    ) -> Result<(Self, Vec<String>), SrlError> {
         for (index, (iri, _)) in table.iter().enumerate() {
             if !purrdf_iri::is_absolute(iri).unwrap_or(false) {
                 return Err(SrlError::Import {
@@ -585,7 +810,7 @@ impl RuleSetDocument {
             used.push(key);
             Ok((*text).to_owned())
         };
-        let resolved = self.resolve_imports(&mut resolver)?;
+        let resolved = self.resolve_imports_listing(&mut resolver)?;
         let unreached: Vec<String> = table
             .iter()
             .filter(|(key, _)| !used.contains(key))

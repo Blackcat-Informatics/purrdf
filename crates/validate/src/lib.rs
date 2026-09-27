@@ -34,7 +34,8 @@
 //! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
 //!   canonical N-Triples.
 //! * [`shapes_tools`] — the shapes-graph tools beside validation: running SHACL or
-//!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), evaluating one node expression
+//!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), checking a SPARQL 1.2 RL rule set
+//!   without running it ([`check_rules`]), evaluating one node expression
 //!   ([`eval_node_expr_to_terms`]) and certifying a shapes graph ([`lint_shapes_ttl`]).
 //! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
 //!   plus a deterministically rendered [`ReasoningReport`]. Despite the name, this
@@ -137,7 +138,10 @@ pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
 /// See [`purrdf_shapes::imports`].
 pub type ShapesImportList<'a> = [(&'a str, &'a str)];
 pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};
+/// The SPARQL 1.2 RL check level and the checked rule set [`check_rules`] answers,
+/// re-exported so a host binding names them without depending on the engine crate.
+pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
-    NodeExprRequest, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples,
-    eval_node_expr_to_terms, lint_shapes_ttl, parse_scope_binding,
+    NodeExprRequest, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples, check_rules,
+    eval_node_expr_to_terms, lint_shapes_ttl, parse_check_level, parse_scope_binding,
 };

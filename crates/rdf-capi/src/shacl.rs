@@ -85,8 +85,9 @@ use std::os::raw::c_char;
 use purrdf_validate::{
     ChangeScope, ConformanceDisallows, ExprSelector, LintReport, NodeExprRequest, RulesOutcome,
     RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal, ValidationOptions,
-    apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr_to_terms, lint_shapes_ttl,
-    parse_scope_binding, validate_changes_to_sarif_string, validate_to_sarif_string,
+    apply_rules_to_ntriples, check_rules, entail_to_ntriples_string, eval_node_expr_to_terms,
+    lint_shapes_ttl, parse_scope_binding, validate_changes_to_sarif_string,
+    validate_to_sarif_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -587,6 +588,116 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
             }
             *out_inferred = PurrdfBuffer::into_raw(outcome.inferred_ntriples.into_bytes());
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// How far `purrdf_shacl_check_rules` checks a SPARQL 1.2 RL rule set, each level
+/// including the ones before it.
+///
+/// Append-only, like every other discriminant this ABI exports: never renumber a
+/// variant. It is carried as an `int32_t` parameter rather than as this enum type so a C
+/// caller passing an out-of-range value is refused rather than producing an invalid
+/// discriminant.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfSrlCheckLevel {
+    /// The SPARQL 1.2 RL grammar, for the rule set and every document its imports read.
+    Syntax = 0,
+    /// `Syntax`, and every rule — imported ones included — is well formed.
+    WellFormed = 1,
+    /// `WellFormed`, and the combined rule set can be stratified: every static check a
+    /// rules run applies before it evaluates.
+    Stratified = 2,
+}
+
+impl PurrdfSrlCheckLevel {
+    /// The engine's level for a caller's `int32_t`, or `None` for a value no variant has.
+    const fn from_raw(raw: i32) -> Option<purrdf_validate::CheckLevel> {
+        match raw {
+            0 => Some(purrdf_validate::CheckLevel::Syntax),
+            1 => Some(purrdf_validate::CheckLevel::WellFormed),
+            2 => Some(purrdf_validate::CheckLevel::Stratified),
+            _ => None,
+        }
+    }
+}
+
+/// Check a SPARQL 1.2 RL rule set. Native-testable, pointer-free core of
+/// [`purrdf_shacl_check_rules`]: the work is [`check_rules`], and the answer is the
+/// checked rule set's one-line summary.
+fn check_rules_summary(
+    srl: &str,
+    srl_base: Option<&str>,
+    level: i32,
+    imports: &[(&str, &str)],
+) -> Result<String, ShapesError> {
+    let level = PurrdfSrlCheckLevel::from_raw(level).ok_or_else(|| {
+        ShapesError::Invalid(format!(
+            "{level} is not a PurrdfSrlCheckLevel: pass PURRDF_SRL_CHECK_LEVEL_SYNTAX (0), \
+             PURRDF_SRL_CHECK_LEVEL_WELL_FORMED (1) or PURRDF_SRL_CHECK_LEVEL_STRATIFIED (2)"
+        ))
+    })?;
+    check_rules(srl, srl_base, imports, level).map(|checked| checked.summary())
+}
+
+/// Check a SPARQL 1.2 RL rule set WITHOUT evaluating it — the grammar, the `IMPORTS`
+/// closure resolved from the import table, well-formedness and stratification, every static
+/// check `purrdf_shacl_apply_rules` applies before it runs — with no data graph read and no
+/// rule run, and write the one-line summary every PurRDF host reports to `*out_summary`
+/// (free with `purrdf_buffer_free`).
+///
+/// `level` is a `PurrdfSrlCheckLevel`: `PURRDF_SRL_CHECK_LEVEL_SYNTAX` (the grammar, for the
+/// rule set and every document its imports read), `PURRDF_SRL_CHECK_LEVEL_WELL_FORMED`
+/// (every rule, imported ones included, is well formed) or
+/// `PURRDF_SRL_CHECK_LEVEL_STRATIFIED` (the combined rule set can be stratified). Any other
+/// value is a `ParseError`. `srl_base_iri` is the rule set's base IRI and may be NULL.
+///
+/// `import_iris` / `import_documents` / `import_count` are the rule set's `IMPORTS` table
+/// (SPARQL 1.2 RL texts), exactly as `purrdf_shacl_apply_rules` takes it beside `srl`. A
+/// rule set a check refuses — a syntax error, an import no entry supplies or an entry its
+/// closure never names, an ill-formed rule, a rule set that cannot be stratified — is a
+/// `ParseError` whose message names the stage; `*out_summary` is then left untouched.
+///
+/// # Safety
+/// `srl` must be a non-null NUL-terminated C string; `srl_base_iri` must be null or a
+/// NUL-terminated C string; when `import_count` is non-zero, `import_iris` and
+/// `import_documents` must each address that many NUL-terminated C strings; `out_summary`
+/// must be writable; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_check_rules(
+    srl: *const c_char,
+    srl_base_iri: *const c_char,
+    level: i32,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    out_summary: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if srl.is_null() || out_summary.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_check_rules",
+                ));
+            }
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_shacl_check_rules",
+            )?;
+            let summary = check_rules_summary(
+                cstr_to_str(srl)?,
+                opt_cstr_to_str(srl_base_iri)?,
+                level,
+                &imports,
+            )
+            .map_err(PurrdfError::shapes)?;
+            *out_summary = PurrdfBuffer::into_raw(summary.into_bytes());
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -2431,6 +2542,91 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             "the SPARQL 1.2 RL rule set's import closure never reaches \
              <http://example.org/more>, so the import table's rule set would be read and never \
              used; remove it"
+        );
+    }
+
+    /// `purrdf_shacl_check_rules` across the boundary: each level answers its own
+    /// question with the one-line summary, a check refuses by stage, the `IMPORTS` table
+    /// resolves, and a level no `PurrdfSrlCheckLevel` names is refused.
+    #[test]
+    fn capi_check_rules() {
+        use std::ffi::CString;
+
+        let run = |srl: &str, level: i32, count: usize| -> Result<String, String> {
+            let srl = CString::new(srl).expect("no NUL");
+            let iri = CString::new("http://example.org/more").expect("no NUL");
+            let imported = CString::new(
+                "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n",
+            )
+            .expect("no NUL");
+            let iris = [iri.as_ptr()];
+            let documents = [imported.as_ptr()];
+            let mut summary: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, a live array of `count`
+            // CString pointers, or a writable local.
+            unsafe {
+                let status = purrdf_shacl_check_rules(
+                    srl.as_ptr(),
+                    std::ptr::null(),
+                    level,
+                    iris.as_ptr(),
+                    documents.as_ptr(),
+                    count,
+                    &raw mut summary,
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    assert!(summary.is_null(), "a refusal writes no summary");
+                    return Err(take_error(error));
+                }
+                Ok(take_text(summary))
+            }
+        };
+        // The discriminants are ABI: append-only, never renumbered.
+        assert_eq!(PurrdfSrlCheckLevel::Syntax as i32, 0);
+        assert_eq!(PurrdfSrlCheckLevel::WellFormed as i32, 1);
+        assert_eq!(PurrdfSrlCheckLevel::Stratified as i32, 2);
+        let stratified = PurrdfSrlCheckLevel::Stratified as i32;
+        let importing = "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n\
+             RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        assert_eq!(
+            run(importing, stratified, 1).expect("resolved"),
+            "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 2 rules, \
+             0 data triples, 1 imported rule set, 1 stratum, no VERSION"
+        );
+        assert!(
+            run(importing, stratified, 0)
+                .expect_err("unsupplied")
+                .starts_with("SPARQL 1.2 RL import <http://example.org/more> failed")
+        );
+
+        let cyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+        let acyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+        for (level, name) in [
+            (PurrdfSrlCheckLevel::Syntax, "syntax"),
+            (PurrdfSrlCheckLevel::WellFormed, "well-formed"),
+        ] {
+            let summary = run(cyclic, level as i32, 0).expect(name);
+            assert!(summary.contains(&format!("(level {name})")), "{summary}");
+        }
+        assert!(
+            run(cyclic, stratified, 0)
+                .expect_err("unstratifiable")
+                .contains("is not stratifiable")
+        );
+        assert!(run(acyclic, stratified, 0).is_ok());
+        assert!(
+            run("RULE {", PurrdfSrlCheckLevel::Syntax as i32, 0)
+                .expect_err("not SRL")
+                .starts_with("SPARQL 1.2 RL syntax error")
+        );
+        assert!(
+            run(acyclic, 3, 0)
+                .expect_err("no such level")
+                .contains("is not a PurrdfSrlCheckLevel")
         );
     }
 

@@ -1221,6 +1221,13 @@ pub(crate) enum Command {
     /// been exceeded", and this one does, writing no graph. **2** for a usage error.
     ///
     /// The count of inferred triples is always written to stderr as `rules inferred N`.
+    ///
+    /// `--check` runs no rule: it applies every static check SPARQL 1.2 RL defines to the
+    /// `--srl` rule set — the grammar, the `IMPORTS` closure resolved from `--import`,
+    /// well-formedness and stratification — reads no data graph, and writes one summary line
+    /// to stdout. It exits **0** when the rule set passes, **1** when a check refuses it
+    /// (naming the stage), and **2** for a usage error or an `--import` pair the closure
+    /// never reaches, exactly as a run would.
     Rules {
         /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
         /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
@@ -1267,6 +1274,37 @@ pub(crate) enum Command {
         /// unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
+        /// Check the `--srl` rule set and evaluate NOTHING: no data graph is read and no
+        /// rule runs. `LEVEL` is how far the check goes, each level including the ones
+        /// before it: `syntax` (the SPARQL 1.2 RL grammar, the rule set and every document
+        /// its imports read), `well-formed` (every rule, imported ones included, is well
+        /// formed) or `stratified` (the combined rule set can be stratified — every static
+        /// check a run applies before it evaluates). Bare `--check` is `--check=stratified`.
+        /// On success one summary line goes to stdout; a refusal names the stage and exits 1.
+        /// The data-graph, output, proof and limit flags configure an evaluation, which a
+        /// check does not run, so they are refused beside it.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "LEVEL",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "stratified",
+            requires = "srl",
+            conflicts_with_all = [
+                "explain",
+                "max_term_generating_rounds",
+                "max_generated_terms",
+                "max_stored_facts",
+                "max_join_steps",
+                "from",
+                "to",
+                "base",
+                "input",
+                "output",
+            ]
+        )]
+        check: Option<CliSrlCheckLevel>,
         /// Write the PROOF of every inferred triple: bare writes it to stderr,
         /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
         /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
@@ -1916,6 +1954,29 @@ impl CliNativeRdfFormat {
             Self::Hextuples => NativeRdfFormat::HexTuples,
             Self::Jsonld => NativeRdfFormat::JsonLd,
             Self::Yamlld => NativeRdfFormat::YamlLd,
+        }
+    }
+}
+
+/// How far `rules --check` takes a SPARQL 1.2 RL rule set: each level is one of the
+/// specification's conformance questions and includes the ones before it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliSrlCheckLevel {
+    /// The SPARQL 1.2 RL grammar, for the rule set and every document its imports read.
+    Syntax,
+    /// `syntax`, and every rule — imported ones included — is well formed.
+    WellFormed,
+    /// `well-formed`, and the combined rule set can be stratified.
+    Stratified,
+}
+
+impl CliSrlCheckLevel {
+    /// The engine's level.
+    pub(crate) const fn level(self) -> purrdf::shapes::srl::CheckLevel {
+        match self {
+            Self::Syntax => purrdf::shapes::srl::CheckLevel::Syntax,
+            Self::WellFormed => purrdf::shapes::srl::CheckLevel::WellFormed,
+            Self::Stratified => purrdf::shapes::srl::CheckLevel::Stratified,
         }
     }
 }

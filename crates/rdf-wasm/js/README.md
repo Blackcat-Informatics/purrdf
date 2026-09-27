@@ -258,6 +258,16 @@ ownership, and all limits. Complete examples are in
   `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
   imported document's rules run. An import no entry supplies, and an entry the
   import closure never names, throw. Call `free()` when done.
+- `shaclCheckRules(srl, srlBase?, importIris?, importDocuments?, level?)` — checks
+  the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the `IMPORTS`
+  closure resolved from `importIris` / `importDocuments` exactly as `shaclApplyRules`
+  resolves it, well-formedness and stratification, with no data graph read and no
+  rule run. `level` is `"syntax"`, `"well-formed"` or `"stratified"` (the default,
+  every static check `shaclApplyRules` applies before it runs), each including the
+  ones before it. Returns a `ShaclRulesCheck` — `level`, `rules`, `dataTriples`,
+  `imported`, `versions`, `strata` (`undefined` below `"stratified"`) and the
+  one-line `summary` every host reports; a refused rule set throws naming the
+  stage. Call `free()` when done.
 - `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
   importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
   one node expression of the shapes graph against a focus node, with `scope` as

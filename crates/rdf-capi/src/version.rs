@@ -127,6 +127,10 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// default. Both are incompatible (a `0.7.0` host passes its import table or its
 /// out-pointer into the new slots), and both ride this bump for the reason the others do.
 ///
+/// The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
+/// entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
+/// the reason the other added symbols ride it.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

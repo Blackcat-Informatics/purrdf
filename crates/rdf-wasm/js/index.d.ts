@@ -1530,6 +1530,62 @@ export function shaclApplyRules(
 ): ShaclRulesInference;
 
 /**
+ * The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check its
+ * level asks for. Like every other class in this package it owns wasm memory: call
+ * `free()`.
+ */
+export class ShaclRulesCheck {
+  free(): void;
+  /** The level the rule set passed. */
+  readonly level: SrlCheckLevel;
+  /**
+   * Every rule of the combined rule set — the rule set's own, then every imported rule —
+   * described by its IRI or by where it is written.
+   */
+  readonly rules: string[];
+  /** The number of data-block triples of the combined rule set. */
+  readonly dataTriples: number;
+  /** The IRIs of the imported rule sets, each once, in the order they were read. */
+  readonly imported: string[];
+  /** The `VERSION` labels, in document order. */
+  readonly versions: string[];
+  /** The number of stratification layers, or `undefined` below `"stratified"`. */
+  readonly strata?: number;
+  /** The one-line summary every PurRDF host reports. */
+  readonly summary: string;
+}
+
+/**
+ * How far `shaclCheckRules` checks a SPARQL 1.2 RL rule set, each level including the
+ * ones before it.
+ */
+export type SrlCheckLevel = "syntax" | "well-formed" | "stratified";
+
+/**
+ * Check the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the `IMPORTS`
+ * closure resolved from `importIris` / `importDocuments` (rule-set texts, as
+ * `shaclApplyRules` takes them), well-formedness and stratification — every static check
+ * `shaclApplyRules` applies before it runs — with no data graph read and no rule run.
+ * `srlBase` is the rule set's base IRI.
+ *
+ * `level` is how far the check goes: `"syntax"` (the grammar, for the rule set and every
+ * document its imports read), `"well-formed"` (every rule, imported ones included, is
+ * well formed) or `"stratified"` (the combined rule set can be stratified); omitted,
+ * `"stratified"`. Any other name throws.
+ *
+ * Throws, naming the stage, for a rule set a check refuses: a syntax error, an import the
+ * table does not supply or an entry its closure never names, an ill-formed rule, a rule
+ * set that cannot be stratified.
+ */
+export function shaclCheckRules(
+  srl: string,
+  srlBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  level?: SrlCheckLevel,
+): ShaclRulesCheck;
+
+/**
  * Evaluate ONE node expression of the Turtle shapes graph against a focus node of the
  * N-Triples data graph — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
  * focusNode, scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the

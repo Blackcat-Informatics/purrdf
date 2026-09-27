@@ -467,6 +467,49 @@ done:
     return failed;
 }
 
+/* The check-only SPARQL 1.2 RL entry point through the real header and linkage: a
+ * self-negating rule is syntactically valid (level SYNTAX answers with its summary) but
+ * not stratifiable (level STRATIFIED refuses it, naming the stage, and writes no
+ * summary), while its neighbour differing only in the negated predicate passes. */
+static int check_srl_rules(void) {
+    const char *cyclic = "PREFIX ex: <http://example.org/ns#>\n"
+                         "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+    const char *acyclic = "PREFIX ex: <http://example.org/ns#>\n"
+                          "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+    PurrdfBuffer *summary = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    int32_t rc = purrdf_shacl_check_rules(cyclic, NULL, PURRDF_SRL_CHECK_LEVEL_SYNTAX, NULL,
+                                          NULL, 0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_OK && summary != NULL, "check_rules(cyclic, SYNTAX)");
+    purrdf_buffer_data(summary, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "is syntactically valid (level syntax)"),
+          "the syntax level answers its own question");
+    purrdf_buffer_free(summary);
+
+    summary = NULL;
+    rc = purrdf_shacl_check_rules(cyclic, NULL, PURRDF_SRL_CHECK_LEVEL_STRATIFIED, NULL, NULL,
+                                  0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && summary == NULL,
+          "check_rules(cyclic, STRATIFIED) refuses and writes no summary");
+    CHECK(strstr(purrdf_error_message(error), "is not stratifiable") != NULL,
+          "the refusal names the stratification stage");
+    purrdf_error_free(error);
+    error = NULL;
+
+    rc = purrdf_shacl_check_rules(acyclic, NULL, PURRDF_SRL_CHECK_LEVEL_STRATIFIED, NULL,
+                                  NULL, 0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_OK && summary != NULL, "check_rules(acyclic, STRATIFIED)");
+    purrdf_buffer_data(summary, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "is well formed and stratified (level stratified)"),
+          "the stratifiable neighbour passes every level");
+    purrdf_buffer_free(summary);
+    printf("check_rules: the level decides, and a refusal names its stage\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
@@ -1319,6 +1362,8 @@ int main(int argc, char **argv) {
 
     purrdf_reasoner_free(session);
     purrdf_reasoner_free(NULL); /* documented no-op */
+
+    CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
 
     purrdf_dataset_free(dataset);
     printf("C smoke OK\n");

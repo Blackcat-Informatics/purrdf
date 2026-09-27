@@ -349,6 +349,135 @@ fn cli_rules() {
     assert_eq!(code(&neither), 2, "{}", stderr(&neither));
 }
 
+/// `rules --srl FILE --check[=LEVEL]` checks a rule set without evaluating it: one summary
+/// line on stdout and exit 0 for a rule set that passes; exit 1 naming the stage for one a
+/// check refuses; exit 2 for an unused `--import` pair and for the evaluation flags a
+/// check never consumes. Each refusal sits beside the neighbour that passes.
+#[test]
+fn cli_rules_check() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let imported = write_file(
+        dir.path(),
+        "more.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n",
+    );
+    let srl = write_file(
+        dir.path(),
+        "rules.srl",
+        "PREFIX ex: <http://example.org/ns#>\nVERSION \"1.2\"\nIMPORTS <http://example.org/more>\n\
+         RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+    );
+    let pair = format!("http://example.org/more={imported}");
+
+    let ok = run(&["rules", "--srl", &srl, "--import", &pair, "--check"]);
+    assert_eq!(code(&ok), 0, "{}", stderr(&ok));
+    assert_eq!(
+        stdout(&ok),
+        format!(
+            "--srl {srl}: SPARQL 1.2 RL rule set is well formed and stratified (level \
+             stratified): 2 rules, 1 data triple, 1 imported rule set, 1 stratum, \
+             VERSION \"1.2\"\n"
+        )
+    );
+    // No evaluation ran: nothing inferred is reported.
+    assert!(!stderr(&ok).contains("rules inferred"), "{}", stderr(&ok));
+
+    // The same rule set without the pair: the import is unresolved, exit 1, by name.
+    let missing = run(&["rules", "--srl", &srl, "--check"]);
+    assert_eq!(code(&missing), 1, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("--import http://example.org/more=FILE"),
+        "{}",
+        stderr(&missing)
+    );
+    assert_eq!(stdout(&missing), "");
+    // A pair the closure never reaches is refused as unused, exit 2.
+    let lone = write_file(
+        dir.path(),
+        "lone.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n",
+    );
+    let unused = run(&["rules", "--srl", &lone, "--import", &pair, "--check"]);
+    assert_eq!(code(&unused), 2, "{}", stderr(&unused));
+    let lone_ok = run(&["rules", "--srl", &lone, "--check"]);
+    assert_eq!(code(&lone_ok), 0, "{}", stderr(&lone_ok));
+
+    // A self-negating rule: syntactically valid and well formed, not stratifiable. Each
+    // level answers its own question; its stratifiable neighbour passes all three.
+    let cyclic = write_file(
+        dir.path(),
+        "cyclic.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n",
+    );
+    let acyclic = write_file(
+        dir.path(),
+        "acyclic.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n",
+    );
+    for level in ["--check=syntax", "--check=well-formed"] {
+        let out = run(&["rules", "--srl", &cyclic, level]);
+        assert_eq!(code(&out), 0, "{level}: {}", stderr(&out));
+    }
+    let strat = run(&["rules", "--srl", &cyclic, "--check=stratified"]);
+    assert_eq!(code(&strat), 1, "{}", stderr(&strat));
+    assert!(
+        stderr(&strat).contains("is not stratifiable"),
+        "{}",
+        stderr(&strat)
+    );
+    for level in ["--check=syntax", "--check=well-formed", "--check"] {
+        let out = run(&["rules", "--srl", &acyclic, level]);
+        assert_eq!(code(&out), 0, "{level}: {}", stderr(&out));
+    }
+    // An ill-formed rule: the grammar accepts it, `well-formed` refuses it by that stage.
+    let ill = write_file(
+        dir.path(),
+        "ill.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?s ex:p ?o } WHERE { FILTER(?o < 50) ?s ex:p ?o }\n",
+    );
+    assert_eq!(code(&run(&["rules", "--srl", &ill, "--check=syntax"])), 0);
+    let wf = run(&["rules", "--srl", &ill, "--check=well-formed"]);
+    assert_eq!(code(&wf), 1, "{}", stderr(&wf));
+    assert!(
+        stderr(&wf).contains("is not well formed"),
+        "{}",
+        stderr(&wf)
+    );
+    // Not SPARQL 1.2 RL at all: refused by the grammar at every level.
+    let broken = write_file(dir.path(), "broken.srl", "RULE {\n");
+    let syntax = run(&["rules", "--srl", &broken, "--check=syntax"]);
+    assert_eq!(code(&syntax), 1, "{}", stderr(&syntax));
+    assert!(
+        stderr(&syntax).contains("SPARQL 1.2 RL syntax error"),
+        "{}",
+        stderr(&syntax)
+    );
+
+    // A check evaluates nothing, so the flags that configure an evaluation are refused
+    // beside it (exit 2), as are an unknown level and a SHACL rule source.
+    for extra in [
+        vec![data.as_str()],
+        vec!["--to", "ntriples"],
+        vec!["--explain"],
+        vec!["--max-join-steps", "10"],
+        vec!["--base", "http://example.org/"],
+    ] {
+        let mut args = vec!["rules", "--srl", lone.as_str(), "--check"];
+        args.extend(extra.iter().copied());
+        let out = run(&args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
+    }
+    let unknown = run(&["rules", "--srl", &lone, "--check=stratify"]);
+    assert_eq!(code(&unknown), 2, "{}", stderr(&unknown));
+    let shapes = shapes_file(dir.path(), TOOLS);
+    let on_shapes = run(&["rules", "--shapes", &shapes, "--check"]);
+    assert_eq!(code(&on_shapes), 2, "{}", stderr(&on_shapes));
+    // The global document flags configure a serializer a check never runs.
+    let ledger = run(&["--loss-ledger", "rules", "--srl", &lone, "--check"]);
+    assert_eq!(code(&ledger), 2, "{}", stderr(&ledger));
+}
+
 /// `node-expr` evaluates one expression node of the shapes graph: a `sh:sparqlExpr` node
 /// natively, with its `sh:prefixes`; a labelled blank node reading `--scope`; a literal
 /// focus. A label the document never wrote, and a scope binding that could never be read,

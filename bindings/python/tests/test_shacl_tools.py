@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """The shapes-graph tools beside validation: ``purrdf.shapes.apply_rules``,
-``purrdf.shapes.eval_node_expr`` and ``purrdf.shapes.lint_shapes``.
+``purrdf.shapes.check_rules``, ``purrdf.shapes.eval_node_expr`` and
+``purrdf.shapes.lint_shapes``.
 
 Every shapes graph carries the W3C SHACL 1.2 declaration of
 ``sh:SPARQLExprExpression`` verbatim -- a built-in declared as a
@@ -361,3 +362,53 @@ def test_py_apply_rules_resolves_srl_imports_from_the_table() -> None:
         )
     assert str(unreached.value) == _SRL_UNREACHED
     assert _COUNTED not in purrdf.shapes.apply_rules(_DATA, srl=_SRL_LONE)["inferred"]
+
+
+_SRL_CYCLIC = (
+    "PREFIX ex: <http://example.org/ns#>\n"
+    "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n"
+)
+_SRL_ACYCLIC = (
+    "PREFIX ex: <http://example.org/ns#>\n"
+    "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n"
+)
+
+
+def test_py_check_rules() -> None:
+    """``check_rules`` checks a SPARQL 1.2 RL rule set to a level and evaluates nothing:
+    the import table resolves ``IMPORTS``, each level answers its own question, and a
+    refusal names its stage beside the neighbour that passes."""
+    checked = purrdf.shapes.check_rules(
+        _SRL_IMPORTING, imports=[("http://example.org/more", _SRL_IMPORTED)]
+    )
+    assert checked["level"] == "stratified"
+    assert len(checked["rules"]) == 2
+    assert checked["data_triples"] == 0
+    assert checked["imported"] == ["http://example.org/more"]
+    assert checked["versions"] == []
+    assert checked["strata"] == 1
+    assert checked["summary"] == (
+        "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 2 rules, "
+        "0 data triples, 1 imported rule set, 1 stratum, no VERSION"
+    )
+    # The same unresolved import a rules run refuses, with the same message.
+    with pytest.raises(ValueError) as unresolved:
+        purrdf.shapes.check_rules(_SRL_IMPORTING)
+    assert str(unresolved.value) == _SRL_UNRESOLVED
+    with pytest.raises(ValueError) as unreached:
+        purrdf.shapes.check_rules(
+            _SRL_LONE, imports=[("http://example.org/more", _SRL_IMPORTED)]
+        )
+    assert str(unreached.value) == _SRL_UNREACHED
+
+    for level in ("syntax", "well-formed"):
+        below = purrdf.shapes.check_rules(_SRL_CYCLIC, level=level)
+        assert below["level"] == level
+        assert below["strata"] is None
+    with pytest.raises(ValueError, match="is not stratifiable"):
+        purrdf.shapes.check_rules(_SRL_CYCLIC)
+    assert purrdf.shapes.check_rules(_SRL_ACYCLIC)["strata"] == 1
+    with pytest.raises(ValueError, match="^SPARQL 1.2 RL syntax error"):
+        purrdf.shapes.check_rules("RULE {", level="syntax")
+    with pytest.raises(ValueError, match="is not a SPARQL 1.2 RL check level"):
+        purrdf.shapes.check_rules(_SRL_ACYCLIC, level="stratify")

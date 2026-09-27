@@ -332,6 +332,60 @@ fn apply_rules(
     Ok(out.into_any().unbind())
 }
 
+/// Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the `IMPORTS`
+/// closure resolved from `imports`, well-formedness and stratification — every static check
+/// `apply_rules(srl=...)` applies before it runs — with no data graph read and no rule run.
+///
+/// `level` is how far the check goes, each level including the ones before it:
+/// `"syntax"` (the grammar, for the rule set and every document its imports read),
+/// `"well-formed"` (every rule, imported ones included, is well formed) or `"stratified"`
+/// (the combined rule set can be stratified); `None` is `"stratified"`. Any other name
+/// raises `ValueError` naming the three.
+///
+/// Returns `{"level", "rules" (each rule described by its IRI or its position), "data_triples",
+/// "imported" (the imported rule sets' IRIs, in the order read), "versions" (the `VERSION`
+/// labels), "strata" (the number of stratification layers; `None` below "stratified"),
+/// "summary" (the one line every host reports)}`. A rule set a check refuses raises
+/// `ValueError` naming the stage — a syntax error, an import `imports` does not supply or
+/// an entry its closure never names, an ill-formed rule, a rule set that cannot be
+/// stratified.
+///
+/// The work is [`purrdf_validate::check_rules`], the function the WASM and C-ABI bindings
+/// and every host's rules run call.
+#[pyfunction]
+#[pyo3(signature = (srl, *, srl_base=None, imports=Vec::new(), level=None))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn check_rules(
+    py: Python<'_>,
+    srl: &str,
+    srl_base: Option<&str>,
+    imports: Vec<(String, String)>,
+    level: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let pairs = crate::py_entail::import_list(&imports);
+    let checked = py
+        .detach(|| {
+            let level = purrdf_validate::parse_check_level(level)?;
+            purrdf_validate::check_rules(srl, srl_base, &pairs, level)
+        })
+        .map_err(|error| shapes_error(py, error))?;
+    let out = PyDict::new(py);
+    out.set_item("level", checked.level().name())?;
+    let rules: Vec<String> = checked
+        .document()
+        .rules()
+        .iter()
+        .map(purrdf_shapes::srl::SrlRule::describe)
+        .collect();
+    out.set_item("rules", rules)?;
+    out.set_item("data_triples", checked.document().data().len())?;
+    out.set_item("imported", checked.imported())?;
+    out.set_item("versions", checked.document().versions())?;
+    out.set_item("strata", checked.strata().map(<[_]>::len))?;
+    out.set_item("summary", checked.summary())?;
+    Ok(out.into_any().unbind())
+}
+
 /// Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
 /// graph (N-Triples) — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode,
 /// scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
@@ -1445,7 +1499,7 @@ fn import_error(py: Python<'_>, error: &purrdf_validate::ShapesImportError) -> P
 ///
 /// Exposes the legacy `validate(shapes_ttl, data_nt)` function, the SHACL-AF
 /// `entail(shapes_ttl, data_nt)` rule-entailment function, the shapes-graph tools
-/// `apply_rules`, `eval_node_expr` and `lint_shapes`, and the reusable
+/// `apply_rules`, `check_rules`, `eval_node_expr` and `lint_shapes`, and the reusable
 /// `Shapes` / `ValidationReport` wrappers used by the Rust-native orchestration
 /// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib to
 /// populate the `purrdf_native.shacl` submodule.
@@ -1454,6 +1508,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(entail, m)?)?;
     m.add_function(wrap_pyfunction!(pack_product, m)?)?;
     m.add_function(wrap_pyfunction!(apply_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(check_rules, m)?)?;
     m.add_function(wrap_pyfunction!(eval_node_expr, m)?)?;
     m.add_function(wrap_pyfunction!(lint_shapes, m)?)?;
     m.add_class::<PyShapes>()?;

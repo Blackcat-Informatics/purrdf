@@ -58,6 +58,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) srl_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable: the rule source's imports.
     pub(crate) imports: &'a [String],
+    /// `--check[=LEVEL]`: check the `--srl` rule set to this level and evaluate nothing.
+    pub(crate) check: Option<srl::CheckLevel>,
     /// `--explain`: where the proof goes, if anywhere.
     pub(crate) explain: ReportTarget,
     /// `--max-term-generating-rounds`.
@@ -116,6 +118,9 @@ pub(crate) fn run_rules(
     options: &RulesOptions<'_>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
+    if let Some(level) = options.check {
+        return run_srl_check(options, level, ledger_target);
+    }
     refuse_two_stdins(&[
         ("IN", Some(options.input)),
         ("--shapes", options.shapes),
@@ -137,14 +142,10 @@ pub(crate) fn run_rules(
             let base = crate::validate::shapes_document_base(path, format, options.shapes_base)?;
             RuleSource::Shapes { path, format, base }
         }
-        (None, Some(path)) => {
-            let base = match options.srl_base {
-                Some(base) => Some(base.to_owned()),
-                None if path == "-" => None,
-                None => Some(source::retrieval_base_iri(path)?),
-            };
-            RuleSource::Srl { path, base }
-        }
+        (None, Some(path)) => RuleSource::Srl {
+            path,
+            base: srl_base(path, options.srl_base)?,
+        },
         // clap makes exactly one of the two required; reported rather than unwrapped,
         // because an unreachable panic in a CLI is a crash report.
         _ => {
@@ -195,10 +196,13 @@ pub(crate) fn run_rules(
                 .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
         }
         RuleSource::Srl { path, base } => {
-            let text = utf8_text(path, "--srl")?;
-            let document = srl::parse_and_check(&text, base.as_deref())
-                .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?;
-            let document = resolve_srl_imports(&document, &srl_pairs, path)?;
+            let document = check_srl(
+                path,
+                base.as_deref(),
+                &srl_pairs,
+                srl::CheckLevel::Stratified,
+            )?
+            .into_document();
             let mut infer_options = InferOptions::default().with_limit_knobs(cli_limit_knobs());
             if let Some(rounds) = options.max_term_generating_rounds {
                 infer_options = infer_options.with_max_term_generating_rounds(rounds);
@@ -277,17 +281,56 @@ fn import_pairs(specs: &[String]) -> Result<Vec<ImportPair<'_>>, CliError> {
         .collect()
 }
 
-/// Fold a SPARQL 1.2 RL rule set's `IMPORTS` closure in from the `--import` pairs, through
-/// the one import-table route every PurRDF host takes
-/// (`RuleSetDocument::resolve_import_table`): every pair's file is read, and the table they
-/// make is resolved exactly as the Python, WebAssembly and C hosts resolve theirs. An import
-/// no pair names is refused (exit 1) with the pair that resolves it, and a pair the closure
+/// The base a `--srl` rule set parses under: `--srl-base`, else the file's `file://`
+/// retrieval IRI; stdin has none.
+fn srl_base(path: &str, srl_base: Option<&str>) -> Result<Option<String>, CliError> {
+    Ok(match srl_base {
+        Some(base) => Some(base.to_owned()),
+        None if path == "-" => None,
+        None => Some(source::retrieval_base_iri(path)?),
+    })
+}
+
+/// `rules --srl FILE --check[=LEVEL]`: check the rule set to `level` through the one
+/// check-only entry point every PurRDF host exposes (`purrdf_shapes::srl::check`), with
+/// the `--import` table a run would use, read no data graph, evaluate nothing, and write
+/// the one-line summary to stdout.
+fn run_srl_check(
+    options: &RulesOptions<'_>,
+    level: srl::CheckLevel,
+    ledger_target: &LedgerTarget,
+) -> Result<(), CliError> {
+    refuse_document_flags("rules --check", ledger_target, options.jsonld_options)?;
+    // clap makes `--check` require `--srl`; reported rather than unwrapped, because an
+    // unreachable panic in a CLI is a crash report.
+    let Some(path) = options.srl else {
+        return Err(CliError::Usage(
+            "--check checks a SPARQL 1.2 RL rule set, and names none without --srl; a SHACL \
+             shapes graph is checked with `purrdf shapes lint`"
+                .to_owned(),
+        ));
+    };
+    let pairs = import_pairs(options.imports)?;
+    let base = srl_base(path, options.srl_base)?;
+    let checked = check_srl(path, base.as_deref(), &pairs, level)?;
+    println!("--srl {path}: {}", checked.summary());
+    Ok(())
+}
+
+/// Read the `--srl` rule set and its `--import` pairs, and check it to `level` through
+/// `purrdf_shapes::srl::check` — the static checks a run applies before it evaluates
+/// ([`srl::CheckLevel::Stratified`]) and the check-only entry point alike, so `--check`
+/// refuses exactly what a run refuses. Every pair's file is read and the table they make
+/// is resolved exactly as the Python, WebAssembly and C hosts resolve theirs. An import no
+/// pair names is refused (exit 1) with the pair that resolves it, and a pair the closure
 /// never reaches is refused as unused (exit 2): it would be read and never used.
-fn resolve_srl_imports(
-    document: &srl::RuleSetDocument,
-    pairs: &[ImportPair<'_>],
+fn check_srl(
     path: &str,
-) -> Result<srl::RuleSetDocument, CliError> {
+    base: Option<&str>,
+    pairs: &[ImportPair<'_>],
+    level: srl::CheckLevel,
+) -> Result<srl::CheckedRuleSet, CliError> {
+    let text = utf8_text(path, "--srl")?;
     let texts = pairs
         .iter()
         .map(|(_, iri, file)| utf8_text(file, &format!("--import {iri}")))
@@ -297,44 +340,42 @@ fn resolve_srl_imports(
         .zip(&texts)
         .map(|((_, iri, _), text)| (*iri, text.as_str()))
         .collect();
-    document
-        .resolve_import_table(&table)
-        .map_err(|error| match error {
-            srl::SrlError::UnreachedImports { iris } => {
-                let specs: Vec<&str> = pairs
-                    .iter()
-                    .filter(|(_, iri, _)| iris.iter().any(|unreached| unreached == iri))
-                    .map(|(spec, ..)| *spec)
-                    .collect();
-                CliError::Usage(format!(
-                    "--import {}: the rule set's import closure never reaches {}, so {} \
-                     would be read and never used. Remove {}",
-                    specs.join(" --import "),
-                    iris.iter()
-                        .map(|iri| format!("<{iri}>"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    if iris.len() == 1 {
-                        "this document"
-                    } else {
-                        "these documents"
-                    },
-                    if iris.len() == 1 {
-                        "the pair"
-                    } else {
-                        "the pairs"
-                    },
-                ))
-            }
-            srl::SrlError::Import { iri, message } if message == srl::UNRESOLVED_IMPORT_MESSAGE => {
-                CliError::Runtime(format!(
-                    "--srl {path}: SPARQL 1.2 RL import <{iri}> failed: no --import pair \
-                     resolves it, and PurRDF fetches nothing the operator did not name; pass \
-                     `--import {iri}=FILE`"
-                ))
-            }
-            other => CliError::Runtime(format!("--srl {path}: {other}")),
-        })
+    srl::check(&text, base, &table, level).map_err(|error| match error {
+        srl::SrlError::UnreachedImports { iris } => {
+            let specs: Vec<&str> = pairs
+                .iter()
+                .filter(|(_, iri, _)| iris.iter().any(|unreached| unreached == iri))
+                .map(|(spec, ..)| *spec)
+                .collect();
+            CliError::Usage(format!(
+                "--import {}: the rule set's import closure never reaches {}, so {} would be \
+                 read and never used. Remove {}",
+                specs.join(" --import "),
+                iris.iter()
+                    .map(|iri| format!("<{iri}>"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if iris.len() == 1 {
+                    "this document"
+                } else {
+                    "these documents"
+                },
+                if iris.len() == 1 {
+                    "the pair"
+                } else {
+                    "the pairs"
+                },
+            ))
+        }
+        srl::SrlError::Import { iri, message } if message == srl::UNRESOLVED_IMPORT_MESSAGE => {
+            CliError::Runtime(format!(
+                "--srl {path}: SPARQL 1.2 RL import <{iri}> failed: no --import pair resolves \
+                 it, and PurRDF fetches nothing the operator did not name; pass \
+                 `--import {iri}=FILE`"
+            ))
+        }
+        other => CliError::Runtime(format!("--srl {path}: {other}")),
+    })
 }
 
 /// The resolved `node-expr` flags.

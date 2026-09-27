@@ -569,6 +569,128 @@ pub fn shacl_apply_rules(
     })
 }
 
+/// The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check
+/// its level asks for.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclRulesCheck {
+    /// The checked rule set.
+    checked: purrdf_validate::CheckedRuleSet,
+}
+
+#[wasm_bindgen]
+impl ShaclRulesCheck {
+    /// The level the rule set passed: `"syntax"`, `"well-formed"` or `"stratified"`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn level(&self) -> String {
+        self.checked.level().name().to_owned()
+    }
+
+    /// Every rule of the combined rule set — the rule set's own, then every imported
+    /// rule — described by its IRI or by where it is written.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn rules(&self) -> Vec<String> {
+        self.checked
+            .document()
+            .rules()
+            .iter()
+            .map(purrdf::shapes::srl::SrlRule::describe)
+            .collect()
+    }
+
+    /// The number of data-block triples of the combined rule set.
+    #[wasm_bindgen(getter = dataTriples)]
+    #[must_use]
+    pub fn data_triples(&self) -> usize {
+        self.checked.document().data().len()
+    }
+
+    /// The IRIs of the imported rule sets, each once, in the order they were read.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn imported(&self) -> Vec<String> {
+        self.checked.imported().to_vec()
+    }
+
+    /// The `VERSION` labels, in document order.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn versions(&self) -> Vec<String> {
+        self.checked.document().versions().to_vec()
+    }
+
+    /// The number of stratification layers, or `undefined` below `"stratified"`, which
+    /// does not stratify.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn strata(&self) -> Option<usize> {
+        self.checked.strata().map(<[_]>::len)
+    }
+
+    /// The one-line summary every PurRDF host reports.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn summary(&self) -> String {
+        self.checked.summary()
+    }
+}
+
+/// Check a SPARQL 1.2 RL rule set. Native-testable core of [`shacl_check_rules`]; the
+/// plain Rust [`ShapesError`] for the reason [`validate_to_sarif_impl`] gives.
+pub(crate) fn check_rules_impl(
+    srl: &str,
+    srl_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    level: Option<&str>,
+) -> Result<purrdf_validate::CheckedRuleSet, ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let level = purrdf_validate::parse_check_level(level)?;
+    purrdf_validate::check_rules(srl, srl_base, &imports, level)
+}
+
+/// `shaclCheckRules(srl, srlBase?, importIris?, importDocuments?, level?)` → a
+/// `ShaclRulesCheck`.
+///
+/// Checks the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the
+/// `IMPORTS` closure resolved from `importIris` / `importDocuments` (rule-set texts, as
+/// `shaclApplyRules` takes them), well-formedness and stratification — every static check
+/// `shaclApplyRules` applies before it runs — with no data graph read and no rule run.
+/// `srlBase` is the rule set's base IRI.
+///
+/// `level` is how far the check goes, each level including the ones before it: `"syntax"`
+/// (the grammar, for the rule set and every document its imports read), `"well-formed"`
+/// (every rule, imported ones included, is well formed) or `"stratified"` (the combined
+/// rule set can be stratified); omitted, `"stratified"`. Any other name throws.
+///
+/// Throws, naming the stage, for a rule set a check refuses: a syntax error, an import the
+/// table does not supply or an entry its closure never names, an ill-formed rule, a rule
+/// set that cannot be stratified. Call `.free()` on the result.
+#[wasm_bindgen(js_name = shaclCheckRules)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_check_rules(
+    srl: &str,
+    srl_base: Option<String>,
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    level: Option<String>,
+) -> Result<ShaclRulesCheck, JsValue> {
+    check_rules_impl(
+        srl,
+        srl_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        level.as_deref(),
+    )
+    .map(|checked| ShaclRulesCheck { checked })
+    .map_err(shapes_rejection)
+}
+
 /// The expression selector's four optional inputs, as `shaclEvalNodeExpr` receives them:
 /// `expr`, `exprAt`, `exprVia` and `exprTurtle`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -1965,5 +2087,51 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(malformed.load_error().is_some());
         assert!(malformed.report().ends_with("clean false\n"));
         assert!(lint_shapes_impl("@@@ not turtle", None, &[], &[]).is_err());
+    }
+
+    /// `shaclCheckRules`' native core: every level answers its own question, a check
+    /// refuses by stage, the import table resolves `IMPORTS`, and an unknown level is
+    /// refused rather than read as the default.
+    #[test]
+    fn check_rules_answers_each_level() {
+        let cyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+        let acyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+        for level in ["syntax", "well-formed"] {
+            let checked = check_rules_impl(cyclic, None, &[], &[], Some(level)).expect(level);
+            assert_eq!(checked.level().name(), level);
+            assert!(checked.strata().is_none());
+        }
+        let refused = check_rules_impl(cyclic, None, &[], &[], None).expect_err("cyclic");
+        assert!(
+            matches!(&refused, ShapesError::Invalid(message) if message.contains("is not stratifiable")),
+            "{refused}"
+        );
+        let checked = check_rules_impl(acyclic, None, &[], &[], None).expect("acyclic");
+        assert_eq!(checked.strata().map(<[_]>::len), Some(1));
+
+        let importing = "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n\
+            RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        let imported = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+        assert!(check_rules_impl(importing, None, &[], &[], None).is_err());
+        let resolved = check_rules_impl(
+            importing,
+            None,
+            &["http://example.org/more".to_owned()],
+            &[imported.to_owned()],
+            None,
+        )
+        .expect("resolved");
+        assert_eq!(resolved.imported(), ["http://example.org/more".to_owned()]);
+        assert_eq!(resolved.document().rules().len(), 2);
+
+        let unknown =
+            check_rules_impl(acyclic, None, &[], &[], Some("stratify")).expect_err("no such level");
+        assert!(
+            unknown
+                .to_string()
+                .contains("is not a SPARQL 1.2 RL check level")
+        );
     }
 }

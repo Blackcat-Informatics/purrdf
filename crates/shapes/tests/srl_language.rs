@@ -391,6 +391,120 @@ fn imports_resolve_through_the_callers_resolver() {
     ));
 }
 
+// ── the check-only entry point ────────────────────────────────────────────────────
+
+/// `srl::check` answers each conformance question up to its level and evaluates nothing:
+/// a self-negating rule is syntactically valid and well formed but not stratifiable, so it
+/// passes the first two levels and is refused at the third, by the stratification stage —
+/// while its stratifiable neighbour, differing only in the negated predicate, passes all
+/// three and names its strata.
+#[test]
+fn check_answers_each_level_and_refuses_by_stage() {
+    use srl::CheckLevel;
+    let cyclic = rules("RULE { ?x :p :z } WHERE { ?x :q :o NOT { ?x :p :z } }");
+    let acyclic = rules("RULE { ?x :p :z } WHERE { ?x :q :o NOT { ?x :r :z } }");
+    for level in [CheckLevel::Syntax, CheckLevel::WellFormed] {
+        let checked = srl::check(&cyclic, None, &[], level).expect("below stratification");
+        assert_eq!(checked.level(), level);
+        assert!(checked.strata().is_none(), "{level} does not stratify");
+    }
+    let refused = srl::check(&cyclic, None, &[], CheckLevel::Stratified)
+        .expect_err("a closed self-dependency");
+    assert!(
+        matches!(refused, SrlError::Stratification { .. }),
+        "{refused}"
+    );
+
+    let checked = srl::check(&acyclic, None, &[], CheckLevel::default()).expect("stratifiable");
+    assert_eq!(checked.level(), CheckLevel::Stratified);
+    assert_eq!(checked.strata().map(<[_]>::len), Some(1));
+    assert_eq!(
+        checked.summary(),
+        "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 1 rule, \
+         0 data triples, 0 imported rule sets, 1 stratum, no VERSION"
+    );
+
+    // An ill-formed rule is refused at `well-formed` and above, by that stage; the grammar
+    // alone accepts it.
+    let ill = rules("RULE { ?s :p ?o } WHERE { FILTER(?o < 50) ?s :p ?o }");
+    srl::check(&ill, None, &[], CheckLevel::Syntax).expect("the grammar accepts it");
+    for level in [CheckLevel::WellFormed, CheckLevel::Stratified] {
+        let error = srl::check(&ill, None, &[], level).expect_err("ill formed");
+        assert!(matches!(error, SrlError::WellFormedness { .. }), "{error}");
+    }
+    // Not a document at all: refused by the grammar at every level.
+    for level in CheckLevel::ALL {
+        let error = srl::check(&rules("RULE {"), None, &[], level).expect_err("not SRL");
+        assert!(matches!(error, SrlError::Syntax { .. }), "{error}");
+    }
+    for level in CheckLevel::ALL {
+        assert_eq!(CheckLevel::from_name(level.name()), Some(level));
+    }
+    assert_eq!(CheckLevel::from_name("stratify"), None);
+}
+
+/// `srl::check` resolves the `IMPORTS` closure from the table exactly as a rules run does,
+/// holds an imported rule to §4.2 like the importer's own, and names what it read.
+#[test]
+fn check_resolves_imports_from_the_table() {
+    use srl::CheckLevel;
+    let main = format!(
+        "PREFIX : <{EX}>\nVERSION \"1.2\"\nIMPORTS <{EX}lib>\nDATA {{ :a :p :o }}\n\
+         RULE {{ ?s :tagged :yes }} WHERE {{ ?s :p :o }}"
+    );
+    let lib = format!("PREFIX : <{EX}>\nRULE {{ ?s :seen :yes }} WHERE {{ ?s :tagged :yes }}");
+    let lib_iri = format!("{EX}lib");
+
+    let unresolved = srl::check(&main, None, &[], CheckLevel::Stratified)
+        .expect_err("the empty table resolves nothing");
+    assert!(
+        matches!(unresolved, SrlError::Import { .. }),
+        "{unresolved}"
+    );
+
+    let checked =
+        srl::check(&main, None, &[(&lib_iri, &lib)], CheckLevel::Stratified).expect("resolved");
+    assert_eq!(checked.imported(), std::slice::from_ref(&lib_iri));
+    assert_eq!(checked.document().rules().len(), 2);
+    assert_eq!(checked.document().imports(), &[] as &[NamedNode]);
+    assert_eq!(
+        checked.summary(),
+        "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 2 rules, \
+         1 data triple, 1 imported rule set, 1 stratum, VERSION \"1.2\""
+    );
+    // The checked document is the one a rules run evaluates.
+    let inferred = srl::infer(checked.document(), &data(""), &InferOptions::default())
+        .expect("evaluates")
+        .inferred()
+        .to_vec();
+    assert!(
+        inferred.contains(&[iri("a"), iri("seen"), iri("yes")]),
+        "{inferred:?}"
+    );
+
+    // An ill-formed IMPORTED rule is refused at `well-formed`, naming its document.
+    let bad_lib = format!("PREFIX : <{EX}>\nRULE {{ ?s :seen ?c }} WHERE {{ ?s :tagged :yes }}");
+    let error = srl::check(&main, None, &[(&lib_iri, &bad_lib)], CheckLevel::WellFormed)
+        .expect_err("the imported rule is ill formed");
+    assert!(
+        matches!(&error, SrlError::WellFormedness { rule, .. } if rule.contains(&lib_iri)),
+        "{error}"
+    );
+    // A table entry the closure never reaches is refused as unused.
+    let other = format!("{EX}other");
+    let error = srl::check(
+        &main,
+        None,
+        &[(&lib_iri, &lib), (&other, &lib)],
+        CheckLevel::Syntax,
+    )
+    .expect_err("unused entry");
+    assert!(
+        matches!(error, SrlError::UnreachedImports { .. }),
+        "{error}"
+    );
+}
+
 #[test]
 fn numeric_and_boolean_terms() {
     let inferred = infer(

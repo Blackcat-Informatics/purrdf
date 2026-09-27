@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The string-in / string-out boundary of the three shapes-graph TOOLS the Python, WASM
-//! and C-ABI hosts expose beside validation: running rules ([`apply_rules_to_ntriples`]),
-//! evaluating one node expression ([`eval_node_expr_to_terms`]) and certifying a shapes
-//! graph ([`lint_shapes_ttl`]).
+//! The string-in / string-out boundary of the shapes-graph TOOLS the Python, WASM and
+//! C-ABI hosts expose beside validation: running rules ([`apply_rules_to_ntriples`]),
+//! checking a SPARQL 1.2 RL rule set without running it ([`check_rules`]), evaluating one
+//! node expression ([`eval_node_expr_to_terms`]) and certifying a shapes graph
+//! ([`lint_shapes_ttl`]).
 //!
 //! Each is one function here so the three bindings share one implementation, exactly as
 //! [`crate::validate_to_sarif_string`] and [`crate::entail_to_ntriples_string`] are shared.
@@ -161,9 +162,9 @@ pub struct RulesOutcome {
 /// The SHACL route is [`purrdf_shapes::infer`] over the shapes graph's default rule set,
 /// with no `sh:ruleProcessor` registered — a rule or rule set naming one is a failure,
 /// as SHACL 1.2 Inference Rules requires of a processor the engine cannot handle. The
-/// SPARQL 1.2 RL route is [`srl::parse_and_check`], then
-/// [`srl::RuleSetDocument::resolve_import_table`] over [`RulesRequest::imports`], then
-/// [`srl::infer`].
+/// SPARQL 1.2 RL route is [`check_rules`] at [`srl::CheckLevel::Stratified`] over
+/// [`RulesRequest::imports`] — the check-only entry point, so a rules run refuses exactly
+/// what a check refuses — then [`srl::infer`].
 ///
 /// # Errors
 ///
@@ -201,9 +202,13 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             purrdf_shapes::infer(&holder, &shapes, &options)?
         }
         (None, Some(text)) => {
-            let document = srl::parse_and_check(text, request.srl_base)
-                .and_then(|document| document.resolve_import_table(request.imports))
-                .map_err(|e| e.to_string())?;
+            let document = check_rules(
+                text,
+                request.srl_base,
+                request.imports,
+                srl::CheckLevel::Stratified,
+            )?
+            .into_document();
             let mut options = InferOptions::default().with_limit_knobs(request.host.limit_knobs());
             if let Some(rounds) = request.max_term_generating_rounds {
                 options = options.with_max_term_generating_rounds(rounds);
@@ -235,6 +240,51 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
     Ok(RulesOutcome {
         inferred_ntriples: inference.inferred_ntriples(),
         proof: request.explain.then(|| inference.proof_text()),
+    })
+}
+
+/// Check a SPARQL 1.2 RL rule set without evaluating it: [`srl::check`] up to `level`
+/// — the §7 grammar, the `IMPORTS` closure resolved from `imports` (the rules tool's
+/// import table, `(import IRI, rule-set text)` pairs), §4.2 well-formedness and §4.4
+/// stratification — with no base graph read and no rule run. The Python `check_rules`,
+/// WebAssembly `shaclCheckRules` and C `purrdf_shacl_check_rules` entry points, and every
+/// host's SPARQL 1.2 RL rules run ([`apply_rules_to_ntriples`]), pass through here.
+///
+/// # Errors
+///
+/// [`ShapesError::Invalid`] carrying the [`srl::SrlError`] text, which names the stage that
+/// refused: a syntax error, an import the table does not supply or an entry it never
+/// reaches, an ill-formed rule, a rule set that cannot be stratified.
+pub fn check_rules(
+    srl_text: &str,
+    srl_base: Option<&str>,
+    imports: &ShapesImportList<'_>,
+    level: srl::CheckLevel,
+) -> Result<srl::CheckedRuleSet, ShapesError> {
+    srl::check(srl_text, srl_base, imports, level)
+        .map_err(|error| ShapesError::Invalid(error.to_string()))
+}
+
+/// The [`srl::CheckLevel`] a host spelled by name — `syntax`, `well-formed` or
+/// `stratified` — or [`srl::CheckLevel::Stratified`] when it named none.
+///
+/// # Errors
+///
+/// [`ShapesError::Invalid`] naming the three levels, for any other name: a level the host
+/// mistyped is refused rather than read as the default.
+pub fn parse_check_level(name: Option<&str>) -> Result<srl::CheckLevel, ShapesError> {
+    let Some(name) = name else {
+        return Ok(srl::CheckLevel::default());
+    };
+    srl::CheckLevel::from_name(name).ok_or_else(|| {
+        ShapesError::Invalid(format!(
+            "`{name}` is not a SPARQL 1.2 RL check level; name one of {}",
+            srl::CheckLevel::ALL
+                .iter()
+                .map(|level| format!("`{level}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     })
 }
 

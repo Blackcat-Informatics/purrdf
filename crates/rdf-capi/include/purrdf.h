@@ -684,6 +684,42 @@ typedef int32_t PurrdfShaclChangeScopeKind;
 #endif // __cplusplus
 
 /**
+ * How far `purrdf_shacl_check_rules` checks a SPARQL 1.2 RL rule set, each level
+ * including the ones before it.
+ *
+ * Append-only, like every other discriminant this ABI exports: never renumber a
+ * variant. It is carried as an `int32_t` parameter rather than as this enum type so a C
+ * caller passing an out-of-range value is refused rather than producing an invalid
+ * discriminant.
+ */
+enum PurrdfSrlCheckLevel
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The SPARQL 1.2 RL grammar, for the rule set and every document its imports read.
+     */
+    PURRDF_SRL_CHECK_LEVEL_SYNTAX = 0,
+    /**
+     * `Syntax`, and every rule — imported ones included — is well formed.
+     */
+    PURRDF_SRL_CHECK_LEVEL_WELL_FORMED = 1,
+    /**
+     * `WellFormed`, and the combined rule set can be stratified: every static check a
+     * rules run applies before it evaluates.
+     */
+    PURRDF_SRL_CHECK_LEVEL_STRATIFIED = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfSrlCheckLevel PurrdfSrlCheckLevel;
+#else
+typedef int32_t PurrdfSrlCheckLevel;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
  * with `purrdf_buffer_free`.
  */
@@ -2854,6 +2890,40 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  size_t import_count,
                                  PurrdfBuffer **out_inferred,
                                  PurrdfBuffer **out_proof,
+                                 PurrdfError **out_error);
+
+/**
+ * Check a SPARQL 1.2 RL rule set WITHOUT evaluating it — the grammar, the `IMPORTS`
+ * closure resolved from the import table, well-formedness and stratification, every static
+ * check `purrdf_shacl_apply_rules` applies before it runs — with no data graph read and no
+ * rule run, and write the one-line summary every PurRDF host reports to `*out_summary`
+ * (free with `purrdf_buffer_free`).
+ *
+ * `level` is a `PurrdfSrlCheckLevel`: `PURRDF_SRL_CHECK_LEVEL_SYNTAX` (the grammar, for the
+ * rule set and every document its imports read), `PURRDF_SRL_CHECK_LEVEL_WELL_FORMED`
+ * (every rule, imported ones included, is well formed) or
+ * `PURRDF_SRL_CHECK_LEVEL_STRATIFIED` (the combined rule set can be stratified). Any other
+ * value is a `ParseError`. `srl_base_iri` is the rule set's base IRI and may be NULL.
+ *
+ * `import_iris` / `import_documents` / `import_count` are the rule set's `IMPORTS` table
+ * (SPARQL 1.2 RL texts), exactly as `purrdf_shacl_apply_rules` takes it beside `srl`. A
+ * rule set a check refuses — a syntax error, an import no entry supplies or an entry its
+ * closure never names, an ill-formed rule, a rule set that cannot be stratified — is a
+ * `ParseError` whose message names the stage; `*out_summary` is then left untouched.
+ *
+ * # Safety
+ * `srl` must be a non-null NUL-terminated C string; `srl_base_iri` must be null or a
+ * NUL-terminated C string; when `import_count` is non-zero, `import_iris` and
+ * `import_documents` must each address that many NUL-terminated C strings; `out_summary`
+ * must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_shacl_check_rules(const char *srl,
+                                 const char *srl_base_iri,
+                                 int32_t level,
+                                 const char *const *import_iris,
+                                 const char *const *import_documents,
+                                 size_t import_count,
+                                 PurrdfBuffer **out_summary,
                                  PurrdfError **out_error);
 
 /**

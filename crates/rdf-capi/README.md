@@ -149,7 +149,8 @@ executes that example against the generated shared library and committed header.
   The same bump gives `purrdf_shacl_apply_rules` the nullable `max_stored_facts` /
   `max_join_steps` limits between `max_generated_terms` and `import_iris`, and
   `purrdf_entail_materialize_to_nquads` the same two between `program` and
-  `out_nquads`.
+  `out_nquads`. It also adds `purrdf_shacl_check_rules` and its
+  `PurrdfSrlCheckLevel` discriminant.
   It bumps in any case because `0.7.0` is the ABI of the released
   `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
@@ -158,7 +159,7 @@ executes that example against the generated shared library and committed header.
 
 ## Shapes-graph tools
 
-Beside validation, three entry points reach the same engine every other PurRDF host
+Beside validation, four entry points reach the same engine every other PurRDF host
 does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 
 - `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
@@ -180,6 +181,16 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   the parameter. `purrdf_entail_materialize_to_nquads(document, regime, program,
   max_stored_facts, max_join_steps, out_nquads, out_report, out_error)` takes the
   same two limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes.
+- `purrdf_shacl_check_rules(srl, srl_base_iri, level, import_iris,
+  import_documents, import_count, out_summary, out_error)` checks a SPARQL 1.2 RL
+  rule set WITHOUT evaluating it — the grammar, the `IMPORTS` closure resolved
+  from the table exactly as `purrdf_shacl_apply_rules` resolves it,
+  well-formedness and stratification — and writes the one-line summary every host
+  reports. `level` is a `PurrdfSrlCheckLevel`: `PURRDF_SRL_CHECK_LEVEL_SYNTAX`,
+  `PURRDF_SRL_CHECK_LEVEL_WELL_FORMED` or `PURRDF_SRL_CHECK_LEVEL_STRATIFIED`
+  (every static check a rules run applies before it evaluates), each including
+  the ones before it; any other value is a `ParseError`. A refused rule set is a
+  `ParseError` naming the stage, and `*out_summary` is left untouched.
 - `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
   expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
   import_iris, import_documents, import_count, out_terms, out_error)` evaluates

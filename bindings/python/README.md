@@ -178,7 +178,7 @@ non-conforming (by default `sh:Violation`, `sh:Warning` and `sh:Info`), and
 the dict's `conformance_disallows` names the set the report was judged
 against.
 
-Three tools sit beside validation, each the same library call the CLI, WebAssembly
+Four tools sit beside validation, each the same library call the CLI, WebAssembly
 and C surfaces make:
 
 ```python
@@ -197,6 +197,12 @@ shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=50_00
 # graph, a rule set's data and every inferred triple) and 1048576 join steps. A
 # run past either raises ValueError naming the limit and the keyword argument.
 shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
+
+# Check a SPARQL 1.2 RL rule set WITHOUT running it: the grammar, the IMPORTS
+# closure (from `imports`), well-formedness and stratification -- every static
+# check apply_rules(srl=...) applies first. level="syntax" or "well-formed" stops
+# earlier. A refused rule set raises ValueError naming the stage.
+shapes.check_rules(counting_rules)["summary"]
 
 # Evaluate one node expression of a shapes graph against a focus node. The
 # expression is an IRI or "_:label"; the scope binds shnex:var names.
