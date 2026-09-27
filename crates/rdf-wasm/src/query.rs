@@ -53,7 +53,7 @@
 //!
 //! The wall deadline is the one host-platform clock read on this path. It lives in
 //! [`WallDeadline`], which is written per target inside `purrdf-sparql-eval` — a wasm
-//! build reads `js_sys::Date::now()` rather than `std::time::Instant`, which would compile
+//! build reads the host's `Date.now()` rather than `std::time::Instant`, which would compile
 //! here and panic at run time. The Node round-trip lane (`js/tests/governors.test.mjs`)
 //! executes a real deadline trip against the optimized module so that split is *observed*
 //! rather than merely compiled.

@@ -194,11 +194,11 @@ fn host_millis() -> f64 {
 /// The host clock read, in milliseconds since a fixed origin, written per target exactly
 /// as [`crate::clock::wall_clock_now`] is.
 ///
-/// wasm32: `js_sys::Date::now()`, milliseconds since the Unix epoch. This is a **wall**
+/// wasm32: the host's `Date.now()`, milliseconds since the Unix epoch. This is a **wall**
 /// clock, not a monotonic one — see [`WallDeadline`] for why that is load-bearing.
 #[cfg(target_arch = "wasm32")]
 fn host_millis() -> f64 {
-    js_sys::Date::now()
+    crate::wasm_host::date_now()
 }
 
 /// Where a [`WallDeadline`] reads the time from.
@@ -241,7 +241,7 @@ impl DeadlineClock {
 ///
 /// # The rewind rule
 ///
-/// On wasm32 the clock is `js_sys::Date::now()`, a wall clock that is NTP-steppable. A
+/// On wasm32 the clock is `Date.now()`, a wall clock that is NTP-steppable. A
 /// backwards step would make a naive `now >= deadline` deadline **un-trippable** — a
 /// silent failure in which a query outlives a budget the caller believes is enforced. So
 /// the start instant is snapshotted at construction and the deadline latches on **either**

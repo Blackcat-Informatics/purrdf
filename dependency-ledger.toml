@@ -459,11 +459,6 @@ category = "transitive:serde_json"
 reason = "integer formatting for serde_json"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.js-sys]
-category = "binding"
-reason = "browser clock and entropy for SPARQL NOW()/RAND() on wasm32; testkit wasm runner"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.libc]
 category = "runtime"
 reason = "mmap/memfd_create/fcntl syscalls for the CLI's race-free pack reads and immutable-seal writes (replaces filetime, memmap2, rustix); also reached transitively through getrandom"
@@ -716,8 +711,8 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false,
 
 [packages.wasm-bindgen]
 category = "binding"
-reason = "JavaScript bindings for purrdf-wasm and the testkit wasm runner"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
+reason = "JavaScript bindings for purrdf-wasm, SPARQL host clock and entropy, and the testkit wasm runner"
+metrics = { direct = true, exclusive_closure = 6, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.wasm-bindgen-macro]
 category = "transitive:wasm-bindgen"

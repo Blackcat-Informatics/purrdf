@@ -74,7 +74,10 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
-#![forbid(unsafe_code)]
+// Only the wasm host-import macro expansion needs unsafe code. Keep all native
+// builds forbidden and deny new wasm unsafe outside that one import module.
+#![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
+#![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 #![warn(missing_docs)]
 
 pub mod agg_fn;
@@ -86,6 +89,9 @@ mod cdt_agg;
 mod cdt_fn;
 mod cdt_unfold;
 mod clock;
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
+mod wasm_host;
 mod construct;
 mod contain;
 mod convert;

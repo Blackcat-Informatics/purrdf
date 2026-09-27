@@ -39,16 +39,16 @@ pub(crate) fn entropy_seed() -> u64 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn wall_clock_now() -> DateTime {
-    // js_sys::Date::now() is milliseconds since the Unix epoch.
+    // The host Date.now() is milliseconds since the Unix epoch.
     #[allow(clippy::cast_possible_truncation)]
-    let secs = (js_sys::Date::now() / 1000.0) as i64;
+    let secs = (crate::wasm_host::date_now() / 1000.0) as i64;
     purrdf_xsd::datetime_from_unix_seconds(secs)
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn entropy_seed() -> u64 {
-    // Compose 64 bits from two js_sys::Math::random() draws in [0,1).
+    // Compose 64 bits from two host Math.random() draws in [0,1).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let draw = || (js_sys::Math::random() * f64::from(u32::MAX)) as u64;
+    let draw = || (crate::wasm_host::math_random() * f64::from(u32::MAX)) as u64;
     (draw() << 32) | draw()
 }

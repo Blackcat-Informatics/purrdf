@@ -127,16 +127,6 @@ getrandom = "0.3"
 # so the default hasher (foldhash) and allocator-api2 stay OFF. Tracks the same
 # major `indexmap` (via serde_yaml_ng) resolves, so the graph holds one hashbrown.
 hashbrown = { version = "0.17", default-features = false }
-# Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
-# crates/sparql-eval's target-gated dependency section), and Node's process,
-# console and clock for the wasm32 test harness (crates/testkit). Default
-# features off: `std` only adds a `std::error::Error` impl this workspace never
-# names and pulls in futures-util (with futures-core, futures-task,
-# pin-project-lite and slab) for a stream adapter it never uses, and
-# `unsafe-eval` only gates `eval` and the string-bodied `Function`
-# constructors, which nothing here calls. `Date::now` and `Math::random`
-# compile without either.
-js-sys = { version = "0.3", default-features = false }
 # The C library bindings behind the CLI's immutable-input authority on Linux:
 # `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
 # `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see

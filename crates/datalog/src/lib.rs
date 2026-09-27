@@ -68,7 +68,7 @@
 //! a budget are false, and are corrected rather than left standing:
 //!
 //! * It does **not** break wasm. The reader is target-split — [`std::time::Instant`]
-//!   natively, `js_sys::Date::now()` on `wasm32-unknown-unknown` — and the wasm half is
+//!   natively, the host's `Date.now()` on `wasm32-unknown-unknown` — and the wasm half is
 //!   demonstrated by an executed Node round-trip against a real module rather than by a
 //!   green cross-compile, because a build that links is no evidence that a clock reads.
 //! * It does not break reproducibility, because **wall time never claims it**. Determinism

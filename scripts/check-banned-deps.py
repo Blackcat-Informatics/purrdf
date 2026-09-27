@@ -170,6 +170,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "displaydoc": "purrdf-iri (no Unicode normalization on the IRI path)",
     "synstructure": "purrdf-iri (no Unicode normalization on the IRI path)",
     "wasm-bindgen-test": "purrdf_testkit::harness run on wasm32 by scripts/wasm-test-runner.sh",
+    "js-sys": "direct wasm-bindgen imports of Date.now and Math.random",
     # wasm-bindgen-test's own closure: its attribute macro and shared descriptor
     # crate, its async test executor, its coverage hook and its console colours.
     # Nothing else in the graph pulled any of them in.
@@ -424,12 +425,27 @@ def manifest_override_names(manifest: dict) -> set[str]:
     names: set[str] = set()
     for patches in manifest.get("patch", {}).values():
         for alias, declaration in patches.items():
-            names.add(declaration.get("package", alias) if isinstance(declaration, dict) else alias)
+            names.add(
+                declaration.get("package", alias)
+                if isinstance(declaration, dict)
+                else alias
+            )
     for key, declaration in manifest.get("replace", {}).items():
         names.add(key.split(":", 1)[0])
         if isinstance(declaration, dict) and "package" in declaration:
             names.add(declaration["package"])
     return names
+
+
+def manifest_banned_declarations(
+    manifest: dict, banned: dict[str, str]
+) -> tuple[set[str], set[str]]:
+    """Banned package names in workspace and ordinary manifest declarations."""
+    workspace_deps = direct_dependency_names(
+        {"dependencies": manifest.get("workspace", {}).get("dependencies", {})}
+    )
+    declared = direct_dependency_names(manifest) | manifest_override_names(manifest)
+    return workspace_deps & banned.keys(), declared & banned.keys()
 
 
 def manifest_path_for(directory: str) -> str:
@@ -535,15 +551,12 @@ def direct_edge_offenders(
 
     for manifest_path in first_party_manifests(root):
         manifest = tomllib.loads((root / manifest_path).read_text(encoding="utf-8"))
-        workspace_deps = direct_dependency_names(
-            {"dependencies": manifest.get("workspace", {}).get("dependencies", {})}
-        )
-        for name in sorted(workspace_deps & banned.keys()):
+        workspace, declared = manifest_banned_declarations(manifest, banned)
+        for name in sorted(workspace):
             offenders.setdefault(name, []).append(
                 f"{manifest_path} [workspace.dependencies]"
             )
-        declared = direct_dependency_names(manifest) | manifest_override_names(manifest)
-        for name in sorted(declared & banned.keys()):
+        for name in sorted(declared):
             offenders.setdefault(name, []).append(manifest_path)
 
     return offenders
@@ -1232,14 +1245,19 @@ def self_test() -> int:
         },
     }
     for label, manifest in direct_variants.items():
-        if "hex" not in direct_dependency_names(manifest):
+        if manifest_banned_declarations(manifest, BANNED_ANY_EDGE)[1] != {"hex"}:
             failures.append(f"direct hex dependency ({label}) was not flagged")
 
     # A synthetic name keeps the direct-only scanner contract covered even
     # though no production dependency has an authorized direct-only exception.
     synthetic = "synthetic-direct-only"
-    if synthetic not in direct_dependency_names(
-        {"dependencies": {"alias": {"package": synthetic, "version": "1"}}}
+    synthetic_manifest = {
+        "dependencies": {"alias": {"package": synthetic, "version": "1"}},
+        "workspace": {"dependencies": {"renamed": {"package": synthetic, "version": "1"}}},
+    }
+    if manifest_banned_declarations(synthetic_manifest, {synthetic: "test"}) != (
+        {synthetic},
+        {synthetic},
     ):
         failures.append("a renamed synthetic direct-only dependency was missed")
 
@@ -1261,9 +1279,13 @@ def self_test() -> int:
         failures.append("transitive hex was not flagged by the any-edge ban")
     if any_edge_offenders('name = "rand_core"\n') != ["rand_core"]:
         failures.append("transitive rand_core was not flagged by the any-edge ban")
-    if manifest_override_names({"patch": {"crates-io": {"alias": {"package": "hex"}}}}) != {"hex"}:
+    if manifest_banned_declarations(
+        {"patch": {"crates-io": {"alias": {"package": "hex"}}}}, BANNED_ANY_EDGE
+    )[1] != {"hex"}:
         failures.append("a renamed patch declaration was not flagged")
-    if manifest_override_names({"replace": {"hex:0.4.3": {"path": "../hex"}}}) != {"hex"}:
+    if manifest_banned_declarations(
+        {"replace": {"hex:0.4.3": {"path": "../hex"}}}, BANNED_ANY_EDGE
+    )[1] != {"hex"}:
         failures.append("a replace declaration was not flagged")
 
     # --- (B) substitution: a [[patch.unused]] block naming a banned package.

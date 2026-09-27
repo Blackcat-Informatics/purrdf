@@ -287,7 +287,7 @@ Two implementations ship:
   signal would leave two callers with two different notions of "expired", which is
   the optionality this profile refuses everywhere else.
 
-`WallDeadline` is target-split — `std::time::Instant` natively, `js_sys::Date::now()`
+`WallDeadline` is target-split — `std::time::Instant` natively, the host's `Date.now()`
 on `wasm32-unknown-unknown` — so the wasm target remains supported. The wasm half is
 demonstrated by an executed Node round-trip against a real module rather than by a
 green cross-compile.

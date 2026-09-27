@@ -603,8 +603,8 @@ pub fn entail_explain_conclusion(
 ///
 /// wasm-bindgen has no ABI for a nested string array: `Vec<Vec<String>>` does not
 /// implement `VectorFromWasmAbi`, because `ErasableGeneric` bottoms out at `&str` rather
-/// than at `JsValue`. Reading a JS `Array` of `Array`s therefore needs `js-sys`, which this
-/// crate does not depend on, and the alternative — receiving the pairs in `js/index.mjs`
+/// than at `JsValue`. Reading a JS `Array` of `Array`s therefore needs extra JS interop,
+/// which this crate does not carry, and the alternative — receiving the pairs in `js/index.mjs`
 /// and flattening them there — is structurally refused by
 /// `scripts/check-wasm-js-exports.py`, which requires every `#[wasm_bindgen]` free
 /// function to be re-exported from the package root under its OWN name, leaving no room

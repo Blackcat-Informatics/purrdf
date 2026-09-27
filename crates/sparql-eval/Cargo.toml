@@ -85,9 +85,9 @@ hashbrown = { workspace = true }
 getrandom = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# Browser wall clock + entropy for NOW()/RAND() on wasm. Target-gated so native
-# builds never pull js-sys.
-js-sys = { workspace = true }
+# Browser wall clock + entropy for NOW()/RAND() on wasm. The two host globals
+# are imported directly through the already-required binding crate.
+wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `prepared_reuse_counters`

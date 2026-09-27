@@ -113,8 +113,8 @@ signature would key on. A digest over internal values would pass while the
 renderer diverged.
 
 **Every host clock and entropy source throws while the digest runs.**
-`purrdf-geo` depends on `purrdf-sparql-eval`, which target-gates `js-sys` and
-`wasm-bindgen` on wasm32 to give SPARQL's `NOW()` and `RAND()` a browser clock
+`purrdf-geo` depends on `purrdf-sparql-eval`, which uses target-gated
+`wasm-bindgen` imports on wasm32 to give SPARQL's `NOW()` and `RAND()` a browser clock
 and browser entropy. The digest touches neither. Leaving those sources live
 would let a future change quietly consult a clock and still produce a digest — a
 digest that agreed on two targets while one had read a clock is precisely the

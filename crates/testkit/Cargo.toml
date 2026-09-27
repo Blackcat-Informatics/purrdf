@@ -60,8 +60,7 @@ regex = { workspace = true }
 # The harness's host on wasm32-unknown-unknown, where the standard library has
 # no command line, environment, console or clock: the test binary runs in Node
 # under scripts/wasm-test-runner.sh, and these reach Node's `process.argv`,
-# `process.env`, `console.log`/`console.error` and `Date.now`. Both are the
-# workspace's own wasm32 dependencies already, so this adds no package.
+# `process.env`, `console.log`/`console.error` and `Date.now`. Direct host
+# imports need only the already-shared wasm-bindgen dependency.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
-js-sys = { workspace = true }
