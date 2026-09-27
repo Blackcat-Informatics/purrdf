@@ -1124,25 +1124,28 @@ mod tests {
     // ── bounds and termination ────────────────────────────────────────────────
 
     #[test]
-    fn nesting_past_the_depth_bound_is_a_hard_failure() {
-        // 64 nested constructors is the deepest composite that can exist; the 65th
-        // has nowhere to go. The refusal is a HARD failure, not an unbound
-        // variable — a `FILTER(!BOUND(?x))` must not be satisfiable by a resource
-        // refusal, or a hostile query could use one to change a result set.
+    fn nesting_is_bounded_by_the_element_and_byte_bounds_alone() {
+        // A composite nests as deep as its elements and bytes allow: each level is
+        // one element, so no separate depth bound exists. 256 nested constructors
+        // mint a value whose canonical form is exactly that many bracket pairs, and
+        // whose size is the one element of its outermost list.
         let nest = |depth: usize| {
             let mut expression = "cdt:List()".to_owned();
             for _ in 1..depth {
                 expression = format!("cdt:List({expression})");
             }
-            format!("BIND({expression} AS ?x) FILTER(BOUND(?x))")
+            expression
         };
-        assert!(ask(&nest(64)), "64 levels is within the bound");
-        let error = ask_err(&nest(65));
-        assert!(
-            matches!(error, EvalError::CompositeBound(_)),
-            "got {error:?}"
-        );
-        assert!(error.to_string().contains("nesting"), "got {error}");
+        let brackets = "[".repeat(256) + &"]".repeat(256);
+        assert!(ask(&format!(
+            "BIND({} AS ?x) FILTER(BOUND(?x)) FILTER(STR(?x) = \"{brackets}\") \
+             FILTER(cdt:size(?x) = 1)",
+            nest(256)
+        )));
+        // The neighbour with no nesting at all: an empty list has no element.
+        assert!(ask(
+            "BIND(cdt:List() AS ?x) FILTER(STR(?x) = \"[]\") FILTER(cdt:size(?x) = 0)"
+        ));
     }
 
     #[test]

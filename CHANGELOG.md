@@ -2443,6 +2443,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   (`native-sparql-host-fault`), and `FailureCode::from` maps both to
   `FailureCode::HostFault`, so a protocol boundary answers it as the host's fault.
 
+- **BREAKING** **cdt, geo:** composite and geometry nesting is bounded by memory alone.
+  `purrdf_cdt::MAX_NESTING_DEPTH` and `CdtError::DepthExceeded` are removed; a
+  composite is bounded by `MAX_ELEMENTS` and `MAX_LEXICAL_BYTES`, and every level is
+  one element. `CdtValue` and `CdtTripleTerm` implement `Drop` iteratively (so a
+  `CdtTripleTerm` is no longer destructured by value), `CdtTerm`'s `Clone` and `Debug`
+  are iterative with byte-identical output, equality and ordering own the values they
+  resolve out of nested `cdt:`-typed literals instead of re-entering the comparator,
+  and `canonical_lexical_len` reads a length every value carries. `purrdf_geo` reads
+  and writes nested geometry collections over explicit stacks, its `Geometry` drops,
+  clones, compares and prints iteratively, and the 64-deep WKT nesting cap is gone.
+
 - **BREAKING** **sparql-eval:** `MAX_HOPS_CAP` is removed and `PathLimits::new`
   accepts any `max_hops` a `u32` holds. The path-relation traversal keeps every piece
   of per-depth state on the heap, so the cap that stood in for a stack budget names
