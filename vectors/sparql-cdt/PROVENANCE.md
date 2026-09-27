@@ -61,5 +61,5 @@ Harness: `crates/sparql-conformance/tests/cdt_corpus.rs` runs every case here
 through `manifest-all.ttl`'s `mf:include` aggregator and reports the
 `SPARQL CDT (SEP-0009, vendored corpus)` row of `conformance-matrix.py`. The
 corpus deliberately stays OUTSIDE `crates/sparql-conformance/suite/`, whose
-`datatest_stable` root folds every manifest it finds into the one full-corpus
+`sparql_conformance` harness folds every manifest it finds into the one full-corpus
 row; keeping it here is what gives it a row of its own.

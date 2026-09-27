@@ -7,8 +7,9 @@
 //! Discovers `mf:` test manifests, runs each case against the native
 //! [`purrdf_sparql_eval`] engine (zero oxigraph Store), and diffs the result
 //! against the expected SPARQL Results (SRX/SRJ) or canonical N-Quads. The
-//! datatest-stable test harness (`tests/sparql_conformance.rs`) emits one
-//! nextest case per `manifest.ttl`; each loops its entries via [`run_manifest`].
+//! `harness = false` test target `tests/sparql_conformance.rs` runs one case per
+//! `manifest.ttl` that [`paths::suite_manifests`] discovers under `suite/`; each
+//! loops its entries via [`run_manifest`].
 //!
 //! Expected failures are recorded in [`xfail`] — never skipped — and the
 //! per-manifest [`Summary`] prints a tally (`passed / xfail / unexpected-pass /
@@ -93,7 +94,7 @@ impl Summary {
         )
     }
 
-    /// A detailed failure report for the datatest error message.
+    /// A detailed failure report for the failing manifest case's message.
     #[must_use]
     pub fn failure_report(&self) -> String {
         let mut lines = Vec::new();

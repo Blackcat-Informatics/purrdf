@@ -11,7 +11,7 @@
 //!
 //! # Why this target, and not `suite/`
 //!
-//! `sparql_conformance.rs`'s `datatest_stable::harness!` is rooted at `suite/`
+//! `sparql_conformance.rs` discovers its cases under `suite/`
 //! and folds every manifest it finds into ONE scoreboard row. The CDT corpus is
 //! vendored under `vectors/` (frozen and digest-pinned by
 //! `scripts/check-corpus-frozen.py`, exactly like the GTS vectors), so it gets

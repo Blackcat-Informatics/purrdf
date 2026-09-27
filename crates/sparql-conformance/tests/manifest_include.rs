@@ -15,7 +15,7 @@
 //!   IRI-matched expected-failure ledger could not tell the two apart.
 //!
 //! The fixtures live under `tests/fixtures/include-manifests/`, never under
-//! `suite/`, so the datatest harness never discovers them as live cases.
+//! `suite/`, so `sparql_conformance.rs` never discovers them as live cases.
 
 use std::path::{Path, PathBuf};
 
@@ -189,8 +189,8 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
     );
 }
 
-/// An aggregator may not be named `manifest.ttl`: the datatest root glob discovers
-/// every `*/manifest.ttl`, so such a file would be run alongside the
+/// An aggregator may not be named `manifest.ttl`: `sparql_conformance.rs` runs
+/// every `manifest.ttl` below `suite/` as a case, so such a file would be run alongside the
 /// `manifest.ttl` files it includes and every included case would run twice.
 #[test]
 fn an_aggregator_named_manifest_ttl_is_refused() {

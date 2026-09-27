@@ -8,9 +8,9 @@
 # yielded ZERO cases and reported success, which is the silent green this fixture
 # exists to keep closed.
 #
-# Named `manifest-all.ttl`, not `manifest.ttl`: the datatest root glob in
-# `crates/sparql-conformance/tests/sparql_conformance.rs` discovers every
-# `*/manifest.ttl`, so an aggregator with that name would be discovered alongside
+# Named `manifest-all.ttl`, not `manifest.ttl`:
+# `crates/sparql-conformance/tests/sparql_conformance.rs` runs every
+# `manifest.ttl` below `suite/` as a case, so an aggregator with that name would be discovered alongside
 # the children it includes and every child case would run twice. `manifest::load`
 # refuses that shape by name (see `include-named-manifest/` below this directory).
 #
