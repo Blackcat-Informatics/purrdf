@@ -319,8 +319,8 @@ ORDER BY ?rank
     数成正比。
   - **路径见证**——一个绑定遍历*推导过程*而不只是其端点的属性函数：
     `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，每跳一行，每条被遍历的
-    陈述都是一个可直接连接回数据集的 RDF 1.2 三元组项；每条简单前缀游走或每对端点
-    一条最短见证，一个由内容派生的路径标识符，以及调用方必须声明的跳数上限。可从 CLI
+    陈述都是一个可直接连接回数据集的 RDF 1.2 三元组项；可返回每一条简单前缀游走，
+    或每对端点只返回一条最短见证，一个由内容派生的路径标识符，以及调用方必须声明的跳数上限。可从 CLI
     （`--path-relation`）与 Python（`path_relations`）访问；参考向量是在一个真实的
     Virtuoso `OPTION(TRANSITIVE …)` 实例上重新执行得到的，而不是从其手册抄录的。
 - **受调控的执行**——每个查询/更新入口点都有一个对应的受调控版本，在调用方设定的
@@ -420,14 +420,15 @@ ORDER BY ?rank
   `queryEntailmentGoverned`、C `purrdf_query_entailment_governed`）解析查询、在七种
   蕴涵机制之一下求闭包、在闭包上求值，并把答案连同推理报告一起交回；路径关系
   （`--path-relation`）从闭包重新派生，因此游走能看到推导出的边，而 OWL-Direct 通道在
-  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：与
-  生成见证的 chase 并置的重建器会按名称被拒绝（`reasoning-closure-relation-witness`）；
+  求值之前把每个绑定叶子都包进一个对照 chase 见证列表的 `MINUS` 中。止步于何处：若
+  chase 生成了存在性见证，同时又提供了从闭包重新派生关系的重建器（rebuilder），这一
+  组合会按名称被拒绝（`reasoning-closure-relation-witness`）；
   闭包阶段只遵守停止信号（取消或墙钟截止时间），而数值上限只作用于查询阶段；
   `ClosureStopped` 结果不携带任何行，也不携带报告。
 - **GTS 图传输**——面向 RDF 1.2 图及其引用的二进制对象的单文件、内容寻址、仅追加
   的容器：BLAKE3 链接的 CBOR 段、确定性的折叠、COSE 签名/加密、纯 Rust 密码学
   （对 wasm 友好）。可从 Rust、CLI（`--from gts`，只读）、Python 与 C 访问；wasm/JavaScript
-  包并不暴露它。仅限 Rust 库的附加功能——可流式的压缩证书、MMR 包含证明、内容链与
+  包并不暴露它。仅限 Rust 库的附加功能——可流式压缩（compaction）的证书、MMR 包含证明、内容链与
   OpenPGP 密钥环验证——在 [本书的 GTS 一章](./docs/book/src/gts.md) 中描述而不在此处：
   Rust 之外没有任何接口能触及它们，且该栈的一部分在本仓库中没有直接测试。规范见
   [`docs/GTS-SPEC.md`](./docs/GTS-SPEC.md)，冻结的跨语言一致性向量见

@@ -150,7 +150,7 @@ Path("void.tar").write_bytes(description.archive)
 
 对于大型 LPG 载体，`purrdf.project_artifacts(...)` 会调用一个事务式的工件回调，带有
 包/工件开始、有界分块、工件结束、提交与中止事件。可选的进度回调会收到不可变的
-`ProjectionProgress` 快照；回调中的异常会中止该包并原样返回。这条路径保留所选的规范
+`ProjectionProgress` 快照；回调中的异常会中止该包，并原样传回给调用方（即重新抛出）。这条路径保留所选的规范
 LPG 模型，但不保留完整的工件体或 USTAR 字节。参见可运行的原子目录式
 [`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
 示例。
@@ -411,7 +411,7 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 蕴涵的缺失——而 `undecided` 是不完备的过程有权改说的话。把后者当作前者，会把本库的
 一个局限变成关于所用本体的一个错误陈述。
 
-### `imports`——前提自称并非全部的那些文档
+### `imports`——前提自称缺了它们便不完整的那些文档
 
 `imports` 是一个有序的 `(ontology_iri, document)` 对序列，其中 `document` 是与前提
 完全一样的 N-Quads（或 N-Triples）文本。带有 `owl:imports` 的本体声明其公理是自身的
@@ -564,7 +564,7 @@ store.query(query, relations_from_graph={f"{EX}rel/memberOf": (purrdf.NamedNode(
 模式。重复的 IRI、参差不齐的表、断裂的列表或指向不存在节点的头节点，会在其提供之处抛出
 `ValueError`。
 
-第三种写法根本不是表。`path_relations` 在存储自身的边上注册一次**路径见证**（path
+第三种写法根本不是表。`path_relations` 在存储自身的边上注册一个**路径见证**（path
 witness）遍历：一次调用写作 `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，
 每一跳发出一行，`?edge` 绑定到作为 RDF 1.2 三元组项的被遍历陈述，因此 `GROUP BY ?pathId`
 配合 `ORDER BY ?step` 就能在查询内部重组一整条游走。规格中的每个字段都是必填的——
@@ -683,7 +683,7 @@ rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs
 `annotations`、`blobs`——按投影自身的行顺序写出，因此把同一个容器导出两次会得到相同的
 内容。`gts_to_parquet` 每张表写一个文件，并按表的顺序返回它们的路径。
 
-SQLite 只需要标准库。另外两个在所需的可选依赖缺失时会抛出点名该依赖的
+SQLite 只需要标准库。另外两个在对应的 extra 缺失时会抛出点名该 extra 的
 `ModuleNotFoundError`：
 
 ```bash
