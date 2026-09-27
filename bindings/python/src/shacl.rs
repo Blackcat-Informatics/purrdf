@@ -486,13 +486,16 @@ fn eval_node_expr(
 /// function call binds to. Returns a dict:
 ///
 /// - `"clean"` — no finding: the loader accepted the graph, every `shacl-shacl` result is
-///   superseded (flagged by `shacl-shacl.ttl` but well-formed SHACL 1.2 Core) and no
-///   unexecuted query violates a pre-binding restriction;
+///   superseded (flagged by `shacl-shacl.ttl` but well-formed SHACL 1.2 Core) or
+///   diagnosed, no
+///   unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+///   applies;
 /// - `"findings"` — the finding count;
 /// - `"load_error"` — the loader's refusal, or `None`;
 /// - `"shacl_shacl"` — one dict per result: `"focus"`, `"path"`, `"value"`,
 ///   `"component"`, `"source_shape"`, `"severity"`, `"messages"`, `"superseded"` (the
-///   supersession rule's name, or `None`);
+///   supersession rule's name, or `None`), `"diagnosed"` (the rule id of the mandatory
+///   diagnostic that states the same defect and is counted instead, or `None`);
 /// - `"calls"` — one dict per function call site, `"binding"` (`native`, `custom`,
 ///   `sparql-registered`, `host-extension`), `"function"`, `"owner"`; `None` when the
 ///   loader refused the graph;
@@ -505,6 +508,9 @@ fn eval_node_expr(
 ///   validator no use of its component selects, a `sh:SPARQLFunction` nothing calls),
 ///   which the load accepts: `"declaration"`, `"message"`; each is a finding; `None`
 ///   when the loader refused the graph;
+/// - `"diagnostics"` — one dict per mandatory diagnostic, a shape whose `sh:in` or
+///   `sh:xone` list is empty: `"rule"` (`in-minListLength`, `xone-minListLength`),
+///   `"shape"`; each is a finding, reported whether or not the load succeeded;
 /// - `"unanchored_imports"` — one dict per `owl:imports` triple of the closure whose
 ///   subject is no anchor of its document (not the IRI it was read or imported under, not
 ///   an ontology header, not a shapes graph, not a node versioning one of those), so it is
@@ -559,6 +565,7 @@ fn lint_shapes(
         d.set_item("severity", &result.severity)?;
         d.set_item("messages", &result.messages)?;
         d.set_item("superseded", result.superseded.map(|rule| rule.name))?;
+        d.set_item("diagnosed", result.diagnosed)?;
         results.append(d)?;
     }
     out.set_item("shacl_shacl", results)?;
@@ -604,6 +611,14 @@ fn lint_shapes(
             out.set_item("unexecuted", unexecuted)?;
         }
     }
+    let diagnostics = PyList::empty(py);
+    for diagnostic in report.diagnostics() {
+        let d = PyDict::new(py);
+        d.set_item("rule", diagnostic.rule)?;
+        d.set_item("shape", diagnostic.shape.to_string())?;
+        diagnostics.append(d)?;
+    }
+    out.set_item("diagnostics", diagnostics)?;
     let unanchored = PyList::empty(py);
     for entry in report.unanchored_imports() {
         let d = PyDict::new(py);

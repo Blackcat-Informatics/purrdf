@@ -1938,7 +1938,9 @@ class shapes:
     ) -> list[str]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
-    # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None),
+    # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None, and
+    # "diagnosed" naming the mandatory diagnostic that states the same defect and is
+    # counted instead, else None),
     # "calls" (each function call site's "binding" / "function" / "owner", None when
     # the loader refused the graph), "alternatives" (each validator declared for a
     # built-in constraint component, superseded by the native implementation:
@@ -1946,7 +1948,10 @@ class shapes:
     # when the loader refused the graph), "unexecuted" (each query the graph declares
     # that violates a pre-binding restriction and that nothing executes, which the
     # load accepts: "declaration" / "message"; each is a finding; None when the loader
-    # refused the graph), "unanchored_imports" (each owl:imports triple of the closure
+    # refused the graph), "diagnostics" (each mandatory diagnostic, one per shape whose
+    # sh:in or sh:xone list is empty: "rule" ("in-minListLength" /
+    # "xone-minListLength") / "shape"; each is a finding, reported whether or not the
+    # load succeeded), "unanchored_imports" (each owl:imports triple of the closure
     # whose subject is no anchor of its document, so it is data and imported nothing:
     # "document" (None for the shapes document itself, else the IRI it was imported
     # under) / "subject" / "object"; never findings), "report" (the deterministic text

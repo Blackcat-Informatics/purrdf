@@ -469,12 +469,14 @@ pub struct ValidationReport {
     /// the results graph has true as the value for sh:shapesGraphWellFormed then the
     /// processor was certain that the shapes graph that was used for the validation
     /// process is well-formed." PurRDF checks every shapes graph before validating it and
-    /// refuses an ill-formed one, so every report the engine produces states `Some`:
-    /// `true`, or `false` for the one ill-formedness the W3C suite requires a validation
-    /// of — an empty `sh:in` or `sh:xone` list (`in-minListLength`,
-    /// `xone-minListLength`), see [`crate::shapes::Shapes::is_well_formed`]. `None` — a
-    /// report assembled by [`Self::from_results`] rather than by a validation — states
-    /// nothing.
+    /// refuses an ill-formed one, so every report the engine produces states
+    /// `Some(true)`. Appendix A's `in-minListLength` and `xone-minListLength` ("Each such
+    /// list SHOULD have at least one member") constrain the document's author: PurRDF
+    /// applies them as a mandatory diagnostic that [`crate::lint`] always reports, and the
+    /// approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and `xone-003` validate
+    /// such a graph, so an empty `sh:in` or `sh:xone` list leaves the graph well-formed.
+    /// `None` — a report assembled by [`Self::from_results`] rather than by a
+    /// validation — states nothing.
     pub shapes_graph_well_formed: Option<bool>,
 }
 

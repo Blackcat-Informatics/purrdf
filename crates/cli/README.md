@@ -966,6 +966,7 @@ call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <htt
 validators 1
 alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
 unexecuted 0
+diagnostics 0
 unanchored-imports 1
 unanchored <http://example.org/Other> <http://example.org/Target> document -
 findings 0
@@ -1012,6 +1013,17 @@ clean true
   followed by its `error` lines, and each is a finding here. A declaration
   that violates a syntax rule never appears here: it refuses the load. It
   reads `unexecuted unavailable` when the loader refused the graph.
+- **`diagnostics`** lists every mandatory diagnostic: a `diagnostic RULE SHAPE`
+  line for each shape whose `sh:in` or `sh:xone` list is empty, `RULE` being the
+  SHACL 1.2 Core syntax rule id `in-minListLength` or `xone-minListLength`
+  ("Each such list SHOULD have at least one member"). The shapes graph is still
+  well-formed — the approved W3C tests `core/node/in-002`, `in-003`, `xone-002`
+  and `xone-003` validate it, and its validation report states
+  `sh:shapesGraphWellFormed true` — but the rule constrains the author, so lint
+  always reports it, whether or not the load succeeded, and each line is a
+  finding. `shacl-shacl.ttl` warns about the same empty list (`sh:minListLength`
+  on the `sh:in` / `sh:xone` path); that result is listed marked
+  `diagnosed RULE` and is not counted a second time.
 - **`unanchored-imports`** lists every `owl:imports` triple of the shapes
   graph's closure that is **not** an import, because its subject is no anchor of
   the document it occurs in. The anchors are the IRI the document was read
@@ -1030,9 +1042,9 @@ clean true
   being typed `owl:Ontology`, and that result is a finding like any other.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded (an `sh:Info` result counts like any other) and no
-unexecuted query violates a pre-binding restriction. `unanchored-imports` never
-affects it.
+result is superseded (an `sh:Info` result counts like any other), no
+unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+applies. `unanchored-imports` never affects it.
 
 The report goes to `OUT` either way, and `shapes lint clean true|false` and
 `shapes lint findings N` always go to stderr.

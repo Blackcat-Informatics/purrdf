@@ -6,17 +6,23 @@
 //! the property sh:shapesGraphWellFormed to inform the consumer of the validation report
 //! about this fact."
 //!
-//! Every report a validation produces states it. It is `true` for a shapes graph that met
-//! every syntax rule, and `false` for the one ill-formedness the approved W3C suite requires
-//! a validation of: an empty `sh:in` or `sh:xone` list (`in-minListLength`,
-//! `xone-minListLength`). The neighbour of each `false` row differs only in the list having
-//! a member, and states `true`.
+//! Every report a validation produces states it, and states `true`: the loader refuses a
+//! shapes graph that breaks a syntax rule it enforces. Appendix A's `in-minListLength` and
+//! `xone-minListLength` ("Each such list SHOULD have at least one member") are a MANDATORY
+//! DIAGNOSTIC instead (maintainer decision, `docs/design/should-audit.md`): the graph is
+//! well-formed, validation proceeds as the approved W3C tests `core/node/in-002`, `in-003`,
+//! `xone-002` and `xone-003` require, and `lint` always reports each empty list by rule id.
+//! The lint rows below are graded against the W3C test files themselves, each beside a
+//! neighbour whose list has a member.
 
 use std::sync::Arc;
 
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_dataset_with_shapes_graph};
+use purrdf_shapes::imports::ShapesImports;
+use purrdf_shapes::lint::{LintReport, lint};
 use purrdf_shapes::report::{ConformanceDisallows, ValidationReport};
-use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use purrdf_shapes::term::Term;
+use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
 const PREFIXES: &str = "@prefix ex: <http://example.org/ns#> .\n\
     @prefix sh: <http://www.w3.org/ns/shacl#> .\n";
@@ -49,9 +55,14 @@ fn report(constraint: &str) -> ValidationReport {
     free
 }
 
+/// Every row states `true`, the empty-list rows included: an empty `sh:in` or `sh:xone`
+/// list is a lint diagnostic, not an ill-formedness. The empty rows are observed to be
+/// validated (the approved `in-002` / `xone-002` answer: the focus node violates the empty
+/// list), and their non-empty neighbours to conform, so the rows cannot pass by the
+/// validation having been skipped.
 #[test]
-fn every_report_states_whether_the_shapes_graph_is_well_formed() {
-    for (constraint, well_formed) in [
+fn every_report_states_the_shapes_graph_well_formed() {
+    for (constraint, conforms) in [
         ("sh:in ( ex:a )", true),
         ("sh:in ( )", false),
         ("sh:xone ( [ sh:nodeKind sh:IRI ] )", true),
@@ -59,19 +70,123 @@ fn every_report_states_whether_the_shapes_graph_is_well_formed() {
         ("sh:nodeKind sh:IRI", true),
     ] {
         let report = report(constraint);
-        assert_eq!(
-            report.shapes_graph_well_formed,
-            Some(well_formed),
-            "{constraint}"
-        );
+        assert_eq!(report.shapes_graph_well_formed, Some(true), "{constraint}");
+        assert_eq!(report.conforms, conforms, "{constraint}");
         let text = report.to_ntriples();
-        let (stated, absent) = if well_formed {
-            (WELL_FORMED_TRUE, WELL_FORMED_FALSE)
-        } else {
-            (WELL_FORMED_FALSE, WELL_FORMED_TRUE)
-        };
-        assert!(text.contains(stated), "{constraint}: {text}");
-        assert!(!text.contains(absent), "{constraint}: {text}");
+        assert!(text.contains(WELL_FORMED_TRUE), "{constraint}: {text}");
+        assert!(!text.contains(WELL_FORMED_FALSE), "{constraint}: {text}");
+    }
+}
+
+/// A W3C test file's text, linted as its own shapes graph (every test there names `<>`
+/// as its shapes graph).
+fn lint_text(text: &str) -> LintReport {
+    let document = parse_turtle_document(text, Some("http://example.org/w3c-test"))
+        .expect("the test file parses");
+    lint(
+        &document.dataset,
+        &document.prefixes,
+        None,
+        None,
+        &ShapesImports::new(),
+    )
+    .expect("lints")
+}
+
+/// The W3C test file at `path`, relative to the SHACL 1.2 suite's `tests/` directory.
+fn w3c_test(path: &str) -> String {
+    let file = format!(
+        "{}/../../vectors/shacl12/tests/{path}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(&file).unwrap_or_else(|error| panic!("{file}: {error}"))
+}
+
+/// `lint` over the approved W3C test `core/node/in-002` (and `xone-002`) lists the empty
+/// list as a finding naming its rule id and shape, and the report is not clean. The
+/// neighbour is the same file with one member in the list: it carries no diagnostic, and
+/// its finding count is exactly one lower, so the diagnostic is the only difference.
+#[test]
+fn lint_always_reports_an_empty_in_or_xone_list_by_rule_id() {
+    for (path, shape, rule, empty, filled) in [
+        (
+            "core/node/in-002.ttl",
+            "TestShape",
+            "in-minListLength",
+            "sh:in () ;",
+            "sh:in ( ex:Instance ) ;",
+        ),
+        (
+            "core/node/xone-002.ttl",
+            "TestXoneUnsatisfiableShape",
+            "xone-minListLength",
+            "sh:xone () ;",
+            "sh:xone ( [ sh:nodeKind sh:IRI ] ) ;",
+        ),
+    ] {
+        let text = w3c_test(path);
+        assert_eq!(text.matches(empty).count(), 1, "{path}: the fixture moved");
+        let flagged = lint_text(&text);
+        let shape_iri = format!("http://example.com/ns#{shape}");
+        assert_eq!(
+            flagged
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.rule, diagnostic.shape.clone()))
+                .collect::<Vec<_>>(),
+            vec![(rule, Term::NamedNode(shape_iri.as_str().into()))],
+            "{path}: {}",
+            flagged.render()
+        );
+        assert!(
+            flagged.load_error().is_none(),
+            "{path}: {}",
+            flagged.render()
+        );
+        assert!(!flagged.is_clean(), "{path}: {}", flagged.render());
+        let rendered = flagged.render();
+        assert!(
+            rendered.contains(&format!("diagnostics 1\ndiagnostic {rule} <{shape_iri}>\n")),
+            "{path}: {rendered}"
+        );
+        // shacl-shacl.ttl's own warning on the empty list is the same defect: listed,
+        // marked with the rule that states it, and not counted twice.
+        let warned: Vec<_> = flagged
+            .shacl_shacl()
+            .iter()
+            .filter(|result| result.diagnosed.is_some())
+            .collect();
+        assert_eq!(warned.len(), 1, "{path}: {rendered}");
+        assert_eq!(warned[0].diagnosed, Some(rule), "{path}: {rendered}");
+        assert!(
+            rendered.contains(&format!(" diagnosed {rule}\n")),
+            "{path}: {rendered}"
+        );
+        assert_eq!(flagged.findings(), 1, "{path}: {rendered}");
+
+        let neighbour = lint_text(&text.replace(empty, filled));
+        assert_eq!(
+            neighbour.diagnostics(),
+            [],
+            "{path}: {}",
+            neighbour.render()
+        );
+        assert!(
+            neighbour.render().contains("diagnostics 0\n"),
+            "{path}: {}",
+            neighbour.render()
+        );
+        assert!(
+            !neighbour.render().contains(rule),
+            "{path}: {}",
+            neighbour.render()
+        );
+        assert_eq!(
+            neighbour.findings() + 1,
+            flagged.findings(),
+            "{path}: the diagnostic is the one finding the neighbour lacks: {}",
+            flagged.render()
+        );
     }
 }
 

@@ -10,7 +10,7 @@
 //! parameter value, an unresolved or duplicate function definition (the
 //! [linker](crate::spec)) — and it deliberately does not validate the graph against the
 //! W3C's `shacl-shacl.ttl`, because a load pays for that on every validation. [`lint`]
-//! is where that price is paid once, on request. It reports six sections:
+//! is where that price is paid once, on request. It reports seven sections:
 //!
 //! 1. **load** — the loader's own verdict: accepted, or the refusal it raised.
 //! 2. **shacl-shacl** — every result of validating the shapes graph, as DATA, against
@@ -32,7 +32,16 @@
 //!    violation is not silenced. A declaration that violates a SYNTAX rule is never
 //!    listed here: it refuses the load ([`ShapesError::IllFormed`]), and the report
 //!    carries that refusal in `load`.
-//! 6. **unanchored-imports** — every `owl:imports` triple of the shapes graph's closure
+//! 6. **diagnostics** — every syntax rule whose "SHOULD" PurRDF applies as a MANDATORY
+//!    DIAGNOSTIC rather than a refusal ([`MANDATORY_DIAGNOSTIC_RULES`]): Appendix A's
+//!    `in-minListLength` and `xone-minListLength` ("Each such list SHOULD have at least
+//!    one member"). The approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and
+//!    `xone-003` validate a shapes graph with an empty `sh:in` or `sh:xone` list, so the
+//!    load accepts it and a validation report states it well-formed. The rule constrains
+//!    the document's author, and this section is where the author is told: every empty
+//!    list is listed by rule id and shape, whether or not the load succeeded, and each is
+//!    a FINDING.
+//! 7. **unanchored-imports** — every `owl:imports` triple of the shapes graph's closure
 //!    that is NOT an import, because its subject is no anchor of the document it occurs in
 //!    ([`purrdf_core::imports::ImportMap::unanchored_imports`]): not the IRI the document
 //!    was read or imported under, not an ontology header, not a shapes graph, and not a
@@ -59,10 +68,15 @@
 //! `tests/shacl_shacl_differential.rs`, pins exactly that against every corpus shapes
 //! graph and hundreds of mutants); over a graph the loader refused, every result counts.
 //!
+//! `shacl-shacl.ttl` itself warns about an empty `sh:in` or `sh:xone` list
+//! (`sh:minListLength` on the `sh:in` / `sh:xone` path). That result is the same defect a
+//! diagnostic states, so it is listed marked `diagnosed RULE` and not counted twice: the
+//! diagnostic, which names the rule id, is the finding.
+//!
 //! A report is CLEAN exactly when the loader accepted the graph, every `shacl-shacl`
-//! result is superseded (whatever its severity: an `sh:Info` result counts), and no
-//! unexecuted query violates a pre-binding restriction. `unanchored-imports` never
-//! affects it.
+//! result is superseded or diagnosed (whatever its severity: an `sh:Info` result counts), no
+//! unexecuted query violates a pre-binding restriction, and no mandatory diagnostic
+//! applies. `unanchored-imports` never affects it.
 //!
 //! # An incomplete `owl:imports` closure is not a report
 //!
@@ -80,11 +94,12 @@ use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
 
+use crate::data::{GraphFilter, native_quads};
 use crate::engine::validate_dataset_as_document;
 use crate::error::{PrebindingViolation, ShapesError};
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
-use crate::model::BoxRoleVocab;
+use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::shapes::{
     Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_unexecuted,
 };
@@ -249,6 +264,11 @@ pub struct ShaclShaclResult {
     /// The [`Supersession`] that covers the result, when the loader accepted the graph
     /// and SHACL 1.2 Core makes what `shacl-shacl.ttl` flags well-formed.
     pub superseded: Option<&'static Supersession>,
+    /// The rule id of the [`MandatoryDiagnostic`] that states this same defect, when the
+    /// result is `shacl-shacl.ttl`'s `sh:minListLength` warning on an empty `sh:in` or
+    /// `sh:xone` list. The diagnostic is the finding; the result is listed beside it and
+    /// not counted a second time.
+    pub diagnosed: Option<&'static str>,
 }
 
 /// One `owl:imports` triple of the shapes graph's closure that is not an import. See the
@@ -262,6 +282,24 @@ pub struct UnanchoredImport {
     pub subject: Term,
     /// The triple's object.
     pub object: Term,
+}
+
+/// The syntax rules PurRDF applies as mandatory diagnostics: `(rule id, list parameter)`.
+/// Each is Appendix A's "Each such list SHOULD have at least one member" for the
+/// parameter's list. See the [module docs](self).
+pub const MANDATORY_DIAGNOSTIC_RULES: &[(&str, &str)] = &[
+    ("in-minListLength", sh::IN),
+    ("xone-minListLength", sh::XONE),
+];
+
+/// One mandatory diagnostic: a shape whose `sh:in` or `sh:xone` list is empty. See the
+/// [module docs](self).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MandatoryDiagnostic {
+    /// The syntax rule's id, `in-minListLength` or `xone-minListLength`.
+    pub rule: &'static str,
+    /// The shape whose list is empty.
+    pub shape: Term,
 }
 
 /// The whole cold-certify report for one shapes graph. See the [module docs](self).
@@ -278,6 +316,8 @@ pub struct LintReport {
     /// The pre-binding violations of the queries nothing executes, when the loader
     /// accepted the graph.
     unexecuted: Option<Vec<PrebindingViolation>>,
+    /// Every empty `sh:in` / `sh:xone` list, by rule id and shape.
+    diagnostics: Vec<MandatoryDiagnostic>,
     /// Every `owl:imports` triple of the closure that is not an import.
     unanchored_imports: Vec<UnanchoredImport>,
 }
@@ -318,6 +358,14 @@ impl LintReport {
         self.unexecuted.as_deref()
     }
 
+    /// Every mandatory diagnostic — one per shape with an empty `sh:in` or `sh:xone`
+    /// list — ordered by rule id, then shape. Reported whether or not the loader accepted
+    /// the graph; each is a finding. See the [module docs](self).
+    #[must_use]
+    pub fn diagnostics(&self) -> &[MandatoryDiagnostic] {
+        &self.diagnostics
+    }
+
     /// Every `owl:imports` triple of the shapes graph's closure whose subject is no anchor of
     /// the document it occurs in: the shapes document's first, then each imported
     /// document's in the order the closure reached it, each in document order. Never
@@ -328,17 +376,18 @@ impl LintReport {
     }
 
     /// How many findings the report carries: one for a load refusal, plus every
-    /// `shacl-shacl.ttl` result no [`Supersession`] covers, plus every unexecuted query
-    /// that violates a pre-binding restriction.
+    /// `shacl-shacl.ttl` result no [`Supersession`] covers and no diagnostic states, plus every unexecuted query
+    /// that violates a pre-binding restriction, plus every mandatory diagnostic.
     #[must_use]
     pub fn findings(&self) -> usize {
         usize::from(self.load_error.is_some())
             + self
                 .shacl_shacl
                 .iter()
-                .filter(|result| result.superseded.is_none())
+                .filter(|result| result.superseded.is_none() && result.diagnosed.is_none())
                 .count()
             + self.unexecuted.as_ref().map_or(0, Vec::len)
+            + self.diagnostics.len()
     }
 
     /// Whether the report carries no finding.
@@ -354,7 +403,7 @@ impl LintReport {
     /// load accepted|refused
     ///   error LINE                     (one per line of the refusal, when refused)
     /// shacl-shacl N
-    /// result COMPONENT focus F path P value V shape S severity SEV [superseded NAME]
+    /// result COMPONENT focus F path P value V shape S severity SEV [superseded NAME] [diagnosed RULE]
     ///   message TEXT                   (one per result message)
     /// functions N|unavailable
     /// call BINDING FUNCTION in OWNER
@@ -363,6 +412,8 @@ impl LintReport {
     /// unexecuted N|unavailable
     /// violation DECLARATION
     ///   error LINE                     (one per line of the violated restriction)
+    /// diagnostics N
+    /// diagnostic RULE SHAPE
     /// unanchored-imports N
     /// unanchored SUBJECT OBJECT document -|<IRI>
     /// findings N
@@ -374,7 +425,8 @@ impl LintReport {
     /// `functions unavailable` means the loader refused the graph. `LANGUAGE` is
     /// [`ValidatorLanguage::label`](crate::validator_alternatives::ValidatorLanguage::label);
     /// `validators unavailable` means the loader refused the graph, and so does
-    /// `unexecuted unavailable`. `unanchored-imports` is always present (the closure is
+    /// `unexecuted unavailable`. `diagnostics` is always present: `RULE` is
+    /// `in-minListLength` or `xone-minListLength`. `unanchored-imports` is always present (the closure is
     /// resolved before the load); its `document` is `-` for the shapes document itself and
     /// the import IRI for an imported one. Every list is in the
     /// order its accessor documents, so the text is a pure function of the shapes graph.
@@ -406,6 +458,9 @@ impl LintReport {
             );
             if let Some(rule) = result.superseded {
                 let _ = write!(out, " superseded {}", rule.name);
+            }
+            if let Some(rule) = result.diagnosed {
+                let _ = write!(out, " diagnosed {rule}");
             }
             out.push('\n');
             for message in &result.messages {
@@ -454,6 +509,10 @@ impl LintReport {
                     }
                 }
             }
+        }
+        let _ = writeln!(out, "diagnostics {}", self.diagnostics.len());
+        for diagnostic in &self.diagnostics {
+            let _ = writeln!(out, "diagnostic {} {}", diagnostic.rule, diagnostic.shape);
         }
         let _ = writeln!(out, "unanchored-imports {}", self.unanchored_imports.len());
         for entry in &self.unanchored_imports {
@@ -507,6 +566,7 @@ pub fn lint(
         })
         .collect();
     let dataset = &resolved.dataset;
+    let diagnostics = mandatory_diagnostics(dataset);
     let loaded = from_resolved_dataset_with_unexecuted(
         dataset,
         None,
@@ -548,9 +608,13 @@ pub fn lint(
                     .map(|message| message.value().to_owned())
                     .collect(),
                 superseded,
+                diagnosed: None,
             }
         })
         .collect();
+    for result in &mut shacl_shacl {
+        result.diagnosed = diagnosed_by(result, &diagnostics);
+    }
     shacl_shacl.sort_by_cached_key(|result| {
         (
             result.component.clone(),
@@ -583,8 +647,66 @@ pub fn lint(
         functions,
         alternatives,
         unexecuted,
+        diagnostics,
         unanchored_imports,
     })
+}
+
+/// The rule id of the diagnostic in `diagnostics` that states the defect `result` flags:
+/// `shacl-shacl.ttl`'s `sh:minListLength` result on a shape's `sh:in` or `sh:xone` path,
+/// for a shape the diagnostics list under that parameter's rule.
+fn diagnosed_by(
+    result: &ShaclShaclResult,
+    diagnostics: &[MandatoryDiagnostic],
+) -> Option<&'static str> {
+    if result.component != SH_MIN_LIST_LENGTH_COMPONENT {
+        return None;
+    }
+    let Some(Term::NamedNode(path)) = &result.path else {
+        return None;
+    };
+    let (rule, _) = MANDATORY_DIAGNOSTIC_RULES
+        .iter()
+        .find(|(_, parameter)| *parameter == path.as_str())?;
+    diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.rule == *rule && diagnostic.shape == result.focus)
+        .then_some(*rule)
+}
+
+/// `sh:MinListLengthConstraintComponent`, the component `shacl-shacl.ttl` reports an empty
+/// `sh:in` or `sh:xone` list under.
+const SH_MIN_LIST_LENGTH_COMPONENT: &str =
+    "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent";
+
+/// Every shape of `dataset` — the shapes graph's whole `owl:imports` closure — with an
+/// empty `sh:in` or `sh:xone` list, ordered by rule id and then canonically by shape.
+/// Any subject of either predicate is a shape (the predicate is a parameter), so the
+/// subject is reported as it stands.
+fn mandatory_diagnostics(dataset: &RdfDataset) -> Vec<MandatoryDiagnostic> {
+    let nil = Term::NamedNode(crate::term::NamedNode::new_unchecked(rdf::NIL));
+    let mut diagnostics = Vec::new();
+    for &(rule, parameter) in MANDATORY_DIAGNOSTIC_RULES {
+        let parameter = Term::NamedNode(crate::term::NamedNode::new_unchecked(parameter));
+        let mut shapes: Vec<Term> = native_quads(
+            dataset,
+            None,
+            Some(&parameter),
+            Some(&nil),
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(shape, _, _)| shape)
+        .collect();
+        crate::term::sort_terms_canonical(&mut shapes);
+        shapes.dedup();
+        diagnostics.extend(
+            shapes
+                .into_iter()
+                .map(|shape| MandatoryDiagnostic { rule, shape }),
+        );
+    }
+    diagnostics
 }
 
 /// `shacl-shacl.ttl`, loaded as a shapes graph.

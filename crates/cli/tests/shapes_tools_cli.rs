@@ -694,7 +694,7 @@ fn cli_shapes_lint() {
     );
     assert!(
         report.ends_with(
-            "validators 0\nunexecuted 0\nunanchored-imports 0\nfindings 0\nclean true\n"
+            "validators 0\nunexecuted 0\ndiagnostics 0\nunanchored-imports 0\nfindings 0\nclean true\n"
         ),
         "{report}"
     );
@@ -758,6 +758,24 @@ fn cli_shapes_lint() {
     let superseded = run(&["shapes", "lint", &by_types]);
     assert_eq!(code(&superseded), 0, "{}", stderr(&superseded));
     assert!(stdout(&superseded).contains(" superseded closed-by-types\n"));
+
+    // An empty sh:xone list is a mandatory diagnostic named by rule id: the load is
+    // accepted, the line is a finding, and the verb exits 1. The clean fixture above is
+    // its neighbour and reported `diagnostics 0`.
+    let empty_xone = write_file(
+        dir.path(),
+        "empty-xone.ttl",
+        &format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; sh:xone () .\n"),
+    );
+    let diagnosed = run(&["shapes", "lint", &empty_xone]);
+    assert_eq!(code(&diagnosed), 1, "{}", stderr(&diagnosed));
+    let report = stdout(&diagnosed);
+    assert!(report.starts_with("load accepted\n"), "{report}");
+    assert!(
+        report.contains("diagnostics 1\ndiagnostic xone-minListLength <http://example.org/ns#S>\n"),
+        "{report}"
+    );
+    assert!(stderr(&diagnosed).contains("shapes lint findings 1\n"));
 
     let ledger = run(&["--loss-ledger", "shapes", "lint", &clean]);
     assert_eq!(code(&ledger), 2, "a text report has no loss ledger");

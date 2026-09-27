@@ -2708,7 +2708,8 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * `sh:and` / `sh:or` / `sh:xone` check alike. `count == 0` (the array may then be
  * NULL) is SHACL's default set, `sh:Violation`, `sh:Warning` and `sh:Info`; a
  * value that is not an absolute IRI is a `ParseError`. The SARIF run carries
- * `properties.shaclConforms` and `properties.shaclConformanceDisallows`, because the
+ * `properties.shaclConforms`, `properties.shaclConformanceDisallows` and
+ * `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`), because the
  * results alone cannot say whether the data conforms: an `sh:Debug` / `sh:Trace`
  * result (SARIF `kind` `informational`, `level` `none`) appears in the log of a
  * conforming report. A result's `message.text` is its untagged `sh:resultMessage`
@@ -3028,7 +3029,10 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
  * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
  * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one
- * per query that violates a pre-binding restriction and that nothing executes) and
+ * per query that violates a pre-binding restriction and that nothing executes),
+ * `diagnostics` (`diagnostic RULE SHAPE`, one per shape whose `sh:in` or `sh:xone` list is
+ * empty, `RULE` being `in-minListLength` or `xone-minListLength`; each a finding, and the
+ * `shacl-shacl` warning on the same list is marked `diagnosed RULE` and not counted) and
  * `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
  * `owl:imports` triple of the closure whose subject is no anchor of its document — not
  * the IRI it was read or imported under, not an ontology header, not a shapes graph — so
@@ -3036,8 +3040,8 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * `clean true|false`.
  *
  * `*out_clean` receives 1 when the report carries no finding — the loader accepted the
- * graph, every `shacl-shacl.ttl` result is superseded and no unexecuted query violates a
- * pre-binding restriction — and 0 otherwise;
+ * graph, every `shacl-shacl.ttl` result is superseded, no unexecuted query violates a
+ * pre-binding restriction and no mandatory diagnostic applies — and 0 otherwise;
  * `*out_findings` receives the finding count. A malformed shapes graph is a report with
  * findings and status `Ok`; only a document that is not Turtle is a `ParseError`.
  *

@@ -1189,8 +1189,10 @@ fn finish_report(
         )
     };
     results.sort_by_cached_key(sort_key);
-    ValidationReport::from_results(results, disallows.clone())
-        .with_shapes_graph_well_formed(shapes.is_well_formed())
+    // Every shapes graph a validation runs over met every syntax rule the loader
+    // enforces; an empty `sh:in` / `sh:xone` list is a mandatory lint diagnostic, not an
+    // ill-formedness (see `ValidationReport::shapes_graph_well_formed`).
+    ValidationReport::from_results(results, disallows.clone()).with_shapes_graph_well_formed(true)
 }
 
 fn validate_with_plan_and_focus_filter<F>(

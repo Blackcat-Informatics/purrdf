@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   ready,
   shaclEntail,
+  shaclLintShapes,
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
 } from "../index.mjs";
@@ -65,8 +66,10 @@ test("wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformance
   assert.throws(() => shaclValidateToSarif(warning, DATA, undefined, ["Violation"]));
 });
 
-// SHACL 1.2 Core section 6.7.1.4: every report states sh:shapesGraphWellFormed — true,
-// or false for an empty sh:in list the approved W3C tests require validating.
+// SHACL 1.2 Core section 6.7.1.4: every report states sh:shapesGraphWellFormed, and states
+// true for an empty sh:in list too — in-minListLength is a mandatory lint diagnostic, not
+// an ill-formedness. The empty row is observed to be validated (one result) and its
+// non-empty neighbour to conform; only the empty row carries the lint diagnostic.
 test("wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed", () => {
   const withIn = (members) =>
     `@prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -74,10 +77,25 @@ test("wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWe
 ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in ${members} .
 `;
   const data = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
-  const stated = (shapes) =>
-    JSON.parse(shaclValidateToSarif(shapes, data)).runs[0].properties.shaclShapesGraphWellFormed;
-  assert.equal(stated(withIn("( <http://example.org/a> )")), true);
-  assert.equal(stated(withIn("( )")), false);
+  const run = (shapes) => JSON.parse(shaclValidateToSarif(shapes, data)).runs[0];
+  const filled = run(withIn("( <http://example.org/a> )"));
+  const empty = run(withIn("( )"));
+  assert.equal(filled.properties.shaclShapesGraphWellFormed, true);
+  assert.equal(empty.properties.shaclShapesGraphWellFormed, true);
+  assert.equal(filled.results.length, 0);
+  assert.equal(empty.results.length, 1);
+
+  const emptyLint = shaclLintShapes(withIn("( )"));
+  assert.ok(
+    emptyLint.report.includes("diagnostics 1\ndiagnostic in-minListLength <http://example.org/S>\n"),
+    emptyLint.report,
+  );
+  assert.equal(emptyLint.clean, false);
+  const filledLint = shaclLintShapes(withIn("( <http://example.org/a> )"));
+  assert.ok(!filledLint.report.includes("in-minListLength"), filledLint.report);
+  assert.equal(filledLint.findings + 1, emptyLint.findings);
+  emptyLint.free();
+  filledLint.free();
 });
 
 // SHACL 1.2 Core section 6.3's subClassOfInShapesGraph: a class target reached only through

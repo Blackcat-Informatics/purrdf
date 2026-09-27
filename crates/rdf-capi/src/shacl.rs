@@ -900,7 +900,10 @@ fn lint_shapes_report(
 /// `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
 /// <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
 /// declared for a built-in component), `unexecuted` (`violation DECLARATION`, one
-/// per query that violates a pre-binding restriction and that nothing executes) and
+/// per query that violates a pre-binding restriction and that nothing executes),
+/// `diagnostics` (`diagnostic RULE SHAPE`, one per shape whose `sh:in` or `sh:xone` list is
+/// empty, `RULE` being `in-minListLength` or `xone-minListLength`; each a finding, and the
+/// `shacl-shacl` warning on the same list is marked `diagnosed RULE` and not counted) and
 /// `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
 /// `owl:imports` triple of the closure whose subject is no anchor of its document — not
 /// the IRI it was read or imported under, not an ontology header, not a shapes graph — so
@@ -908,8 +911,8 @@ fn lint_shapes_report(
 /// `clean true|false`.
 ///
 /// `*out_clean` receives 1 when the report carries no finding — the loader accepted the
-/// graph, every `shacl-shacl.ttl` result is superseded and no unexecuted query violates a
-/// pre-binding restriction — and 0 otherwise;
+/// graph, every `shacl-shacl.ttl` result is superseded, no unexecuted query violates a
+/// pre-binding restriction and no mandatory diagnostic applies — and 0 otherwise;
 /// `*out_findings` receives the finding count. A malformed shapes graph is a report with
 /// findings and status `Ok`; only a document that is not Turtle is a `ParseError`.
 ///
@@ -3311,6 +3314,21 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(report.starts_with("load refused\n"), "{report}");
         let (status, ..) = lint("@@@ not turtle");
         assert_eq!(status, PurrdfStatus::ParseError as i32);
+        // An empty sh:in list is a mandatory diagnostic named by rule id: one finding, the
+        // load accepted. Its neighbour, the clean fixture, carries `diagnostics 0`.
+        let (status, clean, findings, report) = lint(&format!(
+            "{TOOLS_SHAPES}ex:Empty a sh:NodeShape ; sh:in () .\n"
+        ));
+        assert_eq!((status, clean, findings), (PurrdfStatus::Ok as i32, 0, 1));
+        assert!(report.starts_with("load accepted\n"), "{report}");
+        assert!(
+            report.contains(
+                "diagnostics 1\ndiagnostic in-minListLength <http://example.org/ns#Empty>\n"
+            ),
+            "{report}"
+        );
+        let (.., report) = lint(TOOLS_SHAPES);
+        assert!(report.contains("diagnostics 0\n"), "{report}");
     }
 
     // ── One shapes graph, one owl:imports verdict, on every entry point ─────────

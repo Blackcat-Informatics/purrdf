@@ -1628,13 +1628,14 @@ export class ShaclLintReport {
   free(): void;
   /**
    * No finding: the loader accepted the graph, every `shacl-shacl.ttl` result is
-   * superseded (flagged there, well-formed SHACL 1.2 Core) and no unexecuted query
-   * violates a pre-binding restriction.
+   * superseded (flagged there, well-formed SHACL 1.2 Core), no unexecuted query
+   * violates a pre-binding restriction and no mandatory diagnostic applies.
    */
   readonly clean: boolean;
   /**
    * One for a load refusal, plus every `shacl-shacl.ttl` result no supersession covers,
-   * plus every unexecuted query that violates a pre-binding restriction.
+   * plus every unexecuted query that violates a pre-binding restriction, plus every
+   * mandatory diagnostic (an empty `sh:in` or `sh:xone` list).
    */
   readonly findings: number;
   /** The loader's refusal, or `undefined` when it accepted the graph. */
@@ -1644,8 +1645,11 @@ export class ShaclLintReport {
    * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
    * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
    * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one per
-   * query that violates a pre-binding restriction and that nothing executes) and
-   * `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+   * query that violates a pre-binding restriction and that nothing executes),
+   * `diagnostics` (`diagnostic RULE SHAPE`, one per shape whose `sh:in` or `sh:xone`
+   * list is empty, `RULE` being `in-minListLength` or `xone-minListLength`; each a
+   * finding, and the `shacl-shacl` warning on the same list is marked `diagnosed RULE`
+   * and not counted) and `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
    * `owl:imports` triple of the closure whose subject is no anchor of its document — not
    * the IRI it was read or imported under, not an ontology header, not a shapes graph —
    * so it is data and imported nothing; never a finding) sections, then `findings N` and

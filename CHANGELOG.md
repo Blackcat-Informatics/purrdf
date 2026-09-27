@@ -47,17 +47,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   shapes-graph refusals (Python `ValueError`, WebAssembly `Error`, C
   `PURRDF_STATUS_PARSE_ERROR`, CLI exit `1`).
 
+- **shapes, validate, cli, python, wasm, capi:** an empty `sh:in` or `sh:xone` list is
+  a MANDATORY DIAGNOSTIC (maintainer decision). Appendix A's `in-minListLength` and
+  `xone-minListLength` ("Each such list SHOULD have at least one member") constrain the
+  document author: the shapes graph is well-formed, validation proceeds as the approved
+  W3C tests `core/node/in-002`, `in-003`, `xone-002` and `xone-003` require, and its
+  report states `sh:shapesGraphWellFormed true`. `shapes lint` gains a `diagnostics`
+  section, between `unexecuted` and `unanchored-imports`, that always lists each empty
+  list as `diagnostic in-minListLength|xone-minListLength SHAPE`, whether or not the load
+  succeeded; each line is a finding, so such a graph no longer lints clean.
+  `shacl-shacl.ttl`'s own `sh:minListLength` warning on the same list is listed marked
+  `diagnosed RULE` (`ShaclShaclResult::diagnosed`, Python key `diagnosed`) and is not
+  counted a second time.
+  `LintReport::diagnostics`, `lint::MandatoryDiagnostic`,
+  `lint::MANDATORY_DIAGNOSTIC_RULES`; Python `lint_shapes` gains the `diagnostics` key
+  (`rule`, `shape`); the CLI, WebAssembly and C carry the section in the rendered report.
+  Every lint report's text gains the `diagnostics N` line.
+
 - **shapes, validate, python, wasm, capi:** every validation report states
   `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4: a processor that checks the
   shapes graph "SHOULD use the property sh:shapesGraphWellFormed to inform the consumer
   of the validation report"). It is `true`, since an ill-formed shapes graph is refused
-  before validation, except for a shapes graph with an empty `sh:in` or `sh:xone` list:
-  Appendix A's `in-minListLength` / `xone-minListLength` say "Each such list SHOULD
-  have at least one member", but the approved W3C tests `core/node/in-002`, `in-003`,
-  `xone-002` and `xone-003` require such a graph to be validated, so it is, and its
-  report states `false`. `ValidationReport::shapes_graph_well_formed` (`None` for a
-  report assembled by `from_results`, which states nothing) and
-  `with_shapes_graph_well_formed`; `Shapes::is_well_formed`; the SARIF run property
+  before validation; a shapes graph with an empty `sh:in` or `sh:xone` list is
+  well-formed (see the mandatory-diagnostic entry below).
+  `ValidationReport::shapes_graph_well_formed` (`None` for a report assembled by
+  `from_results`, which states nothing) and `with_shapes_graph_well_formed`; the SARIF
+  run property
   `shaclShapesGraphWellFormed`; Python `ValidationReport.shapes_graph_well_formed` and
   the `shapes.validate` dict key `shapes_graph_well_formed`. Report bytes change by the
   one added triple: the first-party corpus expectations and the change-path golden

@@ -262,7 +262,7 @@ def test_py_lint_shapes() -> None:
     assert clean["unexecuted"] == []
     assert clean["unanchored_imports"] == []
     assert clean["report"].endswith(
-        "validators 0\nunexecuted 0\nunanchored-imports 0\nfindings 0\nclean true\n"
+        "validators 0\nunexecuted 0\ndiagnostics 0\nunanchored-imports 0\nfindings 0\nclean true\n"
     )
 
     malformed = purrdf.shapes.lint_shapes(

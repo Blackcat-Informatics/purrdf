@@ -884,39 +884,6 @@ impl Shapes {
         &self.validation_options
     }
 
-    /// Whether this shapes graph is well-formed, as a validation report states it
-    /// (`sh:shapesGraphWellFormed`, SHACL 1.2 Core §6.7.1.4).
-    ///
-    /// Every syntax rule but two fails the load, so a `Shapes` value exists only for a
-    /// shapes graph that meets them. The two are Appendix A's `in-minListLength` and
-    /// `xone-minListLength` ("Each such list SHOULD have at least one member"): the
-    /// approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and `xone-003` require
-    /// a shapes graph with an empty `sh:in` or `sh:xone` list to be VALIDATED, so it is
-    /// validated, and its report says the graph is not well-formed rather than claiming
-    /// a certainty the processor does not have. Any subject of `sh:in` or `sh:xone` is a
-    /// shape (the predicate is a parameter), so the check reads the retained shapes graph
-    /// — carried by a prepared product too — and costs two indexed lookups.
-    #[must_use]
-    pub fn is_well_formed(&self) -> bool {
-        let graph = self.shapes_dataset.as_ref();
-        let Some(nil) = graph.term_id_by_iri(rdf::NIL) else {
-            return true;
-        };
-        [sh::IN, sh::XONE].into_iter().all(|parameter| {
-            graph.term_id_by_iri(parameter).is_none_or(|parameter| {
-                ::purrdf::DatasetView::quads_for_pattern(
-                    graph,
-                    None,
-                    Some(parameter),
-                    Some(nil),
-                    ::purrdf::GraphMatch::Any,
-                )
-                .next()
-                .is_none()
-            })
-        })
-    }
-
     /// Validate these shapes under `options` from now on — a host's
     /// conformance-disallow set, for one.
     pub fn set_validation_options(&mut self, options: crate::engine::ValidationOptions) {

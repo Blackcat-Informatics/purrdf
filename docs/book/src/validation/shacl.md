@@ -1194,7 +1194,7 @@ purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
 **Certifying a shapes graph.** Loading a shapes graph is the hot path: it
 refuses the first construct it cannot evaluate faithfully, and does not pay for
 validating the graph against the W3C `shacl-shacl.ttl`. Linting pays that cost
-once, on request, and reports six sections:
+once, on request, and reports seven sections:
 
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
@@ -1216,7 +1216,15 @@ once, on request, and reports six sections:
    `sh:SPARQLTargetType` no shape instantiates. The load accepts
    them, and each is a finding here. A declaration that breaks a syntax rule is
    never listed here, because it fails the load.
-6. `unanchored-imports`: every `owl:imports` triple of the closure that is not
+6. `diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line
+   per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax
+   rule id, `in-minListLength` or `xone-minListLength` ("Each such list SHOULD
+   have at least one member"). Such a shapes graph is well-formed and validates
+   (see below), but the rule tells the author something, so lint always reports
+   it, whether or not the load succeeded, and each line is a finding.
+   `shacl-shacl.ttl` warns about the same empty list; that result is listed
+   marked `diagnosed RULE` and is not counted a second time.
+7. `unanchored-imports`: every `owl:imports` triple of the closure that is not
    an import, because its subject is no anchor of its document (see
    [`owl:imports` in a shapes graph](#owlimports-in-a-shapes-graph)). Each is
    data, so no document was looked for. These lines are never findings. The
@@ -1225,9 +1233,9 @@ once, on request, and reports six sections:
    `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded (an `sh:Info` result counts like any other) and no
-unexecuted query violates a pre-binding restriction. `unanchored-imports` never
-affects it. Every host renders the same deterministic text; the
+result is superseded (an `sh:Info` result counts like any other), no
+unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+applies. `unanchored-imports` never affects it. Every host renders the same deterministic text; the
 [CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)
 shows it.
 
@@ -1278,14 +1286,15 @@ Every report a validation produces also states `sh:shapesGraphWellFormed`. SHACL
 property sh:shapesGraphWellFormed to inform the consumer of the validation report
 about this fact", and that `true` means "the processor was certain that the shapes
 graph that was used for the validation process is well-formed". PurRDF refuses an
-ill-formed shapes graph before validating, so the value is `true`, with one
-exception. The approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and
-`xone-003` require a shapes graph with an empty `sh:in` or `sh:xone` list to be
-validated, although Appendix A's `in-minListLength` and `xone-minListLength` say
-"Each such list SHOULD have at least one member". PurRDF validates such a graph as
-the suite requires, and its report states `false` rather than a certainty it does
-not have. `ValidationReport::shapes_graph_well_formed` carries the value, and the
-SARIF run carries it as `properties.shaclShapesGraphWellFormed`.
+ill-formed shapes graph before validating, so the value is always `true`. An empty
+`sh:in` or `sh:xone` list does not change that. Appendix A's `in-minListLength`
+and `xone-minListLength` say "Each such list SHOULD have at least one member", and
+PurRDF applies them as a mandatory diagnostic: the shapes graph is well-formed,
+validation proceeds as the approved W3C tests `core/node/in-002`, `in-003`,
+`xone-002` and `xone-003` require, and `purrdf shapes lint` (and every host's lint
+entry point) always reports each empty list as a finding naming the rule id.
+`ValidationReport::shapes_graph_well_formed` carries the value, and the SARIF run
+carries it as `properties.shaclShapesGraphWellFormed`.
 
 ## SARIF output
 

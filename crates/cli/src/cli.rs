@@ -1497,7 +1497,10 @@ pub(crate) enum ShapesCommand {
     /// query that violates a pre-binding restriction (a `MINUS`, a `VALUES`, an `AS ?var`
     /// for a pre-bound variable) and that nothing executes — a validator of a built-in
     /// component, a validator no use of its component selects, a `sh:SPARQLFunction`
-    /// nothing calls — which the load accepts; each is a finding. `unanchored-imports`:
+    /// nothing calls — which the load accepts; each is a finding. `diagnostics`: every
+    /// shape whose `sh:in` or `sh:xone` list is empty (`diagnostic in-minListLength|
+    /// xone-minListLength SHAPE`) — a mandatory diagnostic: the graph is well-formed and
+    /// validates, and each line is a finding. `unanchored-imports`:
     /// every `owl:imports` triple of the closure whose subject is no anchor of its
     /// document — not the IRI it was read or imported under, not an ontology header, not a
     /// shapes graph, not a node versioning one of those — so it is data and imported
@@ -1507,8 +1510,9 @@ pub(crate) enum ShapesCommand {
     /// on request.
     ///
     /// Exit codes follow `shacl verify`, the other certify verb: **0** when the report is
-    /// clean — the loader accepted the graph, every `shacl-shacl` result is superseded and
-    /// no unexecuted query violates a pre-binding restriction.
+    /// clean — the loader accepted the graph, every `shacl-shacl` result is superseded, no
+    /// unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+    /// applies.
     /// **1** when it carries a finding, and for a document that does not parse or an
     /// `owl:imports` no `--import` resolves; the report is still written when there is one.
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
