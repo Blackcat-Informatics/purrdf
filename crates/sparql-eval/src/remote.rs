@@ -2675,44 +2675,53 @@ mod tests {
             .map_err(|e| e.to_string())
     }
 
-    /// Whether the parser admits `pattern`'s forwarded text with exactly `bytes` of
-    /// stack left (to within one 4 KiB frame), measured with the guard's own
+    /// Whether the parser admits `text` with about `bytes` of stack left below this
+    /// call (to within one 4 KiB frame), measured with the guard's own
     /// [`purrdf_stack::remaining`] rather than trusting the size a thread asked for.
-    fn admitted_with_stack_left(pattern: &GraphPattern, bytes: usize) -> bool {
-        fn descend(bytes: usize, text: &str) -> bool {
-            if purrdf_stack::remaining() <= bytes {
-                return purrdf_sparql_algebra::SparqlParser::new()
-                    .parse_query(text)
-                    .is_ok();
-            }
-            let frame = core::hint::black_box([0_u8; 4096]);
-            let admitted = descend(bytes, text);
-            core::hint::black_box(&frame);
-            admitted
+    ///
+    /// Where the descent lands depends on where it starts, so two probes compare only
+    /// when they start from the same frame of the same thread.
+    fn parses_with_stack_left(bytes: usize, text: &str) -> bool {
+        if purrdf_stack::remaining() <= bytes {
+            return purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(text)
+                .is_ok();
         }
-        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        let frame = core::hint::black_box([0_u8; 4096]);
+        let admitted = parses_with_stack_left(bytes, text);
+        core::hint::black_box(&frame);
+        admitted
+    }
+
+    /// On one thread, with every probe started from one frame: the least stack left, to
+    /// within 4 KiB, on which the parser admits `admitted`'s forwarded text, and whether
+    /// it admits `other`'s forwarded text on that same stack.
+    ///
+    /// Probes on separate threads would each land within a frame of the requested
+    /// amount, but not the same frame, so a size found on one thread could be a frame
+    /// more or less on the next.
+    fn other_admitted_on_least_stack(admitted: &GraphPattern, other: &GraphPattern) -> bool {
+        const MOST: usize = 64 * 1024 * 1024;
+        let admitted = purrdf_sparql_algebra::pattern_to_select_query(admitted);
+        let other = purrdf_sparql_algebra::pattern_to_select_query(other);
         std::thread::Builder::new()
-            .stack_size(bytes + 1024 * 1024)
-            .spawn(move || descend(bytes, &text))
+            .stack_size(MOST + 1024 * 1024)
+            .spawn(move || {
+                let (mut lo, mut hi) = (0_usize, MOST);
+                assert!(parses_with_stack_left(hi, &admitted), "admitted on 64 MiB");
+                while hi - lo > 4096 {
+                    let mid = lo.midpoint(hi);
+                    if parses_with_stack_left(mid, &admitted) {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                parses_with_stack_left(hi, &other)
+            })
             .expect("spawn")
             .join()
             .expect("the parsing thread returned rather than aborting")
-    }
-
-    /// The least stack left, to within 4 KiB, on which the parser admits `pattern`'s
-    /// forwarded text.
-    fn stack_to_admit(pattern: &GraphPattern) -> usize {
-        let (mut lo, mut hi) = (0_usize, 64 * 1024 * 1024);
-        assert!(admitted_with_stack_left(pattern, hi), "admitted on 64 MiB");
-        while hi - lo > 4096 {
-            let mid = lo.midpoint(hi);
-            if admitted_with_stack_left(pattern, mid) {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        hi
     }
 
     #[test]
@@ -2725,7 +2734,7 @@ mod tests {
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded beneath the filters");
         assert!(
-            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            !other_admitted_on_least_stack(&sanitized, &injected),
             "the block beside the filters needs more stack than beneath them"
         );
         // The one level's shape: the block is joined to the triple, under both filters.
@@ -2753,7 +2762,7 @@ mod tests {
         let sanitized = sanitize_forwarded_body(&injected);
         forwarded_text_is_admitted(&sanitized).expect("forwarded without the repeated block");
         assert!(
-            !admitted_with_stack_left(&injected, stack_to_admit(&sanitized)),
+            !other_admitted_on_least_stack(&sanitized, &injected),
             "the block beside the reading filter needs more stack than the text without it"
         );
         let GraphPattern::Graph { inner, .. } = &sanitized else {
