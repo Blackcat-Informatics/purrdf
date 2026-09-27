@@ -11,7 +11,7 @@
 //! `validate.rs` sweeps the whole corpus end-to-end (parse + focus resolution +
 //! every constraint), this bench drives ONLY the id-native pattern-lookup and
 //! path-traversal path — [`purrdf_shapes::path::eval`] over a synthetic frozen
-//! dataset — so the seam that item 1 rewired (indexed `quads_for_pattern` →
+//! dataset — so the id-native lookup seam (indexed `quads_for_pattern` →
 //! `QuadIds`, `TermId` frontier dedup, no per-quad owned-`Term` materialization)
 //! is measured in isolation from parsing and constraint evaluation.
 //!

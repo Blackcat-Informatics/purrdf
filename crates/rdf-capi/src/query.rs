@@ -514,7 +514,7 @@ pub unsafe extern "C" fn purrdf_query_json(
             let query_text = cstr_to_str(query)?;
             let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
             let result = run_query(dataset, query, base_iri)?;
-            // Delegate to the canonical SPARQL-Results serializer (purrdf S9). An
+            // Delegate to the canonical SPARQL-Results serializer. An
             // empty `ResultProvenance` (no namespace supplied) yields byte-identical
             // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
             // crate's wasm-clean rdf-core N-QUADS writer — graph slots and the RDF 1.2

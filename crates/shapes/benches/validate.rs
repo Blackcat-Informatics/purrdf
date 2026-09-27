@@ -5,12 +5,12 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! Baseline benchmark for the SHACL Core validator (acceleration, Phase 0).
+//! Baseline benchmark for the SHACL Core validator.
 //!
 //! Sweeps the whole committed conformance corpus through
 //! [`purrdf_shapes::engine::validate_graphs`] — parse data + shapes, resolve focus
-//! nodes, run every constraint. This is the end-to-end number Phase 2 (regex /
-//! subclass-closure / SPARQL caching) and Phase 4 (focus-node `rayon`) move.
+//! nodes, run every constraint. This is the end-to-end number regex, subclass-closure and SPARQL caching and
+//! focus-node `rayon` parallelism move.
 //!
 //! `shacl_focus_closed` is the per-value-node constraint path: a `sh:closed` shape
 //! with several property shapes over many focus nodes, whose values are checked

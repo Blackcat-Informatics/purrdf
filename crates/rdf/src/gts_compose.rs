@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The pyo3-free GTS snapshot compose core (P6).
+//! The pyo3-free GTS snapshot compose core.
 //!
 //! This is the byte-emitting heart of `src/purrdf_tools/gts_producer.py::_Builder`,
 //! lifted out of the Python binding surface so the non-python

@@ -253,7 +253,7 @@ impl std::fmt::Display for PagedFreezeError {
                 f,
                 "pages {} and {} are not quad-disjoint in the {} stream: the global quad \
                  (s={:?}, p={:?}, o={:?}, g={:?}) occurs on both; PagedDataset refuses \
-                 to silently dedup (G3)",
+                 to silently dedup: every quad belongs to exactly one page",
                 o.first_page.0,
                 o.second_page.0,
                 o.table.label(),

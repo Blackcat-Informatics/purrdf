@@ -1387,7 +1387,7 @@ impl RdfDataset {
     }
 
     /// The id of an interned term given its **dataset-independent** value, or
-    /// `None` if the dataset contains no such term (purrdf P4).
+    /// `None` if the dataset contains no such term.
     ///
     /// Lookup reuses the builder's store-once hash→id table, retained at freeze.
     /// Compound dataset-independent values are first resolved recursively into

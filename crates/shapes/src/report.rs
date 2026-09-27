@@ -323,7 +323,7 @@ pub struct ValidationResult {
     pub path_box_roles: Vec<NamedNode>,
     /// Deterministic union of source/path/component roles relevant to this result.
     pub result_box_roles: Vec<NamedNode>,
-    /// Structured slice attributions for this result (§9 / S5).
+    /// Structured slice attributions for this result.
     ///
     /// Records which compilation units (identified by their runtime `UnitId`,
     /// resolved to public slice IRIs at the serialization boundary) played which

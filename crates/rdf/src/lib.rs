@@ -8,7 +8,7 @@
 //! terms directly, preserves source/location context where adapters can provide it,
 //! and keeps reporting structured but SARIF-free.
 //!
-//! # Crate boundary (purrdf P2b)
+//! # Crate boundary
 //!
 //! The oxigraph-free, PyO3-free kernel — the immutable IR, the owned value model,
 //! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
@@ -63,7 +63,7 @@ pub use purrdf_core::describe;
 pub use purrdf_core::embedding;
 pub use purrdf_core::embedding::*;
 pub mod gts_view;
-// The native RDF text codecs (S3): the codec-only `GtsCodecBackend`
+// The native RDF text codecs: the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
 pub mod native_codecs;
 /// Deterministic graph/tabular/research-object projection foundations and codecs.
@@ -72,7 +72,7 @@ pub mod projections;
 // the oxigraph-quad helpers, available to every Rust consumer without pulling the
 // oxigraph Store adapter.
 pub mod native_quads;
-// The PyO3-free GTS snapshot compose core (P6): SnapshotBuilder + emit_gts +
+// The PyO3-free GTS snapshot compose core: SnapshotBuilder + emit_gts +
 // BlobRow, lifted out of the Python binding surface so purrdf-pipeline can
 // author a full multi-named-graph snapshot without pulling pyo3. Oxigraph-free
 //.

@@ -3,7 +3,7 @@
 
 //! A hand-rolled SPARQL 1.1/1.2 tokenizer.
 //!
-//! Scope is corpus-driven (purrdf S5): the token set covers every construct used
+//! Scope is corpus-driven: the token set covers every construct used
 //! across the project's `queries/**/*.rq` and the 51 DSL-generated CONSTRUCT
 //! projections — IRIs, prefixed names, variables, blank nodes, RDF literals
 //! (plain/typed/`@lang`), the operator/punctuation set, and the RDF 1.2

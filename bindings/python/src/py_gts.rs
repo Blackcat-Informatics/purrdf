@@ -32,8 +32,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::bundle::{RdfBundle, UnitMetadata};
-// The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
-// (P6); this surface is the thin pyo3 wrapper that delegates to it.
+// The byte-emitting compose core now lives in the pyo3-free `gts_compose` module;
+// this surface is the thin pyo3 wrapper that delegates to it.
 use crate::gts_compose::{
     BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, IngestReport, MediumPlan, SnapshotBuilder, emit_gts,
 };
@@ -43,7 +43,7 @@ use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::{PyRdfFormat, parse_quads};
 use crate::{NativeRdfFormat, RdfQuad, flat_dataset_from_quads};
 
-/// The `rep`-label prefix every S3 slice-artifact blob carries (S3). A blob
+/// The `rep`-label prefix every slice-artifact blob carries. A blob
 /// authored from the slice catalog rides ahead of the snapshot with
 /// `rep == "slice-artifact:{role}:{logical_path}"`, so a repo-free consumer can
 /// recover each ontology artifact by role + logical path + content digest. This
@@ -74,7 +74,7 @@ fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, S
 
 /// Assemble the self-describing S3 [`RdfBundle`] from the slice-artifact rows and
 /// the parsed base graph, hard-fail `validate()` it, and return the artifact bytes
-/// as content-addressed [`BlobRow`]s to embed (S3).
+/// as content-addressed [`BlobRow`]s to embed.
 ///
 /// One [`UnitId`] per slice (metadata = slice IRI + name), one content-addressed
 /// `ArtifactRecord` per ontology artifact, every blob inserted into the bundle's

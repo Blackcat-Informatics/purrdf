@@ -12,7 +12,7 @@
 //!    `slice-manifest-shapes.ttl`);
 //! 2. every `generated/shapes/*.ttl` (sorted) — FAIL CLOSED if none exist
 //!    (mirrors `validate.py`: the generated frame constraints replaced the
-//!    hand-written ones, so their absence would silently stop enforcing P11);
+//!    hand-written ones, so their absence would silently stop enforcing those constraints);
 //! 3. every `slices/*/*/shapes.ttl` (sorted) — exactly two directory levels.
 
 use std::collections::BTreeMap;
