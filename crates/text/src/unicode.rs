@@ -683,7 +683,7 @@ pub fn analysis_form<O: ?Sized + Sink>(input: &str, out: &mut O) {
 }
 
 // ---------------------------------------------------------------------------
-// Word boundaries, UAX #29.
+// Word boundaries, UAX 29.
 
 /// Before the first character (`sot`), and after the last (`eot`).
 const SOT: u8 = 0xFE;

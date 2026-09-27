@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 # Provenance of `purrdf-text`'s Unicode data and frozen vectors
 
 The code under `src/` and `examples/` is first-party, written from the Unicode
-specifications: UAX #15 (Unicode Normalization Forms), UAX #29 (Unicode Text
+specifications: UAX 15 (Unicode Normalization Forms), UAX 29 (Unicode Text
 Segmentation, word boundaries), the Unicode core specification chapter 3
 (§3.11 normalization forms, §3.12 conjoining jamo behavior, §3.13 default case
-algorithms) and UAX #44 (the file formats). What the crate carries from
+algorithms) and UAX 44 (the file formats). What the crate carries from
 elsewhere is data, recorded here.
 
 ## `src/unicode_tables.rs` — generated from the Unicode Character Database

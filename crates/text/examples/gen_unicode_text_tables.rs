@@ -8,7 +8,7 @@
 //! the decomposition mappings), `CompositionExclusions.txt`,
 //! `DerivedCoreProperties.txt` (`Alphabetic`), `CaseFolding.txt` (statuses `C`
 //! and `F`), `WordBreakProperty.txt` and `emoji-data.txt`
-//! (`Extended_Pictographic`). File formats per UAX #44.
+//! (`Extended_Pictographic`). File formats per UAX 44.
 //!
 //! Every per-code-point property is emitted as a two-stage table: one `u16`
 //! block number per 128-code-point block, and the deduplicated blocks.
@@ -16,7 +16,7 @@
 //! syllable arithmetic of the core specification §3.12), so the runtime maps
 //! one character in one lookup. Primary composites are the two-character
 //! canonical decompositions whose source is not `Full_Composition_Exclusion`,
-//! derived as UAX #15 §5 describes.
+//! derived as UAX 15 §5 describes.
 //!
 //! Output goes to stdout; `scripts/check-generated.sh` pipes it through
 //! `rustfmt` and compares it with the committed file.
@@ -352,7 +352,7 @@ fn main() {
     }
     let decomposition_table = two_stage(&decomposition_of);
 
-    // Primary composites (UAX #15 §5): every canonical pair mapping whose
+    // Primary composites (UAX 15 §5): every canonical pair mapping whose
     // source is not Full_Composition_Exclusion — not listed in
     // CompositionExclusions.txt, not a non-starter, and not decomposing to a
     // non-starter first. Singletons have one-character mappings and never

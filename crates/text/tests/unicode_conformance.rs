@@ -264,7 +264,7 @@ fn the_fold_is_case_folding_txt_c_and_f_for_every_scalar() {
     assert_eq!(unicode::case_fold("STRASSE Straße"), "strasse strasse");
 }
 
-/// UAX #15 §5: a character with a canonical decomposition is recomposed by
+/// UAX 15 §5: a character with a canonical decomposition is recomposed by
 /// NFC exactly when it is not `Full_Composition_Exclusion`. The generator
 /// derives the exclusions from `CompositionExclusions.txt` plus singletons
 /// plus non-starter decompositions; `DerivedNormalizationProps.txt` publishes

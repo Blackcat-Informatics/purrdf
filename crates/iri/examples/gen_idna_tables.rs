@@ -87,7 +87,7 @@ fn hex_list(field: &str) -> Vec<u32> {
     field.split_whitespace().map(hex).collect()
 }
 
-/// `lo..hi` or a single code point, per UAX #44 §4.2.
+/// `lo..hi` or a single code point, per UAX 44 §4.2.
 fn range(field: &str) -> (u32, u32) {
     match field.trim().split_once("..") {
         Some((lo, hi)) => (hex(lo), hex(hi)),
