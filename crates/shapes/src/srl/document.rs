@@ -523,7 +523,7 @@ impl RuleSetDocument {
     /// Resolve the document's imports from a caller-supplied TABLE of `(import IRI, rule
     /// set text)` pairs — the one route every PurRDF host resolves `IMPORTS` through.
     ///
-    /// PurRDF fetches nothing (see the [module docs](self)), so the table is the whole of
+    /// PurRDF fetches nothing (see [`ImportResolver`]), so the table is the whole of
     /// what an import can resolve to, followed transitively by [`Self::resolve_imports`]:
     /// an imported rule set's own `IMPORTS` are looked up in the same table, each IRI read
     /// once. A table entry must also be USED — an entry the closure never names would be
