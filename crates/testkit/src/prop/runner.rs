@@ -45,6 +45,7 @@ impl Default for Config {
 impl Config {
     /// The default configuration with `cases` cases.
     pub fn with_cases(cases: u32) -> Self {
+        assert!(cases > 0, "a property must run at least one case");
         Self {
             cases,
             ..Self::default()

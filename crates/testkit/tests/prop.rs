@@ -593,19 +593,18 @@ fn a_passing_property_runs_exactly_its_configured_cases() {
 
 #[test]
 fn zero_case_configuration_cannot_pass_without_exercising_the_property() {
-    for config in [
-        Config::with_cases(0),
-        Config {
-            cases: 0,
-            ..Config::default()
-        },
-    ] {
-        let result = std::panic::catch_unwind(|| Runner::with_seed(config, "zero", 1));
-        assert!(
-            result.is_err(),
-            "zero cases must be refused at construction"
-        );
-    }
+    assert!(
+        std::panic::catch_unwind(|| Config::with_cases(0)).is_err(),
+        "zero cases must be refused by the convenience constructor"
+    );
+    let direct = Config {
+        cases: 0,
+        ..Config::default()
+    };
+    assert!(
+        std::panic::catch_unwind(|| Runner::with_seed(direct, "zero", 1)).is_err(),
+        "directly constructed zero-case config must also be refused"
+    );
 }
 
 #[test]
