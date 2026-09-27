@@ -15,6 +15,7 @@ members = [
     "crates/envelope-probe",
     "crates/geo",
     "crates/gts",
+    "crates/hash",
     "crates/hnsw",
     "crates/iri",
     "crates/json",
@@ -75,6 +76,7 @@ purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
 purrdf-gts = { path = "crates/gts", version = "2.0.2" }
+purrdf-hash = { path = "crates/hash", version = "2.0.2" }
 purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
@@ -144,7 +146,6 @@ hashbrown = { version = "0.17", default-features = false }
 # constructors, which nothing here calls. `Date::now` and `Math::random`
 # compile without either.
 js-sys = { version = "0.3", default-features = false }
-md-5 = { version = "0.10", default-features = false }
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
 memchr = "2"
@@ -182,10 +183,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
-# digest-0.10 family, matching sha2/md-5.
-sha1 = { version = "0.10", default-features = false }
+# SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
 sha2 = { version = "0.10", default-features = false }
-sha3 = { version = "0.10", default-features = false }
 # Small-vector optimization for id-vectors / solution rows. DEFAULT FEATURES
 # ONLY: `union` (adds unsafe) and `serde` stay OFF; wasm-clean, no runtime deps.
 smallvec = "1"

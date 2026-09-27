@@ -66,10 +66,9 @@ fastrand = { workspace = true }
 filetime = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
 ed25519-dalek = { workspace = true }
-# pure-Rust SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not
-# used as a general-purpose hash; wasm-friendly. Workspace-unified on the
-# digest-0.10 family (matching sha2/md-5); defaults re-enabled here (std).
-sha1 = { workspace = true, default-features = true }
+# SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
+# general-purpose hash. The workspace's zero-dependency digest leaf, wasm-clean.
+purrdf-hash = { workspace = true }
 # pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
 # through the portable core API, so this crate does not need an OS RNG.
 aes-gcm = { workspace = true }

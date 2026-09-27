@@ -372,16 +372,28 @@ PY
     fi
     stop_crate="$(sed -n 's/^STOP: \([a-z0-9-]*\) .*/\1/p' <<<"$out")"
     if [[ -n "$stop_crate" ]]; then
-      # The STOP must be at the first dependent of a still-absent ledger crate,
-      # every earlier non-ledger crate must have been published, and the crate
-      # itself must not have been.
+      # The STOP must be at the earliest crate, in publish order, that depends
+      # on any still-absent ledger crate — the ledger's own order says nothing
+      # about which of its crates is needed first — every earlier non-ledger
+      # crate must have been published, and the crate itself must not have been.
       expect=""
-      for crate in "${fixture[@]}"; do
-        if ! is_present "$crate"; then
-          expect="$(first_dependent "$crate")"
-          [[ -n "$expect" ]] && break
-        fi
+      local waits_on="" candidate dependent index best_index=${#crates[@]}
+      for candidate in "${fixture[@]}"; do
+        is_present "$candidate" && continue
+        dependent="$(first_dependent "$candidate")"
+        [[ -z "$dependent" ]] && continue
+        for index in "${!crates[@]}"; do
+          if [[ "${crates[$index]}" == "$dependent" ]]; then
+            if [[ "$index" -lt "$best_index" ]]; then
+              best_index="$index"
+              expect="$dependent"
+              waits_on="$candidate"
+            fi
+            break
+          fi
+        done
       done
+      crate="$waits_on"
       if [[ "$stop_crate" == "$expect" ]] && ! grep -q "^would publish ${stop_crate} " <<<"$out" \
         && grep -q "^skipping ${crate}: bootstrap pending" <<<"$out" \
         && grep -q "gh run rerun" <<<"$out" && grep -q 'enable "Require trusted publishing"' <<<"$out"; then

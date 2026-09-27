@@ -244,7 +244,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 27 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -284,7 +284,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -414,7 +414,7 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
 	fi; \
 	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
-	@for leaf in purrdf-iri purrdf-xsd purrdf-events; do \
+	@for leaf in purrdf-iri purrdf-xsd purrdf-events purrdf-hash; do \
 		deps=$$(cargo tree -p $$leaf --edges normal --depth 1 -f "{p}" | tail -n +2); \
 		if [ -n "$$deps" ]; then \
 			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
@@ -495,7 +495,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -602,6 +602,8 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# compiles the cross-target test targets to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
+	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
+	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -680,7 +682,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-json --test roundtrip \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-shapes --test product_wasm; \
+			-p purrdf-shapes --test product_wasm \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash --test digest_differential; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

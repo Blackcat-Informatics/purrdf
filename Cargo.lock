@@ -703,15 +703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keccak"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
-dependencies = [
- "cpufeatures 0.2.17",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -722,16 +713,6 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
-
-[[package]]
-name = "md-5"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
-dependencies = [
- "cfg-if",
- "digest",
-]
 
 [[package]]
 name = "memchr"
@@ -956,9 +937,9 @@ dependencies = [
  "criterion",
  "hashbrown",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-testkit",
  "rayon",
- "sha1",
  "smallvec",
 ]
 
@@ -1026,14 +1007,22 @@ dependencies = [
  "getrandom 0.3.4",
  "purrdf-alloc-probe",
  "purrdf-events",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-xsd",
  "rayon",
  "serde",
  "serde_json",
- "sha1",
  "structured-zstd",
  "visual-hashing",
+]
+
+[[package]]
+name = "purrdf-hash"
+version = "2.0.2"
+dependencies = [
+ "criterion",
+ "purrdf-testkit",
 ]
 
 [[package]]
@@ -1252,10 +1241,10 @@ dependencies = [
  "getrandom 0.3.4",
  "hashbrown",
  "js-sys",
- "md-5",
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
@@ -1263,9 +1252,7 @@ dependencies = [
  "purrdf-xsd",
  "rayon",
  "regex",
- "sha1",
  "sha2",
- "sha3",
  "smallvec",
 ]
 
@@ -1587,17 +1574,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest",
-]
-
-[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1606,16 +1582,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
-]
-
-[[package]]
-name = "sha3"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
-dependencies = [
- "digest",
- "keccak",
 ]
 
 [[package]]

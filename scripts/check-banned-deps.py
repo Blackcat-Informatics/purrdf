@@ -187,6 +187,11 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "futures-task": "js-sys with default-features = false (its `std` feature pulled it in)",
     "pin-project-lite": "js-sys with default-features = false (its `std` feature pulled it in)",
     "slab": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "md-5": "purrdf_hash::md5 (RFC 1321)",
+    "sha1": "purrdf_hash::sha1 (FIPS 180-4)",
+    "sha3": "purrdf_hash::sha3 (FIPS 202)",
+    # sha3's permutation crate; nothing else in the graph pulled it in.
+    "keccak": "purrdf_hash::sha3::keccak_f1600 (FIPS 202 Keccak-f[1600])",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

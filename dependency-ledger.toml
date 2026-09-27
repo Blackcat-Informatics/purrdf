@@ -45,3 +45,33 @@ url = [
     # dependency — and a line holding any of them is not matched here.
     '^(?!.*(?<![\w.-])url::)(?!.*(?<![\w.-])url\s*=\s*[{"])(?!.*`url` (?:crate|dependency)).*\burl\b',
 ]
+sha1 = [
+    # `purrdf_hash::sha1`, the in-house SHA-1 module, in a path or a grouped
+    # import (`crate::sha1` inside purrdf-hash), and its declaration and
+    # documentation in purrdf-hash itself.
+    '\b(?:purrdf_hash|crate)::(?:\{[^}]*\bsha1::|sha1::)',
+    '^pub mod sha1;$',
+    '\[`sha1`\] \| SHA-1 \|',
+    '^\| `sha1` \| SHA-1 \|',
+    # The name of purrdf-hash's Armv8 SHA1-instruction execution path.
+    '"aarch64-sha1"',
+    # A local variable named after the digest it holds.
+    '\blet mut sha1 = (?:Self|Sha1)::new\(\);',
+    '\bsha1\.(?:update|finalize)\(',
+    # The published derivation-identity recipe, written as a function of SHA-1.
+    'sha1\(rule_identity \+\+',
+]
+sha3 = [
+    # `purrdf_hash::sha3`, the in-house SHA-3 module, in a path or a grouped
+    # import, and its declaration and documentation in purrdf-hash itself.
+    '\bpurrdf_hash::(?:\{[^}]*\bsha3::|sha3::)',
+    '^pub mod sha3;$',
+    '\[`sha3`\] \| SHA3-224',
+    '^\| `sha3` \| SHA3-224',
+    # SPARQL's SHA3-224 … SHA3-512 built-ins spelled in query text, and a
+    # lexer test's variable `?sha3` that must not absorb the hyphen.
+    '`sha3-256` is the same',
+    '"\?sha3-224"',
+    'var\("sha3"\)',
+    'BIND\(sha3-512\(',
+]

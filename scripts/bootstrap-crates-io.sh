@@ -542,24 +542,56 @@ self_test() {
     "New versions of this crate can only be published using Trusted Publishing"
 
   # 2. The ledger with every dependency absent at VERSION: refuse, naming
-  #    every missing dependency of every ledger crate.
+  #    every missing dependency of every ledger crate. A ledger crate with no
+  #    dependency outside the ledger is creatable against ANY registry, so
+  #    "nothing creatable" is a claim about the ledger crates that have one;
+  #    the dependency-free ones are the valid neighbour, asserted in 2a.
   mock="${tmp}/deps-absent"; mkdir -p "$mock"
-  local -a expect_missing=()
-  local crate dep_line dep
+  local -a expect_missing=() waiting=() free=()
+  local crate dep_line dep outside
   for crate in "${fixture[@]}"; do
+    outside=false
     while IFS= read -r dep_line; do
       [[ -z "$dep_line" ]] && continue
       dep="${dep_line#* }"
-      in_list "$dep" "${fixture[@]}" || expect_missing+=("${crate} waits on")
-      in_list "$dep" "${fixture[@]}" || expect_missing+=("${dep} ${VERSION} (${dep_line%% *})")
+      in_list "$dep" "${fixture[@]}" && continue
+      outside=true
+      expect_missing+=("${crate} waits on" "${dep} ${VERSION} (${dep_line%% *})")
     done < <(crate_path_deps "$crate")
+    if [[ "$outside" == "true" ]]; then waiting+=("$crate"); else free+=("$crate"); fi
   done
-  arm "every ledger crate's dependencies absent at ${VERSION}: nothing creatable" refuse \
-    "$mock" "$(ledger_file absent "${fixture[@]}")" \
-    "REFUSING: nothing can be created yet" \
-    "failed to select a version for the requirement" \
-    "scripts/publish-release-crates.sh" \
-    "${expect_missing[@]}"
+  if [[ "${#waiting[@]}" -eq 0 ]]; then
+    echo "  FAILED  no ledger crate has a dependency outside the ledger, so the refusal cannot be exercised"
+    failures=$((failures + 1))
+  else
+    arm "every ledger crate's dependencies absent at ${VERSION}: nothing creatable" refuse \
+      "$mock" "$(ledger_file absent "${waiting[@]}")" \
+      "REFUSING: nothing can be created yet" \
+      "failed to select a version for the requirement" \
+      "scripts/publish-release-crates.sh" \
+      "${expect_missing[@]}"
+  fi
+
+  # 2a. The neighbour of 2: a ledger crate with no dependency outside the
+  #     ledger is created against the same empty registry. When the ledger has
+  #     none, one is FOUND in the release set, never named here.
+  local -a free_fixture=("${free[@]}")
+  if [[ "${#free_fixture[@]}" -eq 0 ]]; then
+    for candidate in "${release_set[@]}"; do
+      if [[ -z "$(crate_path_deps "$candidate")" ]]; then
+        free_fixture=("$candidate")
+        break
+      fi
+    done
+  fi
+  if [[ "${#free_fixture[@]}" -eq 0 ]]; then
+    echo "  FAILED  no release crate is free of dependencies, so the neighbour cannot be exercised"
+    failures=$((failures + 1))
+  else
+    arm "dependency-free ledger crate(s) against the same empty registry: created" pass \
+      "${tmp}/deps-absent" "$(ledger_file free "${free_fixture[@]}")" \
+      "${#free_fixture[@]} crate record(s) will be CREATED by this token in this pass: ${free_fixture[*]}"
+  fi
 
   # 2b. Token step 1 of the interleave: the FIRST ledger crate's dependencies
   #     are up (the trusted lane stopped at its first dependent), the others'
@@ -572,22 +604,32 @@ self_test() {
     version "$mock" "${dep_line#* }"
   done < <(crate_path_deps "${fixture[0]}")
   local -a expect_step1=("CREATE RECORD  ${fixture[0]} (no crates.io record")
+  local -a created_step1=("${fixture[0]}")
   local -a others=("${fixture[@]:1}")
   for crate in "${others[@]}"; do
-    # A later ledger crate whose dependencies happen to be a subset of the
-    # first's would be creatable too; only assert DEFER for those that are not.
+    # A later ledger crate whose dependencies happen to be up already — a subset
+    # of the first's, none at all, or ledger crates created earlier in this
+    # pass — is creatable too; only the rest are DEFERRED.
     local deferred_here=false
     while IFS= read -r dep_line; do
       [[ -z "$dep_line" ]] && continue
       dep="${dep_line#* }"
-      in_list "$dep" "${fixture[@]}" && continue
+      if in_list "$dep" "${fixture[@]}"; then
+        in_list "$dep" "${created_step1[@]}" || deferred_here=true
+        continue
+      fi
       [[ -f "${mock}/${dep}@${VERSION}" ]] || deferred_here=true
     done < <(crate_path_deps "$crate")
-    [[ "$deferred_here" == "true" ]] && expect_step1+=("DEFER          ${crate} (no record; its dependencies are not on crates.io yet")
+    if [[ "$deferred_here" == "true" ]]; then
+      expect_step1+=("DEFER          ${crate} (no record; its dependencies are not on crates.io yet")
+    else
+      expect_step1+=("CREATE RECORD  ${crate} (no crates.io record")
+      created_step1+=("$crate")
+    fi
   done
   arm "token step 1: ${fixture[0]}'s dependencies present, the rest deferred" pass \
     "$mock" "$(ledger_file step1 "${fixture[@]}")" \
-    "1 crate record(s) will be CREATED by this token in this pass: ${fixture[0]}" \
+    "${#created_step1[@]} crate record(s) will be CREATED by this token in this pass: ${created_step1[*]}" \
     "gh run rerun" \
     "${expect_step1[@]}"
 
@@ -597,9 +639,11 @@ self_test() {
   #     after it re-walked the whole ledger and `cargo package` died on a deferred
   #     crate's missing dependency before a single record was created. Asserting the
   #     plan text is not asserting the args; only this is.
-  arm "token step 1: the gates and package pass get ONLY ${fixture[0]}" pass \
+  local expect_step1_args="cargo args:"
+  for crate in "${created_step1[@]}"; do expect_step1_args+=" -p ${crate}"; done
+  arm "token step 1: the gates and package pass get ONLY ${created_step1[*]}" pass \
     "$mock" "$(ledger_file step1args "${fixture[@]}")" \
-    "cargo args: -p ${fixture[0]}"
+    "${expect_step1_args}"
   # And the neighbouring VALID case: with every dependency up, nothing is deferred
   # and the args must cover the whole ledger. A fix that narrowed the args by
   # refusing too much would pass the arm above and fail this one.

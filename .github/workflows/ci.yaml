@@ -307,7 +307,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 26 publishable crates with rustdoc lints promoted
+      # Document exactly the 27 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -385,6 +385,7 @@ jobs:
             -p purrdf-xsd \
             -p purrdf-cdt \
             -p purrdf-jsonschema \
+            -p purrdf-hash \
             -p purrdf-gts \
             -p purrdf-core \
             -p purrdf-columnar \
@@ -537,6 +538,14 @@ jobs:
         run: |
           cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
             --test wasm_reassociated
+
+      - name: Run the SHA-1 and CRC-32 Armv8 kernels against the frozen digest vectors
+        # The hash crate's own path requirement: both Armv8 kernels must be
+        # detected and executed here, beside the portable path, and reproduce
+        # every frozen vector bit for bit. No other job runs them.
+        env:
+          PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
+        run: cargo test --locked -p purrdf-hash
 
   # The architectures whose float control register this build does not read. On them the
   # float environment is proven by the behavioural probe alone, so a kernel that computes

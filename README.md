@@ -543,8 +543,9 @@ triple pattern.
   `purrdf-core`, not the slice crate).
 - **Zero-dependency foundations** — `purrdf-iri` (RFC 3987/3986) and `purrdf-xsd`
   (XSD 1.1 value space) have no runtime dependencies at all; `purrdf-events` (the
-  object-safe ingestion seam) has none either, and `purrdf-cdt` is a `no_std`
-  closed leaf over exactly those two.
+  object-safe ingestion seam) and `purrdf-hash` (MD5, SHA-1, SHA-3 and CRC-32
+  digests) have none either, and `purrdf-cdt` is a `no_std` closed leaf over
+  exactly the first two.
 
 ## Quickstart
 
@@ -694,6 +695,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
+| [`purrdf-hash`](./crates/hash/) | Zero-dependency MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
 | [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `update`, `reason`, `entails`, `consistency`, `validate`, `shex`, `describe`, `project`, `lift`, `pack verify` (unpublished). `convert` takes any number of `--input` sources, merged by deterministic union under a separate blank-node scope per source, and `--transport auto\|none\|gzip\|zstd` detects a gzip or zstd wrapper by its magic bytes before consulting the suffix and decodes it all-or-nothing; a transport is never applied on output and is refused against a pack source. |

@@ -1,0 +1,66 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Digest throughput at 64 B, 1 KiB and 1 MiB, per algorithm and per path the
+//! host can run. Report-only; not a gate.
+
+#![allow(missing_docs)] // criterion_main! generates an undocumented `main`
+
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use purrdf_hash::backend::{Crc32Backend, Sha1Backend};
+use purrdf_hash::md5::Md5;
+use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
+
+const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
+
+/// Deterministic, non-trivial input bytes.
+fn input(len: usize) -> Vec<u8> {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect()
+}
+
+fn bench_one(c: &mut Criterion, group: &str, path: &str, digest: &dyn Fn(&[u8]) -> u8) {
+    let mut group = c.benchmark_group(group);
+    for (len, label) in SIZES {
+        let data = input(len);
+        group.throughput(Throughput::Bytes(len as u64));
+        group.bench_with_input(BenchmarkId::new(path, label), &data, |b, data| {
+            b.iter(|| digest(black_box(data)));
+        });
+    }
+    group.finish();
+}
+
+fn digests(c: &mut Criterion) {
+    bench_one(c, "md5", "portable", &|data| Md5::digest(data)[0]);
+    for backend in Sha1Backend::ALL {
+        if backend.is_available() {
+            bench_one(c, "sha1", backend.name(), &|data| {
+                backend.digest(data).map_or(0, |digest| digest[0])
+            });
+        }
+    }
+    bench_one(c, "sha3-224", "portable", &|data| Sha3_224::digest(data)[0]);
+    bench_one(c, "sha3-256", "portable", &|data| Sha3_256::digest(data)[0]);
+    bench_one(c, "sha3-384", "portable", &|data| Sha3_384::digest(data)[0]);
+    bench_one(c, "sha3-512", "portable", &|data| Sha3_512::digest(data)[0]);
+    for backend in Crc32Backend::ALL {
+        if backend.is_available() {
+            bench_one(c, "crc32", backend.name(), &|data| {
+                backend.checksum(data).map_or(0, |crc| crc as u8)
+            });
+        }
+    }
+}
+
+criterion_group!(benches, digests);
+criterion_main!(benches);

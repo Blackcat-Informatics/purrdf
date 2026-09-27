@@ -420,8 +420,9 @@ ORDER BY ?rank
   SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
   slice crate）。
 - **零依赖的基础层**——`purrdf-iri`（RFC 3987/3986）与 `purrdf-xsd`（XSD 1.1 值
-  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）同样没有，而
-  `purrdf-cdt` 是恰好建立在这两者之上的 `no_std` 封闭叶。
+  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）与 `purrdf-hash`
+  （MD5、SHA-1、SHA-3 与 CRC-32 摘要）同样没有，而 `purrdf-cdt` 是恰好建立在前两者之上的
+  `no_std` 封闭叶。
 
 ## 快速入门
 
@@ -560,6 +561,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
+| [`purrdf-hash`](./crates/hash/) | 零依赖的 MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | `purrdf` ESM 包背后的 wasm32 引擎。 |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI（不发布；经由 cargo-c 构建）。 |
 | [`purrdf-cli`](./crates/cli/) | `purrdf` 命令行工具：`convert`、`query`、`update`、`reason`、`entails`、`consistency`、`validate`、`shex`、`describe`、`project`、`lift`、`pack verify`（不发布）。`convert` 接受任意数量的 `--input` 源，按确定性的并集合并，每个源使用独立的空节点作用域；`--transport auto\|none\|gzip\|zstd` 先根据魔数检测 gzip 或 zstd 包装再参考后缀，并以全有或全无的方式解码；传输包装从不在输出时施加，对 pack 源则拒绝。 |

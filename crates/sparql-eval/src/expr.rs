@@ -41,7 +41,7 @@ use purrdf_xsd::{
     numeric_round, numeric_unary_plus, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div,
     value_equal, value_mul, value_sub, value_unary_minus,
 };
-use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
+use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
 use crate::DetHashSet;
 use crate::error::EvalError;
@@ -3451,14 +3451,14 @@ fn eval_function<D: DatasetView + Sync>(
         // returns, which is genuinely new text.
         Function::Md5 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = md5::Md5::digest(s.as_bytes());
+                let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = sha1::Sha1::digest(s.as_bytes());
+                let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
@@ -3490,28 +3490,28 @@ fn eval_function<D: DatasetView + Sync>(
         // an unbound/ill-typed argument yielding an error (`None`).
         Function::Sha3_224 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = sha3::Sha3_224::digest(s.as_bytes());
+                let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = sha3::Sha3_256::digest(s.as_bytes());
+                let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = sha3::Sha3_384::digest(s.as_bytes());
+                let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
-                let digest = sha3::Sha3_512::digest(s.as_bytes());
+                let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
@@ -4109,7 +4109,7 @@ fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<St
 /// The accepted-datatype rule is identical to [`string_arg`]'s (simple literal,
 /// `xsd:string`, `rdf:langString`, `rdf:dirLangString`); only the ownership
 /// differs. Callers that merely READ the lexical form — the hash built-ins,
-/// which feed it straight to `Digest::update` as bytes — must use this one:
+/// which hash it straight from its bytes — must use this one:
 /// [`string_arg`] heap-allocates a fresh `String` per call, and these are
 /// evaluated once per solution row, so a `SHA3-256(?o)` over a million-row scan
 /// paid a million allocations to hand `as_bytes()` a pointer it could have had

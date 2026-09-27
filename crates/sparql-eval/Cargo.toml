@@ -55,14 +55,14 @@ regex = { workspace = true }
 # Keeps the wasm-clean dependency path by disabling ahash's runtime RNG feature
 # (default-features = false in the workspace table).
 ahash = { workspace = true }
-# RustCrypto hash crates — all wasm-safe (no getrandom; pure software).
-# default-features = false in the workspace table keeps this tree wasm-clean.
-md-5 = { workspace = true }
-sha1 = { workspace = true }
+# The SPARQL MD5()/SHA1() built-ins and the SEP-0008 SHA-3 built-ins
+# (SHA3-224/256/384/512): the workspace's zero-dependency digest leaf, pure
+# integer arithmetic, wasm32-unknown-unknown-clean.
+purrdf-hash = { workspace = true }
+# The SHA256()/SHA384()/SHA512() built-ins. Pure software with
+# default-features = false in the workspace table, so no getrandom and the tree
+# stays wasm-clean.
 sha2 = { workspace = true }
-# SEP-0008 SHA-3 (Keccak) built-ins: SHA3-224/256/384/512. Same digest-0.10
-# family, pure software, no getrandom — wasm32-unknown-unknown-clean.
-sha3 = { workspace = true }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
 # (hand-rolled, no serde). No oxigraph-family edge.
 purrdf-sparql-results = { workspace = true }

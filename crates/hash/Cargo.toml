@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-hash"
+description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-hash"
+rust-version.workspace = true
+keywords = ["md5", "sha1", "sha3", "crc32", "hash"]
+categories = ["algorithms", "cryptography", "no-std::no-alloc"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, ZERO runtime dependencies: a leaf foundation like purrdf-iri,
+# purrdf-xsd and purrdf-events, held to that by `make rdf-core-hygiene`. Pure
+# integer arithmetic over caller-supplied bytes: no allocation, no threads, no
+# filesystem, no clock, no entropy, so it is wasm32-clean on every target.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_hash"
+
+[dev-dependencies]
+# The frozen differential vectors and the deterministic input stream they are
+# drawn from. Path-only and unpublished, so it is stripped from the packaged
+# manifest; the zero-dep leaf gate checks normal edges only.
+purrdf-testkit = { workspace = true }
+# Digest throughput baselines. DEV-DEPENDENCY ONLY: it never reaches the
+# published library's graph.
+criterion = { workspace = true }
+
+[[bench]]
+name = "digests"
+harness = false
+
+# The frozen-vector replay runs on purrdf_testkit's `harness = false` runner so
+# the same named cases run natively under `cargo test` and on
+# wasm32-unknown-unknown in Node under scripts/wasm-test-runner.sh
+# (`make wasm-test`).
+[[test]]
+name = "digest_differential"
+harness = false
