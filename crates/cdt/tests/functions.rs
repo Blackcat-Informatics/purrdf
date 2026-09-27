@@ -13,11 +13,11 @@
 use pretty_assertions::assert_eq;
 use purrdf_cdt::{
     CDT_FUNCTIONS, CDT_LIST, CDT_MAP, CDT_NS, CdtArity, CdtEntry, CdtError, CdtFn, CdtKey,
-    CdtLiteral, CdtOutcome, CdtTerm, CdtValue, MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH,
-    MapRemoval, concat, contains, contains_key, get, head, integer_argument, keys, list_concat,
-    list_constructor, list_contains, list_get, list_head, list_reverse, list_size, list_subseq,
-    list_tail, map_constructor, map_contains_key, map_get, map_keys, map_merge, map_put,
-    map_remove, map_size, merge, parse_list, parse_map, put, remove, reverse, size, subseq, tail,
+    CdtLiteral, CdtOutcome, CdtTerm, CdtValue, MAX_ELEMENTS, MAX_LEXICAL_BYTES, MapRemoval, concat,
+    contains, contains_key, get, head, integer_argument, keys, list_concat, list_constructor,
+    list_contains, list_get, list_head, list_reverse, list_size, list_subseq, list_tail,
+    map_constructor, map_contains_key, map_get, map_keys, map_merge, map_put, map_remove, map_size,
+    merge, parse_list, parse_map, put, remove, reverse, size, subseq, tail,
 };
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -43,7 +43,7 @@ fn entries(lexical: &str) -> Vec<CdtEntry> {
 }
 
 /// A composite element, refused by the constructor only when it would break one of
-/// the crate's three bounds — which no fixture in this file does.
+/// the crate's two bounds — which no fixture in this file does.
 fn composite(value: CdtValue) -> CdtTerm {
     CdtTerm::composite(value).expect("the fixture is within every bound")
 }
@@ -1269,37 +1269,47 @@ fn the_three_outcomes_are_distinguishable() {
 
     // A bound refusal is NOT an expression error: a consumer must fail the query
     // rather than leave a variable unbound.
-    let refused = deep_enough_to_refuse();
+    let refused = refused_by_the_element_bound();
     assert!(!refused.is_value() && !refused.is_error() && refused.is_bound());
 }
 
-/// Nest lists until one more level would exceed [`MAX_NESTING_DEPTH`].
-///
-/// The last element is spelled with the `CdtTerm::Composite` variant rather than with
-/// `CdtTerm::composite`, which would refuse it: the point of this fixture is that the
-/// **minting function** refuses on its own, so that a consumer which built the element
-/// some other way still cannot get an over-deep value out of the library.
-fn deep_enough_to_refuse() -> CdtOutcome<CdtValue> {
-    let mut built = value(list_constructor(Vec::new()));
-    for _ in 1..MAX_NESTING_DEPTH {
-        built = value(list_constructor(vec![composite(built)]));
-    }
-    assert_eq!(built.depth(), MAX_NESTING_DEPTH);
-    list_constructor(vec![CdtTerm::Composite(Box::new(built))])
+/// Two lists that each fit and together do not: `cdt:concat` of them is one element
+/// over [`MAX_ELEMENTS`], refused from the borrowed inputs before anything is joined.
+fn refused_by_the_element_bound() -> CdtOutcome<CdtValue> {
+    let half = vec![CdtTerm::Null; MAX_ELEMENTS / 2 + 1];
+    list_concat(&[&half, &half])
 }
 
-// ── The three bounds, on values that never passed the scanner ─────────────────
+// ── The two bounds, on values that never passed the scanner ───────────────────
 
+/// A minted value nests as deep as its elements allow: there is no depth bound, so
+/// a hundred thousand constructor applications one inside the other are a value.
+///
+/// The last level is also spelled with the raw `CdtTerm::Composite` variant rather
+/// than with `CdtTerm::composite`: the minting function measures the element itself,
+/// and admits it just the same. Expected values from the shape: `depth` levels,
+/// `depth - 1` elements, a canonical form of `depth * 2` bytes. Run on a 256 KiB
+/// stack so that a walk costing stack per level would be visible as an abort.
 #[test]
-fn a_minted_value_may_not_nest_deeper_than_the_bound() {
-    let refused = deep_enough_to_refuse();
-    assert_eq!(
-        refused,
-        CdtOutcome::Bound(CdtError::DepthExceeded {
-            offset: 0,
-            limit: MAX_NESTING_DEPTH,
+fn a_minted_value_nests_as_deep_as_its_elements_allow() {
+    let depth = 100_000usize;
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let mut built = value(list_constructor(Vec::new()));
+            for _ in 1..depth {
+                built = value(list_constructor(vec![composite(built)]));
+            }
+            assert_eq!(built.depth(), depth);
+            assert_eq!(built.element_count(), depth - 1);
+            assert_eq!(purrdf_cdt::canonical_lexical_len(&built), depth * 2);
+            let deeper = value(list_constructor(vec![CdtTerm::Composite(Box::new(built))]));
+            assert_eq!(deeper.depth(), depth + 1);
+            assert_eq!(deeper.element_count(), depth);
         })
-    );
+        .expect("the thread starts")
+        .join()
+        .expect("the walks did not abort");
 }
 
 #[test]

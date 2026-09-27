@@ -25,7 +25,7 @@ fn list_items(lexical: &str) -> Vec<CdtTerm> {
 }
 
 /// A composite element, refused by the constructor only when it would break one of
-/// the crate's three bounds — which no fixture in this file does.
+/// the crate's two bounds — which no fixture in this file does.
 fn composite(value: CdtValue) -> CdtTerm {
     CdtTerm::composite(value).expect("the fixture is within every bound")
 }

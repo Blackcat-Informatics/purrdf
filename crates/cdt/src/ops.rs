@@ -61,22 +61,33 @@
 //! renderer both need. Value semantics stay where they belong: in the partial,
 //! raising relations above.
 //!
-//! # Everything here is iterative
+//! # Everything here is iterative, and the walk owns what it parses
 //!
 //! Composite values are trees over attacker-controlled lexical input, and a stack
 //! overflow in Rust is an `abort`, not a catchable panic. Every function in this
 //! module walks the tree with an explicit heap worklist; none of them recurses.
+//!
+//! The one place a walk meets a value that is not in the input is a `cdt:`-typed
+//! literal: the value relations see through it to the composite its lexical form
+//! denotes (see [`composite_reach`]), and that composite has to be parsed into a value
+//! nobody else owns. The walk **owns** it: the parsed value goes onto the same work
+//! list as the borrowed input, as an owned item beside the borrowed ones, and is
+//! taken apart there position by position exactly as a nested composite written with
+//! brackets is. A literal inside a literal inside a literal therefore costs one
+//! parse and a few work-list entries per level, and never a native frame — there is
+//! no re-entry into the comparator, and nothing for a depth budget to bound.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
+use core::mem;
 
 use purrdf_xsd::XsdValue;
 
 use crate::error::CdtTypeError;
-use crate::limits::MAX_NESTING_DEPTH;
 use crate::literal::LiteralValue;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
-use crate::value::{CdtContents, CdtValue};
+use crate::value::{CdtContents, CdtParts, CdtValue};
 
 // ── 1. The syntactic total order ────────────────────────────────────────────────
 
@@ -330,28 +341,12 @@ fn unmodelled() -> CdtTypeError {
     )
 }
 
-/// A composite value reached either by borrowing a nested one or by parsing a
-/// `cdt:`-typed literal.
-///
-/// The borrowed case is what keeps the common walk allocation-free; the owned case is
-/// unavoidable, because a value parsed out of a literal's lexical form has no home to
-/// be borrowed from.
-enum MaybeOwned<'a> {
-    Borrowed(&'a CdtValue),
-    Owned(CdtValue),
+/// The error `<` raises between a list and a map, wherever in a walk the pair meets.
+fn list_against_map() -> CdtTypeError {
+    CdtTypeError::undefined("SPARQL `<` is not defined between a cdt:List and a cdt:Map")
 }
 
-impl MaybeOwned<'_> {
-    fn get(&self) -> &CdtValue {
-        match self {
-            Self::Borrowed(value) => value,
-            Self::Owned(value) => value,
-        }
-    }
-}
-
-/// The composite an element denotes, in either of its two spellings, or `None` when it
-/// denotes no composite at all.
+/// How an element reaches the composite it denotes.
 ///
 /// # Why an element that *is* a literal can still be a composite
 ///
@@ -369,15 +364,26 @@ impl MaybeOwned<'_> {
 /// keeps its lexical form ([`CdtLiteral`] is verbatim), why map keys are still
 /// distinguished lexically, and why this resolution lives here in the value relations
 /// and nowhere else.
+enum Reach {
+    /// The element is a [`CdtTerm::Composite`]: the value is right there, borrowed.
+    Syntactic,
+    /// The element is a `cdt:`-typed literal whose lexical form parses: the value was
+    /// parsed out of it and belongs to the walk that asked.
+    Parsed(CdtValue),
+}
+
+/// The composite an element denotes, in either of its two spellings, or `None` when it
+/// denotes no composite at all.
 ///
 /// An **ill-typed** `cdt:`-typed literal answers `None` here on purpose: it denotes no
-/// composite, and the leaf rules then raise [`CdtTypeErrorKind::IllTyped`](crate::CdtTypeErrorKind::IllTyped)
-/// for it rather than reporting an inequality.
-fn as_composite(term: &CdtTerm) -> Option<MaybeOwned<'_>> {
+/// composite, and the leaf rules then raise
+/// [`CdtTypeErrorKind::IllTyped`](crate::CdtTypeErrorKind::IllTyped) for it rather than
+/// reporting an inequality.
+fn composite_reach(term: &CdtTerm) -> Option<Reach> {
     match term {
-        CdtTerm::Composite(inner) => Some(MaybeOwned::Borrowed(inner.as_ref())),
+        CdtTerm::Composite(_) => Some(Reach::Syntactic),
         CdtTerm::Literal(literal) => match denotation(literal) {
-            Denotation::Composite(value) => Some(MaybeOwned::Owned(value)),
+            Denotation::Composite(value) => Some(Reach::Parsed(value)),
             Denotation::Xsd(_)
             | Denotation::LanguageTagged
             | Denotation::IllTyped
@@ -387,22 +393,15 @@ fn as_composite(term: &CdtTerm) -> Option<MaybeOwned<'_>> {
     }
 }
 
-/// Spend one level of the composite-literal resolution budget.
-///
-/// Resolving a `cdt:`-typed literal into a value is the one step in this module that
-/// re-enters the comparator, because the value it yields is owned and cannot be
-/// pushed onto a worklist of borrowed terms. A literal may carry a literal that
-/// carries a literal, so the chain is bounded here — by the same
-/// [`MAX_NESTING_DEPTH`] that bounds *syntactic* nesting, since a composite reached
-/// through an embedded literal is nested just as surely as one reached through a
-/// bracket. That keeps the re-entry depth at 64 frames whatever the input, which is
-/// the same budget the value tree's own `Drop` glue already runs on.
-fn spend(budget: usize) -> Result<usize, CdtTypeError> {
-    budget.checked_sub(1).ok_or_else(|| {
-        CdtTypeError::undefined(
-            "cdt:List / cdt:Map literals nested deeper than the composite nesting bound",
-        )
-    })
+/// What a leaf comparison under `=` found.
+enum LeafEq {
+    /// The pair has its answer, or its refusal.
+    Answer(Result<bool, CdtTypeError>),
+    /// Both sides denote composites, at least one of them spelled as a literal. Each
+    /// `Some` is the value parsed out of that side's literal; a `None` side is already
+    /// a [`CdtTerm::Composite`] and is used as it stands. The walk continues into the
+    /// pair as it would into two nested composites.
+    Composites(Option<CdtValue>, Option<CdtValue>),
 }
 
 /// SPARQL `=` over two literals.
@@ -414,7 +413,8 @@ fn spend(budget: usize) -> Result<usize, CdtTypeError> {
 ///   literal denotes nothing, so there is no value to be equal or unequal to.
 ///   `list-functions/list-less-than-error-03.rq` pins the analogous outcome for `<`
 ///   on a whole `"1"^^cdt:List` operand.
-/// * both composites — compared as composites (`list-functions/contains-08.rq`).
+/// * both composites — compared as composites (`list-functions/contains-08.rq`), by
+///   the walk that asked, which takes over both parsed values.
 /// * a composite against an XSD value or a language-tagged string — `false`. Those
 ///   are three value spaces PurRDF models in full and they are pairwise disjoint, so
 ///   this is SPARQL's "known to be different" rather than a refusal.
@@ -428,24 +428,36 @@ fn spend(budget: usize) -> Result<usize, CdtTypeError> {
 ///   `list-functions/contains-03.rq` requires a list holding `'b'@en` to answer
 ///   `false`, not an error, when asked for the plain string `'b'`.
 /// * two XSD values — `purrdf_xsd::value_eq`, which is definite in both directions.
-fn literal_equal(a: &CdtLiteral, b: &CdtLiteral, budget: usize) -> Result<bool, CdtTypeError> {
+fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> LeafEq {
     if a == b {
-        return Ok(true);
+        return LeafEq::Answer(Ok(true));
     }
-    match (denotation(a), denotation(b)) {
+    LeafEq::Answer(match (denotation(a), denotation(b)) {
         (Denotation::IllTyped, _) | (_, Denotation::IllTyped) => Err(ill_typed()),
         (Denotation::Composite(left), Denotation::Composite(right)) => {
-            value_equal_at(&left, &right, spend(budget)?)
+            return LeafEq::Composites(Some(left), Some(right));
         }
         (Denotation::Unmodelled, _) | (_, Denotation::Unmodelled) => Err(unmodelled()),
         (Denotation::Composite(_), _) | (_, Denotation::Composite(_)) => Ok(false),
         (Denotation::LanguageTagged, _) | (_, Denotation::LanguageTagged) => Ok(false),
         (Denotation::Xsd(x), Denotation::Xsd(y)) => Ok(purrdf_xsd::value_eq(&x, &y)),
+    })
+}
+
+/// A nested composite against a literal: the pair is two composites when the literal
+/// denotes one, and otherwise has the leaf answer for a composite against a
+/// non-composite.
+fn composite_against_literal(literal: &CdtLiteral) -> Result<Option<CdtValue>, CdtTypeError> {
+    match denotation(literal) {
+        Denotation::Composite(value) => Ok(Some(value)),
+        Denotation::IllTyped => Err(ill_typed()),
+        Denotation::Unmodelled => Err(unmodelled()),
+        Denotation::Xsd(_) | Denotation::LanguageTagged => Ok(None),
     }
 }
 
 /// SPARQL `=` over two elements that are not both composites and not both triple
-/// terms (those two cases are driven by the iterative walkers instead).
+/// terms (those two cases are driven by the iterative walker instead).
 ///
 /// # Two blank nodes are equal when they are the same node, and undecidable otherwise
 ///
@@ -460,8 +472,8 @@ fn literal_equal(a: &CdtLiteral, b: &CdtLiteral, budget: usize) -> Result<bool, 
 /// terms that are not both literals, and the corpus is the reason for the narrowing.
 ///
 /// [`membership_equal`] is where the distinction stops applying — see there.
-fn leaf_equal(a: &CdtTerm, b: &CdtTerm, budget: usize) -> Result<bool, CdtTypeError> {
-    match (a, b) {
+fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> LeafEq {
+    LeafEq::Answer(match (a, b) {
         (CdtTerm::Iri(p), CdtTerm::Iri(q)) => Ok(p == q),
         (CdtTerm::Blank(p), CdtTerm::Blank(q)) => {
             if p == q {
@@ -473,22 +485,25 @@ fn leaf_equal(a: &CdtTerm, b: &CdtTerm, budget: usize) -> Result<bool, CdtTypeEr
                 ))
             }
         }
-        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => literal_equal(p, q, budget),
+        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => return literal_equal(p, q),
         (CdtTerm::Null, CdtTerm::Null) => Ok(true),
         // A nested composite and a composite-typed literal are two spellings of one
-        // value; see `as_composite`.
-        (CdtTerm::Composite(p), CdtTerm::Literal(q))
-        | (CdtTerm::Literal(q), CdtTerm::Composite(p)) => match denotation(q) {
-            Denotation::Composite(value) => value_equal_at(p.as_ref(), &value, spend(budget)?),
-            Denotation::IllTyped => Err(ill_typed()),
-            Denotation::Unmodelled => Err(unmodelled()),
-            Denotation::Xsd(_) | Denotation::LanguageTagged => Ok(false),
+        // value; see `composite_reach`. The parsed value takes the literal's side.
+        (CdtTerm::Composite(_), CdtTerm::Literal(q)) => match composite_against_literal(q) {
+            Ok(Some(value)) => return LeafEq::Composites(None, Some(value)),
+            Ok(None) => Ok(false),
+            Err(error) => Err(error),
+        },
+        (CdtTerm::Literal(p), CdtTerm::Composite(_)) => match composite_against_literal(p) {
+            Ok(Some(value)) => return LeafEq::Composites(Some(value), None),
+            Ok(None) => Ok(false),
+            Err(error) => Err(error),
         },
         // Nulls are indistinguishable from each other and distinguishable from
         // everything else; different term categories are simply not equal, which is
         // `false` and not a type error.
         _ => Ok(false),
-    }
+    })
 }
 
 /// SPARQL `<` over two elements that are not both composites.
@@ -520,6 +535,152 @@ fn leaf_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
     }
 }
 
+// ── Equality ────────────────────────────────────────────────────────────────────
+
+/// One side of an equality pair: an element of the input, borrowed, or an element the
+/// walk parsed out of a composite-typed literal and owns.
+enum Side<'a> {
+    Borrowed(&'a CdtTerm),
+    Owned(CdtTerm),
+}
+
+impl<'a> Side<'a> {
+    fn term(&self) -> &CdtTerm {
+        match self {
+            Self::Borrowed(term) => term,
+            Self::Owned(term) => term,
+        }
+    }
+
+    /// This side with the composite its literal denotes standing in for the literal,
+    /// or this side as it is when it was a composite already.
+    fn resolved(self, parsed: Option<CdtValue>) -> Self {
+        match parsed {
+            Some(value) => Self::Owned(CdtTerm::Composite(Box::new(value))),
+            None => self,
+        }
+    }
+
+    /// The three components of this side, which the caller has established is a
+    /// triple term, each as a side of its own.
+    fn components(self) -> [Self; 3] {
+        match self {
+            Self::Borrowed(CdtTerm::TripleTerm(triple)) => [
+                Self::Borrowed(&triple.subject),
+                Self::Borrowed(&triple.predicate),
+                Self::Borrowed(&triple.object),
+            ],
+            Self::Owned(CdtTerm::TripleTerm(mut triple)) => [
+                Self::Owned(mem::replace(&mut triple.subject, CdtTerm::Null)),
+                Self::Owned(mem::replace(&mut triple.predicate, CdtTerm::Null)),
+                Self::Owned(mem::replace(&mut triple.object, CdtTerm::Null)),
+            ],
+            Self::Borrowed(_) | Self::Owned(_) => {
+                unreachable!("components are taken of a triple term")
+            }
+        }
+    }
+
+    /// The contents of this side, which the caller has established is a composite.
+    fn children(self) -> Kids<'a> {
+        match self {
+            Self::Borrowed(CdtTerm::Composite(value)) => match value.contents() {
+                CdtContents::List(items) => Kids::BorrowedList(items),
+                CdtContents::Map(entries) => Kids::BorrowedMap(entries),
+            },
+            Self::Owned(CdtTerm::Composite(value)) => match (*value).into_parts() {
+                CdtParts::List(items) => Kids::OwnedList(items),
+                CdtParts::Map(entries) => Kids::OwnedMap(entries),
+            },
+            Self::Borrowed(_) | Self::Owned(_) => {
+                unreachable!("children are taken of a composite")
+            }
+        }
+    }
+}
+
+/// The contents of one side of a composite pair, borrowed from the input or owned by
+/// the walk.
+enum Kids<'a> {
+    BorrowedList(&'a [CdtTerm]),
+    BorrowedMap(&'a [CdtEntry]),
+    OwnedList(Vec<CdtTerm>),
+    OwnedMap(Vec<CdtEntry>),
+}
+
+impl<'a> Kids<'a> {
+    const fn is_map(&self) -> bool {
+        matches!(self, Self::BorrowedMap(_) | Self::OwnedMap(_))
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::BorrowedList(items) => items.len(),
+            Self::BorrowedMap(entries) => entries.len(),
+            Self::OwnedList(items) => items.len(),
+            Self::OwnedMap(entries) => entries.len(),
+        }
+    }
+
+    /// The key at `index`, of a side the caller has established is a map.
+    fn key(&self, index: usize) -> &CdtKey {
+        match self {
+            Self::BorrowedMap(entries) => &entries[index].key,
+            Self::OwnedMap(entries) => &entries[index].key,
+            Self::BorrowedList(_) | Self::OwnedList(_) => unreachable!("a list has no keys"),
+        }
+    }
+
+    /// The elements — list items, or map values — in order, each as a side.
+    fn into_sides(self) -> KidSides<'a> {
+        match self {
+            Self::BorrowedList(items) => KidSides::BorrowedList(items.iter()),
+            Self::BorrowedMap(entries) => KidSides::BorrowedMap(entries.iter()),
+            Self::OwnedList(items) => KidSides::OwnedList(items.into_iter()),
+            Self::OwnedMap(entries) => KidSides::OwnedMap(entries.into_iter()),
+        }
+    }
+}
+
+/// [`Kids::into_sides`]'s iterator.
+enum KidSides<'a> {
+    BorrowedList(core::slice::Iter<'a, CdtTerm>),
+    BorrowedMap(core::slice::Iter<'a, CdtEntry>),
+    OwnedList(alloc::vec::IntoIter<CdtTerm>),
+    OwnedMap(alloc::vec::IntoIter<CdtEntry>),
+}
+
+impl<'a> Iterator for KidSides<'a> {
+    type Item = Side<'a>;
+
+    fn next(&mut self) -> Option<Side<'a>> {
+        match self {
+            Self::BorrowedList(items) => items.next().map(Side::Borrowed),
+            Self::BorrowedMap(entries) => entries.next().map(|entry| Side::Borrowed(&entry.value)),
+            Self::OwnedList(items) => items.next().map(Side::Owned),
+            Self::OwnedMap(entries) => entries.next().map(|entry| Side::Owned(entry.value)),
+        }
+    }
+}
+
+/// What a pair on the equality work list is made of.
+enum Shape {
+    /// Two triple terms: compare component by component.
+    Triples,
+    /// Two nested composites: compare the contents.
+    Composites,
+    /// Anything else: a leaf rule decides, or finds two composites after all.
+    Leaves,
+}
+
+fn shape(x: &CdtTerm, y: &CdtTerm) -> Shape {
+    match (x, y) {
+        (CdtTerm::TripleTerm(_), CdtTerm::TripleTerm(_)) => Shape::Triples,
+        (CdtTerm::Composite(_), CdtTerm::Composite(_)) => Shape::Composites,
+        _ => Shape::Leaves,
+    }
+}
+
 /// SPARQL `=` over two elements, walking nested composites and triple terms with an
 /// explicit worklist.
 ///
@@ -541,12 +702,7 @@ fn leaf_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
 /// );
 /// ```
 pub fn term_equal(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
-    term_equal_at(a, b, MAX_NESTING_DEPTH)
-}
-
-/// [`term_equal`], carrying the remaining composite-literal resolution budget.
-fn term_equal_at(a: &CdtTerm, b: &CdtTerm, budget: usize) -> Result<bool, CdtTypeError> {
-    equal_worklist(alloc::vec![(a, b)], budget)
+    equal_worklist(alloc::vec![(Side::Borrowed(a), Side::Borrowed(b))])
 }
 
 /// `cdt:contains`'s membership test: [`term_equal`], except that two blank nodes are
@@ -572,53 +728,47 @@ pub(crate) fn membership_equal(item: &CdtTerm, term: &CdtTerm) -> Result<bool, C
 
 /// Drive an equality worklist to a verdict. Every pair on the list must be equal for
 /// the answer to be `true`.
-fn equal_worklist<'a>(
-    mut work: Vec<(&'a CdtTerm, &'a CdtTerm)>,
-    budget: usize,
-) -> Result<bool, CdtTypeError> {
+///
+/// A pair of composites is compared by putting its element pairs on the list, whether
+/// the composites are borrowed from the input or were parsed out of literals during
+/// the walk: an owned composite hands its elements over to the pairs, so ownership
+/// travels down the list and no walk ever re-enters this function.
+fn equal_worklist(mut work: Vec<(Side<'_>, Side<'_>)>) -> Result<bool, CdtTypeError> {
     let mut withheld: Option<CdtTypeError> = None;
     while let Some((x, y)) = work.pop() {
-        match (x, y) {
-            (CdtTerm::TripleTerm(p), CdtTerm::TripleTerm(q)) => {
-                work.push((&p.object, &q.object));
-                work.push((&p.predicate, &q.predicate));
-                work.push((&p.subject, &q.subject));
+        match shape(x.term(), y.term()) {
+            Shape::Triples => {
+                let [left_subject, left_predicate, left_object] = x.components();
+                let [right_subject, right_predicate, right_object] = y.components();
+                work.push((left_object, right_object));
+                work.push((left_predicate, right_predicate));
+                work.push((left_subject, right_subject));
             }
-            (CdtTerm::Composite(p), CdtTerm::Composite(q)) => {
-                match (p.contents(), q.contents()) {
-                    (CdtContents::List(left), CdtContents::List(right)) => {
-                        if left.len() != right.len() {
-                            return Ok(false);
-                        }
-                        work.extend(left.iter().zip(right.iter()));
-                    }
-                    (CdtContents::Map(left), CdtContents::Map(right)) => {
-                        if left.len() != right.len() {
-                            return Ok(false);
-                        }
-                        // Map equality needs identical KEY SETS. Both entry
-                        // sequences are in key order, so the sets agree exactly when
-                        // the sequences of keys agree position by position.
-                        if left.iter().zip(right.iter()).any(|(p, q)| p.key != q.key) {
-                            return Ok(false);
-                        }
-                        work.extend(
-                            left.iter()
-                                .zip(right.iter())
-                                .map(|(p, q)| (&p.value, &q.value)),
-                        );
-                    }
-                    // A list is never equal to a map.
-                    _ => return Ok(false),
+            Shape::Composites => {
+                let (left, right) = (x.children(), y.children());
+                // A list is never equal to a map.
+                if left.is_map() != right.is_map() || left.len() != right.len() {
+                    return Ok(false);
                 }
+                // Map equality needs identical KEY SETS. Both entry sequences are in
+                // key order, so the sets agree exactly when the sequences of keys agree
+                // position by position.
+                if left.is_map() && (0..left.len()).any(|index| left.key(index) != right.key(index))
+                {
+                    return Ok(false);
+                }
+                work.extend(left.into_sides().zip(right.into_sides()));
             }
-            _ => match leaf_equal(x, y, budget) {
-                Ok(true) => {}
-                Ok(false) => return Ok(false),
-                Err(error) => {
+            Shape::Leaves => match leaf_equal(x.term(), y.term()) {
+                LeafEq::Answer(Ok(true)) => {}
+                LeafEq::Answer(Ok(false)) => return Ok(false),
+                LeafEq::Answer(Err(error)) => {
                     if withheld.is_none() {
                         withheld = Some(error);
                     }
+                }
+                LeafEq::Composites(left, right) => {
+                    work.push((x.resolved(left), y.resolved(right)));
                 }
             },
         }
@@ -629,9 +779,71 @@ fn equal_worklist<'a>(
     }
 }
 
+/// SEP-0009 `cdt:list-equal` over two lists' elements.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_cdt::{CdtTerm, list_equal};
+///
+/// // Nulls are mutually indistinguishable, so `[null]` equals `[null]`.
+/// assert_eq!(list_equal(&[CdtTerm::Null], &[CdtTerm::Null]), Ok(true));
+/// // Different lengths are unequal, never an error.
+/// assert_eq!(list_equal(&[CdtTerm::Null], &[]), Ok(false));
+/// ```
+pub fn list_equal(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    equal_worklist(
+        a.iter()
+            .zip(b.iter())
+            .map(|(p, q)| (Side::Borrowed(p), Side::Borrowed(q)))
+            .collect(),
+    )
+}
+
+/// SEP-0009 `cdt:map-equal` over two maps' entries.
+///
+/// The entry sequences must already be in [`total_key_cmp`] order — the invariant
+/// [`crate::parse_map`] and [`CdtValue::map`](crate::CdtValue::map) establish. Two
+/// maps are equal when their key sets are identical and every shared key's values
+/// are equal.
+pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
+    if a.len() != b.len() || a.iter().zip(b.iter()).any(|(p, q)| p.key != q.key) {
+        return Ok(false);
+    }
+    equal_worklist(
+        a.iter()
+            .zip(b.iter())
+            .map(|(p, q)| (Side::Borrowed(&p.value), Side::Borrowed(&q.value)))
+            .collect(),
+    )
+}
+
+/// SEP-0009 `=` over two composite values, dispatching on their datatypes. A list is
+/// never equal to a map.
+pub fn value_equal(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
+    match (a.contents(), b.contents()) {
+        (CdtContents::List(left), CdtContents::List(right)) => list_equal(left, right),
+        (CdtContents::Map(left), CdtContents::Map(right)) => map_equal(left, right),
+        (CdtContents::List(_), CdtContents::Map(_))
+        | (CdtContents::Map(_), CdtContents::List(_)) => Ok(false),
+    }
+}
+
+// ── Ordering ────────────────────────────────────────────────────────────────────
+
 /// SPARQL `<` over two elements, seeing through both spellings of a composite.
+///
+/// The pair is walked as a one-position sequence on each side, so a composite pair
+/// descends exactly as it does at any position of a list, and a leaf pair is decided
+/// by the leaf rules.
 pub fn term_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
-    Ok(term_verdict(a, b, MAX_NESTING_DEPTH)? == Verdict::Less)
+    Ok(sequence_less_than(
+        Owner::Borrowed(Seq::List(core::slice::from_ref(a))),
+        Owner::Borrowed(Seq::List(core::slice::from_ref(b))),
+    )? == Verdict::Less)
 }
 
 /// The three outcomes one position of a lexicographic walk can produce.
@@ -645,7 +857,7 @@ enum Verdict {
     NotLess,
 }
 
-/// One side of a lexicographic walk.
+/// One side of a lexicographic walk, borrowed from the input.
 #[derive(Clone, Copy)]
 enum Seq<'a> {
     List(&'a [CdtTerm]),
@@ -686,48 +898,95 @@ impl<'a> Seq<'a> {
     }
 }
 
+/// One side of a lexicographic walk: a sequence of the input, borrowed, or one the
+/// walk parsed out of a composite-typed literal and owns.
+enum Owner<'a> {
+    Borrowed(Seq<'a>),
+    List(Vec<CdtTerm>),
+    Map(Vec<CdtEntry>),
+}
+
+impl Owner<'_> {
+    /// A value the walk owns, taken apart into the sequence it walks.
+    fn parsed(value: CdtValue) -> Self {
+        match value.into_parts() {
+            CdtParts::List(items) => Self::List(items),
+            CdtParts::Map(entries) => Self::Map(entries),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(seq) => seq.len(),
+            Self::List(items) => items.len(),
+            Self::Map(entries) => entries.len(),
+        }
+    }
+
+    const fn is_map(&self) -> bool {
+        match self {
+            Self::Borrowed(seq) => seq.is_map(),
+            Self::List(_) => false,
+            Self::Map(_) => true,
+        }
+    }
+
+    fn value(&self, index: usize) -> &CdtTerm {
+        match self {
+            Self::Borrowed(seq) => seq.value(index),
+            Self::List(items) => &items[index],
+            Self::Map(entries) => &entries[index].value,
+        }
+    }
+
+    fn key(&self, index: usize) -> Option<&CdtKey> {
+        match self {
+            Self::Borrowed(seq) => seq.key(index),
+            Self::List(_) => None,
+            Self::Map(entries) => Some(&entries[index].key),
+        }
+    }
+
+    /// The composite at `index`, which the caller has established is one, as an owner
+    /// of its own: borrowed from the input when this side is, and otherwise moved out
+    /// of this side. Position `index` is settled once the walk descends into it — the
+    /// walk either returns from inside it or moves on to `index + 1` — so nothing
+    /// reads the null left behind.
+    fn descend(&mut self, index: usize) -> Self {
+        let taken = match self {
+            Self::Borrowed(seq) => match seq.value(index) {
+                CdtTerm::Composite(inner) => return Self::Borrowed(Seq::of(inner)),
+                _ => unreachable!("the walk descends into a composite"),
+            },
+            Self::List(items) => mem::replace(&mut items[index], CdtTerm::Null),
+            Self::Map(entries) => mem::replace(&mut entries[index].value, CdtTerm::Null),
+        };
+        match taken {
+            CdtTerm::Composite(value) => Self::parsed(*value),
+            _ => unreachable!("the walk descends into a composite"),
+        }
+    }
+
+    /// The composite at `index` as the walk reaches it: the syntactic one this side
+    /// holds, or the one parsed out of the literal at that position.
+    fn reached(&mut self, index: usize, reach: Reach) -> Self {
+        match reach {
+            Reach::Syntactic => self.descend(index),
+            Reach::Parsed(value) => Self::parsed(value),
+        }
+    }
+}
+
 /// A frame of the iterative lexicographic walk: two sequences and how far we are.
 struct Frame<'a> {
-    left: Seq<'a>,
-    right: Seq<'a>,
+    left: Owner<'a>,
+    right: Owner<'a>,
     index: usize,
 }
 
-/// `<` over two whole composite values.
-fn value_verdict(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<Verdict, CdtTypeError> {
-    let (left, right) = (Seq::of(a), Seq::of(b));
-    if left.is_map() != right.is_map() {
-        return Err(CdtTypeError::undefined(
-            "SPARQL `<` is not defined between a cdt:List and a cdt:Map",
-        ));
-    }
-    sequence_less_than(left, right, budget)
-}
-
-/// `<` over two elements, at one position of a walk.
-fn term_verdict(x: &CdtTerm, y: &CdtTerm, budget: usize) -> Result<Verdict, CdtTypeError> {
-    if matches!(x, CdtTerm::Blank(_)) || matches!(y, CdtTerm::Blank(_)) {
-        return Err(CdtTypeError::undefined(
-            "SPARQL `<` has no answer where a blank node stands, not even against the very \
-             same blank node",
-        ));
-    }
-    if let (Some(p), Some(q)) = (as_composite(x), as_composite(y)) {
-        return value_verdict(p.get(), q.get(), spend(budget)?);
-    }
-    if term_equal_at(x, y, budget)? {
-        return Ok(Verdict::Equal);
-    }
-    Ok(if leaf_less_than(x, y)? {
-        Verdict::Less
-    } else {
-        Verdict::NotLess
-    })
-}
-
-/// The lexicographic `<` walk shared by lists and maps.
+/// The lexicographic `<` walk shared by lists, maps and single elements.
 ///
-/// The rules, stated once so both entry points read the same, each with the corpus
+/// The rules, stated once so every entry point reads the same, each with the corpus
 /// test that pins it:
 ///
 /// * Positions are visited in order, and the walk stops at the first position that is
@@ -765,6 +1024,11 @@ fn term_verdict(x: &CdtTerm, y: &CdtTerm, budget: usize) -> Result<Verdict, CdtT
 ///   `xsd:string` key), `map-less-than-20.rq` (a literal key against an IRI key) and
 ///   `map-less-than-21.rq` (two IRI keys) each demand an answer where SPARQL `<` has
 ///   none, and each agrees with [`total_key_cmp`].
+/// * Two composites at a position — nested with brackets, or spelled as
+///   `cdt:`-typed literals, in any mix — open a frame of their own and the walk
+///   continues inside them; a list against a map there raises. A composite parsed
+///   out of a literal belongs to its frame, so the depth of literals inside literals
+///   costs frames on the heap and nothing else.
 ///
 /// # `<=` is not `<` or `=`
 ///
@@ -774,24 +1038,20 @@ fn term_verdict(x: &CdtTerm, y: &CdtTerm, budget: usize) -> Result<Verdict, CdtT
 /// `list-equals-07.rq` requires the same two operands to be `=`-equal, so SPARQL's
 /// `||`, under which `error || true` is `true`, would give the wrong answer.
 /// `list-greater-equal-28.rq` says the same for `>=`.
-fn sequence_less_than(
-    left: Seq<'_>,
-    right: Seq<'_>,
-    budget: usize,
-) -> Result<Verdict, CdtTypeError> {
-    let mut stack: Vec<Frame<'_>> = Vec::new();
-    stack.push(Frame {
+fn sequence_less_than(left: Owner<'_>, right: Owner<'_>) -> Result<Verdict, CdtTypeError> {
+    let mut stack: Vec<Frame<'_>> = alloc::vec![Frame {
         left,
         right,
         index: 0,
-    });
+    }];
     loop {
-        let Some(&Frame { left, right, index }) = stack.last() else {
+        let Some(top) = stack.last_mut() else {
             return Ok(Verdict::Equal);
         };
-        let shortest = left.len().min(right.len());
+        let index = top.index;
+        let shortest = top.left.len().min(top.right.len());
         if index == shortest {
-            match left.len().cmp(&right.len()) {
+            match top.left.len().cmp(&top.right.len()) {
                 Ordering::Less => return Ok(Verdict::Less),
                 Ordering::Greater => return Ok(Verdict::NotLess),
                 Ordering::Equal => {}
@@ -806,7 +1066,7 @@ fn sequence_less_than(
             }
         }
 
-        if let (Some(left_key), Some(right_key)) = (left.key(index), right.key(index)) {
+        if let (Some(left_key), Some(right_key)) = (top.left.key(index), top.right.key(index)) {
             match total_key_cmp(left_key, right_key) {
                 Ordering::Less => return Ok(Verdict::Less),
                 Ordering::Greater => return Ok(Verdict::NotLess),
@@ -814,72 +1074,37 @@ fn sequence_less_than(
             }
         }
 
-        let (x, y) = (left.value(index), right.value(index));
-        // Two nested composites keep the walk iterative: a frame costs heap, and the
-        // depth of this stack is the depth of the values, which is bounded.
-        if let (CdtTerm::Composite(p), CdtTerm::Composite(q)) = (x, y) {
-            let (inner_left, inner_right) = (Seq::of(p.as_ref()), Seq::of(q.as_ref()));
-            if inner_left.is_map() != inner_right.is_map() {
-                return Err(CdtTypeError::undefined(
-                    "SPARQL `<` is not defined between a cdt:List and a cdt:Map",
-                ));
-            }
-            stack.push(Frame {
-                left: inner_left,
-                right: inner_right,
-                index: 0,
-            });
-            continue;
+        let (x, y) = (top.left.value(index), top.right.value(index));
+        if matches!(x, CdtTerm::Blank(_)) || matches!(y, CdtTerm::Blank(_)) {
+            return Err(CdtTypeError::undefined(
+                "SPARQL `<` has no answer where a blank node stands, not even against the very \
+                 same blank node",
+            ));
         }
-
-        match term_verdict(x, y, budget)? {
-            Verdict::Equal => {
-                stack
-                    .last_mut()
-                    .expect("the frame just read is still on the stack")
-                    .index += 1;
+        match (composite_reach(x), composite_reach(y)) {
+            (Some(reach_left), Some(reach_right)) => {
+                let inner_left = top.left.reached(index, reach_left);
+                let inner_right = top.right.reached(index, reach_right);
+                if inner_left.is_map() != inner_right.is_map() {
+                    return Err(list_against_map());
+                }
+                stack.push(Frame {
+                    left: inner_left,
+                    right: inner_right,
+                    index: 0,
+                });
             }
-            decided => return Ok(decided),
+            (Some(_) | None, None) | (None, Some(_)) => {
+                if term_equal(x, y)? {
+                    top.index += 1;
+                } else if leaf_less_than(x, y)? {
+                    return Ok(Verdict::Less);
+                } else {
+                    return Ok(Verdict::NotLess);
+                }
+            }
         }
     }
-}
-
-/// SEP-0009 `cdt:list-equal` over two lists' elements.
-///
-/// # Examples
-///
-/// ```rust
-/// use purrdf_cdt::{CdtTerm, list_equal};
-///
-/// // Nulls are mutually indistinguishable, so `[null]` equals `[null]`.
-/// assert_eq!(list_equal(&[CdtTerm::Null], &[CdtTerm::Null]), Ok(true));
-/// // Different lengths are unequal, never an error.
-/// assert_eq!(list_equal(&[CdtTerm::Null], &[]), Ok(false));
-/// ```
-pub fn list_equal(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
-    if a.len() != b.len() {
-        return Ok(false);
-    }
-    equal_worklist(a.iter().zip(b.iter()).collect(), MAX_NESTING_DEPTH)
-}
-
-/// SEP-0009 `cdt:map-equal` over two maps' entries.
-///
-/// The entry sequences must already be in [`total_key_cmp`] order — the invariant
-/// [`crate::parse_map`] and [`CdtValue::map`](crate::CdtValue::map) establish. Two
-/// maps are equal when their key sets are identical and every shared key's values
-/// are equal.
-pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
-    if a.len() != b.len() || a.iter().zip(b.iter()).any(|(p, q)| p.key != q.key) {
-        return Ok(false);
-    }
-    equal_worklist(
-        a.iter()
-            .zip(b.iter())
-            .map(|(p, q)| (&p.value, &q.value))
-            .collect(),
-        MAX_NESTING_DEPTH,
-    )
 }
 
 /// SEP-0009 `cdt:list-less-than` over two lists' elements.
@@ -906,46 +1131,18 @@ pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
 /// # let _ = CdtDatatype::List;
 /// ```
 pub fn list_less_than(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
-    Ok(sequence_less_than(Seq::List(a), Seq::List(b), MAX_NESTING_DEPTH)? == Verdict::Less)
+    Ok(
+        sequence_less_than(Owner::Borrowed(Seq::List(a)), Owner::Borrowed(Seq::List(b)))?
+            == Verdict::Less,
+    )
 }
 
 /// SEP-0009 `cdt:map-less-than` over two maps' entries, walking in key order.
 pub fn map_less_than(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
-    Ok(sequence_less_than(Seq::Map(a), Seq::Map(b), MAX_NESTING_DEPTH)? == Verdict::Less)
-}
-
-/// SEP-0009 `=` over two composite values, dispatching on their datatypes. A list is
-/// never equal to a map.
-pub fn value_equal(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
-    value_equal_at(a, b, MAX_NESTING_DEPTH)
-}
-
-/// [`value_equal`], carrying the remaining composite-literal resolution budget (see
-/// [`spend`]).
-fn value_equal_at(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<bool, CdtTypeError> {
-    match (a.contents(), b.contents()) {
-        (CdtContents::List(left), CdtContents::List(right)) => {
-            if left.len() != right.len() {
-                return Ok(false);
-            }
-            equal_worklist(left.iter().zip(right.iter()).collect(), budget)
-        }
-        (CdtContents::Map(left), CdtContents::Map(right)) => {
-            if left.len() != right.len()
-                || left.iter().zip(right.iter()).any(|(p, q)| p.key != q.key)
-            {
-                return Ok(false);
-            }
-            equal_worklist(
-                left.iter()
-                    .zip(right.iter())
-                    .map(|(p, q)| (&p.value, &q.value))
-                    .collect(),
-                budget,
-            )
-        }
-        _ => Ok(false),
-    }
+    Ok(
+        sequence_less_than(Owner::Borrowed(Seq::Map(a)), Owner::Borrowed(Seq::Map(b)))?
+            == Verdict::Less,
+    )
 }
 
 /// SEP-0009 `<` over two composite values, dispatching on their datatypes.
@@ -960,5 +1157,9 @@ fn value_equal_at(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<bool, Cdt
 /// make `<` and `>` both `false` for a pair that is not equal either, which is a claim
 /// about an order that does not exist.
 pub fn value_less_than(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
-    Ok(value_verdict(a, b, MAX_NESTING_DEPTH)? == Verdict::Less)
+    let (left, right) = (Seq::of(a), Seq::of(b));
+    if left.is_map() != right.is_map() {
+        return Err(list_against_map());
+    }
+    Ok(sequence_less_than(Owner::Borrowed(left), Owner::Borrowed(right))? == Verdict::Less)
 }

@@ -46,9 +46,15 @@
 //!
 //! The scanner keeps its open composites in an explicit heap `Vec` of frames and
 //! runs a two-state machine over them. There is no recursive descent anywhere, so
-//! nesting depth costs heap, not stack, and a hostile `[[[[…` yields
-//! [`CdtError::DepthExceeded`] rather than the uncatchable `abort` a stack overflow
-//! would be.
+//! nesting depth costs heap, not stack: a `[[[[…` a million deep is a million frames
+//! on the heap, an ordinary value, and never the uncatchable `abort` a stack overflow
+//! would be. What bounds it is [`MAX_ELEMENTS`] — every level is an element of the one
+//! that holds it — and [`MAX_LEXICAL_BYTES`]; there is no depth bound of its own.
+//!
+//! Each frame that closes measures the value it produced from the extents its
+//! children already carry, so the scan is linear in the input however the input
+//! nests, and the byte bound on the canonical form is answered at the root from the
+//! root's own measure.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -60,7 +66,7 @@ use crate::datatype::{
     XSD_INTEGER,
 };
 use crate::error::CdtError;
-use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH};
+use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, list_extent, map_extent};
 use crate::render::canonical_key_lexical;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
 use crate::value::CdtValue;
@@ -161,8 +167,10 @@ pub fn parse_cdt(lexical: &str, datatype: CdtDatatype) -> Result<CdtValue, CdtEr
     // The canonical form spells every shorthand out, so it can be far longer than the
     // input that was accepted: `[1]` is three bytes in and forty-eight out. The
     // invariant is on the value, not on the input, so the form the value would be
-    // *written* as is measured too — once, with the same walker `canonical_lexical`
-    // uses, so the two can never disagree about what the bytes would be.
+    // *written* as is checked too — from the measure the root frame accumulated as it
+    // closed, which every frame below it computed with the same walker
+    // `canonical_lexical` uses, so the two can never disagree about what the bytes
+    // would be.
     let bytes = crate::render::canonical_lexical_len(&value);
     if bytes > MAX_LEXICAL_BYTES {
         return Err(CdtError::InputTooLarge {
@@ -400,12 +408,6 @@ impl<'a> Scanner<'a> {
                         _ => None,
                     };
                     if let Some(frame) = opening {
-                        if stack.len() >= MAX_NESTING_DEPTH {
-                            return Err(CdtError::DepthExceeded {
-                                offset: self.position,
-                                limit: MAX_NESTING_DEPTH,
-                            });
-                        }
                         self.position += if matches!(frame, Frame::Triple(_)) {
                             3
                         } else {
@@ -466,12 +468,16 @@ impl<'a> Scanner<'a> {
     /// otherwise appends the finished element to its parent.
     fn close_frame(&self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, CdtError> {
         let frame = stack.pop().expect("the frame stack is never empty here");
-        // The scanner has enforced the depth and element bounds as it went, before the
-        // offending element was allocated, so re-measuring each closed frame here
-        // would only make the scan quadratic in nesting depth.
+        // The scanner has enforced the element bound as it went, before the offending
+        // element was allocated, and the byte bound is checked at the root. Measuring
+        // the closed frame here reads each nested composite's carried extent, so the
+        // whole scan stays linear in the input however deep it nests.
         let term = match frame {
             Frame::List(items) => {
-                CdtTerm::Composite(alloc::boxed::Box::new(CdtValue::from_checked_items(items)))
+                let extent = list_extent(items.iter());
+                CdtTerm::Composite(alloc::boxed::Box::new(CdtValue::from_checked_items(
+                    items, extent,
+                )))
             }
             Frame::Map { entries, .. } => {
                 CdtTerm::Composite(alloc::boxed::Box::new(finish_map(entries)?))
@@ -1035,9 +1041,9 @@ fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError>
             });
         }
     }
-    Ok(CdtValue::from_checked_entries(
-        entries.into_iter().map(|(_, entry)| entry).collect(),
-    ))
+    let entries: Vec<CdtEntry> = entries.into_iter().map(|(_, entry)| entry).collect();
+    let extent = map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)));
+    Ok(CdtValue::from_checked_entries(entries, extent))
 }
 
 // `PN_CHARS`, `PN_CHARS_U` and `PN_CHARS_BASE` were transcribed here once, as a

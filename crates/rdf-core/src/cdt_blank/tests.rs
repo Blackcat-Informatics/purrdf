@@ -276,21 +276,44 @@ fn a_malformed_embedded_composite_literal_is_refused() {
     assert!(matches!(err, CdtBlankError::Malformed { .. }), "{err:?}");
 }
 
-/// The `purrdf-cdt` resource limits are enforced at ingress rather than looped
-/// on or truncated: over-deep nesting is a refusal.
+/// Nesting depth is not a `purrdf-cdt` bound: a label a hundred thousand brackets
+/// deep is found, bound and spelled exactly as the same label one bracket deep,
+/// on a 256 KiB stack — every walk on the way (the grammar, the byte scanner,
+/// the value's own drop) is iterative.
+///
+/// Expected values from the shallow twins above: under the text binding the form
+/// is returned borrowed and byte-identical; under an ambient scope the one token
+/// is respelled as [`encode_blank_label`] spells a bare `_:b` in that scope, with
+/// every other byte — here, the brackets — untouched; and reading the bound form
+/// back yields the one `(label, scope)` pair.
 #[test]
-fn over_deep_nesting_is_refused_not_truncated() {
-    let depth = purrdf_cdt::MAX_NESTING_DEPTH + 2;
-    let mut lexical = String::new();
-    for _ in 0..depth {
-        lexical.push('[');
-    }
-    lexical.push_str("_:b");
-    for _ in 0..depth {
-        lexical.push(']');
-    }
-    let err = bind_cdt_blank_labels(&lexical, LIST, TEXT).expect_err("too deep");
-    assert!(matches!(err, CdtBlankError::Malformed { .. }), "{err:?}");
+fn a_hundred_thousand_deep_label_is_bound_exactly_as_a_shallow_one() {
+    let depth = 100_000usize;
+    let lexical: String = "[".repeat(depth) + "_:b" + &"]".repeat(depth);
+    let scope = BlankScope(7);
+    let expected_token = encode_blank_label("b", scope, LabelAlphabet::BlankNodeLabel);
+    let expected_ambient: String = "[".repeat(depth) + "_:" + &expected_token + &"]".repeat(depth);
+    let (text_identity, found, ambient, read_back) = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let text =
+                bind_cdt_blank_labels(&lexical, LIST, TEXT).expect("a deep literal is a value");
+            let text_identity = matches!(text, std::borrow::Cow::Borrowed(_)) && text == lexical;
+            let found = labels(&lexical, LIST);
+            let ambient = bound(&lexical, LIST, BlankBinding::Ambient(scope));
+            let read_back = cdt_embedded_blanks(&ambient, LIST);
+            (text_identity, found, ambient, read_back)
+        })
+        .expect("the thread starts")
+        .join()
+        .expect("the walks did not abort");
+    assert!(
+        text_identity,
+        "the text binding is a byte identity at any depth"
+    );
+    assert_eq!(found, ["b"]);
+    assert_eq!(ambient, expected_ambient);
+    assert_eq!(read_back, vec![("b".to_owned(), scope)]);
 }
 
 /// The scanner is TOTAL: it never panics, whatever bytes it is handed. Only the

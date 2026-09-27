@@ -271,9 +271,8 @@ pub enum EvalError {
     Config(String),
 
     /// A SEP-0009 composite-datatype function was asked to mint a `cdt:List` /
-    /// `cdt:Map` value that crosses one of `purrdf-cdt`'s three resource bounds
-    /// (`MAX_NESTING_DEPTH`, `MAX_ELEMENTS`, `MAX_LEXICAL_BYTES`). Carries the
-    /// bound's own diagnostic.
+    /// `cdt:Map` value that crosses one of `purrdf-cdt`'s two resource bounds
+    /// (`MAX_ELEMENTS`, `MAX_LEXICAL_BYTES`). Carries the bound's own diagnostic.
     ///
     /// Its own variant, and a HARD failure rather than an expression error,
     /// because the two are observably different and only one of them is safe:
