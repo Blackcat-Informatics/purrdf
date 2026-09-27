@@ -292,9 +292,10 @@ const fn dimension_ordinal(dimension: ProductDimension) -> u8 {
         ProductDimension::PropertyFunctionRegistry => 15,
         ProductDimension::ClassCatalog => 16,
         ProductDimension::ParseConfiguration => 17,
-        ProductDimension::UnsupportedCapability => 18,
-        ProductDimension::DepthLimit => 19,
-        ProductDimension::Malformed => 20,
+        ProductDimension::IncludedGraphs => 18,
+        ProductDimension::UnsupportedCapability => 19,
+        ProductDimension::DepthLimit => 20,
+        ProductDimension::Malformed => 21,
     }
 }
 

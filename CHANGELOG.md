@@ -47,6 +47,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `b4c4a547c28b743e110bb68a8b766a9abfdeb4cbe37718443e69637c7620c8f5`, so every earlier
   product is refused at `admit` and re-derived by `rebuild` (holding only what its
   merged dataset declares); the fixture product was regenerated with its generator.
+  The recorded set is bound by the product identity as a thirteenth component,
+  `included-graphs` (row 12, after `parse-configuration`), refused under a new
+  `ProductDimension::IncludedGraphs` (`included-graphs`, between
+  `parse-configuration` and `unsupported-capability`; `ProductDimension::ALL` grows to
+  22 and the later dimensions' ordinals move by one), so two products over one merged
+  dataset that recorded different sets no longer share an identity. The parse base is
+  recorded as the base, not repeated in the set. Every host's dimension list names it
+  (and `parse-configuration`, which the C, Python and WebAssembly lists had omitted);
+  the fixture product is 4,728 bytes and a restore's admit allocations are re-pinned
+  from 291 to 304, attributed in `change_path_alloc`.
   **Breaking API:** the engine's validation entry points return the typed
   `ShapesError` instead of `String` — `validate_with`, `validate_with_focus_filter`,
   `validate_with_governors`, `validate_dataset`, `validate_dataset_with_governors`,

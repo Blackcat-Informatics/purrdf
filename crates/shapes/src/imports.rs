@@ -535,8 +535,10 @@ pub struct ResolvedShapesGraph {
     /// each reached document's, in the order the closure reached it.
     pub prefixes: Vec<(String, String)>,
     /// The IRIs of every graph this shapes graph was assembled from by name, sorted: each
-    /// IRI it was loaded under, each document its closure reached, and each data-graph
-    /// link it resolved. [`check_data_graph_links`] reads a link as held when it is here.
+    /// IRI the import table declares it loaded under (an in-document `@base`, say — the
+    /// `loaded` argument itself is the base and is recorded as such), each document its
+    /// closure reached, and each data-graph link it resolved. [`check_data_graph_links`]
+    /// reads a link as held when it is here or is the base.
     pub included: Vec<String>,
 }
 
@@ -583,8 +585,12 @@ pub fn resolve_shapes_imports(
         }
         return Err(ShapesImportError::Unresolved { iris: others });
     }
+    // `loaded` — the base the caller parsed the shapes document under — is not repeated
+    // here: it is the shapes graph's own base, recorded (and bound, and read as held)
+    // as the base itself.
     let mut included: Vec<String> = map
         .loaded()
+        .filter(|iri| !loaded.contains(iri))
         .map(ToOwned::to_owned)
         .chain(closure.documents().iter().map(|(iri, _)| iri.clone()))
         .chain(imports.links.iter().cloned())

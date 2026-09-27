@@ -383,8 +383,30 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 291 allocations
+/// seam, and here the figure really is constant: admission makes 304 allocations
 /// with either seam dataset bound.
+///
+/// # Why it moved from 291
+///
+/// The product identity gained an `included-graphs` component (row 12): the IRIs of
+/// every graph the shapes graph was assembled from by name — the `owl:imports`
+/// documents its closure absorbed and the data-graph `sh:shapesGraph` links it
+/// resolved. They decide which links a restored preparation holds (SHACL 1.2 Core
+/// section 6.4), and a table-supplied document with no ontology header leaves no trace
+/// in the merged dataset, so two products over one dataset could otherwise share an
+/// identity and still answer a data graph differently.
+///
+/// ATTRIBUTED, as the twelve below were: with the row present but its value emptied the
+/// figure measures 300, and with the unmodified encoder it measures 304.
+///
+/// * **9** are the row's EXISTENCE — one more component in the fixed-order table, its
+///   label, and its framing in the identity preimage, owed for every product because the
+///   restore check needs a position to compare.
+/// * **4** are the value: the sized buffer [`encode_included_graphs`] writes the framed
+///   count into, and that non-empty value's copies into the declared identity the
+///   restore decodes and into the one it assembles to compare against.
+///
+/// [`encode_included_graphs`]: ../src/product/identity.rs
 ///
 /// # Why it moved from 284
 ///
@@ -460,7 +482,7 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// value of either may be a SHACL list, read as a disjunction — so the decoder
 /// reads each as a sequence into its own vector. The seam shapes graph carries one
 /// of each: two allocations, once per restore, whatever the data.
-const ADMIT_ALLOC_CONST: u64 = 291;
+const ADMIT_ALLOC_CONST: u64 = 304;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

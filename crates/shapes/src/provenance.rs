@@ -92,8 +92,9 @@ pub struct ParseProvenance {
     /// SHACL-SPARQL queries, when the caller named one.
     shapes_graph: Option<String>,
     /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
-    /// the IRIs it was loaded under, each `owl:imports` document its closure reached, and
-    /// each data-graph `sh:shapesGraph` link it resolved
+    /// the IRIs its import table declares it loaded under (its base is recorded as the
+    /// base), each `owl:imports` document its closure reached, and each data-graph
+    /// `sh:shapesGraph` link it resolved
     /// ([`crate::imports::ResolvedShapesGraph::included`]).
     ///
     /// A prepared product carries them in its identity section, so a restored
@@ -132,9 +133,11 @@ impl ParseProvenance {
     }
 
     /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
-    /// each IRI it was loaded under, each `owl:imports` document its closure reached, and
-    /// each data-graph `sh:shapesGraph` link it resolved. A prepared product records them,
-    /// so a restored preparation answers the same list.
+    /// each IRI its import table declares it loaded under (the parse base is recorded as
+    /// [`Self::base`]), each `owl:imports` document its closure reached, and each
+    /// data-graph `sh:shapesGraph` link it resolved. A prepared product records them, and
+    /// binds them as its `included-graphs` identity component, so a restored preparation
+    /// answers the same list.
     #[must_use]
     pub fn included_graphs(&self) -> &[String] {
         &self.included_graphs

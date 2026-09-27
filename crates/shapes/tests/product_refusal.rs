@@ -1818,6 +1818,69 @@ ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// included-graphs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// A product for `body` whose shapes graph was assembled from the named graphs
+/// `absorbed` — declared loaded in its import table, so they are recorded without
+/// changing the merged dataset.
+fn product_absorbing(body: &str, absorbed: &[&str]) -> Vec<u8> {
+    let mut imports = purrdf_shapes::ShapesImports::new();
+    for iri in absorbed {
+        imports.declare_loaded(*iri);
+    }
+    product_for(
+        purrdf_shapes::engine::parse_shapes_with_config(
+            &format!("{PREFIXES}{body}"),
+            None,
+            None,
+            &imports,
+        )
+        .expect("the fixture shapes parse"),
+    )
+}
+
+/// Provoke: the product's binding pins a set of absorbed graphs its own preamble — and
+/// so the preparation it restores — does not record.
+fn refusal_included_graphs() -> ShapesProductError {
+    let donor = identity_component(
+        &product_absorbing(PLAIN_SHAPES, &["http://example.org/lib"]),
+        "included-graphs",
+    );
+    let bytes = product_of(PLAIN_SHAPES);
+    assert_ne!(
+        identity_component(&bytes, "included-graphs"),
+        donor,
+        "another absorbed set must move the pinned component",
+    );
+    admit(&splice_identity(&bytes, "included-graphs", &donor)).expect_err(
+        "a product whose binding pins graphs its preparation does not record must not restore",
+    )
+}
+
+#[test]
+fn refuses_included_graphs() {
+    assert_eq!(
+        refusal_included_graphs().dimension(),
+        ProductDimension::IncludedGraphs,
+    );
+}
+
+#[test]
+fn accepts_included_graphs_neighbour() {
+    // Both genuine products restore: the empty set and a non-empty one, each checked
+    // against the preparation its own preamble restores.
+    admit(&product_of(PLAIN_SHAPES)).expect("a product that absorbed nothing restores");
+    let absorbing = product_absorbing(PLAIN_SHAPES, &["http://example.org/lib"]);
+    let restored = admit(&absorbing).expect("a product that absorbed a graph restores");
+    assert_eq!(
+        restored.shapes().provenance().included_graphs(),
+        ["http://example.org/lib"],
+        "the restore answers the recorded set",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // unsupported-capability
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2312,6 +2375,7 @@ fn provoked_dimensions() -> BTreeSet<ProductDimension> {
         refusal_implementation_identity(),
         refusal_class_catalog(),
         refusal_parse_configuration(),
+        refusal_included_graphs(),
         refusal_unsupported_capability(),
         depth_boundary().1,
         refusal_malformed(),

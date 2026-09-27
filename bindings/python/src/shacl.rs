@@ -840,8 +840,8 @@ create_exception!(
      (`magic`, `format-version`, `stage-id`, `profile`, `truncated`, `trailer`, \
      `section-digest`, `container-digest`, `dataset-identity`, `shapes-graph`, \
      `prefixes`, `base`, `vocabulary`, `function-registry`, `aggregate-registry`, \
-     `property-function-registry`, `class-catalog`, `unsupported-capability`, \
-     `depth-limit`, `malformed`), or `None` when the failure happened before any \
+     `property-function-registry`, `class-catalog`, `parse-configuration`, \
+     `included-graphs`, `unsupported-capability`, `depth-limit`, `malformed`), or `None` when the failure happened before any \
      product existed — a shapes or data document that did not parse was never \
      admitted, and naming a dimension for it would claim a product was inspected \
      when none was.\n\

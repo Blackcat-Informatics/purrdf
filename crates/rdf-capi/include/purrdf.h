@@ -3189,8 +3189,8 @@ int32_t purrdf_shapes_product_certify(const uint8_t *product,
  * `format-version`, `stage-id`, `profile`, `truncated`, `trailer`, `section-digest`,
  * `container-digest`, `dataset-identity`, `shapes-graph`, `prefixes`, `base`,
  * `vocabulary`, `function-registry`, `aggregate-registry`,
- * `property-function-registry`, `class-catalog`, `unsupported-capability`,
- * `depth-limit`, `malformed`.
+ * `property-function-registry`, `class-catalog`, `parse-configuration`,
+ * `included-graphs`, `unsupported-capability`, `depth-limit`, `malformed`.
  *
  * NULL — never an empty string — when `err` is null, when it is not a product refusal
  * at all, or when the failure happened before any product existed (a shapes or data

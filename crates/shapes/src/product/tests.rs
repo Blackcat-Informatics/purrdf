@@ -873,6 +873,7 @@ fn declared_identity_readable_without_admission() {
             "property-function-registry",
             "class-catalog",
             "parse-configuration",
+            "included-graphs",
         ],
         "the binding is DECODABLE, which is what lets a caller see which input moved",
     );
@@ -1296,4 +1297,63 @@ fn disagreeing_carriers_refuse() {
 #[test]
 fn writing_is_deterministic() {
     assert_eq!(product_of(PLAIN_SHAPES), product_of(PLAIN_SHAPES));
+}
+
+/// The graphs a shapes graph was assembled from by name are an identity component of
+/// their own: they decide which data-graph `sh:shapesGraph` links (SHACL 1.2 Core
+/// section 6.4) a restored preparation holds, so two products over ONE merged dataset
+/// that recorded different sets validate the same data graph differently and must not
+/// share an identity. Equal sets give equal identities.
+#[test]
+fn included_graphs_are_bound_by_the_identity() {
+    const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:Node a sh:NodeShape ; sh:targetNode ex:Focus ; sh:property ex:Prop .\n\
+        ex:Prop sh:path ex:p ; sh:minCount 1 .\n";
+    const LIB: &str = "http://example.org/lib";
+    let pack = |absorbed: &[&str]| -> (Vec<u8>, Identity) {
+        let mut imports = crate::imports::ShapesImports::new();
+        for iri in absorbed {
+            imports.declare_loaded(*iri);
+        }
+        let shapes = crate::engine::parse_shapes_with_config(SHAPES, None, None, &imports)
+            .expect("the fixture parses");
+        assert_eq!(shapes.provenance().included_graphs(), absorbed);
+        let bytes = PreparedShapes::new(Arc::new(shapes))
+            .to_product(&ShapesProfile::CORE)
+            .expect("the fixture is representable");
+        let identity = ShapesProduct::open(&bytes)
+            .expect("the product opens")
+            .declared_identity()
+            .clone();
+        (bytes, identity)
+    };
+    let (_, none) = pack(&[]);
+    let (lib_bytes, lib) = pack(&[LIB]);
+    let (_, lib_again) = pack(&[LIB]);
+
+    // One merged dataset, one of everything else: only row 12 differs.
+    assert_eq!(
+        none.component("source-dataset"),
+        lib.component("source-dataset")
+    );
+    let differing: Vec<&str> = none
+        .components()
+        .iter()
+        .zip(lib.components())
+        .filter(|(a, b)| a.value() != b.value())
+        .map(|(a, _)| a.label())
+        .collect();
+    assert_eq!(differing, ["included-graphs"]);
+    assert_ne!(
+        none, lib,
+        "different absorbed sets must not share an identity"
+    );
+    assert_eq!(lib, lib_again, "equal absorbed sets give equal identities");
+
+    // Restoring checks the row against the restored preparation, so the product admits.
+    ShapesProduct::open(&lib_bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("a product whose recorded graphs agree with its preamble admits");
 }

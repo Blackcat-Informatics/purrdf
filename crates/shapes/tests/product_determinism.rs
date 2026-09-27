@@ -75,7 +75,12 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// 4,696 since a property shape carries its `sh:values` and `sh:defaultValue`
 /// expressions: each property shape writes one presence flag for each, and the
 /// fixture's four property shapes declare neither (+8).
-const GOLDEN_LEN: usize = 4_696;
+///
+/// 4,728 since the identity binds the graphs the shapes graph was assembled from by
+/// name (the `included-graphs` component, row 12): its label and its empty-set value —
+/// a framed eight-byte count — join the identity section, and the preamble writes the
+/// set's one-byte count (+32, container alignment included).
+const GOLDEN_LEN: usize = 4_728;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See
