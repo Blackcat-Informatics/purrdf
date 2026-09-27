@@ -15,9 +15,12 @@ use std::sync::Arc;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
 use purrdf_sparql_eval::protocol::{
-    OperationKind, ProtocolError, ProtocolRequest, ResultKind, format_media_type, negotiate,
+    FailureCode, OperationKind, ProblemDetail, ProtocolError, ProtocolRequest, ResultKind,
+    format_media_type, negotiate, problem_for,
+};
+use purrdf_sparql_eval::{
+    EvalError, LoadError, NativeSparqlEngine, RemoteError, ServiceCapability, ServiceDenial,
 };
 
 const EX: &str = "http://example.org/";
@@ -1061,4 +1064,175 @@ fn every_error_names_itself_and_explains_itself() {
     for error in &errors {
         assert_ne!(error.to_string(), "");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Failures and their problems
+// ---------------------------------------------------------------------------
+
+/// The engine's diagnostic for `query` over the fixture, which must fail.
+fn failure_of(query: &str) -> FailureCode {
+    let diagnostic = NativeSparqlEngine::new()
+        .query(&fixture(), sparql(query))
+        .expect_err("the query fails");
+    FailureCode::from_diagnostic_code(&diagnostic.code)
+}
+
+/// A parse refusal is the client's `400` in the engine's own words, and a well-formed
+/// query that fails in evaluation is the evaluation's `500`: the same table tells the
+/// two apart by the diagnostic's code alone.
+#[test]
+fn a_parse_refusal_is_a_400_and_an_evaluation_failure_is_a_500() {
+    let parse = failure_of("SELECT WHERE {");
+    assert_eq!(parse, FailureCode::QueryParse);
+    assert_eq!(problem_for(parse).status, 400);
+    assert_eq!(problem_for(parse).detail, ProblemDetail::Message);
+    assert_eq!(problem_for(parse).code, "native-sparql-query-parse");
+
+    let evaluation = failure_of(&format!(
+        "SELECT * WHERE {{ ?s <{EX}p> ?o FILTER(<{EX}unregistered>(?o)) }}"
+    ));
+    assert_eq!(evaluation, FailureCode::CustomFunction);
+    assert_eq!(problem_for(evaluation).status, 400);
+
+    // An evaluation code this table has no variant for is the evaluation's own failure.
+    let unknown = FailureCode::from_diagnostic_code("native-sparql-query-eval");
+    assert_eq!(unknown, FailureCode::Evaluation);
+    assert_eq!(problem_for(unknown).status, 500);
+    assert_eq!(problem_for(unknown).detail, ProblemDetail::Message);
+
+    // The valid neighbour answers.
+    assert!(
+        NativeSparqlEngine::new()
+            .query(
+                &fixture(),
+                sparql(&format!("SELECT * WHERE {{ ?s <{EX}p> ?o }}"))
+            )
+            .is_ok()
+    );
+}
+
+/// Every variant's code reads back as that variant, so a host holding only a
+/// diagnostic's code reaches the same problem the typed error does.
+#[test]
+fn every_failure_code_round_trips_through_its_diagnostic_code() {
+    for failure in FailureCode::ALL {
+        assert_eq!(
+            FailureCode::from_diagnostic_code(failure.code()),
+            failure,
+            "{failure:?}"
+        );
+    }
+}
+
+/// A `SERVICE` or `LOAD` a catalog refused is a `403` naming the catalog; the host's own
+/// refusal is a `403` naming the host policy; an endpoint or source that was reached and
+/// failed is a `502`. None of them discloses the failure's own words.
+#[test]
+fn service_and_load_failures_are_answered_without_their_own_words() {
+    let denial = ServiceDenial::new(format!("{EX}sparql"), ServiceCapability::Network, "policy");
+    let cases = [
+        (
+            FailureCode::from(&RemoteError::Denied(denial.clone())),
+            403,
+            "native-sparql-service-denied",
+        ),
+        (
+            FailureCode::from(&RemoteError::HostDenied {
+                endpoint: format!("{EX}sparql"),
+                message: "secret".to_owned(),
+            }),
+            403,
+            "native-sparql-service-host-denied",
+        ),
+        (
+            FailureCode::from(&RemoteError::Transport("secret".to_owned())),
+            502,
+            "native-sparql-service-failed",
+        ),
+        (
+            FailureCode::from(&LoadError::Denied(denial)),
+            403,
+            "native-sparql-load-denied",
+        ),
+        (
+            FailureCode::from(&LoadError::HostDenied("secret".to_owned())),
+            403,
+            "native-sparql-load-host-denied",
+        ),
+        (
+            FailureCode::from(&LoadError::Transport("secret".to_owned())),
+            502,
+            "native-sparql-load-failed",
+        ),
+        (
+            FailureCode::from(&LoadError::Decode("secret".to_owned())),
+            502,
+            "native-sparql-load-decode",
+        ),
+    ];
+    let mut details = Vec::new();
+    for (failure, status, code) in cases {
+        let problem = problem_for(failure);
+        assert_eq!(problem.status, status, "{failure:?}");
+        assert_eq!(problem.code, code, "{failure:?}");
+        let ProblemDetail::Fixed(detail) = problem.detail else {
+            panic!("{failure:?} discloses its own words");
+        };
+        details.push(detail);
+    }
+    // The catalog's refusal and the host's are told apart for both kinds of request.
+    assert_ne!(details[0], details[1]);
+    assert_ne!(details[3], details[4]);
+    assert_ne!(details[5], details[6]);
+}
+
+/// A host's own fault is a sanitized `500` that names a correlation id; an evaluation
+/// failure is a `500` in the engine's words; a missing resolver is sanitized too.
+#[test]
+fn host_faults_are_sanitized_and_evaluation_failures_are_not() {
+    let fault = problem_for(FailureCode::HostFault);
+    assert_eq!(fault.status, 500);
+    assert_eq!(fault.code, "InternalError");
+    assert!(matches!(
+        fault.detail,
+        ProblemDetail::Internal {
+            names_correlation: true,
+            ..
+        }
+    ));
+    let unconfigured = problem_for(FailureCode::from(&EvalError::ServiceUnconfigured(
+        "no source".to_owned(),
+    )));
+    assert_eq!(unconfigured.status, 500);
+    assert_eq!(unconfigured.code, "native-sparql-service-unconfigured");
+    assert!(matches!(
+        unconfigured.detail,
+        ProblemDetail::Internal {
+            names_correlation: false,
+            ..
+        }
+    ));
+    let evaluation = problem_for(FailureCode::from(&EvalError::Data(
+        "cyclic list".to_owned(),
+    )));
+    assert_eq!(evaluation.status, 500);
+    assert_eq!(evaluation.detail, ProblemDetail::Message);
+}
+
+/// A stop, a result no acceptable format carries, and an update refused because another
+/// is in flight each have their own status.
+#[test]
+fn stops_not_acceptable_and_update_in_flight_have_their_own_statuses() {
+    assert_eq!(problem_for(FailureCode::Cancelled).status, 503);
+    assert_eq!(problem_for(FailureCode::Deadline).status, 503);
+    assert_eq!(problem_for(FailureCode::Cancelled).code, "cancelled");
+    assert_eq!(problem_for(FailureCode::NotAcceptable).status, 406);
+    assert_eq!(
+        problem_for(FailureCode::NotAcceptable).code,
+        "NotAcceptable"
+    );
+    let in_flight = problem_for(FailureCode::UpdateInFlight);
+    assert_eq!(in_flight.status, 409);
+    assert_eq!(in_flight.code, "native-sparql-update-in-flight");
 }

@@ -26,15 +26,16 @@ use crate::governor::StopSignal;
 use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 use crate::service::{ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceProfile};
 
-/// The default per-request timeout for a federated `SERVICE` call.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The default per-request timeout for a federated `SERVICE` call, and for a host
+/// `LOAD` fetch whose catalog profile names none.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The default User-Agent a federated `SERVICE` request identifies itself with.
 ///
 /// Built from the crate's own version at compile time, so it names the release that
 /// actually sent the request rather than a literal that went stale the first time the
 /// version moved.
-const DEFAULT_USER_AGENT: &str = concat!(
+pub const DEFAULT_USER_AGENT: &str = concat!(
     "purrdf-sparql-eval/",
     env!("CARGO_PKG_VERSION"),
     " (SERVICE federation)"

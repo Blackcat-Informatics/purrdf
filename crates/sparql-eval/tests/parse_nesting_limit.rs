@@ -65,13 +65,12 @@ fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
     Ok(subjects)
 }
 
-/// Whether `diagnostic` is a stack refusal: the parser's (a parse diagnostic whose
-/// message is the typed [`purrdf_sparql_algebra::ParseError::StackExhausted`]) or the
-/// evaluator's ([`EvalError::STACK_EXHAUSTED_CODE`]).
+/// Whether `diagnostic` is a stack refusal: the parser's
+/// ([`EvalError::PARSE_STACK_EXHAUSTED_CODE`]) or the evaluator's
+/// ([`EvalError::STACK_EXHAUSTED_CODE`]).
 fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-        || (diagnostic.code == "native-sparql-query-parse"
-            && diagnostic.message.contains("SPARQL parse stack exhausted"))
+        || diagnostic.code == EvalError::PARSE_STACK_EXHAUSTED_CODE
 }
 
 /// `open` written `n` times around `core`, closed by `close` written `n` times.

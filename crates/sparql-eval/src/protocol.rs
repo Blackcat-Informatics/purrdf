@@ -36,11 +36,26 @@
 //! `WHERE` gains `USING`/`USING NAMED` clauses (an operation that already has `USING`,
 //! `USING NAMED` or `WITH` is the protocol's own error, §2.2.3). The caller's text is never
 //! re-serialized: every byte outside the spliced clauses is the request's own.
+//!
+//! # Failures are answered by one table
+//!
+//! Every way an operation can fail once the request has been read — a parse refusal, an
+//! engine refusal, a `SERVICE` or `LOAD` that did not answer, a stop, a host fault — is
+//! one [`FailureCode`]: [`EvalError`], [`LoadError`] and [`RemoteError`] each convert
+//! into it, and [`FailureCode::from_diagnostic_code`] reads the code an engine diagnostic
+//! carries. [`problem_for`] is the one mapping from a failure to the HTTP problem a host
+//! answers with — its status, the problem's `code` member, and whether the failure's own
+//! words may be disclosed. It matches every variant, so a failure added to the enum
+//! cannot compile until it has a status.
 
 use std::fmt;
 
 use purrdf_sparql_algebra::lexer::{Token, tokenize};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser, UpdateDatasetSlot};
+
+use crate::error::{EvalError, UnsupportedKind};
+use crate::remote::RemoteError;
+use crate::update::LoadError;
 
 /// The media type of a query sent directly in a `POST` body (Protocol §2.1.3).
 const SPARQL_QUERY: &str = "application/sparql-query";
@@ -1097,4 +1112,344 @@ pub fn negotiate(accept: Option<&str>, kind: ResultKind) -> Option<&'static str>
         }
     }
     best.map(|(token, _)| token)
+}
+
+// ---------------------------------------------------------------------------
+// Failures and the HTTP problems they are answered with
+// ---------------------------------------------------------------------------
+
+/// Every way an operation behind a SPARQL Protocol endpoint can fail, one variant per
+/// decision about how an HTTP host answers it (see [`problem_for`]).
+///
+/// [`Self::code`] is the stable diagnostic code each variant is reported under;
+/// [`Self::Evaluation`] stands for every evaluation failure without a code of its own
+/// here (an engine diagnostic such as `native-sparql-query-eval` keeps its own code).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FailureCode {
+    /// The query text does not parse.
+    QueryParse,
+    /// The update text does not parse.
+    UpdateParse,
+    /// The request nests deeper than the stack parsing it can hold.
+    ParseStackExhausted,
+    /// On `wasm32`, the request nests deeper than the JavaScript engine's call stack holds.
+    HostStackExhausted,
+    /// A well-formed construct the engine refuses to evaluate as written.
+    Unsupported,
+    /// A function or aggregate IRI nothing is registered under.
+    CustomFunction,
+    /// A variable in a quoted triple term's component.
+    QuotedTripleTermVariable,
+    /// The request nests deeper than the stack evaluating it can hold.
+    EvaluationStackExhausted,
+    /// An installed service catalog withheld a capability a `SERVICE` request needs.
+    ServiceDenied,
+    /// The host's own policy refused a `SERVICE` request.
+    ServiceHostDenied,
+    /// A `SERVICE` endpoint was asked and gave no usable answer.
+    ServiceFailed,
+    /// No source reaches a `SERVICE` endpoint the operation names.
+    ServiceUnconfigured,
+    /// An installed service catalog withheld a capability a `LOAD` fetch needs.
+    LoadDenied,
+    /// The host's own policy refused a `LOAD` fetch.
+    LoadHostDenied,
+    /// A `LOAD` document could not be fetched.
+    LoadFailed,
+    /// A `LOAD` document was fetched and could not be parsed.
+    LoadDecode,
+    /// A `LOAD` source answered with something that is not an answer.
+    LoadFault,
+    /// No source reaches a `LOAD` document the update names.
+    LoadNoResolver,
+    /// The operation's own stop signal fired while a `LOAD` was awaited.
+    LoadStopped,
+    /// The operation was cancelled.
+    Cancelled,
+    /// The operation's deadline passed.
+    Deadline,
+    /// No format the client accepts can carry the result.
+    NotAcceptable,
+    /// An update of the same dataset is already in flight.
+    UpdateInFlight,
+    /// The host's own code failed: a bug in a host handler, or an exception no failure
+    /// code classifies.
+    HostFault,
+    /// The operation's evaluation failed.
+    Evaluation,
+}
+
+impl FailureCode {
+    /// Every variant, in declaration order.
+    pub const ALL: [Self; 25] = [
+        Self::QueryParse,
+        Self::UpdateParse,
+        Self::ParseStackExhausted,
+        Self::HostStackExhausted,
+        Self::Unsupported,
+        Self::CustomFunction,
+        Self::QuotedTripleTermVariable,
+        Self::EvaluationStackExhausted,
+        Self::ServiceDenied,
+        Self::ServiceHostDenied,
+        Self::ServiceFailed,
+        Self::ServiceUnconfigured,
+        Self::LoadDenied,
+        Self::LoadHostDenied,
+        Self::LoadFailed,
+        Self::LoadDecode,
+        Self::LoadFault,
+        Self::LoadNoResolver,
+        Self::LoadStopped,
+        Self::Cancelled,
+        Self::Deadline,
+        Self::NotAcceptable,
+        Self::UpdateInFlight,
+        Self::HostFault,
+        Self::Evaluation,
+    ];
+
+    /// The stable diagnostic code this failure is reported under.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::QueryParse => "native-sparql-query-parse",
+            Self::UpdateParse => "native-sparql-update-parse",
+            Self::ParseStackExhausted => EvalError::PARSE_STACK_EXHAUSTED_CODE,
+            Self::HostStackExhausted => EvalError::HOST_STACK_EXHAUSTED_CODE,
+            Self::Unsupported => EvalError::UNSUPPORTED_CODE,
+            Self::CustomFunction => UnsupportedKind::CustomFunction.code(),
+            Self::QuotedTripleTermVariable => UnsupportedKind::QuotedTripleTermVariable.code(),
+            Self::EvaluationStackExhausted => EvalError::STACK_EXHAUSTED_CODE,
+            Self::ServiceDenied => EvalError::SERVICE_DENIED_CODE,
+            Self::ServiceHostDenied => EvalError::SERVICE_HOST_DENIED_CODE,
+            Self::ServiceFailed => EvalError::SERVICE_FAILED_CODE,
+            Self::ServiceUnconfigured => EvalError::SERVICE_UNCONFIGURED_CODE,
+            Self::LoadDenied => "native-sparql-load-denied",
+            Self::LoadHostDenied => "native-sparql-load-host-denied",
+            Self::LoadFailed => "native-sparql-load-failed",
+            Self::LoadDecode => "native-sparql-load-decode",
+            Self::LoadFault => "native-sparql-load-fault",
+            Self::LoadNoResolver => "native-sparql-load-no-resolver",
+            Self::LoadStopped => "native-sparql-load-stopped",
+            Self::Cancelled => "native-sparql-cancelled",
+            Self::Deadline => "native-sparql-deadline",
+            Self::NotAcceptable => "native-sparql-not-acceptable",
+            Self::UpdateInFlight => "native-sparql-update-in-flight",
+            Self::HostFault => "native-sparql-host-fault",
+            Self::Evaluation => "native-sparql-evaluation",
+        }
+    }
+
+    /// The failure an engine diagnostic's `code` names: the variant whose [`Self::code`]
+    /// it is, and [`Self::Evaluation`] for every other code — the evaluation failures
+    /// (`native-sparql-query-eval`, `native-sparql-update-eval`,
+    /// `native-sparql-property-function`, a dataset's own admission code, …), each of
+    /// which the client is owed in the engine's own words.
+    #[must_use]
+    pub fn from_diagnostic_code(code: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|failure| failure.code() == code)
+            .unwrap_or(Self::Evaluation)
+    }
+}
+
+impl From<&EvalError> for FailureCode {
+    fn from(error: &EvalError) -> Self {
+        match error {
+            EvalError::Parse(_) => Self::QueryParse,
+            EvalError::Unsupported { kind, .. } => match kind {
+                None => Self::Unsupported,
+                Some(UnsupportedKind::CustomFunction) => Self::CustomFunction,
+                Some(UnsupportedKind::QuotedTripleTermVariable) => Self::QuotedTripleTermVariable,
+                Some(UnsupportedKind::HeldInUnconfigured) => Self::Evaluation,
+            },
+            EvalError::Remote(_) => Self::ServiceFailed,
+            EvalError::ServiceUnconfigured(_) => Self::ServiceUnconfigured,
+            EvalError::ServiceDenied(_) => Self::ServiceDenied,
+            EvalError::ServiceHostDenied { .. } => Self::ServiceHostDenied,
+            EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
+            EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
+            EvalError::Dataset(_)
+            | EvalError::Internal(_)
+            | EvalError::Data(_)
+            | EvalError::Function(_)
+            | EvalError::ExistsScopeCollision { .. }
+            | EvalError::Config(_)
+            | EvalError::CompositeBound(_)
+            | EvalError::RelationIncomplete { .. }
+            | EvalError::FloatEnvironment(_) => Self::Evaluation,
+        }
+    }
+}
+
+impl From<&LoadError> for FailureCode {
+    fn from(error: &LoadError) -> Self {
+        match error {
+            LoadError::Transport(_) => Self::LoadFailed,
+            LoadError::Decode(_) => Self::LoadDecode,
+            LoadError::Denied(_) => Self::LoadDenied,
+            LoadError::HostDenied(_) => Self::LoadHostDenied,
+            LoadError::Fault(_) => Self::LoadFault,
+            LoadError::Governed(_) => Self::LoadStopped,
+        }
+    }
+}
+
+impl From<&RemoteError> for FailureCode {
+    fn from(error: &RemoteError) -> Self {
+        match error {
+            RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
+                Self::ServiceFailed
+            }
+            RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
+            RemoteError::Denied(_) => Self::ServiceDenied,
+            RemoteError::HostDenied { .. } => Self::ServiceHostDenied,
+            RemoteError::Governed(_) | RemoteError::GovernedAfterCompletion(_) => Self::Cancelled,
+            RemoteError::StackExhausted(_) => Self::EvaluationStackExhausted,
+            RemoteError::HostStackExhausted(_) => Self::HostStackExhausted,
+        }
+    }
+}
+
+/// What a problem document may say about the failure it answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProblemDetail {
+    /// The failure's own message is the `detail`: the client is owed the reason its
+    /// request was refused or failed.
+    Message,
+    /// A fixed description is the `detail`. The failure's message is never disclosed: it
+    /// carries host configuration (a catalog policy) or a host's or a remote's own words.
+    Fixed(&'static str),
+    /// The failure is the host's own: a fixed description is the `detail`, the failure's
+    /// message goes to the host's log alone under a correlation id the problem carries,
+    /// and `names_correlation` says whether the `detail` itself ends by naming that id.
+    Internal {
+        /// The fixed description.
+        detail: &'static str,
+        /// Whether the rendered `detail` is followed by ` <correlation id>`.
+        names_correlation: bool,
+    },
+}
+
+/// The HTTP problem (RFC 9457) a host answers a failure with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Problem {
+    /// The response status.
+    pub status: u16,
+    /// The problem document's `code` member. [`FailureCode::Evaluation`]'s is
+    /// [`FailureCode::code`]; a host holding the engine diagnostic reports that
+    /// diagnostic's own code instead.
+    pub code: &'static str,
+    /// What the `detail` member says.
+    pub detail: ProblemDetail,
+}
+
+/// The HTTP problem `code` is answered with.
+///
+/// | Status | Failures |
+/// |---|---|
+/// | `400` | the operation does not parse, nests past a parse or host stack, or is one the engine refuses to evaluate as written |
+/// | `403` | a catalog or the host's policy refused a `SERVICE` or `LOAD` it names; nothing was contacted |
+/// | `406` | no acceptable format carries the result |
+/// | `409` | an update of the same dataset is already in flight |
+/// | `500` | evaluation failed (its own words), or the host's own fault (sanitized, logged under a correlation id) |
+/// | `502` | a `SERVICE` endpoint or `LOAD` source was contacted and gave no usable answer |
+/// | `503` | a cancellation or the deadline stopped the operation |
+#[must_use]
+pub const fn problem_for(code: FailureCode) -> Problem {
+    let (status, detail) = match code {
+        FailureCode::QueryParse
+        | FailureCode::UpdateParse
+        | FailureCode::ParseStackExhausted
+        | FailureCode::HostStackExhausted
+        | FailureCode::Unsupported
+        | FailureCode::CustomFunction
+        | FailureCode::QuotedTripleTermVariable => (400, ProblemDetail::Message),
+        FailureCode::ServiceDenied => (
+            403,
+            ProblemDetail::Fixed(
+                "the service catalog does not authorize a SERVICE request this operation makes; \
+                 no endpoint was contacted",
+            ),
+        ),
+        FailureCode::ServiceHostDenied => (
+            403,
+            ProblemDetail::Fixed(
+                "this endpoint's host policy refused a SERVICE request this operation makes; no \
+                 endpoint was contacted",
+            ),
+        ),
+        FailureCode::LoadDenied => (
+            403,
+            ProblemDetail::Fixed(
+                "the service catalog does not authorize a LOAD source this update names; nothing \
+                 was fetched",
+            ),
+        ),
+        FailureCode::LoadHostDenied => (
+            403,
+            ProblemDetail::Fixed(
+                "this endpoint's host policy refused a LOAD source this update names; nothing was \
+                 fetched",
+            ),
+        ),
+        FailureCode::NotAcceptable => (406, ProblemDetail::Message),
+        FailureCode::UpdateInFlight => (409, ProblemDetail::Message),
+        FailureCode::EvaluationStackExhausted | FailureCode::Evaluation => {
+            (500, ProblemDetail::Message)
+        }
+        FailureCode::ServiceUnconfigured => (
+            500,
+            ProblemDetail::Internal {
+                detail: "this endpoint has no way to reach a SERVICE endpoint this operation names",
+                names_correlation: false,
+            },
+        ),
+        FailureCode::LoadNoResolver => (
+            500,
+            ProblemDetail::Internal {
+                detail: "this endpoint has no way to fetch a LOAD source",
+                names_correlation: false,
+            },
+        ),
+        FailureCode::LoadFault | FailureCode::HostFault => (
+            500,
+            ProblemDetail::Internal {
+                detail: "internal error; see the Worker log for correlation id",
+                names_correlation: true,
+            },
+        ),
+        FailureCode::ServiceFailed => (
+            502,
+            ProblemDetail::Fixed(
+                "a SERVICE endpoint this operation names did not return a usable answer",
+            ),
+        ),
+        FailureCode::LoadFailed => (
+            502,
+            ProblemDetail::Fixed("a LOAD source this update names could not be fetched"),
+        ),
+        FailureCode::LoadDecode => (
+            502,
+            ProblemDetail::Fixed(
+                "a LOAD source this update names was fetched and could not be parsed",
+            ),
+        ),
+        FailureCode::LoadStopped | FailureCode::Cancelled | FailureCode::Deadline => {
+            (503, ProblemDetail::Message)
+        }
+    };
+    let problem_code = match code {
+        FailureCode::LoadStopped | FailureCode::Cancelled | FailureCode::Deadline => "cancelled",
+        FailureCode::NotAcceptable => "NotAcceptable",
+        FailureCode::LoadFault | FailureCode::HostFault => "InternalError",
+        other => other.code(),
+    };
+    Problem {
+        status,
+        code: problem_code,
+        detail,
+    }
 }

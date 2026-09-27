@@ -430,8 +430,7 @@ fn a_constructed_graph_is_held_to_the_dataset_limit() {
 /// Whether `diagnostic` is a stack refusal: the parser's or the evaluator's.
 fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-        || (diagnostic.code == "native-sparql-query-parse"
-            && diagnostic.message.contains("SPARQL parse stack exhausted"))
+        || diagnostic.code == EvalError::PARSE_STACK_EXHAUSTED_CODE
 }
 
 /// A hundred thousand nested triple terms on a test thread are the typed stack refusal,

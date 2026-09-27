@@ -289,7 +289,8 @@ impl LoadError {
         match self {
             Self::Transport(_) => "native-sparql-load-failed",
             Self::Decode(_) => "native-sparql-load-decode",
-            Self::Denied(_) | Self::HostDenied(_) => "native-sparql-load-denied",
+            Self::Denied(_) => "native-sparql-load-denied",
+            Self::HostDenied(_) => "native-sparql-load-host-denied",
             Self::Fault(_) => "native-sparql-load-fault",
             Self::Governed(_) => "native-sparql-load-stopped",
         }

@@ -3621,10 +3621,13 @@ fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
 }
 
 /// The diagnostic for request text the parser refused: `code` (the query or update parse
-/// code), except that a request past the `wasm32` host-stack budget
-/// ([`purrdf_sparql_algebra::ParseError::HostStackExhausted`]) carries
-/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`] — no stack a caller sizes answers it,
-/// so a host reads that code rather than a parse failure's.
+/// code), except for the two stack refusals. A request past the `wasm32` host-stack
+/// budget ([`purrdf_sparql_algebra::ParseError::HostStackExhausted`]) carries
+/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`] — no stack a caller sizes answers it —
+/// and one past the parsing thread's own stack
+/// ([`purrdf_sparql_algebra::ParseError::StackExhausted`]) carries
+/// [`crate::EvalError::PARSE_STACK_EXHAUSTED_CODE`], which a larger stack answers; a host
+/// reads either code rather than a parse failure's.
 fn parse_diagnostic(error: purrdf_sparql_algebra::ParseError, code: &'static str) -> RdfDiagnostic {
     if matches!(
         error,
@@ -3632,6 +3635,15 @@ fn parse_diagnostic(error: purrdf_sparql_algebra::ParseError, code: &'static str
     ) {
         let error = crate::error::EvalError::from(error);
         return RdfDiagnostic::error(eval_diagnostic_code(&error, code), error.to_string());
+    }
+    if matches!(
+        error,
+        purrdf_sparql_algebra::ParseError::StackExhausted { .. }
+    ) {
+        return RdfDiagnostic::error(
+            crate::error::EvalError::PARSE_STACK_EXHAUSTED_CODE,
+            error.to_string(),
+        );
     }
     RdfDiagnostic::error(code, error.to_string())
 }
