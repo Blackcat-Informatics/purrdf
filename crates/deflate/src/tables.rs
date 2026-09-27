@@ -188,9 +188,49 @@ pub(crate) const FIXED_LITLEN_LENGTHS: [u8; 288] = {
 /// The fixed distance code lengths: 5 bits for all 32 symbols (§3.2.6).
 pub(crate) const FIXED_DIST_LENGTHS: [u8; 32] = [5; 32];
 
+/// Wire-order canonical codes for the fixed literal/length tree (§3.2.6).
+/// The RFC assigns the four consecutive canonical ranges below; reversing
+/// each code at compile time avoids rebuilding an invariant tree per stream.
+pub(crate) const FIXED_LITLEN_CODES: [u16; 288] = {
+    let mut codes = [0u16; 288];
+    let mut symbol = 0;
+    while symbol < codes.len() {
+        let (code, bits) = match symbol {
+            0..=143 => (0x30 + symbol, 8),
+            144..=255 => (0x190 + symbol - 144, 9),
+            256..=279 => (symbol - 256, 7),
+            _ => (0xC0 + symbol - 280, 8),
+        };
+        codes[symbol] = crate::huffman::reverse_bits(code as u32, bits) as u16;
+        symbol += 1;
+    }
+    codes
+};
+
+/// Wire-order canonical codes for the fixed distance tree (§3.2.6).
+pub(crate) const FIXED_DIST_CODES: [u16; 32] = {
+    let mut codes = [0u16; 32];
+    let mut symbol = 0;
+    while symbol < codes.len() {
+        codes[symbol] = crate::huffman::reverse_bits(symbol as u32, 5) as u16;
+        symbol += 1;
+    }
+    codes
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_codes_match_canonical_construction() {
+        let mut literal_codes = [0u16; 288];
+        let mut distance_codes = [0u16; 32];
+        crate::huffman::canonical_codes(&FIXED_LITLEN_LENGTHS, &mut literal_codes);
+        crate::huffman::canonical_codes(&FIXED_DIST_LENGTHS, &mut distance_codes);
+        assert_eq!(FIXED_LITLEN_CODES, literal_codes);
+        assert_eq!(FIXED_DIST_CODES, distance_codes);
+    }
 
     #[test]
     fn every_length_maps_to_the_code_whose_range_holds_it() {

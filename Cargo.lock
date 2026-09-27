@@ -781,6 +781,7 @@ name = "purrdf-deflate"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-testkit",
 ]

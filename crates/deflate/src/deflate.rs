@@ -18,9 +18,10 @@ use crate::backend::{Backend, Kernels};
 use crate::huffman::{canonical_codes, code_lengths};
 use crate::kernels::{HASH_BITS, hash4};
 use crate::tables::{
-    CODE_LENGTH_ORDER, DIST_BASE, DIST_EXTRA, DIST_SYMBOLS, END_OF_BLOCK, FIXED_DIST_LENGTHS,
-    FIXED_LITLEN_LENGTHS, LENGTH_BASE, LENGTH_CODE, LENGTH_EXTRA, LITLEN_SYMBOLS, MAX_CL_CODE_LEN,
-    MAX_CODE_LEN, MAX_MATCH, MIN_MATCH, WINDOW, distance_code,
+    CODE_LENGTH_ORDER, DIST_BASE, DIST_EXTRA, DIST_SYMBOLS, END_OF_BLOCK, FIXED_DIST_CODES,
+    FIXED_DIST_LENGTHS, FIXED_LITLEN_CODES, FIXED_LITLEN_LENGTHS, LENGTH_BASE, LENGTH_CODE,
+    LENGTH_EXTRA, LITLEN_SYMBOLS, MAX_CL_CODE_LEN, MAX_CODE_LEN, MAX_MATCH, MIN_MATCH, WINDOW,
+    distance_code,
 };
 
 /// A compression level, 0 (stored, no compression) to 9 (slowest, densest).
@@ -114,6 +115,8 @@ const MATCH_FLAG: u32 = 1 << 31;
 /// Batches shorter than this are hashed inline; longer ones go through the
 /// vector hash kernel.
 const SCALAR_INSERT: usize = 8;
+/// Each run encodes at least one length, so its count cannot exceed this.
+const MAX_LENGTH_RUNS: usize = LITLEN_SYMBOLS + DIST_SYMBOLS;
 
 // --- Bit writer ------------------------------------------------------------
 
@@ -161,7 +164,8 @@ struct DynamicPlan {
     dist: [u8; DIST_SYMBOLS],
     code_length: [u8; 19],
     /// The run-length coded lengths: (code-length symbol, extra value).
-    runs: Vec<(u8, u8)>,
+    runs: [(u8, u8); MAX_LENGTH_RUNS],
+    n_runs: usize,
     n_lit: usize,
     n_dist: usize,
     n_cl: usize,
@@ -177,13 +181,17 @@ impl DynamicPlan {
         let n_lit = 257.max(litlen.iter().rposition(|&l| l > 0).map_or(0, |i| i + 1));
         let n_dist = 1.max(dist.iter().rposition(|&l| l > 0).map_or(0, |i| i + 1));
 
-        let mut runs = Vec::new();
+        let mut runs = [(0u8, 0u8); MAX_LENGTH_RUNS];
+        let mut n_runs = 0;
+        let mut push_run = |run| {
+            runs[n_runs] = run;
+            n_runs += 1;
+        };
         let mut cl_freq = [0u32; 19];
-        let sequence: Vec<u8> = litlen[..n_lit]
-            .iter()
-            .chain(&dist[..n_dist])
-            .copied()
-            .collect();
+        let mut sequence = [0u8; MAX_LENGTH_RUNS];
+        sequence[..n_lit].copy_from_slice(&litlen[..n_lit]);
+        sequence[n_lit..n_lit + n_dist].copy_from_slice(&dist[..n_dist]);
+        let sequence = &sequence[..n_lit + n_dist];
         let mut i = 0;
         while i < sequence.len() {
             let value = sequence[i];
@@ -192,27 +200,27 @@ impl DynamicPlan {
             if value == 0 {
                 while run >= 11 {
                     let n = run.min(138);
-                    runs.push((18, (n - 11) as u8));
+                    push_run((18, (n - 11) as u8));
                     run -= n;
                 }
                 if run >= 3 {
-                    runs.push((17, (run - 3) as u8));
+                    push_run((17, (run - 3) as u8));
                     run = 0;
                 }
             } else {
-                runs.push((value, 0));
+                push_run((value, 0));
                 run -= 1;
                 while run >= 3 {
                     let n = run.min(6);
-                    runs.push((16, (n - 3) as u8));
+                    push_run((16, (n - 3) as u8));
                     run -= n;
                 }
             }
             for _ in 0..run {
-                runs.push((value, 0));
+                push_run((value, 0));
             }
         }
-        for &(symbol, _) in &runs {
+        for &(symbol, _) in &runs[..n_runs] {
             cl_freq[usize::from(symbol)] += 1;
         }
         let mut code_length = [0u8; 19];
@@ -224,7 +232,7 @@ impl DynamicPlan {
                 .map_or(0, |i| i + 1),
         );
         let mut header_bits = 3 + 5 + 5 + 4 + 3 * n_cl as u64;
-        for &(symbol, _) in &runs {
+        for &(symbol, _) in &runs[..n_runs] {
             header_bits += u64::from(code_length[usize::from(symbol)]);
             header_bits += match symbol {
                 16 => 2,
@@ -238,6 +246,7 @@ impl DynamicPlan {
             dist,
             code_length,
             runs,
+            n_runs,
             n_lit,
             n_dist,
             n_cl,
@@ -346,8 +355,6 @@ pub struct Deflater {
     seg_token: usize,
     seg_pos: usize,
     writer: BitWriter,
-    fixed_litlen_codes: [u16; 288],
-    fixed_dist_codes: [u16; 32],
     hash_scratch: Vec<u32>,
     total_in: u64,
     finished: bool,
@@ -376,15 +383,11 @@ impl Deflater {
     }
 
     fn with_kernels(level: Level, kernels: Kernels) -> Self {
-        let mut fixed_litlen_codes = [0u16; 288];
-        let mut fixed_dist_codes = [0u16; 32];
-        canonical_codes(&FIXED_LITLEN_LENGTHS, &mut fixed_litlen_codes);
-        canonical_codes(&FIXED_DIST_LENGTHS, &mut fixed_dist_codes);
         let params = params(level.0);
         Self {
             params,
             kernels,
-            win: vec![0; BUF_CAP],
+            win: Vec::with_capacity(BUF_CAP),
             end: 0,
             pos: 0,
             inserted: 0,
@@ -396,12 +399,12 @@ impl Deflater {
             prev: if params.store_only {
                 Vec::new()
             } else {
-                vec![0; WINDOW]
+                Vec::with_capacity(WINDOW)
             },
             pending: None,
             block_start: 0,
             covered: 0,
-            tokens: Vec::with_capacity(MAX_BLOCK_TOKENS + 1),
+            tokens: Vec::with_capacity(CHECK_INTERVAL + 1),
             litlen_freq: [0; LITLEN_SYMBOLS],
             dist_freq: [0; DIST_SYMBOLS],
             seg_litlen: [0; LITLEN_SYMBOLS],
@@ -409,8 +412,6 @@ impl Deflater {
             seg_token: 0,
             seg_pos: 0,
             writer: BitWriter::default(),
-            fixed_litlen_codes,
-            fixed_dist_codes,
             hash_scratch: Vec::with_capacity(MAX_MATCH),
             total_in: 0,
             finished: false,
@@ -437,6 +438,15 @@ impl Deflater {
         self.total_in += input.len() as u64;
         while !input.is_empty() {
             let n = input.len().min(BUF_CAP - self.end);
+            // Short streams initialize only the window and chain slots they
+            // can reach. Once grown, storage is reused across window slides.
+            if self.win.len() < self.end + n {
+                self.win.resize(self.end + n, 0);
+            }
+            let chain_len = (self.end + n).min(WINDOW);
+            if !self.params.store_only && self.prev.len() < chain_len {
+                self.prev.resize(chain_len, 0);
+            }
             self.win[self.end..self.end + n].copy_from_slice(&input[..n]);
             self.end += n;
             input = &input[n..];
@@ -579,11 +589,21 @@ impl Deflater {
             return (0, 0);
         }
         // Positions before `p` a lazy step skipped are entered first.
-        self.insert_through(p);
+        if self.inserted < p {
+            self.insert_through(p);
+        }
         let window = u32::from_le_bytes(self.win[p..p + 4].try_into().expect("four bytes"));
         let h = hash4(window) as usize;
         let mut candidate = self.head[h] as usize;
         let oldest = p.saturating_sub(WINDOW);
+        // Most positions in an incompressible stream have no live hash-chain
+        // predecessor. Avoid setting up the bounded match walk for those bytes.
+        if candidate == 0 || candidate - 1 < oldest {
+            if self.inserted == p {
+                self.insert_one(p, h);
+            }
+            return (0, 0);
+        }
         let mut chain = self.params.max_chain;
         if shorter_than_this >= self.params.good {
             chain = (chain / 4).max(1);
@@ -654,6 +674,7 @@ impl Deflater {
 
     // --- Tokens and blocks -------------------------------------------------
 
+    #[inline]
     fn emit_literal(&mut self, byte: u8) {
         self.tokens.push(u32::from(byte));
         self.litlen_freq[usize::from(byte)] += 1;
@@ -662,6 +683,7 @@ impl Deflater {
         self.after_token();
     }
 
+    #[inline]
     fn emit_match(&mut self, len: u32, dist: u32) {
         self.tokens
             .push(MATCH_FLAG | ((len - 3) << 16) | (dist - 1));
@@ -675,11 +697,17 @@ impl Deflater {
         self.after_token();
     }
 
+    #[inline]
     fn after_token(&mut self) {
-        let n = self.tokens.len();
-        if n - self.seg_token < CHECK_INTERVAL {
-            return;
+        if self.tokens.len() - self.seg_token >= CHECK_INTERVAL {
+            self.check_block_split();
         }
+    }
+
+    /// Rare block planning stays outside the per-token update path.
+    #[cold]
+    fn check_block_split(&mut self) {
+        let n = self.tokens.len();
         if n >= MAX_BLOCK_TOKENS {
             self.flush_block(n, false);
             return;
@@ -752,8 +780,13 @@ impl Deflater {
             self.write_tokens(count, &litlen_codes, &plan.litlen, &dist_codes, &plan.dist);
         } else {
             self.writer.write(bfinal | (1 << 1), 3);
-            let (lc, dc) = (self.fixed_litlen_codes, self.fixed_dist_codes);
-            self.write_tokens(count, &lc, &FIXED_LITLEN_LENGTHS, &dc, &FIXED_DIST_LENGTHS);
+            self.write_tokens(
+                count,
+                &FIXED_LITLEN_CODES,
+                &FIXED_LITLEN_LENGTHS,
+                &FIXED_DIST_CODES,
+                &FIXED_DIST_LENGTHS,
+            );
         }
 
         // Drop the emitted tokens; what remains is the last segment.
@@ -809,7 +842,7 @@ impl Deflater {
         }
         let mut cl_codes = [0u16; 19];
         canonical_codes(&plan.code_length, &mut cl_codes);
-        for &(symbol, extra) in &plan.runs {
+        for &(symbol, extra) in &plan.runs[..plan.n_runs] {
             let s = usize::from(symbol);
             self.writer
                 .write(u32::from(cl_codes[s]), u32::from(plan.code_length[s]));

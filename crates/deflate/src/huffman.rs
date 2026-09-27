@@ -12,6 +12,11 @@
 
 use crate::error::{Alphabet, Error};
 
+// RFC 1951's largest alphabet includes 288 literal/length symbols (two
+// reserved). Encoder alphabets are smaller, but share this bounded workspace.
+const MAX_SYMBOLS: usize = 288;
+const MAX_NODES: usize = 2 * MAX_SYMBOLS - 1;
+
 // --- Decode-table entries -------------------------------------------------
 //
 // bits 0–7   bits consumed
@@ -115,6 +120,8 @@ pub(crate) struct DecodeTable {
     pub(crate) primary_bits: u32,
     /// Scratch copy of the primary table, reused by the pair pass.
     scratch: Vec<u32>,
+    /// Subtable widths, reused across dynamic blocks.
+    sub_len: Vec<u8>,
 }
 
 impl DecodeTable {
@@ -123,6 +130,7 @@ impl DecodeTable {
             entries: Vec::new(),
             primary_bits,
             scratch: Vec::new(),
+            sub_len: Vec::new(),
         }
     }
 
@@ -159,8 +167,10 @@ impl DecodeTable {
 
         // Longest code under each primary prefix, to size subtables.
         let primary_size = 1usize << primary;
-        let mut reversed = vec![0u32; lengths.len()];
-        let mut sub_len = vec![0u8; primary_size];
+        assert!(lengths.len() <= MAX_SYMBOLS, "DEFLATE alphabet bound");
+        let mut reversed = [0u32; MAX_SYMBOLS];
+        self.sub_len.clear();
+        self.sub_len.resize(primary_size, 0);
         for (symbol, &len) in lengths.iter().enumerate() {
             if len == 0 {
                 continue;
@@ -171,7 +181,7 @@ impl DecodeTable {
             reversed[symbol] = rev;
             if len32 > primary {
                 let prefix = (rev & ((1 << primary) - 1)) as usize;
-                sub_len[prefix] = sub_len[prefix].max(len - primary as u8);
+                self.sub_len[prefix] = self.sub_len[prefix].max(len - primary as u8);
             }
         }
 
@@ -179,7 +189,7 @@ impl DecodeTable {
         self.entries
             .resize(primary_size, entry(primary, TAG_INVALID, 0, 0));
         // Subtable links, in prefix order.
-        for (prefix, &width) in sub_len.iter().enumerate() {
+        for (prefix, &width) in self.sub_len.iter().enumerate() {
             if width == 0 {
                 continue;
             }
@@ -253,7 +263,11 @@ impl DecodeTable {
 
 // --- Encoder-side construction --------------------------------------------
 
-/// Optimal code lengths for `freqs`, limited to `limit` bits.
+/// Huffman code lengths for `freqs`, limited to `limit` bits.
+///
+/// The two-queue tree minimizes the unconstrained weighted length. If that
+/// tree exceeds `limit`, the bounded repair below enforces the length bound
+/// while preserving the prefix-code constraint.
 ///
 /// Symbols with a zero count get length 0. When fewer than two symbols are
 /// used, two one-bit codes are assigned (the used symbol, if any, and the
@@ -261,12 +275,16 @@ impl DecodeTable {
 pub(crate) fn code_lengths(freqs: &[u32], limit: u8, lengths: &mut [u8]) {
     debug_assert_eq!(freqs.len(), lengths.len());
     lengths.fill(0);
-    let mut leaves: Vec<(u32, u16)> = freqs
-        .iter()
-        .enumerate()
-        .filter(|&(_, &f)| f > 0)
-        .map(|(s, &f)| (f, s as u16))
-        .collect();
+    assert!(freqs.len() <= MAX_SYMBOLS, "DEFLATE alphabet bound");
+    let mut leaf_storage = [(0u32, 0u16); MAX_SYMBOLS];
+    let mut used = 0;
+    for (symbol, &frequency) in freqs.iter().enumerate() {
+        if frequency > 0 {
+            leaf_storage[used] = (frequency, symbol as u16);
+            used += 1;
+        }
+    }
+    let leaves = &mut leaf_storage[..used];
     if leaves.len() < 2 {
         let used = leaves.first().map(|&(_, s)| usize::from(s));
         let other = (0..freqs.len())
@@ -281,9 +299,11 @@ pub(crate) fn code_lengths(freqs: &[u32], limit: u8, lengths: &mut [u8]) {
 
     // Two-queue merge: leaves in ascending order, internal nodes in creation
     // order (their weights never decrease). Ties take the leaf.
-    let mut weight: Vec<u64> = leaves.iter().map(|&(f, _)| u64::from(f)).collect();
-    weight.reserve(n - 1);
-    let mut parent = vec![0u32; 2 * n - 1];
+    let mut weight = [0u64; MAX_NODES];
+    for (slot, &(frequency, _)) in weight.iter_mut().zip(leaves.iter()) {
+        *slot = u64::from(frequency);
+    }
+    let mut parent = [0u16; MAX_NODES];
     let (mut leaf, mut node) = (0usize, n);
     // The lighter of the next leaf and the next unmerged internal node; ties
     // take the leaf.
@@ -299,19 +319,19 @@ pub(crate) fn code_lengths(freqs: &[u32], limit: u8, lengths: &mut [u8]) {
     for built in n..(2 * n - 1) {
         let a = take(&weight, &mut leaf, &mut node, built);
         let b = take(&weight, &mut leaf, &mut node, built);
-        weight.push(weight[a] + weight[b]);
-        parent[a] = built as u32;
-        parent[b] = built as u32;
+        weight[built] = weight[a] + weight[b];
+        parent[a] = built as u16;
+        parent[b] = built as u16;
     }
     // Depths, root first.
     let root = 2 * n - 2;
-    let mut depth = vec![0u8; 2 * n - 1];
+    let mut depth = [0u8; MAX_NODES];
     for index in (0..root).rev() {
         depth[index] = depth[parent[index] as usize] + 1;
     }
 
-    let mut len: Vec<u8> = depth[..n].to_vec();
-    limit_lengths(&mut len, limit);
+    let len = &mut depth[..n];
+    limit_lengths(len, limit);
     for (i, &(_, symbol)) in leaves.iter().enumerate() {
         lengths[usize::from(symbol)] = len[i];
     }

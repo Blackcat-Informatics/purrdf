@@ -415,7 +415,11 @@ pub fn decompress_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>, Error> 
 
 /// Compress `data` as one gzip member at `level`.
 pub fn compress(data: &[u8], level: Level) -> Vec<u8> {
-    let mut writer = GzipWriter::new(Vec::with_capacity(data.len() / 2 + 64), level);
+    // A compressible large input must not reserve half its uncompressed size.
+    // Start with at most one output chunk plus framing slack; Vec growth
+    // remains amortized for incompressible streams.
+    let capacity = (data.len() / 2 + 64).min(64 * 1024 + 64);
+    let mut writer = GzipWriter::new(Vec::with_capacity(capacity), level);
     writer
         .write_all(data)
         .expect("writing to a Vec cannot fail");
