@@ -1679,7 +1679,6 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-iri",
- "purrdf-stack",
  "purrdf-xsd",
  "regex",
 ]

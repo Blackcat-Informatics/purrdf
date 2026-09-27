@@ -4,15 +4,13 @@
 //! Admitted in, admitted out: the text [`pattern_to_select_query`] renders for any
 //! algebra the parser admits is admitted again, and re-parses to the same tree.
 //!
-//! How deep a request may nest is the stack the parser has, and every bracket or brace
-//! the renderer writes is a level of its recursion. A renderer that brackets more than
-//! the grammar needs therefore turns an admitted body into text refused where the stack
-//! ends — and the forwarded text of a `SERVICE` is exactly such a rendering. These tests
-//! pin the property three ways: a proptest over generated expression and property-path
-//! trees, the named precedence cases (with the brackets they must and must not carry),
-//! and, for every construct family that nests or chains, the deepest body the parser
-//! admits inside a `SERVICE` on the test thread's stack — found by search, with its
-//! first refused neighbour asserted — forwarded and re-parsed on the same stack.
+//! The forwarded text of a `SERVICE` is exactly such a rendering. These tests pin the
+//! property three ways: a proptest over generated expression and property-path trees,
+//! the named precedence cases (with the brackets they must and must not carry), and,
+//! for every construct family that nests, a body written twenty thousand levels deep
+//! inside a `SERVICE` (and for every family that chains, one [`CHAIN`] elements long),
+//! forwarded and re-parsed on the test thread's own stack — nothing but memory bounds
+//! how deep either the parse or the rendering goes.
 
 use proptest::prelude::*;
 use purrdf_sparql_algebra::{
@@ -307,38 +305,11 @@ fn a_mixed_precedence_path_round_trips() {
     );
 }
 
-// ── every nesting and chaining family, at its deepest admitted SERVICE body ──
+// ── every nesting and chaining family, written deep or long in a SERVICE ────────
 
 /// `SELECT * WHERE { SERVICE <ep> { BODY } }`.
 fn in_service(body: &str) -> String {
     format!("SELECT * WHERE {{ SERVICE <{EX}ep> {{ {body} }} }}")
-}
-
-/// The largest `n <= ceiling` whose `build(n)` the parser admits, asserting that
-/// `n = 1` is admitted and that `n + 1` is refused — so the family really was driven
-/// to the parser's own boundary rather than to the search ceiling.
-fn deepest_admitted(build: &dyn Fn(usize) -> String, ceiling: usize) -> usize {
-    assert!(
-        try_select(&build(1)).is_ok(),
-        "the shallowest body is admitted"
-    );
-    let (mut lo, mut hi) = (1, ceiling);
-    assert!(
-        try_select(&build(hi)).is_err(),
-        "the family must reach a refusal below {ceiling}"
-    );
-    // The refusal is the stack's: nothing but the stack bounds how deep a body nests.
-    let refused = try_select(&build(hi)).expect_err("refused at the ceiling");
-    assert!(refused.contains("stack exhausted"), "{refused}");
-    while hi - lo > 1 {
-        let mid = lo + (hi - lo) / 2;
-        if try_select(&build(mid)).is_ok() {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    lo
 }
 
 /// The inner pattern of the query's one `SERVICE`.
@@ -349,13 +320,13 @@ fn service_body(pattern: GraphPattern) -> GraphPattern {
     }
 }
 
-/// Forward the deepest admitted `SERVICE` body of a family and assert the text is
+/// Forward a family's `SERVICE` body written `n` levels deep and assert the text is
 /// admitted and rebuilds the body.
-fn assert_family_forwards(name: &str, body: &dyn Fn(usize) -> String, ceiling: usize) {
-    let build = |n: usize| in_service(&body(n));
-    let n = deepest_admitted(&build, ceiling);
-    let query = build(n);
-    let inner = service_body(try_select(&query).expect("admitted by the search"));
+fn assert_family_forwards(name: &str, body: &dyn Fn(usize) -> String, n: usize) {
+    let query = in_service(&body(n));
+    let inner = service_body(
+        try_select(&query).unwrap_or_else(|e| panic!("{name}: n = {n} is admitted: {e}")),
+    );
     let text = pattern_to_select_query(&inner);
     let reparsed = try_select(&text).unwrap_or_else(|e| {
         panic!("{name}: the body admitted at n = {n} forwards as refused text: {e}")
@@ -383,8 +354,14 @@ fn chain(n: usize, item: impl Fn(usize) -> String) -> String {
 
 const TRIPLE: &str = "?s <http://example.org/p> ?o .";
 
+/// How many sibling elements a chained-clause family is written with. A chain builds a
+/// spine, not nesting; each `BIND` in one is checked, under `debug_assertions`, against
+/// a fresh walk of the whole group before it, so a test build's parse of a chain grows
+/// with its square.
+const CHAIN: usize = 4_000;
+
 #[test]
-fn expression_families_forward_at_their_deepest_admitted_body() {
+fn expression_families_forward_twenty_thousand_levels_deep() {
     let filter = |e: String| format!("{TRIPLE} FILTER({e})");
     assert_family_forwards(
         "right-nested subtraction",
@@ -428,7 +405,7 @@ fn expression_families_forward_at_their_deepest_admitted_body() {
 }
 
 #[test]
-fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
+fn graph_pattern_families_forward_twenty_thousand_levels_deep() {
     assert_family_forwards(
         "nested OPTIONAL",
         &|n| nest(n, TRIPLE, |b| format!("{TRIPLE} OPTIONAL {{ {b} }}")),
@@ -493,7 +470,7 @@ fn graph_pattern_families_forward_at_their_deepest_admitted_body() {
 }
 
 #[test]
-fn chained_clause_families_forward_at_their_deepest_admitted_body() {
+fn chained_clause_families_forward_four_thousand_elements_long() {
     // A `UNION` chain of any length is one node (see
     // `a_ten_thousand_arm_union_round_trips_flat`); what bounds it is the spine
     // inside its tallest arm.
@@ -505,7 +482,7 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 chain(n, |_| format!("OPTIONAL {{ {TRIPLE} }}"))
             )
         },
-        20_000,
+        CHAIN,
     );
     assert_family_forwards(
         "OPTIONAL chain",
@@ -515,17 +492,17 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 chain(n, |_| format!("OPTIONAL {{ {TRIPLE} }}"))
             )
         },
-        20_000,
+        CHAIN,
     );
     assert_family_forwards(
         "MINUS chain",
         &|n| format!("{TRIPLE} {}", chain(n, |_| format!("MINUS {{ {TRIPLE} }}"))),
-        20_000,
+        CHAIN,
     );
     assert_family_forwards(
         "BIND chain",
         &|n| format!("{TRIPLE} {}", chain(n, |i| format!("BIND(?o AS ?v{i})"))),
-        20_000,
+        CHAIN,
     );
     assert_family_forwards(
         "mixed OPTIONAL / BIND / MINUS chain",
@@ -539,17 +516,17 @@ fn chained_clause_families_forward_at_their_deepest_admitted_body() {
                 })
             )
         },
-        20_000,
+        CHAIN,
     );
     assert_family_forwards(
         "FILTER chain",
         &|n| format!("{TRIPLE} {}", chain(n, |_| "FILTER(?o)".to_owned())),
-        20_000,
+        CHAIN,
     );
 }
 
 #[test]
-fn property_path_families_forward_at_their_deepest_admitted_body() {
+fn property_path_families_forward_twenty_thousand_levels_deep() {
     let a = format!("<{EX}a>");
     assert_family_forwards(
         "right-nested sequence",

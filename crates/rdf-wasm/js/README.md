@@ -569,25 +569,24 @@ never shared or reused.
 Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by default, at
 least 524 288). `evidence.async.stackHighWaterBytes` reports the deepest the job went, so
 the region can be sized from a real run. A request that nests deeper than the region
-allows fails with the parser's or the evaluator's own typed stack refusal, the one its
-synchronous twin gives: the parser's (`SPARQL parse stack exhausted`) and the
-evaluator's (`native-sparql-evaluation-stack-exhausted`) keep their code and message and
-add the region's size and a larger `stackBytes` as the remedy. Both check the stack left
-above the region's base at every recursive step and refuse while 64 KiB remain. On the
-synchronous lane the same two refusals name the asynchronous twin and a larger
-`stackBytes` as the remedy instead.
+allows fails with the evaluator's own typed stack refusal, the one its synchronous twin
+gives: `native-sparql-evaluation-stack-exhausted` keeps its code and message and adds the
+region's size and a larger `stackBytes` as the remedy. The evaluator checks the stack
+left above the region's base at every recursive step and refuses while 64 KiB remain.
+On the synchronous lane the same refusal names the asynchronous twin and a larger
+`stackBytes` as the remedy instead. Parsing keeps a request's nesting in linear memory
+and spends neither stack on it.
 
 A region sizes only the shadow stack in linear memory. Every wasm call also takes frames
 on the JavaScript engine's own call stack, which no wasm code can read, and V8 (Node.js,
 Chromium, Cloudflare Workers) gives a job's suspendable stack the same size as the
 synchronous lane's: the smaller of its `--stack-size` and
 `--wasm-stack-switching-stack-size` flags, 984 KiB by default, set for the whole process.
-PurRDF keeps a fixed 640 KiB budget of it for a request, charging each nesting level its
-measured cost, so on both lanes and on every region a request answers at most 637
-nested parentheses, 537 nested `-(`, 283 nested groups and 1 133 nested property-path
-groups. One level more is `native-sparql-host-stack-exhausted`, which names the budget and
-no `stackBytes` remedy, because no region and no lane raises it: the remedy is a request
-nested less deeply. Beneath that lies a guard
+PurRDF keeps a fixed 640 KiB budget of it for evaluating a request, so on both lanes and
+on every region a request's graph patterns nest at most 284 levels deep, and a plan taller
+than the evaluator's host-stack bounds is refused before it runs. Past either is
+`native-sparql-host-stack-exhausted`, which names the budget and no `stackBytes` remedy,
+because no region and no lane raises it: the remedy is a request nested less deeply. Beneath that lies a guard
 band of 32 KiB, which only work no check guards can reach; it fails the job with
 `asynchronous job stack region exhausted (<bytes> bytes); raise stackBytes`. Either way
 the job fails and the instance stays usable. If a job traps, or its frames ever run past

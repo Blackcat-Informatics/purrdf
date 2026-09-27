@@ -4,8 +4,8 @@
 //! The guard every recursive evaluator entry passes through, refusing when the running
 //! evaluation has too little stack left.
 //!
-//! The parser admits a request as deep as the stack of the thread parsing it holds, but
-//! that does not bound the stack *evaluating* it needs: one written level of
+//! The parser admits a request of any depth — it keeps what encloses the cursor on
+//! heap-allocated stacks — but the evaluator recurses: one written level of
 //! `FILTER NOT EXISTS` costs the evaluator about 16.7 KB of wasm32 shadow stack, one of
 //! `LATERAL` about 9.5 KB, and any other algebra level (`OPTIONAL`, `MINUS`, `BIND`, a
 //! sibling spine) about 4.8 KB — far more than the parser spent on it — while the flat
@@ -48,10 +48,12 @@
 //!
 //! * The infallible walks that run once over the whole plan before its first operator
 //!   (planning, blank-node scoping, the endpoint, parallel and admission analyses)
-//!   start from the top of the stack the evaluation starts on. Every evaluation first measures the whole plan's height
-//!   against that stack at the parser's per-level charge
-//!   (`governor::soundness::validate_graph_pattern_depth`), which holds the costliest of
-//!   those walks with room to spare, and refuses the plan, typed, where it does not fit.
+//!   start from the top of the stack the evaluation starts on. Every evaluation first
+//!   measures the whole plan's height against that stack at a per-level charge
+//!   ([`height`], through `governor::soundness::validate_graph_pattern_depth`), which
+//!   holds the costliest of those walks with room to spare, and refuses the plan, typed,
+//!   where it does not fit; preparation measures a plan the same way before its
+//!   feasibility pass.
 //! * The algebra's own copy, comparison, hashing, formatting, serialization and drop,
 //!   and a term's copy, comparison, order, hashing, formatting and drop, walk over work
 //!   lists and need no stack per level.
@@ -75,17 +77,12 @@
 //!   `bgp::compile_term`).
 //! * The one-level visitors do not recurse.
 //!
-//! The parser guards its own recursion against the same measurement, so the re-parse of
-//! a body an in-process `SERVICE` forwards — which runs at whatever depth the `SERVICE`
-//! sits — refuses rather than overflows too.
-//!
 //! # The measurement
 //!
 //! How much stack is left — the per-thread floor it is measured against, natively the
 //! operating system's thread limit and on `wasm32` the shadow stack's low end or the floor
 //! a host installed for a stack it switched onto — and the margin a check refuses at are
-//! [`purrdf_stack`]'s, the one measurement the parser and the wasm host share with this
-//! guard. See [`purrdf_stack::MARGIN_BYTES`] for the measured derivation of the margin.
+//! [`purrdf_stack`]'s, the one measurement the wasm host shares with this guard. See [`purrdf_stack::MARGIN_BYTES`] for the measured derivation of the margin.
 //! The walk scopes are [`purrdf_stack`]'s too ([`purrdf_stack::walk`]): their state is
 //! part of the per-computation [`purrdf_stack::Context`] a host swaps whenever it
 //! suspends an evaluation and runs something else on the thread.
@@ -93,6 +90,7 @@
 use crate::error::EvalError;
 
 pub(crate) mod clone;
+pub(crate) mod height;
 
 /// How many triple-term levels [`purrdf_stack::MARGIN_BYTES`] holds walks over, with no
 /// reserve: 128, at [`TERM_LEVEL_BYTES`] a level half the margin natively and a quarter
@@ -106,7 +104,7 @@ pub(crate) const MARGIN_TERM_LEVELS: usize = 128;
 /// terms thousands of levels deep, the costliest walk a level takes is the derived
 /// `Debug` of a pattern triple term, 496 bytes (its `Clone` is 258); a `wasm32` level
 /// costs 0.37 to 0.45 of its native size on the shadow stack the guard measures. It is the
-/// figure the parser charges a level of any tree it builds for the walks over it.
+/// figure [`height`] charges a level of any plan for the evaluator's walks over it.
 pub(crate) const TERM_LEVEL_BYTES: usize = if cfg!(target_arch = "wasm32") {
     256
 } else {

@@ -6,11 +6,9 @@
 //! `native-sparql-evaluation-stack-exhausted` diagnostic — never an aborted process — and
 //! the same request on a thread with room answers with the rows its semantics give.
 //!
-//! Each deep request is prepared on a roomy thread and evaluated on a small one. The
-//! parser measures its own stack too, and parsing the deepest nested forms takes more
-//! native stack than the small thread has, so preparing there would test the parser
-//! rather than the evaluator; a prepared plan is exactly what a host that parses once and
-//! evaluates on worker threads hands them. The flat `OPTIONAL` spine parses in a few KiB,
+//! Each deep request is prepared on a roomy thread and evaluated on a small one: a
+//! prepared plan is exactly what a host that parses once and evaluates on worker threads
+//! hands them. The flat `OPTIONAL` spine parses in a few KiB,
 //! so it also goes through the whole request path on the small thread. And whole requests
 //! nested far past every count this workspace used to enforce — calls, negations, groups,
 //! operator levels, path groups, spines, and a property-function plan under them — are
@@ -401,24 +399,25 @@ fn evaluate_with_service(
 }
 
 #[test]
-fn a_forwarded_body_too_deep_to_re_parse_is_the_typed_refusal_under_silent() {
+fn a_forwarded_body_too_deep_to_evaluate_there_is_the_typed_refusal_under_silent() {
     // The body's 120 nested calls are written again in the text the SERVICE forwards, and
-    // the in-process source re-parses that text at the depth the SERVICE is evaluated at.
-    // With 320 KiB left there, the re-parse runs out of stack: the typed refusal, naming
-    // the parser's construct, and not silenced — `SILENT` answering it with the join
-    // identity would pass every subject as though the service had imposed nothing.
+    // the in-process source re-parses and evaluates that text at the depth the SERVICE is
+    // evaluated at. With 320 KiB left there, evaluating the body's expression runs out of
+    // stack: the typed refusal, naming the evaluator's construct, and not silenced —
+    // `SILENT` answering it with the join identity would pass every subject as though the
+    // service had imposed nothing.
     let deep = prepare(&service_with_nested_calls(120));
     let refused = evaluate_with_service(&deep, 320 * 1024);
     assert_stack_refusal(&refused, "a SERVICE SILENT body 120 calls deep");
     let message = refused.expect_err("refused").message;
     assert!(
-        message.contains("function argument list"),
-        "the parser's construct is named: {message}"
+        message.contains("expression"),
+        "the evaluator's construct is named: {message}"
     );
-    // The valid neighbours: the same plan with room for the re-parse answers `s1` alone,
+    // The valid neighbours: the same plan with room for the body answers `s1` alone,
     // and so does a shallow body on the very same small stack.
     assert_eq!(
-        evaluate_with_service(&deep, LARGE).expect("room for the re-parse"),
+        evaluate_with_service(&deep, LARGE).expect("room for the body"),
         ["s1"]
     );
     assert_eq!(
@@ -649,12 +648,11 @@ fn request_with_relation(query: &str, bytes: usize) -> Result<Vec<String>, RdfDi
     })
 }
 
-/// Whether `result` is a typed stack refusal: the parser's or the evaluator's.
+/// Whether `result` is the evaluator's typed stack refusal.
 fn is_stack_refusal(result: &Result<Vec<String>, RdfDiagnostic>) -> bool {
-    result.as_ref().is_err_and(|diagnostic| {
-        diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-            || diagnostic.message.contains("SPARQL parse stack exhausted")
-    })
+    result
+        .as_ref()
+        .is_err_and(|diagnostic| diagnostic.code == EvalError::STACK_EXHAUSTED_CODE)
 }
 
 /// Requests nested far past the removed counts (128 recursive levels, 512 levels of

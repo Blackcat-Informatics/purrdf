@@ -124,8 +124,8 @@ unsafe extern "C" {
 }
 
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
-/// in [`purrdf_stack`], the measurement the SPARQL parser's and evaluator's stack guards
-/// refuse against, and the panic hook that poisons the instance (the `panic_poison` module).
+/// in [`purrdf_stack`], the measurement the SPARQL evaluator's stack guards refuse
+/// against, and the panic hook that poisons the instance (the `panic_poison` module).
 ///
 /// The floor's default is address 0, the floor rustc's `--stack-first` layout gives the
 /// stack; this reads the linker's own record of it instead, so the guards measure against

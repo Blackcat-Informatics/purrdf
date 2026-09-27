@@ -4,9 +4,11 @@
 //! How deep a request may nest is the stack of the thread answering it, end to end
 //! through [`NativeSparqlEngine`]: nested brackets, built-in calls, unary minus, groups
 //! and property-path groups answer — with the value the nesting computes, not merely
-//! without an error — as deep as the thread's stack holds them, and the first level
-//! past that is a typed stack refusal returned as a diagnostic, never a stack overflow
-//! that takes the host down.
+//! without an error — as deep as the thread's stack holds their evaluation, and the
+//! first level past that is the evaluator's typed stack refusal returned as a
+//! diagnostic, never a stack overflow that takes the host down. The parser admits every
+//! depth; brackets, a group around a single element and a bracketed path build no node
+//! of their own, so those shapes answer at any depth.
 //!
 //! Every limit here is found by bisection on the thread it is asserted on, because the
 //! C library can hand a thread a cached stack up to four times the size it asked for:
@@ -65,13 +67,10 @@ fn subjects(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
     Ok(subjects)
 }
 
-/// Whether `diagnostic` is a stack refusal: the parser's (a parse diagnostic whose
-/// message is the typed [`purrdf_sparql_algebra::ParseError::StackExhausted`]) or the
-/// evaluator's ([`EvalError::STACK_EXHAUSTED_CODE`]).
+/// Whether `diagnostic` is the evaluator's stack refusal
+/// ([`EvalError::STACK_EXHAUSTED_CODE`]).
 fn is_stack_refusal(diagnostic: &RdfDiagnostic) -> bool {
     diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
-        || (diagnostic.code == "native-sparql-query-parse"
-            && diagnostic.message.contains("SPARQL parse stack exhausted"))
 }
 
 /// `open` written `n` times around `core`, closed by `close` written `n` times.
@@ -205,7 +204,7 @@ fn every_shape_answers_at_128_500_and_1000_where_the_stack_holds_it() {
 /// The real limit of every shape on both stacks, found by bisection: the deepest level
 /// that answers holds its computed value, and one level more is the typed stack
 /// refusal — a refusal pair at the stack's real end, not at a count. Every limit is past
-/// the 127 levels the removed count admitted.
+/// 127 levels. A shape whose nesting builds no node answers twenty thousand levels deep.
 #[test]
 fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
     for (lane, bytes) in [("8 MiB", MAIN_THREAD), ("2 MiB", SPAWNED_THREAD)] {
@@ -218,11 +217,22 @@ fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
                     "{}: one level answers",
                     shape.name
                 );
-                assert!(
-                    answers(refused).is_err(),
-                    "{}: twenty thousand levels exceed the {lane} stack",
-                    shape.name
-                );
+                match answers(refused) {
+                    Ok(subjects) => {
+                        assert_eq!(
+                            subjects,
+                            (shape.answer)(refused),
+                            "{} {refused} deep on the {lane} stack answers what it computes",
+                            shape.name
+                        );
+                        continue;
+                    }
+                    Err(refusal) => assert!(
+                        is_stack_refusal(&refusal),
+                        "{} {refused} deep on the {lane} stack: {refusal:?}",
+                        shape.name
+                    ),
+                }
                 while refused - deepest > 1 {
                     let mid = deepest.midpoint(refused);
                     if answers(mid).is_ok() {
@@ -257,21 +267,22 @@ fn the_deepest_answer_and_the_first_refusal_are_neighbours() {
     }
 }
 
-/// Ten thousand nested parentheses on a test thread are the parser's typed stack
-/// refusal returned as a diagnostic — never a crash — and the engine answers the next
-/// request.
+/// Ten thousand nested parentheses build no node, and answer on a test thread; ten
+/// thousand nested negations do build one each, and are the evaluator's typed stack
+/// refusal returned as a diagnostic — never a crash — after which the engine answers
+/// the next request.
 #[test]
-fn a_ten_thousand_deep_parenthesised_filter_is_the_typed_refusal_not_a_crash() {
-    let deep = &shapes()[0];
-    let refused = subjects(&(deep.text)(10_000))
-        .expect_err("ten thousand nested parentheses do not fit a test thread's stack");
-    assert!(is_stack_refusal(&refused), "{refused:?}");
-    assert!(
-        refused.message.contains("bracketted expression"),
-        "the refusal names the construct: {refused:?}"
-    );
+fn ten_thousand_deep_parentheses_answer_and_negations_are_the_typed_refusal() {
+    let [parentheses, _, negations, ..] = shapes();
     assert_eq!(
-        subjects(&(deep.text)(1)).expect("the next request answers"),
+        subjects(&(parentheses.text)(10_000)).expect("ten thousand parentheses answer"),
+        ["s1"]
+    );
+    let refused = subjects(&(negations.text)(10_000))
+        .expect_err("ten thousand nested negations do not fit a test thread's stack");
+    assert!(is_stack_refusal(&refused), "{refused:?}");
+    assert_eq!(
+        subjects(&(parentheses.text)(1)).expect("the next request answers"),
         ["s1"]
     );
 }

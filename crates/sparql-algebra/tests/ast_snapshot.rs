@@ -9,8 +9,7 @@
 //! * a text that parses is recorded as the `{:?}` rendering of the [`Query`] or
 //!   [`Update`] it produced — the whole algebra, every node and every term;
 //! * a text that is refused is recorded as the [`ParseError`] variant and the byte
-//!   offset it names (plus, for the stack refusals, the construct), never the message,
-//!   whose wording is free to change.
+//!   offset it names, never the message, whose wording is free to change.
 //!
 //! Any difference fails. The golden is a snapshot of what the parser does today, so a
 //! change to the parser that keeps its observable output is proven to keep it here, and
@@ -29,9 +28,8 @@
 //! Files are walked in sorted relative-path order. Each is parsed against a base IRI
 //! derived from its relative path, with the extension- and property-function
 //! namespaces the conformance harness declares, so every file is read the way the
-//! harness reads it and no two runs can differ. The parse runs on a thread with a
-//! fixed stack, so the stack-depth guard cannot answer differently under a different
-//! `RUST_MIN_STACK`.
+//! harness reads it and no two runs can differ. Nothing the parser does depends on the
+//! stack of the thread it runs on, so the snapshot is rendered on the test's own thread.
 //!
 //! # Regenerating
 //!
@@ -63,9 +61,6 @@ const EXT_NS: &str = "https://example.org/ext/";
 
 /// The property-function namespace the conformance harness declares.
 const REL_NS: &str = "https://example.org/rel/";
-
-/// The stack every parse runs on.
-const PARSE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 /// A floor on the number of files walked, so a corpus that moved away cannot leave the
 /// snapshot passing over nothing.
@@ -140,8 +135,7 @@ fn corpus_files() -> Vec<(String, PathBuf)> {
     files
 }
 
-/// The variant, the byte offset and — for the stack refusals — the construct. Never the
-/// message.
+/// The variant and the byte offset. Never the message.
 fn render_error(error: &ParseError) -> String {
     let at = error
         .byte_offset()
@@ -152,12 +146,6 @@ fn render_error(error: &ParseError) -> String {
         ParseError::Unsupported(_) => format!("Unsupported at={at}"),
         ParseError::Iri { .. } => format!("Iri at={at}"),
         ParseError::CdtArity { found, .. } => format!("CdtArity at={at} found={found}"),
-        ParseError::StackExhausted { construct, .. } => {
-            format!("StackExhausted at={at} construct={construct:?}")
-        }
-        ParseError::HostStackExhausted { construct, .. } => {
-            format!("HostStackExhausted at={at} construct={construct:?}")
-        }
         other => panic!("unpinned ParseError variant {other:?}"),
     }
 }
@@ -189,27 +177,19 @@ fn render_one(relative: &str, path: &Path, out: &mut String) {
     out.push('\n');
 }
 
-/// The whole snapshot, rendered on a thread with a fixed stack.
+/// The whole snapshot.
 fn render_snapshot() -> String {
-    std::thread::Builder::new()
-        .name("ast-snapshot".to_owned())
-        .stack_size(PARSE_STACK_BYTES)
-        .spawn(|| {
-            let files = corpus_files();
-            assert!(
-                files.len() >= MIN_FILES,
-                "the snapshot corpus shrank: only {} files were found",
-                files.len()
-            );
-            let mut out = String::new();
-            for (relative, path) in &files {
-                render_one(relative, path, &mut out);
-            }
-            out
-        })
-        .expect("spawn the snapshot thread")
-        .join()
-        .expect("the snapshot thread completes")
+    let files = corpus_files();
+    assert!(
+        files.len() >= MIN_FILES,
+        "the snapshot corpus shrank: only {} files were found",
+        files.len()
+    );
+    let mut out = String::new();
+    for (relative, path) in &files {
+        render_one(relative, path, &mut out);
+    }
+    out
 }
 
 /// Each entry of a snapshot, as `(header, body)`.

@@ -918,27 +918,21 @@ fn lateral_inside_exists_pattern_evaluates() {
 }
 
 // ---------------------------------------------------------------------------
-// 18. A LATERAL spine, adversarially deep: evaluated where the stack holds it,
-//     a typed refusal where it ends, never a stack abort.
+// 18. A LATERAL spine, adversarially long: parsed at any length, evaluated
+//     where the stack holds it.
 // ---------------------------------------------------------------------------
 
 /// Chained (sibling, not nested-brace) `LATERAL` clauses build a LEFT-DEEP
-/// algebra spine that no recursion guard sees: the group-parsing loop builds it,
-/// one `Lateral` node per keyword, with brace nesting at 1 throughout. So the
-/// parser charges the spine's height as the loop builds it, and builds it only
-/// where every walk over it — its own `Drop` among them — fits the stack left
-/// there; the evaluator measures the whole plan against the stack it evaluates
-/// on before its first operator.
+/// algebra spine, one `Lateral` node per keyword. The parser builds it at any
+/// length — five thousand links parse on the test thread's own stack — and the
+/// evaluator measures the whole plan against the stack it evaluates on before
+/// its first operator.
 ///
-/// On the test thread's 2 MiB stack the longest spine that parses is found by
-/// search: it is longer than the 2 048 links the removed combinator budget
-/// admitted, and one link more is the typed stack refusal — never an abort
-/// (reaching either assertion at all shows the process did not crash). On a
-/// large stack a 300-link spine EVALUATES, and its answer is observed, not
+/// On a large stack a 300-link spine EVALUATES, and its answer is observed, not
 /// merely produced: the same spine ending in a link that matches nothing
 /// answers no row, so a truncated or dropped spine could not pass both.
 #[test]
-fn lateral_spine_depth_is_bounded_by_the_stack() {
+fn lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it() {
     fn lateral_spine(n: usize, last: &str) -> String {
         let mut body = String::from("SELECT * WHERE { ?s :q ?o ");
         for _ in 0..n {
@@ -948,37 +942,14 @@ fn lateral_spine_depth_is_bounded_by_the_stack() {
         body.push('}');
         format!("{PFX}{body}")
     }
-    let spine = |n: usize| lateral_spine(n, "");
 
-    assert!(
-        SparqlParser::new().parse_query(&spine(1)).is_ok(),
-        "the smallest LATERAL spine must parse"
-    );
-    let (mut lo, mut hi) = (1_usize, 100_000_usize);
-    while hi - lo > 1 {
-        let mid = lo.midpoint(hi);
-        if SparqlParser::new().parse_query(&spine(mid)).is_ok() {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    assert!(
-        lo > 2_048,
-        "only {lo} LATERAL links parse on a 2 MiB stack; the removed budget admitted 2 048"
-    );
-    let error = SparqlParser::new()
-        .parse_query(&spine(hi))
-        .expect_err("one LATERAL link past the stack's end must be a typed refusal");
-    assert!(
-        matches!(
-            error,
-            purrdf_sparql_algebra::ParseError::StackExhausted {
-                construct: "graph pattern",
-                ..
-            }
-        ),
-        "a spine refusal is the typed stack refusal at the spine, got: {error}"
+    let long = SparqlParser::new()
+        .parse_query(&lateral_spine(5_000, ""))
+        .expect("a five-thousand-link LATERAL spine parses");
+    assert_eq!(
+        format!("{long:?}").matches("Lateral {").count(),
+        5_000,
+        "every link of the spine is in the algebra"
     );
 
     std::thread::Builder::new()

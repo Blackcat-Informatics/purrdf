@@ -1640,20 +1640,12 @@ pub(crate) const SYNC_STACK_HINT: &str = "; the synchronous lane runs on the ins
      stack — run this request with the asynchronous twin of this call (selectAsync, \
      queryAsync, updateAsync, …) and a larger stackBytes region";
 
-/// [`diag_to_err`] for an engine call on the synchronous lane: a shadow-stack refusal —
-/// the parser's `SPARQL parse stack exhausted` under the query or update parse code, or
+/// [`diag_to_err`] for an engine call on the synchronous lane: the shadow-stack refusal —
 /// the evaluator's `native-sparql-evaluation-stack-exhausted` — keeps its code and message
 /// and gains [`SYNC_STACK_HINT`], the remedy only this lane has to name. Every other
 /// diagnostic, the host-stack refusal included, is [`diag_to_err`]'s.
 fn sync_lane_err(diag: &RdfDiagnostic) -> JsError {
-    let parse =
-        diag.code == "native-sparql-query-parse" || diag.code == "native-sparql-update-parse";
-    let stack = diag.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-        || (parse
-            && diag
-                .message
-                .starts_with("SPARQL parse stack exhausted at byte "));
-    if stack {
+    if diag.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE {
         JsError::new(&format!("{diag}{SYNC_STACK_HINT}"))
     } else {
         diag_to_err(diag)

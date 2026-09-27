@@ -28,10 +28,8 @@
 //! - `serialize` — `pattern_to_select_query` over the pattern under the projection.
 //!
 //! [`DEEP_LEVELS`] is the list of deep heights; extending it is one line. Each tree is
-//! parsed once, before sampling, on a thread with [`PARSE_STACK_BYTES`] of stack, which
-//! the parser's recursive descent needs for the deepest heights; every walk then runs
-//! on the bench thread, since none of them recurses. All IRIs are `example.org`
-//! fixtures.
+//! parsed once, before sampling, and every walk runs on the bench thread: neither the
+//! parser nor any walk recurses. All IRIs are `example.org` fixtures.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-algebra --bench algebra_walks` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
@@ -46,10 +44,6 @@ const EX: &str = "http://example.org/";
 
 /// The heights every deep tree is measured at.
 const DEEP_LEVELS: &[usize] = &[64, 512, 100_000];
-
-/// The stack the trees are parsed on: room for the parser's recursive descent through
-/// the deepest of [`DEEP_LEVELS`].
-const PARSE_STACK_BYTES: usize = 2 << 30;
 
 /// `open` written `n` times around `core`, closed by `close` written `n` times.
 fn nested(open: &str, core: &str, close: &str, n: usize) -> String {
@@ -128,15 +122,10 @@ fn hash_of(query: &Query) -> u64 {
     hasher.finish()
 }
 
-/// `text`, parsed on a thread with [`PARSE_STACK_BYTES`] of stack.
+/// `text`, parsed.
 fn parse(id: &str, text: &str) -> Query {
-    let text = text.to_owned();
-    std::thread::Builder::new()
-        .stack_size(PARSE_STACK_BYTES)
-        .spawn(move || SparqlParser::new().parse_query(&text))
-        .expect("the parsing thread starts")
-        .join()
-        .expect("the parse does not panic")
+    SparqlParser::new()
+        .parse_query(text)
         .unwrap_or_else(|error| panic!("{id} parses: {error}"))
 }
 

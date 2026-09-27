@@ -522,10 +522,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   offers an `ASK` result only JSON and XML, since CSV and TSV exist only for
   `SELECT`. `EvalError::StackExhausted` (`native-sparql-evaluation-stack-exhausted`)
   and `RemoteError::StackExhausted` report a request too deep for the stack that
-  evaluates it; on `wasm32`, `ParseError::HostStackExhausted`,
-  `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`, also the code
-  of a parse the budget refuses) and `RemoteError::HostStackExhausted` report one past
-  the budget kept under the JavaScript engine's call stack; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
+  evaluates it; on `wasm32`, `EvalError::HostStackExhausted`
+  (`native-sparql-host-stack-exhausted`) and `RemoteError::HostStackExhausted` report
+  one past the budget kept under the JavaScript engine's call stack; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
   explains a query with a host stop signal polled by the measuring run, which is
   still metered and never bounded; a signal that fires is reported on the
   explanation's evidence as the stop it was.
@@ -545,19 +544,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `QueryDatasetSlot`: where a query's dataset clause is, or where one would go.
   `parse_update_split` returns an `UpdateSplit` giving each update operation's
   `WITH`/`USING`/`WHERE` positions (`UpdateDatasetSlot`). `parse_update_with` runs
-  through the same split. `ParseError::StackExhausted` refuses a parse that the
-  thread's remaining stack cannot hold, and `GraphPattern::validate_height`
-  refuses, with the same error, a pattern too tall for the walks over it to fit
-  the calling thread's stack; it returns how deeply the pattern's triple terms nest.
-  `TermPattern::triple_term_nesting` and `GroundTerm::triple_term_nesting` count a
-  term's triple-term levels without recursion. `WASM_HOST_STACK_BUDGET` (640 KiB) and
-  `WASM_GRAPH_PATTERN_DEPTH` (284) are the host call-stack bounds a `wasm32` build
-  applies to nesting.
+  through the same split. `TermPattern::triple_term_nesting` and
+  `GroundTerm::triple_term_nesting` count a term's triple-term levels without
+  recursion.
 
 - **stack:** a new publishable crate, `purrdf-stack`, that measures how much stack
   the running thread has left. `remaining`, `is_low` and `replace_floor` read that
   measurement, and `MARGIN_BYTES` (128 KiB natively, 64 KiB on `wasm32`) is the
-  margin the SPARQL parser and evaluator refuse at. Natively the floor is the
+  margin the SPARQL evaluator refuses at. Natively the floor is the
   operating system's thread limit, read once per thread by a small platform
   module: `pthread_getattr_np` (Linux, Android, NetBSD), `pthread_attr_get_np`
   (FreeBSD, DragonFly BSD), `pthread_stackseg_np` (OpenBSD),
@@ -629,43 +623,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   source as the evaluation it explains would.
 
 - **sparql-algebra:** only group patterns were bounded, so a query nested deeply
-  enough anywhere else exhausted the parser's stack. About 950 nested parentheses
+  enough anywhere else exhausted the parser's stack: about 950 nested parentheses
   trapped the wasm build, and every other recursive production overflowed a native
-  stack at 10 000 levels. Every recursive production of the query and update
-  grammars — groups, `EXISTS` bodies, bracketed expressions, unary operators,
-  function, built-in and aggregate calls, `IN` lists, triple terms, reifiers,
-  annotations, path groups, blank-node property lists and collections — now
-  measures the stack its thread has left and refuses with
-  `ParseError::StackExhausted` before it runs out, so how deep a request may nest
-  is the real capacity of the thread parsing it rather than a count. Natively an
-  8 MiB thread answers 2 180 nested built-in calls, 3 101 nested `-(`, 2 427
-  nested groups, 3 625 nested parentheses and 6 354 nested path groups; a 2 MiB
-  thread 514, 732, 573, 856 and 1 500. The 128-level group limit is gone:
-  `MAX_GRAPH_PATTERN_DEPTH` is deprecated and no longer enforced, and so is
-  `MAX_GRAPH_PATTERN_NODES`, whose 2 048-element count on a run of sibling
-  elements is now a measured height too. What loops build without recursion —
-  operators above their operands, `^`, path modifiers, `NOT EXISTS`, runs of
-  `OPTIONAL`/`MINUS`/`BIND`/`FILTER` siblings, projection, `GROUP BY` and `HAVING`
-  chains — is built only where every walk over the tree (its own `Drop`, `Clone`,
-  `PartialEq`, `Hash` and `Debug`, the serializer, the evaluator's analyses) fits
-  the stack left there, at a measured 512 bytes a level, so a tree the parser
-  returns can be dropped, copied, compared and formatted from the frame that
-  parsed it. Triple terms — in patterns, `VALUES`, templates and `INSERT DATA` —
-  nest as deep as the stack holds them too, with no count of their own. On
-  `wasm32` the host engine's own call stack, which wasm code cannot read, runs out
-  before the shadow stack for some constructs (path groups trapped V8 at about
-  2 000 levels), so there each level is also charged its measured V8 cost against
-  a 640 KiB budget (`WASM_HOST_STACK_BUDGET`, 65% of V8's stack), and tree height
-  is capped at 2 048 levels: both lanes answer 637 nested parentheses, 537 `-(`,
-  283 groups and 1 133 path groups, and refuse the next level with
-  `ParseError::HostStackExhausted` (`native-sparql-host-stack-exhausted`), whose
-  message names the budget and says that a larger `stackBytes` does not raise it.
-  Measured with a recursive wasm function under Node 26 and workerd, V8 runs a JSPI
-  job on a stack the size of the synchronous lane's (20 136 frames against
-  20 927, on 984 KiB): the smaller of the process-wide `--stack-size` and
-  `--wasm-stack-switching-stack-size` flags, which no module or job can change.
-  (Some requests the synchronous lane used to answer are now refused on both lanes;
-  see the **BREAKING** **wasm** entry under Changed.)
+  stack at 10 000 levels. The parser no longer recurses on a request's nesting (see
+  the **BREAKING** **sparql-algebra, sparql-eval** entry under Changed), so every
+  construct of the query and update grammars nests as deep as memory holds it, on a
+  thread of any stack size and on both wasm lanes. The 128-level group limit and the
+  2 048-element count on a run of sibling elements are gone, and so are
+  `MAX_GRAPH_PATTERN_DEPTH` and `MAX_GRAPH_PATTERN_NODES`.
 
 - **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
   On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
@@ -676,13 +641,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   the half-built result, and the serializer that renders a forwarded `SERVICE` body
   asks at every level too. A stack refusal inside an in-process `SERVICE` body cannot
   be silenced by `SERVICE SILENT`. The evaluator's 128-level graph-pattern count and
-  the 512-level expression height `Query::validate` admitted are gone with the
-  parser's counts: a plan is measured, whole and iteratively, against the stack its
-  evaluation starts on, and refused with `native-sparql-evaluation-stack-exhausted`
-  only where that stack cannot hold the walks over it, so a plan prepared on one
-  thread and run on another is judged by the stack it runs on. On `wasm32`, graph
-  patterns still nest at most 284 deep (`WASM_GRAPH_PATTERN_DEPTH`), for V8's call
-  stack.
+  the 512-level expression height are gone: a plan is measured, whole and
+  iteratively, against the stack its evaluation starts on, and refused with
+  `native-sparql-evaluation-stack-exhausted` only where that stack cannot hold the
+  walks over it, so a plan prepared on one thread and run on another is judged by
+  the stack it runs on. On `wasm32`, graph patterns nest at most 284 deep, for V8's
+  call stack.
 
 - **sparql-eval, core, stack:** a triple term nested past anything a dataset holds is
   valid SPARQL 1.2 and is answered, not refused. A pattern whose triple term nests
@@ -697,7 +661,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   past 128 levels is evaluated under a stack reserve (`purrdf_stack::reserve`, 512
   bytes a level natively, 256 on `wasm32`) that every check it passes leaves room
   for; past the stack the answer is the typed `native-sparql-evaluation-stack-exhausted`
-  or `ParseError::StackExhausted` refusal. Writing a triple term into a dataset is
+  refusal. Writing a triple term into a dataset is
   held to the dataset's own limit: `INSERT DATA`, an `INSERT` template and a
   `CONSTRUCT` graph nesting one past 16 levels are refused with
   `rdf-ir-triple-nesting-limit` (a `CONSTRUCT`'s through the new
@@ -2412,22 +2376,21 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Changed
 
-- **BREAKING** **wasm:** the synchronous lane refuses some requests it used to
-  answer. Every recursive level of a request is now charged its measured cost to V8's
-  call stack against a 640 KiB budget (`WASM_HOST_STACK_BUDGET`), so a request nested
-  between that budget and the depth at which V8's stack used to run out — 638 to
-  about 950 nested parentheses, which 2.0.2 answered — is now refused with
-  `native-sparql-host-stack-exhausted` (it used to trap near 950). No lane answers it:
-  an asynchronous job runs on a V8 stack of the same size, whatever its `stackBytes`,
-  so the refusal names the budget and the remedy is a request nested less deeply.
-  The shadow-stack refusals are the ones a larger stack answers: on the synchronous
-  lane the parser's (`SPARQL parse stack exhausted`) and the evaluator's
-  (`native-sparql-evaluation-stack-exhausted`) keep their code and message and end
-  with the remedy, the asynchronous twin of the call (`selectAsync`, `queryAsync`,
-  `updateAsync`, …) and a larger `stackBytes` region; on the asynchronous lane they
-  name the region's size and a larger `stackBytes`. On `wasm32` neither message
-  says to use a thread with a larger stack any more, which a JavaScript caller
-  cannot do.
+- **BREAKING** **wasm:** both lanes bound a request's evaluation by a 640 KiB budget
+  kept under V8's call stack: a plan whose height is past the evaluator's host-stack
+  bounds — graph patterns nested past 284 levels, 2 304 levels of expressions and
+  paths, triple terms 2 048 deep — is refused with `native-sparql-host-stack-exhausted`
+  before it runs, on either lane: an asynchronous job runs on a V8 stack of the same
+  size, whatever its `stackBytes`, so the refusal names the budget and the remedy is a
+  request nested less deeply. Parsing spends none of that stack, so nesting that
+  builds no node — brackets, a group around a single element, a bracketed path — is
+  not limited. The shadow-stack refusal is the one a larger stack answers: on the
+  synchronous lane the evaluator's (`native-sparql-evaluation-stack-exhausted`) keeps
+  its code and message and ends with the remedy, the asynchronous twin of the call
+  (`selectAsync`, `queryAsync`, `updateAsync`, …) and a larger `stackBytes` region; on
+  the asynchronous lane it names the region's size and a larger `stackBytes`. On
+  `wasm32` the message does not say to use a thread with a larger stack, which a
+  JavaScript caller cannot do.
 
 - **BREAKING** **sparql-eval, sparql-algebra, wasm:** an unsupported request no longer
   reads as a development stage or as a server fault. `EvalError::Unsupported` renders
@@ -2463,7 +2426,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   code `native-sparql-graph-pattern-depth-exceeded` are removed (`UnsupportedKind::ALL`
   has three entries). The `wasm32` graph-pattern depth limit it reported is the
   host-stack budget, not a construct deferred in scope, and a graph pattern nested
-  past `WASM_GRAPH_PATTERN_DEPTH` is now `EvalError::HostStackExhausted`
+  past 284 levels is now `EvalError::HostStackExhausted`
   (`native-sparql-host-stack-exhausted`).
 
 - **release:** under this suite's full-semver rule, the breaking changes below
@@ -2552,6 +2515,33 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `Hash` (feeding the same sequence as before), `Debug`, `canonical_bytes` and drop
   walk a work list. A shallow tree's walk keeps its work list in the walk's own frame,
   so it allocates nothing beyond what the derived traits allocated.
+
+- **BREAKING** **sparql-algebra, sparql-eval:** the SPARQL parser runs without
+  recursion, so how deeply a request nests is bounded by memory alone, the same on
+  every host: every construct of the query and update grammars written a hundred
+  thousand levels deep parses on a thread with a 128 KiB stack, and the tree it
+  builds is dropped there too. Group graph patterns, sub-`SELECT`s, solution modifiers
+  and expressions are read by one pushdown machine over heap-allocated stacks, with
+  expressions by operator precedence; triples (blank-node property lists,
+  collections, triple terms, reifying triples, annotation blocks), property paths,
+  quoted triples and `VALUES` triple terms by loops over stacks of their own. The
+  algebra, the error kinds, the byte offsets and the messages the parser produces are
+  unchanged: the snapshot of every in-repository request parses to a byte-identical
+  golden. Removed, because nothing is refused for its nesting any more:
+  `ParseError::StackExhausted`, `ParseError::HostStackExhausted`,
+  `WASM_HOST_STACK_BUDGET`, `WASM_GRAPH_PATTERN_DEPTH`, the deprecated
+  `MAX_GRAPH_PATTERN_DEPTH` and `MAX_GRAPH_PATTERN_NODES`, and
+  `GraphPattern::validate_height`; `Query::validate` no longer refuses a tree for its
+  height, and `purrdf-sparql-algebra` no longer depends on `purrdf-stack`. The
+  evaluator admits a plan's height itself, iteratively and at the same per-level
+  charge, before its recursive passes — at preparation and on every evaluation — so
+  a plan too tall for the evaluating thread is `EvalError::StackExhausted` naming
+  `"query algebra"` (on `wasm32`, past the host-stack bounds,
+  `EvalError::HostStackExhausted`), with the codes it had. `EvalError::from` a
+  `ParseError` is always `EvalError::Parse`, a parse diagnostic always carries the
+  query or update parse code, and an in-process `SERVICE` body that fails to re-parse
+  is a decode failure. The wasm lanes' stack-refusal hints no longer recognize a
+  parser stack refusal, which cannot occur.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as

@@ -22,19 +22,18 @@
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
 //!   body underneath it).
-//! * **Admitted in, admitted out.** A bracket or a brace is a level of the
-//!   parser's recursion, which the stack bounds, and of the tree whose height the
-//!   walks over it are measured against. So the rendering spends a bracket or a
-//!   brace only where the grammar needs one to rebuild the same tree: expressions follow the grammar's precedence and
+//! * **Admitted in, admitted out.** A bracket or a brace is a level the evaluator's
+//!   height admission measures a re-parsed body against. So the rendering spends a
+//!   bracket or a brace only where the grammar needs one to rebuild the same tree:
+//!   expressions follow the grammar's precedence and
 //!   associativity (`a + b + c` bare, `a - (b - c)` and `(a + b) * c`
 //!   bracketted — see `Level`), property paths do the same
 //!   ([`crate::algebra::PropertyPathExpression`]'s `Display`), a `UNION` chain
 //!   or a run of `OPTIONAL`/`MINUS`/`BIND` clauses is written as the one flat
 //!   sequence the parser rebuilds itself, and a sub-`SELECT` is never braced
 //!   twice. Such a brace is one the source text needed too, so the text
-//!   forwarded for a body the parser admitted is admitted again — bracketing
-//!   every operator once turned a 440-operator `FILTER` into a refusal, which a
-//!   `SERVICE SILENT` then answered as if the endpoint had failed.
+//!   forwarded for a body the parser admitted is admitted again, and re-parses to
+//!   the same tree.
 //! * Solution-modifier nodes (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
 //!   shape the parser produces for an inline subquery; an aggregate's own
