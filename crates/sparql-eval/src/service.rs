@@ -590,9 +590,16 @@ impl ServiceCatalog {
         needs: ServiceCapabilities,
     ) -> Result<&ServiceProfile, ServiceDenial> {
         let Some(profile) = self.profile_for(endpoint) else {
+            // No profile grants anything, so the first capability the request needs is the
+            // one withheld; a request that needs none is still refused by a catalog that
+            // knows nothing of the endpoint, and is named as the `query` capability every
+            // `SERVICE` request needs.
+            let withheld = needs
+                .first_withheld_by(ServiceCapabilities::NONE)
+                .unwrap_or(ServiceCapability::Query);
             return Err(ServiceDenial::new(
                 endpoint,
-                ServiceCapability::Query,
+                withheld,
                 "no profile is configured for this service, and the catalog has no fallback",
             ));
         };
@@ -940,6 +947,15 @@ mod tests {
             .expect_err("an empty catalog denies everything");
         assert_eq!(denial.withheld(), ServiceCapability::Query);
         assert_eq!(denial.endpoint(), "https://example.org/sparql");
+        // A request that needs only `network` (a `LOAD` fetch) is refused for the
+        // capability it needs, not for one it never asked for.
+        let fetch = catalog
+            .authorize(
+                "https://example.org/doc",
+                ServiceCapabilities::granting([ServiceCapability::Network]),
+            )
+            .expect_err("an empty catalog denies a fetch too");
+        assert_eq!(fetch.withheld(), ServiceCapability::Network);
 
         // …and the neighbouring VALID case: the same catalog with the service listed
         // authorizes it. A denial that fired for everything would prove nothing.
