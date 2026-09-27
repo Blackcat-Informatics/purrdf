@@ -225,7 +225,7 @@ unification metavariables), a dependency this crate does not have and does not
 want (it is a whole sister crate, not a module). `term` is a from-scratch,
 self-contained arena holding exactly the same shape, keyed by this crate's own
 branded `Id<C>` (three new brands: `Node`, `Meta`, `Sym`), hash-consed with the
-same fixed-key-`ahash` + `hashbrown::HashTable` pattern `crate::proof::ProofArena`
+same fixed-key-`purrdf_hash::fixed::FixedHasher` + `hashbrown::HashTable` pattern `crate::proof::ProofArena`
 already established in this crate — so the port introduces no new dependency and
 no new interning idiom.
 

@@ -3,13 +3,12 @@
 
 //! Replays `host_differential_vectors.txt` against [`purrdf_iri::host`].
 //!
-//! `purrdf-jsonschema` once carried its own RFC 2673 dotted-quad and RFC 4291
-//! IPv6 text-form parsers for its `ipv4` and `ipv6` formats, a second address
-//! parser beside the one this crate validates IP literals with. Before they
-//! were deleted in favour of [`is_ipv4_address`] and [`is_ipv6_address`],
-//! their verdicts over 20,000 seeded address-shaped strings were frozen here
-//! (answers only, never code; see `PROVENANCE.md`). Every record must agree:
-//! a disagreement is a defect in `purrdf_iri::host`, resolved against the RFC
+//! `purrdf-jsonschema`'s `ipv4` and `ipv6` formats validate IP literals through
+//! [`is_ipv4_address`] and [`is_ipv6_address`]. The vector file holds answers
+//! recorded from the RFC 2673 dotted-quad and RFC 4291 IPv6 text-form parsers
+//! this crate replaced (answers only, never code; see the vector file's header
+//! and `crates/iri/tests/PROVENANCE.md`). Every record must agree: a
+//! disagreement is a defect in `purrdf_iri::host`, resolved against the RFC
 //! text, and never a reason to edit a vector.
 
 use purrdf_iri::host::{Mode, is_ipv4_address, is_ipv6_address, is_reg_name};
