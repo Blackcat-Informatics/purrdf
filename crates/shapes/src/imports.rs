@@ -75,6 +75,42 @@
 //! shapes graph. A host supplies documents through its own spelling of a
 //! [`ShapesImports`] table; none of them fetches anything.
 //!
+//! # A data graph's `sh:shapesGraph` links are folded in the same way
+//!
+//! SHACL 1.2 Core §6.4:
+//!
+//! > A data graph can include triples used to suggest one or more graphs to a SHACL processor
+//! > with the predicate sh:shapesGraph. Every value of sh:shapesGraph is an IRI representing a
+//! > graph that SHOULD be included into the shapes graph used to validate the data graph. The
+//! > value of sh:shapesGraph may be a value of owl:versionIRI, so the same strategy of
+//! > resolving a shapes graph IRI from a version IRI, described for Shapes Graphs, applies
+//! > here.
+//!
+//! PurRDF treats the SHOULD as a MUST. A `sh:shapesGraph` triple is a LINK when its subject
+//! is an anchor of the DATA graph: an IRI the data graph was loaded under (its retrieval IRI
+//! or base, when the host knows one), or a SHACL instance of `sh:DataGraph` by the kernel's
+//! one classifier ([`purrdf_core::graph_roles`]). A `sh:shapesGraph` triple on any other
+//! node is data. [`data_graph_links`] reads the links; [`ShapesImports::link_data_graph`]
+//! puts them in the table, and [`resolve_shapes_imports`] resolves each one exactly as it
+//! resolves an import — the same table, the same in-place declarations, the
+//! `^owl:versionIRI` step, and the linked graph's own `owl:imports` closure — and unions the
+//! linked graphs into the shapes graph. A link nothing resolves is
+//! [`ShapesImportError::UnresolvedLink`]; a link value that is not an IRI is
+//! [`ShapesImportError::InvalidLink`]; a table entry only a link names is reached.
+//!
+//! A shapes graph built before its data graph was known — a [`PreparedShapes`], a prepared
+//! product, a `Shapes` validated against many data graphs — cannot take a link any more, so
+//! validation checks each link against it instead ([`check_data_graph_links`]): a link the
+//! shapes graph already holds (its loaded IRI, a graph its closure or its links folded in,
+//! an anchor or version IRI it declares) validates; any other is
+//! [`ShapesImportError::UnheldLink`], never a verdict about a smaller shapes graph than the
+//! data graph asked for.
+//!
+//! The data graph's own `owl:imports` stay unenacted (Core §6.2): a link names a graph for
+//! the SHAPES graph, and nothing about it makes the data graph's imports directives.
+//!
+//! [`PreparedShapes`]: crate::engine::PreparedShapes
+//!
 //! # A supplied document nothing imports is refused too
 //!
 //! [`ShapesImportError::Unreached`]: a caller who hands over a document believes its shapes
@@ -87,7 +123,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
-use purrdf_core::imports::ImportMap;
+use purrdf_core::dataset_view::{DatasetView, GraphMatch};
+use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
+use purrdf_core::imports::{ImportMap, declared_import_targets};
+use purrdf_core::ir::{TermRef, TermValue};
+
+/// `sh:shapesGraph`: on a data-graph anchor, a link to a graph the shapes graph includes.
+pub const SH_SHAPES_GRAPH_LINK: &str = "http://www.w3.org/ns/shacl#shapesGraph";
 
 /// The documents a shapes graph's `owl:imports` resolve to, and the IRIs the shapes graph
 /// was read from.
@@ -133,6 +175,9 @@ pub struct ShapesImports {
     /// Each supplied document's own `@prefix` map, by the ontology IRI it was supplied
     /// under.
     prefixes: BTreeMap<String, Vec<(String, String)>>,
+    /// The data graph's `sh:shapesGraph` links, in the order the data graph states them,
+    /// each once ([`Self::link_data_graph`]).
+    links: Vec<String>,
 }
 
 impl ShapesImports {
@@ -227,6 +272,56 @@ impl ShapesImports {
         self.map.declare_loaded(iri);
     }
 
+    /// Fold the `sh:shapesGraph` links of the data graph `data` into this table: each graph
+    /// the data graph links (SHACL 1.2 Core §6.4, see the [module documentation](self)) is
+    /// then resolved and unioned into the shapes graph by every constructor this table
+    /// reaches, exactly as an import of the shapes graph is.
+    ///
+    /// `loaded` names the IRIs the DATA graph was loaded under — its retrieval IRI or base —
+    /// when the host knows one; a `sh:shapesGraph` on one of those is a link as well as on a
+    /// `sh:DataGraph`. Pass an empty slice when there is none (an N-Triples string, a pack).
+    /// Links accumulate, each IRI once, so a host validating a data graph and a change to it
+    /// can call this for both.
+    ///
+    /// ```
+    /// use purrdf_shapes::imports::ShapesImports;
+    /// use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
+    ///
+    /// let data = parse_ntriples_to_dataset(
+    ///     "<http://example.org/d> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+    ///      <http://www.w3.org/ns/shacl#DataGraph> .\n\
+    ///      <http://example.org/d> <http://www.w3.org/ns/shacl#shapesGraph> \
+    ///      <http://example.org/shapes> .\n",
+    /// )
+    /// .expect("data");
+    /// let mut imports = ShapesImports::new();
+    /// imports.link_data_graph(data.as_ref(), &[]).expect("every link is an IRI");
+    /// assert_eq!(imports.links(), ["http://example.org/shapes"]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`ShapesImportError::InvalidLink`] when a link's value is not an IRI.
+    pub fn link_data_graph<D: DatasetView>(
+        &mut self,
+        data: &D,
+        loaded: &[&str],
+    ) -> Result<(), ShapesImportError> {
+        for link in data_graph_links(data, loaded)? {
+            if !self.links.contains(&link) {
+                self.links.push(link);
+            }
+        }
+        Ok(())
+    }
+
+    /// The data graph's `sh:shapesGraph` links this table carries, in the order they were
+    /// linked ([`Self::link_data_graph`]).
+    #[must_use]
+    pub fn links(&self) -> &[String] {
+        &self.links
+    }
+
     /// The kernel import table this wraps.
     #[must_use]
     pub const fn import_map(&self) -> &ImportMap {
@@ -277,6 +372,27 @@ pub enum ShapesImportError {
         /// The unreached table keys.
         iris: Vec<String>,
     },
+    /// The data graph links shapes graphs (SHACL 1.2 Core §6.4, `sh:shapesGraph`) that
+    /// nothing in hand resolves — no table entry, no loaded document, no `owl:Ontology`,
+    /// `sh:ShapesGraph` or `owl:versionIRI` declaration of the IRI in the closure. Every such
+    /// IRI, in the order the data graph states them.
+    UnresolvedLink {
+        /// The unresolved linked-graph IRIs.
+        iris: Vec<String>,
+    },
+    /// The data graph links shapes graphs that a shapes graph built BEFORE the data graph
+    /// was known does not hold — a prepared shapes graph or product, which can no longer
+    /// take a graph in. Every such IRI, in the order the data graph states them.
+    UnheldLink {
+        /// The linked-graph IRIs the shapes graph does not hold.
+        iris: Vec<String>,
+    },
+    /// A data-graph anchor's `sh:shapesGraph` value is not an IRI ("Every value of
+    /// sh:shapesGraph is an IRI", SHACL 1.2 Core §6.4), so it names no graph to include.
+    InvalidLink {
+        /// Each offending value, rendered as an N-Triples-style term.
+        values: Vec<String>,
+    },
     /// A table entry that cannot be used: a key that is not an absolute IRI, a key named
     /// twice, or a document that does not parse.
     InvalidEntry {
@@ -289,24 +405,30 @@ pub enum ShapesImportError {
 
 impl ShapesImportError {
     /// The stable kebab-case label of the variant: `unresolved-import`,
-    /// `unreached-import` or `invalid-import`. It is what the Python, JavaScript and C hosts
-    /// carry in their own typed slot.
+    /// `unreached-import`, `invalid-import`, `unresolved-shapes-graph-link`,
+    /// `unheld-shapes-graph-link` or `invalid-shapes-graph-link`. It is what the Python,
+    /// JavaScript and C hosts carry in their own typed slot.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Unresolved { .. } => "unresolved-import",
             Self::Unreached { .. } => "unreached-import",
             Self::InvalidEntry { .. } => "invalid-import",
+            Self::UnresolvedLink { .. } => "unresolved-shapes-graph-link",
+            Self::UnheldLink { .. } => "unheld-shapes-graph-link",
+            Self::InvalidLink { .. } => "invalid-shapes-graph-link",
         }
     }
 
-    /// The IRIs the refusal names.
+    /// The IRIs the refusal names — for [`Self::InvalidLink`], the offending values.
     #[must_use]
     pub fn iris(&self) -> Vec<&str> {
         match self {
-            Self::Unresolved { iris } | Self::Unreached { iris } => {
-                iris.iter().map(String::as_str).collect()
-            }
+            Self::Unresolved { iris }
+            | Self::Unreached { iris }
+            | Self::UnresolvedLink { iris }
+            | Self::UnheldLink { iris } => iris.iter().map(String::as_str).collect(),
+            Self::InvalidLink { values } => values.iter().map(String::as_str).collect(),
             Self::InvalidEntry { iri, .. } => vec![iri.as_str()],
         }
     }
@@ -351,6 +473,52 @@ impl fmt::Display for ShapesImportError {
                     kind = self.kind()
                 )
             }
+            Self::UnresolvedLink { iris } => write!(
+                f,
+                "{kind}: the data graph links {named} with sh:shapesGraph (SHACL 1.2 Core \
+                 section 6.4), which {verb} not in the shapes graph and no import table entry \
+                 supplies. A linked graph is part of the shapes graph that validates this data \
+                 graph, PurRDF fetches nothing, and going on without it would validate against \
+                 a smaller shapes graph than the data graph names. Supply {it} in the import \
+                 table, or merge {it} into the shapes document",
+                kind = self.kind(),
+                named = named(iris),
+                verb = if iris.len() == 1 { "is" } else { "are" },
+                it = if iris.len() == 1 {
+                    "the graph"
+                } else {
+                    "the graphs"
+                },
+            ),
+            Self::UnheldLink { iris } => write!(
+                f,
+                "{kind}: the data graph links {named} with sh:shapesGraph (SHACL 1.2 Core \
+                 section 6.4), and the shapes graph this validation holds was built before \
+                 the data graph was known and does not include {it}: it is not the shapes \
+                 graph's loaded IRI, a graph its closure folded in, or an owl:Ontology, \
+                 sh:ShapesGraph or owl:versionIRI it declares. Validate from the shapes \
+                 document with the data graph given at parse time and {it} in the import \
+                 table, or merge {it} into the shapes document",
+                kind = self.kind(),
+                named = named(iris),
+                it = if iris.len() == 1 {
+                    "that graph"
+                } else {
+                    "those graphs"
+                },
+            ),
+            Self::InvalidLink { values } => write!(
+                f,
+                "{kind}: the data graph's sh:shapesGraph {values_word} {listed} {verb} not an \
+                 IRI. Every value of sh:shapesGraph on a data graph is the IRI of a graph to \
+                 include into the shapes graph (SHACL 1.2 Core section 6.4), so {it} names no \
+                 graph at all. Replace {it} with the linked graph's IRI, or remove the triple",
+                kind = self.kind(),
+                values_word = if values.len() == 1 { "value" } else { "values" },
+                listed = values.join(", "),
+                verb = if values.len() == 1 { "is" } else { "are" },
+                it = if values.len() == 1 { "it" } else { "they" },
+            ),
         }
     }
 }
@@ -366,9 +534,14 @@ pub struct ResolvedShapesGraph {
     /// The shapes document's own prefix map first (its declarations win a collision), then
     /// each reached document's, in the order the closure reached it.
     pub prefixes: Vec<(String, String)>,
+    /// The IRIs of every graph this shapes graph was assembled from by name, sorted: each
+    /// IRI it was loaded under, each document its closure reached, and each data-graph
+    /// link it resolved. [`check_data_graph_links`] reads a link as held when it is here.
+    pub included: Vec<String>,
 }
 
-/// Resolve `dataset`'s `owl:imports` closure against `imports`, or refuse it.
+/// Resolve `dataset`'s `owl:imports` closure, and the data-graph links `imports` carries
+/// ([`ShapesImports::link_data_graph`]), against `imports`, or refuse them.
 ///
 /// `prefixes` is the shapes document's own `@prefix` map; `loaded` names the IRIs the
 /// shapes document was read from (its base, and any `@base` it declared), in addition to
@@ -377,28 +550,47 @@ pub struct ResolvedShapesGraph {
 ///
 /// # Errors
 ///
-/// [`ShapesImportError::Unresolved`] naming every import nothing in hand resolves; then
-/// [`ShapesImportError::Unreached`] naming every table entry no import reaches.
+/// [`ShapesImportError::UnresolvedLink`] naming every data-graph link nothing in hand
+/// resolves; then [`ShapesImportError::Unresolved`] naming every import nothing in hand
+/// resolves; then [`ShapesImportError::Unreached`] naming every table entry neither an
+/// import nor a link reaches.
 pub fn resolve_shapes_imports(
     dataset: &Arc<RdfDataset>,
     prefixes: &[(String, String)],
     loaded: &[&str],
     imports: &ShapesImports,
 ) -> Result<ResolvedShapesGraph, ShapesImportError> {
-    let closure = if loaded.iter().all(|iri| imports.map.is_loaded(iri)) {
-        imports.map.closure(dataset)
+    let widened;
+    let map = if loaded.iter().all(|iri| imports.map.is_loaded(iri)) {
+        &imports.map
     } else {
         let mut map = imports.map.clone();
         for iri in loaded {
             map.declare_loaded(*iri);
         }
-        map.closure(dataset)
+        widened = map;
+        &widened
     };
+    let closure = map.closure_with_links(dataset, &imports.links);
     if !closure.unresolved().is_empty() {
-        return Err(ShapesImportError::Unresolved {
-            iris: closure.unresolved().to_vec(),
-        });
+        let (links, others): (Vec<String>, Vec<String>) = closure
+            .unresolved()
+            .iter()
+            .cloned()
+            .partition(|iri| imports.links.contains(iri));
+        if !links.is_empty() {
+            return Err(ShapesImportError::UnresolvedLink { iris: links });
+        }
+        return Err(ShapesImportError::Unresolved { iris: others });
     }
+    let mut included: Vec<String> = map
+        .loaded()
+        .map(ToOwned::to_owned)
+        .chain(closure.documents().iter().map(|(iri, _)| iri.clone()))
+        .chain(imports.links.iter().cloned())
+        .collect();
+    included.sort_unstable();
+    included.dedup();
     if !closure.unreached().is_empty() {
         return Err(ShapesImportError::Unreached {
             iris: closure.unreached().to_vec(),
@@ -417,6 +609,7 @@ pub fn resolve_shapes_imports(
         return Ok(ResolvedShapesGraph {
             dataset: Arc::clone(dataset),
             prefixes: prefixes.to_vec(),
+            included,
         });
     };
     let mut all_prefixes = prefixes.to_vec();
@@ -428,7 +621,126 @@ pub fn resolve_shapes_imports(
     Ok(ResolvedShapesGraph {
         dataset: merged,
         prefixes: all_prefixes,
+        included,
     })
+}
+
+/// The data graph's `sh:shapesGraph` links: the IRI value of each `sh:shapesGraph` triple
+/// whose subject is an anchor of the data graph — an IRI in `loaded` (the data graph's
+/// retrieval IRI or base, when known) or a SHACL instance of `sh:DataGraph` — in frozen quad
+/// order, each IRI once. See the [module documentation](self) for SHACL 1.2 Core §6.4.
+///
+/// A `sh:shapesGraph` triple on any other node is data and is not read. A data graph that
+/// does not intern `sh:shapesGraph` costs one term lookup, and the graph-role classifier
+/// never runs.
+///
+/// # Errors
+///
+/// [`ShapesImportError::InvalidLink`] naming every anchor's value that is not an IRI.
+pub fn data_graph_links<D: DatasetView>(
+    data: &D,
+    loaded: &[&str],
+) -> Result<Vec<String>, ShapesImportError> {
+    data_graph_links_by(data, &TermValue::iri(SH_SHAPES_GRAPH_LINK), loaded)
+}
+
+/// [`data_graph_links`] with the `sh:shapesGraph` term already built, so a caller reading
+/// several graphs spells it once.
+pub(crate) fn data_graph_links_by<D: DatasetView>(
+    data: &D,
+    link: &TermValue,
+    loaded: &[&str],
+) -> Result<Vec<String>, ShapesImportError> {
+    let Some(predicate) = data.term_id_by_value(link) else {
+        return Ok(Vec::new());
+    };
+    let mut anchors: Vec<D::Id> = loaded
+        .iter()
+        .filter_map(|iri| data.term_id_by_value(&TermValue::iri(*iri)))
+        .collect();
+    anchors.extend(
+        GraphRoleIndex::classify(data)
+            .iter()
+            .filter(|(_, roles)| roles.contains(GraphRoles::DATA_GRAPH))
+            .map(|(node, _)| node),
+    );
+    anchors.sort_unstable();
+    anchors.dedup();
+    if anchors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut links: Vec<String> = Vec::new();
+    let mut invalid: Vec<String> = Vec::new();
+    for quad in data.quads_for_pattern(None, Some(predicate), None, GraphMatch::Any) {
+        if anchors.binary_search(&quad.s).is_err() {
+            continue;
+        }
+        match data.resolve(quad.o) {
+            TermRef::Iri(iri) => {
+                if !links.iter().any(|link| link == iri) {
+                    links.push(iri.to_owned());
+                }
+            }
+            TermRef::Blank { label, .. } => invalid.push(format!("_:{label}")),
+            TermRef::Literal { lexical, .. } => invalid.push(format!("\"{lexical}\"")),
+            TermRef::Triple { .. } => invalid.push("a triple term".to_owned()),
+        }
+    }
+    if !invalid.is_empty() {
+        invalid.sort_unstable();
+        invalid.dedup();
+        return Err(ShapesImportError::InvalidLink { values: invalid });
+    }
+    Ok(links)
+}
+
+/// Check that `shapes` — a shapes graph built without the data graph in hand — HOLDS every
+/// graph the data graph `data` links (SHACL 1.2 Core §6.4; see the
+/// [module documentation](self)).
+///
+/// A link is held when it is an IRI the shapes graph was assembled from by name (its loaded
+/// IRI, a document its closure reached, a link it resolved — [`ResolvedShapesGraph::included`]),
+/// its parse base, or an IRI the shapes graph resolves in place: an `owl:Ontology` or
+/// `sh:ShapesGraph` it declares, or an `owl:versionIRI` value
+/// ([`purrdf_core::imports::declared_import_targets`]). Every validation of a data graph runs
+/// this with no `loaded` IRI; a host that knows the data graph's retrieval IRI runs it again
+/// with that IRI.
+///
+/// A data graph with no `sh:shapesGraph` triple costs one term lookup.
+///
+/// # Errors
+///
+/// [`ShapesImportError::InvalidLink`] for a non-IRI link value;
+/// [`ShapesImportError::UnheldLink`] naming every linked graph `shapes` does not hold.
+pub fn check_data_graph_links<D: DatasetView>(
+    data: &D,
+    loaded: &[&str],
+    shapes: &crate::shapes::Shapes,
+) -> Result<(), ShapesImportError> {
+    let links = data_graph_links(data, loaded)?;
+    if links.is_empty() {
+        return Ok(());
+    }
+    let provenance = shapes.provenance();
+    let mut declared: Option<std::collections::BTreeSet<String>> = None;
+    let unheld: Vec<String> = links
+        .into_iter()
+        .filter(|link| {
+            if provenance.included_graphs().binary_search(link).is_ok()
+                || provenance.base() == Some(link.as_str())
+            {
+                return false;
+            }
+            !declared
+                .get_or_insert_with(|| declared_import_targets(shapes.shapes_dataset.as_ref()))
+                .contains(link)
+        })
+        .collect();
+    if unheld.is_empty() {
+        Ok(())
+    } else {
+        Err(ShapesImportError::UnheldLink { iris: unheld })
+    }
 }
 
 #[cfg(test)]

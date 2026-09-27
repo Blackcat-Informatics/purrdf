@@ -226,7 +226,12 @@ line, Python and WebAssembly raise for the same shapes graph, rather than a verd
 a smaller shapes graph than the one named. `purrdf_shapes_import_error_kind(err)` reads
 its kind (`unresolved-import`, `unreached-import` or `invalid-import`), and
 `purrdf_shapes_import_error_iri_count` / `purrdf_shapes_import_error_iri` the IRIs it
-names. An imported document's shapes, rules and functions take part exactly as the
+names. A data graph's `sh:shapesGraph` links (SHACL 1.2 Core section 6.4) are resolved
+through the same `import_iris` / `import_documents` table and unioned into the shapes
+graph: a link on the data graph's `sh:DataGraph` node that nothing resolves is kind
+`unresolved-shapes-graph-link`, a link a prepared product does not hold is
+`unheld-shapes-graph-link`, and a link value that is not an IRI is
+`invalid-shapes-graph-link`. A `sh:shapesGraph` on any other node is data. An imported document's shapes, rules and functions take part exactly as the
 importing document's do, and a prepared product carries the merged closure.
 
 ## Base IRIs across the surface

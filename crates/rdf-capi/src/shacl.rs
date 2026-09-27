@@ -1320,8 +1320,13 @@ pub unsafe extern "C" fn purrdf_shapes_product_error_dimension(
 /// A borrowed, NUL-terminated string valid until `purrdf_error_free(err)`; the C side
 /// must not free it. One of `unresolved-import` (the closure imports ontologies nothing
 /// in hand resolves — pass their documents in the import table), `unreached-import` (the
-/// table supplies documents no import names) or `invalid-import` (a key that is not an
-/// absolute IRI, a key named twice, or a document that is not Turtle).
+/// table supplies documents neither an import nor a data-graph link names),
+/// `invalid-import` (a key that is not an absolute IRI, a key named twice, or a document
+/// that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a graph with
+/// `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
+/// the import table), `unheld-shapes-graph-link` (a prepared product does not hold a graph the data
+/// graph links) or `invalid-shapes-graph-link` (a data-graph `sh:shapesGraph` value that
+/// is not an IRI).
 ///
 /// NULL — never an empty string — when `err` is null or is not a
 /// `PURRDF_STATUS_SHAPES_IMPORT_ERROR`. Branch on it rather than on
@@ -3084,6 +3089,102 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 "unresolved-import".to_owned(),
                 vec!["http://example.org/ns#".to_owned()],
             )
+        );
+    }
+
+    /// SHACL 1.2 Core section 6.4 across the C boundary: a data graph's `sh:shapesGraph`
+    /// link is resolved through the same `import_iris` / `import_documents` table, refused
+    /// by kind and IRI when the table lacks it, and — supplied — its shape reports a result
+    /// the same call without the link does not.
+    #[test]
+    fn a_data_graph_link_resolves_through_the_import_table() {
+        use std::ffi::CString;
+
+        const SHAPES1: &str = "http://example.org/graph-shapes1";
+        let shapes = CString::new(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/> .\n\
+             ex:LocalNode a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+               sh:property ex:LocalShape .\n\
+             ex:LocalShape sh:path ex:q ; sh:maxCount 0 .\n",
+        )
+        .expect("no NUL");
+        let focus = "<http://example.org/Focus> <http://example.org/q> \"x\" .\n\
+             <http://example.org/myDataGraph> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/ns/shacl#DataGraph> .\n";
+        let linked = CString::new(format!(
+            "{focus}<http://example.org/myDataGraph> \
+             <http://www.w3.org/ns/shacl#shapesGraph> <{SHAPES1}> .\n"
+        ))
+        .expect("no NUL");
+        let unlinked = CString::new(focus).expect("no NUL");
+        let link_iri = CString::new(SHAPES1).expect("no NUL");
+        let link_document = CString::new(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/> .\n\
+             ex:LinkedNode a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+               sh:property ex:LinkedShape .\n\
+             ex:LinkedShape sh:path ex:p ; sh:minCount 1 .\n",
+        )
+        .expect("no NUL");
+        let iris = [link_iri.as_ptr()];
+        let documents = [link_document.as_ptr()];
+
+        let validate = |data: &CString,
+                        import_iris: *const *const c_char,
+                        import_documents: *const *const c_char,
+                        import_count: usize|
+         -> (i32, *mut PurrdfBuffer, *mut PurrdfError) {
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, an array of live CStrings of the
+            // stated length (or NULL with a zero count), or a writable local.
+            let status = unsafe {
+                purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut error,
+                )
+            };
+            (status, buffer, error)
+        };
+
+        let (status, _, error) = validate(&linked, std::ptr::null(), std::ptr::null(), 0);
+        // SAFETY: `error` is the live error the call above wrote.
+        let refusal = unsafe { take_import_error(status, error) };
+        assert_eq!(
+            refusal,
+            (
+                PurrdfStatus::ShapesImportError as i32,
+                "unresolved-shapes-graph-link".to_owned(),
+                vec![SHAPES1.to_owned()],
+            )
+        );
+
+        let (status, buffer, _) = validate(&linked, iris.as_ptr(), documents.as_ptr(), 1);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        // SAFETY: `buffer` is the live buffer the successful call wrote.
+        let sarif = unsafe { take_text(buffer) };
+        assert!(
+            sarif.contains("LinkedShape") && sarif.contains("LocalShape"),
+            "{sarif}"
+        );
+
+        let (status, buffer, _) = validate(&unlinked, std::ptr::null(), std::ptr::null(), 0);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        // SAFETY: as above.
+        let sarif = unsafe { take_text(buffer) };
+        assert!(
+            !sarif.contains("LinkedShape") && sarif.contains("LocalShape"),
+            "{sarif}"
         );
     }
 

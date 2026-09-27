@@ -273,6 +273,11 @@ impl ImportMap {
         imported_iris(graph, &self.loaded_iris())
     }
 
+    /// Every IRI declared with [`declare_loaded`](Self::declare_loaded), in IRI order.
+    pub fn loaded(&self) -> impl Iterator<Item = &str> + '_ {
+        self.loaded.iter().map(String::as_str)
+    }
+
     /// The [`declare_loaded`](Self::declare_loaded) IRIs, in IRI order.
     fn loaded_iris(&self) -> Vec<&str> {
         self.loaded.iter().map(String::as_str).collect()
@@ -340,7 +345,28 @@ impl ImportMap {
     /// (see the [module documentation](self)).
     #[must_use]
     pub fn closure(&self, graph: &RdfDataset) -> ImportClosure {
-        let mut queue: VecDeque<String> = self.imported_iris(graph).into_iter().collect();
+        self.closure_with_links(graph, &[])
+    }
+
+    /// [`closure`](Self::closure), with `links` as further roots of the walk: IRIs that name
+    /// graphs to fold in beside `graph`'s own imports, each resolved exactly as an import of
+    /// `graph` is.
+    ///
+    /// SHACL 1.2 Core §6.4 is the caller: a data graph's `sh:shapesGraph` values name graphs
+    /// that "SHOULD be included into the shapes graph used to validate the data graph", and
+    /// "the same strategy of resolving a shapes graph IRI from a version IRI, described for
+    /// Shapes Graphs, applies here". So a link is resolved by the same table, by the same
+    /// in-place declarations (a loaded IRI, an anchor the closure declares, an
+    /// `owl:versionIRI`), and a supplied linked document's own imports are followed from its
+    /// own anchors — the IRI it was linked by, its headers and shapes graphs, and the
+    /// `^owl:versionIRI` step from them. A link is visited, so a map entry only a link names
+    /// is not [`unreached`](ImportClosure::unreached); an unresolved link is reported in
+    /// [`unresolved`](ImportClosure::unresolved) like any import, and the caller tells the two
+    /// apart by its own `links`.
+    #[must_use]
+    pub fn closure_with_links(&self, graph: &RdfDataset, links: &[String]) -> ImportClosure {
+        let mut queue: VecDeque<String> = links.iter().cloned().collect();
+        queue.extend(self.imported_iris(graph));
         if queue.is_empty() {
             // The common case — a graph that imports nothing — costs one term lookup and
             // no survey of the graph's ontology declarations.
@@ -433,6 +459,41 @@ impl ImportMap {
             }
         }
     }
+}
+
+/// Every IRI `graph` resolves an import of IN PLACE, with no document supplied: each IRI the
+/// graph declares an import anchor — a SHACL instance of `owl:Ontology` or `sh:ShapesGraph`
+/// ([`crate::graph_roles`]) — and each IRI some node of the graph names as its
+/// `owl:versionIRI`. The same set [`ImportMap::closure`] consults before it calls an import
+/// unresolved (see the [module documentation](self), "When an import is in hand").
+///
+/// Indexed lookups only; a graph that interns neither `rdf:type` nor `owl:versionIRI` costs
+/// two term lookups.
+///
+/// ```
+/// use purrdf_core::RdfDatasetBuilder;
+/// use purrdf_core::imports::declared_import_targets;
+///
+/// let mut b = RdfDatasetBuilder::new();
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph");
+/// let version_iri = b.intern_iri("http://www.w3.org/2002/07/owl#versionIRI");
+/// let g = b.intern_iri("http://example.org/g");
+/// let v1 = b.intern_iri("http://example.org/g/1");
+/// b.push_quad(g, rdf_type, shapes_graph, None);
+/// b.push_quad(g, version_iri, v1, None);
+/// let graph = b.freeze().expect("freeze");
+///
+/// let targets = declared_import_targets(&graph);
+/// assert!(targets.contains("http://example.org/g"));
+/// assert!(targets.contains("http://example.org/g/1"));
+/// assert_eq!(targets.len(), 2);
+/// ```
+#[must_use]
+pub fn declared_import_targets(graph: &RdfDataset) -> BTreeSet<String> {
+    let mut declared = BTreeSet::new();
+    ImportMap::declared_targets(graph, &mut declared);
+    declared
 }
 
 /// One walk of an import closure: what the map supplied, what nothing resolved, and what

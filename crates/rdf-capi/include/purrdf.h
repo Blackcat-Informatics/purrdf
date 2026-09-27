@@ -222,9 +222,11 @@ enum PurrdfStatus
      * A shapes graph's `owl:imports` closure is not in hand, or the import table the
      * caller passed cannot be used — the one refusal every shapes-graph entry point
      * raises, on every PurRDF host alike. The error carries the refusal's KIND
-     * (`purrdf_shapes_import_error_kind`: `unresolved-import`, `unreached-import` or
-     * `invalid-import`) and the IRIs it names (`purrdf_shapes_import_error_iri_count`,
-     * `purrdf_shapes_import_error_iri`).
+     * (`purrdf_shapes_import_error_kind`: `unresolved-import`, `unreached-import`,
+     * `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+     * `invalid-shapes-graph-link` — the last three for a data graph's `sh:shapesGraph`
+     * links, SHACL 1.2 Core section 6.4) and the IRIs it names
+     * (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
      */
     PURRDF_STATUS_SHAPES_IMPORT_ERROR = 12,
     /**
@@ -3210,8 +3212,13 @@ const char *purrdf_shapes_product_error_dimension(const PurrdfError *err);
  * A borrowed, NUL-terminated string valid until `purrdf_error_free(err)`; the C side
  * must not free it. One of `unresolved-import` (the closure imports ontologies nothing
  * in hand resolves — pass their documents in the import table), `unreached-import` (the
- * table supplies documents no import names) or `invalid-import` (a key that is not an
- * absolute IRI, a key named twice, or a document that is not Turtle).
+ * table supplies documents neither an import nor a data-graph link names),
+ * `invalid-import` (a key that is not an absolute IRI, a key named twice, or a document
+ * that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a graph with
+ * `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
+ * the import table), `unheld-shapes-graph-link` (a prepared product does not hold a graph the data
+ * graph links) or `invalid-shapes-graph-link` (a data-graph `sh:shapesGraph` value that
+ * is not an IRI).
  *
  * NULL — never an empty string — when `err` is null or is not a
  * `PURRDF_STATUS_SHAPES_IMPORT_ERROR`. Branch on it rather than on

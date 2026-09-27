@@ -1633,9 +1633,18 @@ class _ShapesImportError(ValueError):
     PurRDF host alike.
 
     `kind` is `unresolved-import` (pass the named documents in `imports`),
-    `unreached-import` (a table entry no import names) or `invalid-import` (a key that
-    is not an absolute IRI, a key named twice, or a document that is not Turtle);
-    `iris` are the IRIs it names. Branch on `kind`, never on `str(exc)`.
+    `unreached-import` (a table entry neither an import nor a data-graph link names),
+    `invalid-import` (a key that is not an absolute IRI, a key named twice, or a
+    document that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a
+    graph with `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand
+    resolves — pass it in `imports`) or `invalid-shapes-graph-link` (a data-graph
+    `sh:shapesGraph` value that is not an IRI); `iris` are the IRIs (or values) it
+    names. Branch on `kind`, never on `str(exc)`.
+
+    A shapes graph prepared before the data graph was known (`Shapes`,
+    `PreparedShapes`, a product) cannot take a linked graph in: validating a data graph
+    that links one it does not hold raises `ValueError` whose message leads with
+    `unheld-shapes-graph-link`.
     """
 
     kind: str

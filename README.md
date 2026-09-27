@@ -460,7 +460,11 @@ triple pattern.
   shapes document's own IRI or of a graph already in the shapes graph
   (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming
   it) needs no pair; any other unresolved import is
-  refused by name rather than validated against a smaller shapes graph.
+  refused by name rather than validated against a smaller shapes graph. A
+  data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4, on its
+  `sh:DataGraph` node or its own IRI) are resolved through the same table and
+  unioned into the shapes graph, or refused by name; a prepared product refuses
+  a link it does not hold.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`
   lowers a shapes graph (ontology-aware on request, with a coverage report)

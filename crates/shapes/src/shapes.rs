@@ -1157,13 +1157,17 @@ pub fn from_dataset_with_base(
 ) -> Result<Shapes, ShapesError> {
     let loaded: Vec<&str> = base.into_iter().collect();
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &loaded, imports)?;
-    from_resolved_dataset(
+    let mut shapes = from_resolved_dataset(
         &resolved.dataset,
         base,
         &resolved.prefixes,
         box_role_vocab,
         shapes_graph,
-    )
+    )?;
+    shapes
+        .parse_provenance
+        .set_included_graphs(resolved.included);
+    Ok(shapes)
 }
 
 /// Parse a shapes graph whose `owl:imports` closure is ALREADY folded in, without
@@ -1257,9 +1261,13 @@ pub fn from_dataset_with_node_expressions(
         Arc::clone(&resolved.dataset),
         shapes_graph,
     );
-    parser
+    let (mut shapes, expressions) = parser
         .parse_with_expressions(roots)
-        .map_err(|message| parser.load_error(message))
+        .map_err(|message| parser.load_error(message))?;
+    shapes
+        .parse_provenance
+        .set_included_graphs(resolved.included);
+    Ok((shapes, expressions))
 }
 
 // ── Internal parser ────────────────────────────────────────────────────────────

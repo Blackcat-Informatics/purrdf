@@ -176,11 +176,13 @@
 
 use std::sync::Arc;
 
+use purrdf::shapes::ShapesError;
 use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::provenance::ValidatorProvenance;
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
-use purrdf_core::ir::{MutableDataset, QuadValues, ViewLimits};
+use purrdf_core::dataset_view::DatasetView;
+use purrdf_core::ir::{DeltaDatasetView, MutableDataset, QuadValues, ViewLimits};
 use purrdf_core::{DatasetMut, RdfDataset};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
 use purrdf_validate::SarifOptions;
@@ -404,7 +406,25 @@ pub(crate) fn run(
     let validation = validation_options(options)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
-    let source = plan.load(options)?.with_validation_options(validation);
+    // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
+    // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
+    // section 6.4) decide what the shapes graph is — and a change may add or retract a
+    // link like any other row.
+    let snapshot = match change_plan {
+        ChangePlan::WholeGraph => None,
+        ChangePlan::Incremental { added, removed } => Some(Arc::new(
+            apply_changes(&data, options.base, added, removed)?
+                .snapshot_view()
+                .map_err(|error| CliError::Runtime(error.to_string()))?,
+        )),
+    };
+    let data_iris = data_graph_iris(options, data_format)?;
+    let data_iris: Vec<&str> = data_iris.iter().map(String::as_str).collect();
+    let source = match &snapshot {
+        None => plan.load(options, data.as_ref(), &data_iris)?,
+        Some(snapshot) => plan.load(options, snapshot.as_ref(), &data_iris)?,
+    }
+    .with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
     // operator reading a failed run needs to know which shapes produced it even when the
     // validation below never gets to print anything. A restored product renders the
@@ -413,11 +433,9 @@ pub(crate) fn run(
     eprintln!("shacl shapes-provenance {}", source.provenance());
     let shapes = source.shapes();
 
-    let outcome = match change_plan {
-        ChangePlan::WholeGraph => validate(&data, shapes, options, plan.shapes_graph())?,
-        ChangePlan::Incremental { added, removed } => {
-            validate_change(&data, &source, options, plan.shapes_graph(), added, removed)?
-        }
+    let outcome = match &snapshot {
+        None => validate(&data, shapes, options, plan.shapes_graph())?,
+        Some(snapshot) => validate_change(snapshot, &source, options, plan.shapes_graph())?,
     };
     let Some(report) = outcome else {
         // A tripped governor: the receipt is already on stderr and there is no report to
@@ -465,6 +483,25 @@ fn validate(
             eprint!("{}", governors::render_validation_trip(tripped, &evidence));
             Ok(None)
         }
+    }
+}
+
+/// The IRIs the DATA graph was loaded under: `--base`, or the retrieval IRI a syntax with
+/// relative references parses under ([`source::effective_base`], the derivation the data
+/// parse itself used). A `sh:shapesGraph` on one of these is a link (SHACL 1.2 Core section
+/// 6.4) whether or not the graph types that node `sh:DataGraph`. A pack or GTS container
+/// stores resolved IRIs and was loaded under none; stdin has no retrieval IRI.
+fn data_graph_iris(
+    options: &ValidateOptions<'_>,
+    format: SourceFormat,
+) -> Result<Vec<String>, CliError> {
+    match format {
+        SourceFormat::Native(native) => {
+            Ok(source::effective_base(options.input, native, options.base)?
+                .into_iter()
+                .collect())
+        }
+        SourceFormat::Pack | SourceFormat::Gts => Ok(Vec::new()),
     }
 }
 
@@ -566,34 +603,26 @@ impl<'a> ChangePlan<'a> {
 /// A failed read of either change document, a change row that carries a relative IRI, a
 /// snapshot the retention limits refuse, or a hard validation failure.
 fn validate_change(
-    data: &Arc<RdfDataset>,
+    snapshot: &Arc<DeltaDatasetView>,
     source: &ShapesSource,
     options: &ValidateOptions<'_>,
     shapes_graph: Option<&str>,
-    added: Option<(&str, SourceFormat)>,
-    removed: Option<(&str, SourceFormat)>,
 ) -> Result<Option<ValidationReport>, CliError> {
-    let mutation = apply_changes(data, options.base, added, removed)?;
-    let snapshot = Arc::new(
-        mutation
-            .snapshot_view()
-            .map_err(|error| CliError::Runtime(error.to_string()))?,
-    );
     let validator = source
         .prepared()
-        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), shapes_graph, ViewLimits::default())
+        .bind_delta_with_shapes_graph(Arc::clone(snapshot), shapes_graph, ViewLimits::default())
         .map_err(CliError::Runtime)?;
 
     if !options.governors.is_engaged() {
         let validation =
-            engine::validate_change(&validator, &snapshot).map_err(CliError::Runtime)?;
+            engine::validate_change(&validator, snapshot).map_err(CliError::Runtime)?;
         render_expansion(validation.scope);
         return Ok(Some(validation.report));
     }
 
     let governed = engine::validate_change_with_governors(
         &validator,
-        &snapshot,
+        snapshot,
         &options.governors.to_governors(),
     )
     .map_err(CliError::Runtime)?;
@@ -753,14 +782,31 @@ fn emit(
 /// on `--shapes-graph` as well (see
 /// [`resolve_shapes_graph`](crate::shapes_source::resolve_shapes_graph)): one derivation is
 /// what keeps the flag and the document agreeing about what a relative IRI denotes.
-fn load_shapes(
+///
+/// # The data graph's `sh:shapesGraph` links
+///
+/// `data` is the graph this run validates and `data_iris` the IRIs it was loaded under. Every
+/// graph it links with `sh:shapesGraph` (SHACL 1.2 Core section 6.4) joins the import table
+/// as a link, so the engine resolves it through the same `--import IRI=FILE` pairs an
+/// `owl:imports` resolves through and unions it into the shapes graph — or refuses it by name.
+fn load_shapes<D: DatasetView>(
     options: &ValidateOptions<'_>,
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    data: &D,
+    data_iris: &[&str],
 ) -> Result<Shapes, CliError> {
     let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
-    let table = crate::shapes_source::shapes_imports(&root, options.imports)?;
+    let mut table = crate::shapes_source::shapes_imports(&root, options.imports)?;
+    table.link_data_graph(data, data_iris).map_err(|error| {
+        crate::shapes_source::shapes_error(
+            ShapesError::Imports(error),
+            &format!("--shapes {path}"),
+            &root,
+            "--shapes-base",
+        )
+    })?;
     let box_role_vocab = options
         .box_role_vocab
         .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
@@ -907,14 +953,27 @@ impl<'a> ShapesPlan<'a> {
     /// # Errors
     ///
     /// Any read, parse, import-resolution or admission failure.
-    fn load(&self, options: &ValidateOptions<'_>) -> Result<ShapesSource, CliError> {
+    ///
+    /// # The data graph's links
+    ///
+    /// A document is parsed with the data graph's `sh:shapesGraph` links folded in (see
+    /// [`load_shapes`]). A product was prepared before this data graph existed and cannot
+    /// take a graph in, so each link must be one it already holds —
+    /// [`check_data_graph_links`](purrdf::shapes::imports::check_data_graph_links), with the
+    /// data graph's own IRIs as anchors — or the run is refused naming the link.
+    fn load<D: DatasetView>(
+        &self,
+        options: &ValidateOptions<'_>,
+        data: &D,
+        data_iris: &[&str],
+    ) -> Result<ShapesSource, CliError> {
         match *self {
             Self::Document {
                 path,
                 format,
                 ref base,
                 ..
-            } => load_shapes(options, path, format, base.as_deref())
+            } => load_shapes(options, path, format, base.as_deref(), data, data_iris)
                 .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
             Self::Product {
                 path,
@@ -935,9 +994,14 @@ impl<'a> ShapesPlan<'a> {
                         )
                     }
                 };
-                admitted.map(ShapesSource::Restored).map_err(|error| {
+                let prepared = admitted.map_err(|error| {
                     crate::shacl::admission_error(&format!("--shapes-product {path}"), &error)
-                })
+                })?;
+                purrdf::shapes::imports::check_data_graph_links(data, data_iris, prepared.shapes())
+                    .map_err(|error| {
+                        CliError::Runtime(format!("--shapes-product {path}: {error}"))
+                    })?;
+                Ok(ShapesSource::Restored(prepared))
             }
         }
     }

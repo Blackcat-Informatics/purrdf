@@ -2963,3 +2963,202 @@ fn a_shapes_blank_and_a_data_blank_are_two_nodes_in_the_report() {
         .collect();
     assert_eq!(related, [shape.as_str()]);
 }
+
+// ── SHACL 1.2 Core section 6.4: a data graph links its shapes graphs ─────────────
+
+/// The supplied shapes graph of the link fixtures: `ex:Focus` must have no `ex:q` (it has
+/// one), so this shape reports on every run and the linked shape's result is the one
+/// that appears only with the link.
+const LINK_LOCAL_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    @prefix ex: <http://example.org/> .\n\
+    ex:LocalShape a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+      sh:property [ sh:path ex:q ; sh:maxCount 0 ] .\n";
+
+/// The linked shapes graph: `ex:Focus` must have an `ex:p` (it has none).
+const LINKED_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    @prefix ex: <http://example.org/> .\n\
+    ex:LinkedShape a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+      sh:property [ sh:path ex:p ; sh:minCount 1 ] .\n";
+
+/// A Turtle data graph: `ex:Focus ex:q "x"`, plus `extra`.
+fn link_data(extra: &str) -> String {
+    format!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix ex: <http://example.org/> .\n\
+         ex:Focus ex:q \"x\" .\n{extra}"
+    )
+}
+
+/// An unsupplied link is refused by name with the `--import` pair that resolves it; the
+/// supplied link's shape fires beside the supplied shapes graph's; without the link only the
+/// supplied shape fires; a `sh:shapesGraph` on a node that is no data-graph anchor is data.
+#[test]
+fn a_data_graph_link_is_resolved_through_import_and_unioned() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", LINK_LOCAL_SHAPES);
+    let linked = write_file(dir.path(), "linked.ttl", LINKED_SHAPES);
+    let pair = format!("http://example.org/graph-shapes1={linked}");
+    let typed = write_file(
+        dir.path(),
+        "typed.ttl",
+        &link_data(
+            "ex:myDataGraph a sh:DataGraph ; sh:shapesGraph ex:graph-shapes1 ;\n\
+               <http://www.w3.org/2002/07/owl#imports> ex:never-supplied .\n",
+        ),
+    );
+
+    let refused = run(&["validate", "--shapes", &shapes, &typed]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains("unresolved-shapes-graph-link")
+            && err.contains("`--import http://example.org/graph-shapes1=FILE`"),
+        "{err}"
+    );
+
+    let linked_run = run(&["validate", "--shapes", &shapes, "--import", &pair, &typed]);
+    let err = stderr(&linked_run);
+    assert_eq!(code(&linked_run), 0, "{err}");
+    assert!(err.contains("shacl results 2\n"), "{err}");
+    let report = stdout(&linked_run);
+    assert!(
+        report.contains("MinCountConstraintComponent")
+            && report.contains("MaxCountConstraintComponent"),
+        "{report}"
+    );
+
+    // The control: no link, so only the supplied shapes graph's shape reports.
+    let unlinked = write_file(
+        dir.path(),
+        "unlinked.ttl",
+        &link_data("ex:myDataGraph a sh:DataGraph .\n"),
+    );
+    let control = run(&["validate", "--shapes", &shapes, &unlinked]);
+    let err = stderr(&control);
+    assert_eq!(code(&control), 0, "{err}");
+    assert!(err.contains("shacl results 1\n"), "{err}");
+    assert!(!stdout(&control).contains("MinCountConstraintComponent"));
+
+    // Not an anchor: data. No refusal, and the pair is unreached — nothing was unioned.
+    let data_only = write_file(
+        dir.path(),
+        "data-only.ttl",
+        &link_data("ex:someNode sh:shapesGraph ex:graph-shapes1 .\n"),
+    );
+    let plain = run(&["validate", "--shapes", &shapes, &data_only]);
+    let err = stderr(&plain);
+    assert_eq!(code(&plain), 0, "{err}");
+    assert!(err.contains("shacl results 1\n"), "{err}");
+    let unreached = run(&[
+        "validate", "--shapes", &shapes, "--import", &pair, &data_only,
+    ]);
+    let err = stderr(&unreached);
+    assert_eq!(code(&unreached), 2, "{err}");
+    assert!(err.contains("unreached-import"), "{err}");
+}
+
+/// The data document's own retrieval IRI anchors a link with no `sh:DataGraph` type: `<>`
+/// in the data document IS the data graph.
+#[test]
+fn the_data_documents_own_iri_anchors_a_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", LINK_LOCAL_SHAPES);
+    let linked = write_file(dir.path(), "linked.ttl", LINKED_SHAPES);
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        &link_data("<> sh:shapesGraph ex:graph-shapes1 .\n"),
+    );
+    let refused = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(err.contains("unresolved-shapes-graph-link"), "{err}");
+    let accepted = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--import",
+        &format!("http://example.org/graph-shapes1={linked}"),
+        &data,
+    ]);
+    let err = stderr(&accepted);
+    assert_eq!(code(&accepted), 0, "{err}");
+    assert!(err.contains("shacl results 2\n"), "{err}");
+}
+
+/// A change that adds a link changes the shapes graph: the run validates in full, says why,
+/// and reports the linked shape's result about a node the change never touched.
+#[test]
+fn a_change_that_adds_a_link_validates_in_full() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", LINK_LOCAL_SHAPES);
+    let linked = write_file(dir.path(), "linked.ttl", LINKED_SHAPES);
+    let base = write_file(
+        dir.path(),
+        "base.ttl",
+        &link_data("ex:myDataGraph a sh:DataGraph .\n"),
+    );
+    let added = write_file(
+        dir.path(),
+        "added.nt",
+        "<http://example.org/myDataGraph> <http://www.w3.org/ns/shacl#shapesGraph> \
+         <http://example.org/graph-shapes1> .\n",
+    );
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--import",
+        &format!("http://example.org/graph-shapes1={linked}"),
+        "--changes",
+        &added,
+        &base,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "{err}");
+    assert!(
+        err.contains("shacl change-expansion everything") && err.contains("sh:shapesGraph"),
+        "{err}"
+    );
+    assert!(err.contains("shacl results 2\n"), "{err}");
+}
+
+/// A prepared product cannot take a linked graph in: a link it does not hold is refused by
+/// name, and a link to a shapes graph it declares validates.
+#[test]
+fn a_product_must_hold_every_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "shapes.ttl",
+        &format!("{LINK_LOCAL_SHAPES}ex:declared a sh:ShapesGraph .\n"),
+    );
+    let product = dir.path().join("shapes.purrshp");
+    let product = product.to_str().expect("utf-8");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+
+    let unheld = write_file(
+        dir.path(),
+        "unheld.ttl",
+        &link_data("ex:myDataGraph a sh:DataGraph ; sh:shapesGraph ex:graph-shapes1 .\n"),
+    );
+    let refused = run(&["validate", "--shapes-product", product, &unheld]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains("unheld-shapes-graph-link")
+            && err.contains("<http://example.org/graph-shapes1>"),
+        "{err}"
+    );
+
+    let held = write_file(
+        dir.path(),
+        "held.ttl",
+        &link_data("ex:myDataGraph a sh:DataGraph ; sh:shapesGraph ex:declared .\n"),
+    );
+    let accepted = run(&["validate", "--shapes-product", product, &held]);
+    let err = stderr(&accepted);
+    assert_eq!(code(&accepted), 0, "{err}");
+    assert!(err.contains("shacl results 1\n"), "{err}");
+}

@@ -186,3 +186,57 @@ def test_the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_
         purrdf.shapes.validate(_prefix_idiom("a owl:Ontology ;"), PREFIX_IDIOM_DATA)
     assert raised.value.kind == "unresolved-import"
     assert raised.value.iris == ["http://example.org/ns#"]
+
+
+# ── SHACL 1.2 Core section 6.4: a data graph links its shapes graphs ─────────────
+
+GRAPH_SHAPES1 = "http://example.org/graph-shapes1"
+
+# The supplied shapes graph: ex:Focus must have no ex:q (it has one).
+LINK_LOCAL = """@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:LocalShape a sh:NodeShape ; sh:targetNode ex:Focus ;
+  sh:property [ sh:path ex:q ; sh:maxCount 0 ] .
+"""
+
+# The linked shapes graph: ex:Focus must have an ex:p (it has none).
+LINKED = """@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:LinkedShape a sh:NodeShape ; sh:targetNode ex:Focus ;
+  sh:property [ sh:path ex:p ; sh:minCount 1 ] .
+"""
+
+MAX_COUNT = "http://www.w3.org/ns/shacl#MaxCountConstraintComponent"
+
+UNLINKED_DATA = (
+    '<http://example.org/Focus> <http://example.org/q> "x" .\n'
+    "<http://example.org/myDataGraph> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://www.w3.org/ns/shacl#DataGraph> .\n"
+)
+LINKED_DATA = (
+    UNLINKED_DATA
+    + "<http://example.org/myDataGraph> <http://www.w3.org/ns/shacl#shapesGraph> "
+    f"<{GRAPH_SHAPES1}> .\n"
+)
+
+
+def test_a_data_graph_link_is_refused_unsupplied_and_unioned_supplied() -> None:
+    with pytest.raises(purrdf.shapes.ShapesImportError) as raised:
+        purrdf.shapes.validate(LINK_LOCAL, LINKED_DATA)
+    assert raised.value.kind == "unresolved-shapes-graph-link"
+    assert raised.value.iris == [GRAPH_SHAPES1]
+
+    linked = purrdf.shapes.validate(LINK_LOCAL, LINKED_DATA, imports=[(GRAPH_SHAPES1, LINKED)])
+    assert sorted(r["component"] for r in linked["results"]) == [MAX_COUNT, MIN_COUNT]
+    # The control: no link, only the supplied shapes graph's shape.
+    unlinked = purrdf.shapes.validate(LINK_LOCAL, UNLINKED_DATA)
+    assert [r["component"] for r in unlinked["results"]] == [MAX_COUNT]
+
+
+def test_parsed_shapes_must_hold_every_link_of_the_data_graph() -> None:
+    shapes = purrdf.shapes.Shapes(LINK_LOCAL)
+    with pytest.raises(purrdf.shapes.ShapesImportError) as raised:
+        shapes.validate_nt(LINKED_DATA)
+    assert raised.value.kind == "unheld-shapes-graph-link"
+    assert raised.value.iris == [GRAPH_SHAPES1]
+    assert [r["component"] for r in shapes.validate_nt(UNLINKED_DATA).results] == [MAX_COUNT]

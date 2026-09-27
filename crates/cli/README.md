@@ -711,6 +711,23 @@ resolves it, and — for a document that imports its own published IRI — the
 `--shapes-base` that reads it under that IRI; a pair the closure never reaches
 is a usage error (exit `2`).
 
+**`sh:shapesGraph` in the data graph.** SHACL 1.2 Core §6.4 lets a data graph
+name the shapes graphs that validate it: `<G> a sh:DataGraph ; sh:shapesGraph
+<S>`. Every such `<S>` — on a `sh:DataGraph` node, or on the data document's own
+IRI (`--base`, or its `file://` retrieval IRI) — is resolved through the same
+`--import` pairs, by the same rule (a version IRI, a graph already in the
+shapes graph, the linked graph's own `owl:imports`), and unioned into the
+`--shapes` graph; a pair only a link names is used, not unreached. A link no
+pair resolves is refused (exit `1`, `unresolved-shapes-graph-link`) naming the
+`--import` pair that resolves it, and a link value that is not an IRI is
+refused as `invalid-shapes-graph-link`. A `sh:shapesGraph` on any other node is
+data. `--shapes` stays required; an empty shapes document makes the linked
+graphs the whole shapes graph. A `--shapes-product` was prepared before the
+data graph existed and cannot take a graph in: a link it does not hold (its
+base, or a graph it declares) is refused as `unheld-shapes-graph-link`. A
+`--changes` run whose change adds or retracts a link validates in full, and its
+`shacl change-expansion everything` line says why.
+
 ```sh
 # The results graph, N-Triples on stdout, verdict on stderr.
 purrdf validate --shapes shapes.ttl data.ttl

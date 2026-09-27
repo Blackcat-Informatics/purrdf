@@ -1668,6 +1668,7 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
         let shapes = Arc::clone(&prepared.shapes);
+        check_links(&data, &shapes)?;
         // The rules entailment regime applies to every validation this binding answers.
         let data = match entailed_for_validation(&data, &shapes)? {
             Some(entailed) => entailed,
@@ -2113,6 +2114,13 @@ impl PreparedValidator {
         }
         if let Some(reason) = self.bound.footprint().opaque() {
             return Ok(FocusExpansion::Everything { reason });
+        }
+        if changes_a_shapes_graph_link(delta) {
+            return Ok(FocusExpansion::Everything {
+                reason: "the change adds or retracts a data-graph sh:shapesGraph link (SHACL 1.2 \
+                         Core section 6.4), so the shapes graph itself changed and no focus node \
+                         is unaffected",
+            });
         }
         // The change set in THIS binding's id space, mapped once rather than once
         // per trigger: the trigger loop below rescans it for every read the shapes
@@ -2695,10 +2703,82 @@ pub fn validate_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    check_links(data, shapes)?;
+    validate_linked_with_focus_filter(data, shapes, include_focus)
+}
+
+/// Whether `delta` changes the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4),
+/// and with them the shapes graph: a changed `sh:shapesGraph` row (a link, or a triple an IRI
+/// the host loaded the data graph under may anchor), or a changed type or class axiom that
+/// makes a node a `sh:DataGraph` or stops it being one. A bounded expansion assumes one
+/// shapes graph on both sides of the change; a changed link breaks that for every focus node.
+///
+/// A graph that interns no `sh:shapesGraph` costs a term lookup per side.
+fn changes_a_shapes_graph_link(delta: &::purrdf::ir::DeltaDatasetView) -> bool {
+    let link = ::purrdf::TermValue::iri(crate::imports::SH_SHAPES_GRAPH_LINK);
+    // The snapshot interns every term of its base and of its change: a snapshot that does
+    // not intern `sh:shapesGraph` has no link on either side.
+    let Some(predicate) = delta.term_id_by_value(&link) else {
+        return false;
+    };
+    if delta.changed_quads().any(|quad| quad.p == predicate) {
+        return true;
+    }
+    crate::imports::data_graph_links_by(delta.base().as_ref(), &link, &[])
+        != crate::imports::data_graph_links_by(delta, &link, &[])
+}
+
+/// Refuse a data graph whose `sh:shapesGraph` links (SHACL 1.2 Core §6.4) name a graph
+/// `shapes` does not hold — [`crate::imports::check_data_graph_links`], read off the Core
+/// data graph with no loaded IRI, which is all a bound data holder knows. Every validation
+/// of a data graph passes here: the free functions through [`validate_with_focus_filter`],
+/// every binding through [`PreparedValidator`]'s one bind.
+///
+/// A data graph that does not intern `sh:shapesGraph` links nothing; asking costs a borrowed
+/// lookup, which on a native dataset allocates nothing.
+fn check_links(data: &ShaclData, shapes: &Shapes) -> Result<(), String> {
+    use crate::data_view::ShaclRead as _;
+    let core = data.core_view();
+    if core
+        .term_id_by_iri(crate::imports::SH_SHAPES_GRAPH_LINK)
+        .is_none()
+    {
+        return Ok(());
+    }
+    crate::imports::check_data_graph_links(core, &[], shapes).map_err(|error| error.to_string())
+}
+
+/// [`validate_with_focus_filter`] after the data graph's links were checked — or, for
+/// [`validate_dataset_as_document`], deliberately not read.
+fn validate_linked_with_focus_filter<F>(
+    data: &ShaclData,
+    shapes: &Shapes,
+    include_focus: F,
+) -> Result<ValidationReport, String>
+where
+    F: FnMut(&Shape, &Term) -> bool,
+{
     match entailed_for_validation(data, shapes)? {
         Some(entailed) => validate_data_with_focus_filter(&entailed, shapes, include_focus),
         None => validate_data_with_focus_filter(data, shapes, include_focus),
     }
+}
+
+/// Validate a DOCUMENT against a fixed oracle shapes graph, reading none of its
+/// `sh:shapesGraph` triples as links.
+///
+/// Only `shapes lint` reaches this: it validates a SHAPES graph against the W3C's
+/// `shacl-shacl.ttl` to certify it, and a data-graph node that document declares links
+/// shapes for the data graph it describes, not for the certification — the oracle is fixed
+/// by the specification. Every validation of a data graph goes through
+/// [`validate_with_focus_filter`] instead.
+pub(crate) fn validate_dataset_as_document(
+    data: &RdfDataset,
+    shapes: &Shapes,
+) -> Result<ValidationReport, String> {
+    let projected = project_dataset(data)?;
+    let data = build_projected_data(projected, shapes, None)?;
+    validate_linked_with_focus_filter(&data, shapes, |_, _| true)
 }
 
 /// The data graph validation reads under the SHACL rules entailment regime: `data`
@@ -2756,9 +2836,16 @@ where
 /// flattened so GTS bundle partitions behave like the repository's Turtle
 /// source merge, which loads all inputs into one default graph.
 ///
+/// `shapes` was built without this data graph, so a graph the data graph links with
+/// `sh:shapesGraph` (SHACL 1.2 Core §6.4) cannot be folded in here: every link must be one
+/// `shapes` already holds ([`crate::imports::check_data_graph_links`]). That check runs on
+/// every validation and every [`PreparedShapes`] binding.
+///
 /// # Errors
 ///
-/// Returns an error string if the SHACL projection cannot be frozen into the IR.
+/// Returns an error string if the SHACL projection cannot be frozen into the IR, or —
+/// led by `unheld-shapes-graph-link` or `invalid-shapes-graph-link` — when the data
+/// graph links a graph `shapes` does not hold or names a link that is not an IRI.
 pub fn validate_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<ValidationReport, String> {
     let dataset = project_dataset(data)?;
     // The engine reads pattern lookups directly from the frozen IR; SHACL-SPARQL
@@ -3069,6 +3156,13 @@ pub fn validate_graphs(
 /// conformance-disallow set — with the shapes graph's `owl:imports` table (see
 /// [`crate::imports`]).
 ///
+/// The data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4) — on its `sh:DataGraph`
+/// nodes, since N-Triples carries no base — are folded into `imports` before the shapes
+/// graph is parsed, so every linked graph is resolved through the table and unioned into
+/// the shapes graph, or refused by name ([`crate::imports`], "A data graph's
+/// `sh:shapesGraph` links"). The same holds for [`validate_graphs_with_config`] and
+/// [`validate_dataset_graphs`].
+///
 /// # Errors
 ///
 /// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
@@ -3083,9 +3177,27 @@ pub fn validate_graphs_with_options(
 ) -> Result<ValidationReport, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    let imports = linked_imports(data.as_ref(), imports)?;
+    let mut shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, &imports)?;
     shapes.set_validation_options(options.clone());
     Ok(validate_dataset(data.as_ref(), &shapes)?)
+}
+
+/// `imports` with the `sh:shapesGraph` links of the data graph `data` folded in
+/// ([`ShapesImports::link_data_graph`], SHACL 1.2 Core §6.4), so the shapes graph parsed
+/// against it includes every graph the data graph links. `data` was handed over as text or
+/// a dataset with no retrieval IRI, so only its `sh:DataGraph` nodes anchor a link.
+fn linked_imports<'a>(
+    data: &RdfDataset,
+    imports: &'a ShapesImports,
+) -> Result<std::borrow::Cow<'a, ShapesImports>, ShapesError> {
+    let links = crate::imports::data_graph_links(data, &[])?;
+    if links.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(imports));
+    }
+    let mut linked = imports.clone();
+    linked.link_data_graph(data, &[])?;
+    Ok(std::borrow::Cow::Owned(linked))
 }
 
 /// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
@@ -3110,7 +3222,8 @@ pub fn validate_graphs_with_config(
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
-    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, imports)?;
+    let imports = linked_imports(data.as_ref(), imports)?;
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, &imports)?;
     Ok(validate_dataset(data.as_ref(), &shapes)?)
 }
 
@@ -3128,7 +3241,8 @@ pub fn validate_dataset_graphs(
     shapes_base: Option<&str>,
     imports: &ShapesImports,
 ) -> Result<ValidationReport, ShapesError> {
-    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    let imports = linked_imports(data, imports)?;
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, &imports)?;
     Ok(validate_dataset(data, &shapes)?)
 }
 

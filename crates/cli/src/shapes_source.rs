@@ -262,8 +262,9 @@ pub(crate) fn shapes_error(
             if imported_iris(root.dataset.as_ref(), &loaded).is_empty() {
                 return CliError::Usage(format!(
                     "unreached-import: --import {named}: the shapes graph has no owl:imports at \
-                     all, so {these} would be read and never used. Remove the pair, or import \
-                     the IRI from the shapes graph",
+                     all and the data graph links no such graph, so {these} would be read and \
+                     never used. Remove the pair, import the IRI from the shapes graph, or link \
+                     it from the data graph with sh:shapesGraph",
                     named = named.join(", "),
                     these = if iris.len() == 1 {
                         "this document"
@@ -274,8 +275,9 @@ pub(crate) fn shapes_error(
             }
             CliError::Usage(format!(
                 "unreached-import: --import {named}: the shapes graph's import closure never \
-                 reaches {it}, so {these} would be read and never used. Remove the pair, or \
-                 import the IRI from the shapes graph",
+                 reaches {it} and no data-graph sh:shapesGraph link names {it}, so {these} \
+                 would be read and never used. Remove the pair, import the IRI from the shapes \
+                 graph, or link it from the data graph",
                 named = named.join(", "),
                 it = if iris.len() == 1 { "it" } else { "them" },
                 these = if iris.len() == 1 {
@@ -287,6 +289,29 @@ pub(crate) fn shapes_error(
         }
         error @ ShapesImportError::InvalidEntry { .. } => {
             CliError::Usage(format!("--import {error}"))
+        }
+        ShapesImportError::UnresolvedLink { iris } => {
+            let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
+            let remedy: Vec<String> = iris
+                .iter()
+                .map(|iri| format!("`--import {iri}=FILE`"))
+                .collect();
+            CliError::Runtime(format!(
+                "unresolved-shapes-graph-link: the data graph links {named} with \
+                 sh:shapesGraph (SHACL 1.2 Core section 6.4), which {verb} not in the shapes \
+                 graph and no --import pair resolves. A linked graph is part of the shapes \
+                 graph that validates this data graph, PurRDF fetches nothing the operator \
+                 did not name, and going on without it would use a smaller shapes graph than \
+                 the data graph names. Pass {remedy} to fold {it} in, or merge {it} into the \
+                 shapes document",
+                named = named.join(", "),
+                verb = if iris.len() == 1 { "is" } else { "are" },
+                remedy = remedy.join(" "),
+                it = if iris.len() == 1 { "it" } else { "them" },
+            ))
+        }
+        error @ (ShapesImportError::UnheldLink { .. } | ShapesImportError::InvalidLink { .. }) => {
+            CliError::Runtime(error.to_string())
         }
     }
 }

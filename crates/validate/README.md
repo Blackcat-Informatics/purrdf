@@ -73,6 +73,14 @@ refused with the typed `ShapesError::Imports`, the same refusal the Python,
 WebAssembly and C hosts carry, rather than validated without it. PurRDF fetches
 nothing.
 
+The same table resolves the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4):
+a `sh:shapesGraph` on a `sh:DataGraph` node of the data graph names a graph that is
+looked up, followed through its own `owl:imports` and unioned into the shapes graph —
+the shapes document may even be empty — or refused by name
+(`unresolved-shapes-graph-link`). On any other node it is data. A prepared product
+cannot take a graph in, so validating with one refuses a link it does not hold
+(`unheld-shapes-graph-link`).
+
 Lower-level entry points build a `SarifLog` value instead of a string —
 `build_report_sarif` for an existing SHACL `ValidationReport`, and
 `build_diagnostics_sarif` for a slice of parser/codec `RdfDiagnostic`s — so a

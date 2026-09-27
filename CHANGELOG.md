@@ -10,6 +10,44 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **core, shapes, validate, cli, python, wasm, capi (BREAKING):** a data graph's
+  `sh:shapesGraph` links are part of the shapes graph that validates it (SHACL 1.2
+  Core §6.4, whose SHOULD PurRDF reads as a MUST). A `sh:shapesGraph` whose subject is
+  the data graph's loaded IRI (the command line's `--base` or the data file's `file://`
+  retrieval IRI) or a `sh:DataGraph` node names a graph that is resolved through the
+  SAME import table as the shapes graph's `owl:imports` — a table entry, a graph the
+  shapes graph already declares, the `^owl:versionIRI` step, and the linked graph's
+  own `owl:imports` closure — and unioned into the shapes graph; a table entry only a
+  link names is reached, not refused as unreached. It was silently ignored. A
+  `sh:shapesGraph` on any other node is data, and the data graph's own `owl:imports`
+  stay unenacted (§6.2). `ShapesImportError` gains `UnresolvedLink`
+  (`unresolved-shapes-graph-link`, a link nothing resolves), `UnheldLink`
+  (`unheld-shapes-graph-link`) and `InvalidLink` (`invalid-shapes-graph-link`, a link
+  value that is not an IRI); every host carries the new kinds in its existing typed
+  import refusal, and the command line names the `--import IRI=FILE` pair that
+  resolves a link. New API: `purrdf_shapes::imports::{data_graph_links,
+  check_data_graph_links, SH_SHAPES_GRAPH_LINK}`, `ShapesImports::link_data_graph`
+  and `links`, `ResolvedShapesGraph::included`, `ParseProvenance::included_graphs`,
+  and `purrdf_core::imports::{ImportMap::closure_with_links, ImportMap::loaded,
+  declared_import_targets}`. The text entry points (`validate_graphs_with_options`,
+  `validate_graphs_with_config`, `validate_dataset_graphs`, the `purrdf-validate`
+  SARIF and change-path boundaries every binding calls, and `purrdf validate
+  --shapes`) fold the links in before parsing the shapes graph, so an empty shapes
+  document validates against the linked graphs alone. A shapes graph built before
+  the data graph was known — a `Shapes`, a `PreparedShapes`, a prepared product —
+  cannot take a graph in: every validation and every binding checks that each link
+  is one it already holds (its loaded IRI, a graph its closure or links folded in, or
+  an anchor or version IRI it declares) and refuses any other as `UnheldLink`, typed
+  on the product and Python paths and led by the kind label in the engine's string
+  errors. A change that adds or retracts a link changes the shapes graph, so the
+  incremental change path reports `ChangeScope::Everything` and validates in full.
+  Python's `Shapes.validate_against_dataset` now returns a `Result`. `purrdf validate
+  --changes` reads its change documents before the shapes graph, because the mutated
+  graph's links decide what the shapes graph is. The change expansion's fixed
+  allocation cost rises by one (the `sh:shapesGraph` lookup), re-pinned in
+  `change_path_alloc` and `sparql_path_alloc`; binding a native dataset costs nothing
+  more.
+
 - **datalog, shapes, entail, validate, cli, python, wasm, capi:** the
   stored-fact and join-step limits are the caller's. `EvalOptions` gains
   `with_max_stored_facts` and `with_max_join_steps`; `RuleOptions` and

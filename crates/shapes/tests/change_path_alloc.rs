@@ -373,6 +373,11 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// a list of two or more lowers to an identity set at bind; a single class stays
 /// a plain slot. The seam shapes graph carries one `sh:class`, so binding it
 /// builds no set table and the list form costs this figure nothing.
+///
+/// Every binding also checks the data graph's `sh:shapesGraph` links (SHACL 1.2 Core
+/// section 6.4). Over this native dataset that is one borrowed lookup of the predicate,
+/// which allocates nothing, and a data graph that does not intern it links nothing — so
+/// the check costs this figure nothing either.
 const BIND_ALLOC_CONST: u64 = 59;
 
 /// How many allocations one prepared-product `admit` costs.
@@ -2093,7 +2098,14 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
 /// once per call, and on a delta-backed view that lookup builds the owned term it
 /// asks for — one allocation, charged once, whatever the change's size. It adds
 /// nothing to the per-row or per-doubling terms.
-const EXPANSION_CONST: u64 = 3;
+///
+/// A fourth is the same kind of lookup for `sh:shapesGraph`. A change that adds or
+/// retracts a data-graph link (SHACL 1.2 Core section 6.4) changes the shapes graph
+/// itself, so the expansion first asks whether the snapshot interns that predicate at all
+/// — one owned term on a delta-backed view, charged once per call. A snapshot that does
+/// not intern it has no link on either side of the change, and the question costs nothing
+/// further.
+const EXPANSION_CONST: u64 = 4;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
 ///
@@ -2271,10 +2283,10 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// matching trigger is anchored AT the changed row's subject, so the expansion takes
 /// the branch that performs no pattern lookup at all.
 ///
-/// Measured on this revision the per-row term is then exactly zero — 17 allocations
-/// for 32 changed rows and 26 for 256, which is `2 + 3·log2(N)`: the three doubling
-/// series, and a constant of 2 that includes the `sh:shape` trigger's predicate
-/// lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
+/// Measured on this revision the per-row term is then exactly zero — 18 allocations
+/// for 32 changed rows and 27 for 256, which is `3 + 3·log2(N)`: the three doubling
+/// series, and a constant of 3 that includes the `sh:shape` trigger's predicate
+/// lookup and the `sh:shapesGraph` link lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
 #[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
@@ -2292,9 +2304,9 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
         let doublings = u64::from(changes.ilog2());
         assert_eq!(
             sample.allocations,
-            2 + EXPANSION_PER_DOUBLING * doublings,
+            3 + EXPANSION_PER_DOUBLING * doublings,
             "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
-             2 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             3 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
              is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
              in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
              probe it is attributed to\n  {sample:?}",

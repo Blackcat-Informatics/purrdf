@@ -950,6 +950,26 @@ let shapes = engine::parse_shapes_with_config(shapes_ttl, None, None, &imports)
 assert_eq!(shapes.node_shapes.len(), 1);
 ```
 
+### A data graph's `sh:shapesGraph` links
+
+SHACL 1.2 Core §6.4 lets a data graph name the graphs that "SHOULD be included into the
+shapes graph used to validate the data graph" — `<G> a sh:DataGraph ; sh:shapesGraph <S>`
+— and PurRDF reads the SHOULD as a MUST. A `sh:shapesGraph` is a link when its subject is
+the data graph's loaded IRI (when the host knows one) or a `sh:DataGraph`, by the same
+classifier; on any other node it is data. `imports::data_graph_links` reads the links and
+`ShapesImports::link_data_graph` puts them in the table, where `resolve_shapes_imports`
+resolves each one exactly as an import — the same table, the same in-place declarations,
+the `^owl:versionIRI` step, the linked graph's own `owl:imports` — and unions it into the
+shapes graph. `engine::validate_graphs_with_options` and the other text entry points do
+this themselves. A link nothing resolves is `ShapesImportError::UnresolvedLink`, a link
+value that is not an IRI is `InvalidLink`, and a table entry only a link names is reached.
+A shapes graph built before the data graph was known — a `Shapes` validated against many
+graphs, a `PreparedShapes`, a prepared product — cannot take a graph in, so every
+validation checks each link is one it already holds (`imports::check_data_graph_links`:
+its loaded IRI, a graph its closure or links folded in, an anchor or version IRI it
+declares) and refuses any other as `UnheldLink`. A change that adds or retracts a link
+changes the shapes graph, so the incremental change path validates in full and says why.
+
 The accessor returns a borrow rather than a clone so the caller decides whether
 to pay for retention; `Arc::clone(shapes.dataset())` keeps the dataset alive
 independently of the `Shapes` value.

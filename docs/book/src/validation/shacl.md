@@ -220,6 +220,48 @@ shapes graph than the one named, so there is no warn-and-continue path. A pair
 the closure never reaches is refused as unused (exit 2) rather than read and
 ignored.
 
+### A data graph names its shapes graphs
+
+SHACL 1.2 Core §6.4 lets the DATA graph suggest shapes graphs:
+
+```turtle
+<http://example.com/myDataGraph> a sh:DataGraph ;
+  sh:shapesGraph ex:graph-shapes1 ;
+  sh:shapesGraph ex:graph-shapes2 .
+```
+
+"Every value of sh:shapesGraph is an IRI representing a graph that SHOULD be
+included into the shapes graph used to validate the data graph", and PurRDF
+reads the SHOULD as a MUST. A `sh:shapesGraph` triple is such a link when its
+subject is the data graph's own IRI — `--base`, or the data file's `file://`
+retrieval IRI, on the command line — or a `sh:DataGraph` node (N-Triples text
+handed to a binding has no IRI, so there the type is the anchor). Each linked
+graph is resolved through the same import table as an `owl:imports`: a table
+entry, a graph the shapes graph already declares, or an ontology whose
+`owl:versionIRI` is the link — "the same strategy of resolving a shapes graph IRI
+from a version IRI … applies here" — and the linked graph's own `owl:imports`
+are followed. The linked graphs are unioned into the supplied shapes graph; an
+empty shapes document makes them the whole shapes graph. A table entry only a
+link names is used, not unreached.
+
+A link nothing resolves is refused as `unresolved-shapes-graph-link`, naming
+the IRI (and, on the command line, the `--import IRI=FILE` pair that resolves
+it). A link value that is not an IRI is `invalid-shapes-graph-link`. A
+`sh:shapesGraph` on any other node is data, like any other triple. The data
+graph's own `owl:imports` stay unenacted (§6.2): a link names a graph for the
+shapes graph, and nothing about it turns the data graph's imports into
+directives.
+
+A shapes graph prepared before the data graph was known — a parsed `Shapes`
+validated against many graphs, a `PreparedShapes`, a prepared product —
+cannot take a graph in. Validating with one checks that every link is a graph
+it already holds: its base, a document its closure or links folded in, or a
+shapes graph, ontology or version IRI it declares. Any other link is refused as
+`unheld-shapes-graph-link` rather than validated against a smaller shapes graph
+than the data graph names. On the incremental change path, a change that adds
+or retracts a link changes the shapes graph itself, so the run validates the
+whole mutated graph and its scope says why.
+
 ### The same rule on every host
 
 The command line is one caller of a rule that lives in the engine. Every way a
@@ -233,17 +275,19 @@ table in its own spelling:
 
 | Host | Import table | Refusal |
 |---|---|---|
-| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry)` |
+| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, `link_data_graph`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry \| UnresolvedLink \| UnheldLink \| InvalidLink)` |
 | CLI | `--import IRI=FILE`, repeatable | exit 1 for an unresolved import; exit 2 for a pair nothing imports or a malformed pair |
 | Python | `imports=[(iri, turtle), ...]` on `validate`, `entail`, `apply_rules`, `eval_node_expr`, `lint_shapes`, `pack_product` and `Shapes(...)` | `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and `.iris` |
 | WebAssembly | trailing `importIris`, `importDocuments` arrays on every `shacl*` function that takes a shapes graph | `ShaclImportError` with `kind`, `iris` and `message` |
 | C ABI | `import_iris`, `import_documents`, `import_count` before the out-parameters | `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, read with `purrdf_shapes_import_error_kind`, `_iri_count` and `_iri` |
 
 Each imported document is Turtle, parsed with its ontology IRI as its base. The
-kind is `unresolved-import`, `unreached-import` (a table entry no import names —
-refused on every host, because its shapes would be read and never applied) or
-`invalid-import` (a key that is not an absolute IRI, a key named twice, or a
-document that does not parse). Branch on the kind, not on the message.
+kind is `unresolved-import`, `unreached-import` (a table entry neither an import
+nor a data-graph link names — refused on every host, because its shapes would
+be read and never applied) or `invalid-import` (a key that is not an absolute
+IRI, a key named twice, or a document that does not parse); the three
+`*-shapes-graph-link` kinds below belong to the data graph's links. Branch on
+the kind, not on the message.
 
 ```python
 import purrdf

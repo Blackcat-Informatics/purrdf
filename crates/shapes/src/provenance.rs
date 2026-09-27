@@ -91,6 +91,15 @@ pub struct ParseProvenance {
     /// The named-graph IRI under which the shapes dataset is exposed to
     /// SHACL-SPARQL queries, when the caller named one.
     shapes_graph: Option<String>,
+    /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
+    /// the IRIs it was loaded under, each `owl:imports` document its closure reached, and
+    /// each data-graph `sh:shapesGraph` link it resolved
+    /// ([`crate::imports::ResolvedShapesGraph::included`]).
+    ///
+    /// Not carried by a prepared product, which stores the merged graph rather than the
+    /// table it was merged from: a restored preparation holds a link only through its base
+    /// or a graph its dataset declares (see [`crate::imports::check_data_graph_links`]).
+    included_graphs: Vec<String>,
 }
 
 impl ParseProvenance {
@@ -111,7 +120,24 @@ impl ParseProvenance {
             doc_prefixes,
             box_role_vocab,
             shapes_graph,
+            included_graphs: Vec::new(),
         }
+    }
+
+    /// Record the graphs the parse's import resolution assembled the shapes graph from.
+    /// `included` is sorted and deduplicated by
+    /// [`resolve_shapes_imports`](crate::imports::resolve_shapes_imports).
+    pub(crate) fn set_included_graphs(&mut self, included: Vec<String>) {
+        self.included_graphs = included;
+    }
+
+    /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
+    /// each IRI it was loaded under, each `owl:imports` document its closure reached, and
+    /// each data-graph `sh:shapesGraph` link it resolved. Empty for a preparation restored
+    /// from a prepared product, which carries the merged graph rather than its table.
+    #[must_use]
+    pub fn included_graphs(&self) -> &[String] {
+        &self.included_graphs
     }
 
     /// The base the source document's relative IRI references were resolved

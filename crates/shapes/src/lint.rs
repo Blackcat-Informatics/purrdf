@@ -80,7 +80,7 @@ use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
 
-use crate::engine::validate_dataset_with_shapes_graph;
+use crate::engine::validate_dataset_as_document;
 use crate::error::{PrebindingViolation, ShapesError};
 use crate::function_resolution::FunctionResolution;
 use crate::imports::{ShapesImports, resolve_shapes_imports};
@@ -516,7 +516,7 @@ pub fn lint(
     )
     .map_err(String::from);
     let oracle = shacl_shacl()?;
-    let report = validate_dataset_with_shapes_graph(dataset, &oracle, None)
+    let report = validate_dataset_as_document(dataset, &oracle)
         .map_err(|e| format!("shacl-shacl.ttl failed to validate the shapes graph: {e}"))?;
     let accepted = loaded.is_ok();
     let mut shacl_shacl: Vec<ShaclShaclResult> = report

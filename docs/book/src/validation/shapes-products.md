@@ -275,6 +275,17 @@ error its validation functions raise, and the product is only ever packed from
 the merged closure — see
 [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph).
 
+A data graph's `sh:shapesGraph` links are not an admission dimension either,
+and a product cannot take a linked graph in: it was prepared before the data
+graph existed. Validating with a product checks each link against what the
+product holds — its base, or a shapes graph, ontology or version IRI its merged
+graph declares — and refuses any other with the typed import error, kind
+`unheld-shapes-graph-link`, naming the link. To validate a data graph that
+links further shapes, pack the linked graph in (import it from the shapes
+graph), or validate from the shapes document with the link's document in the
+import table — see
+[A data graph names its shapes graphs](shacl.md#a-data-graph-names-its-shapes-graphs).
+
 ## Shipping a product
 
 A product is an artifact of the PurRDF build that wrote it, not a stable

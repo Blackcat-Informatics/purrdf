@@ -816,7 +816,8 @@ pub(crate) enum Command {
     /// exactly as `consistency true|false` and a `false` ASK are, and the report on stdout is
     /// the answer either way. **1** for a malformed data or shapes document, for an
     /// unsupported SHACL construct (the engine hard-fails rather than skipping it), and for
-    /// an `owl:imports` in the shapes graph that is unresolved (see `--import`). **2** for
+    /// an `owl:imports` in the shapes graph or a data-graph `sh:shapesGraph` link that is
+    /// unresolved (see `--import`). **2** for
     /// a usage error. **3** when a `--fuel`/`--deadline`/`--max-*` ceiling stopped the run:
     /// the engine returns no partial report by design (every SHACL constraint is a negative
     /// claim, so a truncated solution bag and a complete empty one read identically), so
@@ -944,6 +945,13 @@ pub(crate) enum Command {
         /// graph's own `owl:imports` are never enacted. Any import no pair resolves
         /// is refused by name (exit 1) rather than validated as if the shapes graph were
         /// complete, and a pair the closure never reaches is refused as unused (exit 2).
+        ///
+        /// The same pairs resolve the DATA graph's `sh:shapesGraph` links (SHACL 1.2 Core
+        /// section 6.4): a `sh:shapesGraph` on the data document's own IRI (`--base` or its
+        /// `file://` retrieval IRI) or on a `sh:DataGraph` node names a graph that is folded
+        /// into the shapes graph exactly as an import is — version IRI, own `owl:imports`
+        /// and all — or refused by name (exit 1). On any other node it is data. A
+        /// `--shapes-product` cannot take a graph in, so a link it does not hold is refused.
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
         /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace

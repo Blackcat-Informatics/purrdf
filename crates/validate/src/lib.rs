@@ -130,6 +130,10 @@ pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
 /// still enforces the rule: a shapes graph that imports a document the list does not
 /// supply is refused with [`ShapesError::Imports`], on every host alike. A list rather
 /// than a map because order is the caller's and this boundary's output is deterministic.
+///
+/// The same table resolves the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4)
+/// on every validation entry point: a linked graph is looked up, followed and unioned into
+/// the shapes graph exactly as an import is, and refused by name when nothing supplies it.
 /// See [`purrdf_shapes::imports`].
 pub type ShapesImportList<'a> = [(&'a str, &'a str)];
 pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};

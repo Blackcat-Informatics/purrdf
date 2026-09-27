@@ -78,8 +78,13 @@ use purrdf_validate::{ShapesError, ShapesProductRefusal};
 /// named. PurRDF fetches nothing.
 ///
 /// `kind` is the matchable half — `unresolved-import`, `unreached-import` (a table entry
-/// no import names) or `invalid-import` (a key that is not an absolute IRI, a key named
-/// twice, or a document that is not Turtle) — and `iris` the IRIs it names. `message` is
+/// neither an import nor a data-graph link names), `invalid-import` (a key that is not an
+/// absolute IRI, a key named twice, or a document that is not Turtle),
+/// `unresolved-shapes-graph-link` (the data graph links a graph with `sh:shapesGraph`,
+/// SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in the import
+/// table), `unheld-shapes-graph-link` (a prepared product does not hold a graph the data
+/// graph links) or `invalid-shapes-graph-link` (a data-graph `sh:shapesGraph` value that
+/// is not an IRI) — and `iris` the IRIs (or values) it names. `message` is
 /// prose; do not match on it. Like every other wasm-bindgen class in this package, a
 /// caught instance owns wasm memory and is released with `e.free()`.
 #[wasm_bindgen]
@@ -95,7 +100,9 @@ pub struct ShaclImportError {
 
 #[wasm_bindgen]
 impl ShaclImportError {
-    /// `unresolved-import`, `unreached-import` or `invalid-import`.
+    /// `unresolved-import`, `unreached-import`, `invalid-import`,
+    /// `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+    /// `invalid-shapes-graph-link`.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn kind(&self) -> String {

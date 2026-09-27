@@ -37,11 +37,25 @@ use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 /// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]); the
 /// empty list still refuses a shapes graph that imports a document it does not hold.
 ///
+/// # The data graph's `sh:shapesGraph` links
+///
+/// SHACL 1.2 Core §6.4: every `sh:shapesGraph` value of the data graph "is an IRI
+/// representing a graph that SHOULD be included into the shapes graph used to validate
+/// the data graph" — here a MUST. A `sh:shapesGraph` on a `sh:DataGraph` node of
+/// `data_nt` (N-Triples has no base, so that type is the data graph's only anchor) names a
+/// graph that is resolved through the same `imports` table, by the same in-place rule and
+/// `^owl:versionIRI` step, with its own `owl:imports` followed, and unioned into the shapes
+/// graph; a table entry only a link names is used, not unreached. `shapes_ttl` may be
+/// empty, and the linked graphs are then the whole shapes graph. A `sh:shapesGraph` on
+/// any other node is data. The data graph's own `owl:imports` stay unenacted (Core §6.2).
+///
 /// # Errors
 ///
-/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
-/// hand or `imports` cannot be used; [`ShapesError::Invalid`] if either the shapes
-/// graph (Turtle) or the data graph (N-Triples) fails to parse or validate.
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure or a data-graph
+/// link is not in hand (`ShapesImportError::UnresolvedLink`), a link value is not an IRI
+/// (`ShapesImportError::InvalidLink`), or `imports` cannot be used;
+/// [`ShapesError::Invalid`] if either the shapes graph (Turtle) or the data graph
+/// (N-Triples) fails to parse or validate.
 ///
 /// # Examples
 ///
@@ -111,12 +125,16 @@ pub fn validate_to_sarif_string(
 /// rendering the report.
 ///
 /// `imports` is the shapes graph's `owl:imports` table, exactly as
-/// [`validate_to_sarif_string`] takes it.
+/// [`validate_to_sarif_string`] takes it, and it resolves the `sh:shapesGraph` links of
+/// the MUTATED data graph the same way: a change may add or retract a link like any other
+/// row. A change that moves a link changes the shapes graph itself, so the run is a full
+/// validation and the scope is [`ChangeScope::Everything`], naming why.
 ///
 /// # Errors
 ///
-/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
-/// hand or `imports` cannot be used; [`ShapesError::Invalid`] when the shapes graph
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure or a link of
+/// the mutated data graph is not in hand, or `imports` cannot be used;
+/// [`ShapesError::Invalid`] when the shapes graph
 /// (Turtle) or any of the three N-Triples documents fails to parse, when a change row
 /// cannot be admitted, or when constraint evaluation hard-fails.
 ///
@@ -158,7 +176,7 @@ pub fn validate_changes_to_sarif_string(
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
 ) -> Result<(String, ChangeScope), ShapesError> {
-    let table = ShapesImports::from_turtle(imports)?;
+    let mut table = ShapesImports::from_turtle(imports)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
     if let Some(added) = added_nt {
@@ -179,6 +197,9 @@ pub fn validate_changes_to_sarif_string(
             .map_err(|error| error.to_string())?,
     );
 
+    // The data graph this validation reads is the MUTATED one, so its links are read off
+    // the snapshot: a change may add or retract a `sh:shapesGraph` link like any other row.
+    table.link_data_graph(snapshot.as_ref(), &[])?;
     let mut shapes = engine::parse_shapes_with_config(shapes_ttl, shapes_base, None, &table)?;
     shapes.set_validation_options(options.validation.clone());
     let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
