@@ -20,3 +20,7 @@ crates/*/tests/golden/** -text -diff whitespace=cr-at-eol
 # by digest (scripts/check-corpus-frozen.py), so no end-of-line conversion applies.
 crates/jsonschema/tests/suite/** -text -diff
 crates/jsonschema/metaschemas/** -text -diff
+
+# The vendored Unicode Character Database is frozen by digest and kept verbatim;
+# several upstream files carry trailing whitespace, which is part of the bytes.
+crates/iri/unicode/*.*.*/*.txt -text -diff

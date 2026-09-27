@@ -93,6 +93,7 @@ GUARDED_ROOTS: dict[str, str] = {
     "crates/jsonschema/metaschemas": (
         "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
     ),
+    "crates/iri/unicode": "scripts/conformance-frozen/iri-unicode.sha256",
 }
 
 
