@@ -16,18 +16,20 @@ use purrdf_gts::files::{
 };
 use purrdf_gts::reader::read;
 
-/// `1971-03-14T15:09:26.535897932Z`.
-const DIRECTORY_STAMP: &str = "1971-03-14T15:09:26.535897932Z";
-const DIRECTORY_UNIX: (i64, u32) = (37_811_366, 535_897_932);
-/// `1969-07-20T20:17:40.123456789Z` — before the epoch, with a fraction.
-const LEAF_STAMP: &str = "1969-07-20T20:17:40.123456789Z";
-const LEAF_UNIX: (i64, u32) = (-14_182_940, 123_456_789);
-/// `1983-11-02T08:00:00.000000001Z`.
-const SIBLING_STAMP: &str = "1983-11-02T08:00:00.000000001Z";
-const SIBLING_UNIX: (i64, u32) = (436_608_000, 1);
-/// `1995-06-30T23:59:59.999999999Z`.
-const LINK_STAMP: &str = "1995-06-30T23:59:59.999999999Z";
-const LINK_UNIX: (i64, u32) = (804_556_799, 999_999_999);
+// Windows file times have 100 ns resolution, so use exactly representable
+// fractions while still checking preservation beyond whole seconds.
+/// `1971-03-14T15:09:26.535897900Z`.
+const DIRECTORY_STAMP: &str = "1971-03-14T15:09:26.535897900Z";
+const DIRECTORY_UNIX: (i64, u32) = (37_811_366, 535_897_900);
+/// `1969-07-20T20:17:40.123456700Z` — before the epoch, with a fraction.
+const LEAF_STAMP: &str = "1969-07-20T20:17:40.123456700Z";
+const LEAF_UNIX: (i64, u32) = (-14_182_940, 123_456_700);
+/// `1983-11-02T08:00:00.000000100Z`.
+const SIBLING_STAMP: &str = "1983-11-02T08:00:00.000000100Z";
+const SIBLING_UNIX: (i64, u32) = (436_608_000, 100);
+/// `1995-06-30T23:59:59.999999900Z`.
+const LINK_STAMP: &str = "1995-06-30T23:59:59.999999900Z";
+const LINK_UNIX: (i64, u32) = (804_556_799, 999_999_900);
 /// `1978-01-01T00:00:00.5Z`.
 const READ_ONLY_DIR_STAMP: &str = "1978-01-01T00:00:00.5Z";
 const READ_ONLY_DIR_UNIX: (i64, u32) = (252_460_800, 500_000_000);

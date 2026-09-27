@@ -778,6 +778,26 @@ jobs:
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
             --test float_environment_x87 --test float_environment_x87_rayon
 
+  # Type-checking the Windows path cannot verify CreateFileW access rights or
+  # timestamp resolution. Exercise file, directory, hardlink, and read-only
+  # restoration on the target operating system.
+  windows-mtime:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Restore file and directory mtimes on Windows
+        run: cargo test --locked -p purrdf-gts --test unpack_mtime
+
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
   # cross compilers cannot be installed together. Its HNSW worker-count digest under
   # emulation is the long pole.
