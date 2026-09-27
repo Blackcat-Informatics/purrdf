@@ -377,6 +377,18 @@ impl JobRun<'_> {
         }
     }
 
+    /// How an ungoverned operation (a query, a serialized query, an update) runs.
+    /// `None` when nothing polls the run — the synchronous lane: the operation takes
+    /// the engine's ungoverned entry, which installs no governor state and charges
+    /// nothing. The metered base with the run's signal attached when a signal must be
+    /// polled — an asynchronous job, which yields, stops and is cancelled through it; the
+    /// base bounds nothing.
+    fn ungoverned_watch(&self) -> Option<QueryGovernors> {
+        self.stop
+            .as_ref()
+            .map(|stop| QueryGovernors::METERED.with_stop_signal(Arc::clone(stop)))
+    }
+
     /// `ceilings` with the run's stop signal attached, when it has one.
     pub(crate) fn governors(&self, ceilings: QueryGovernors) -> QueryGovernors {
         match &self.stop {
@@ -487,7 +499,8 @@ impl<'a> OperationInput<'a> {
     }
 }
 
-/// Run an ungoverned query under the metered base and the run's signal.
+/// Run an ungoverned query: on the engine's ungoverned entry when nothing polls the run,
+/// and under the metered base and the run's signal when something does.
 fn ungoverned_query(
     run: &JobRun<'_>,
     engine: &NativeSparqlEngine,
@@ -495,8 +508,17 @@ fn ungoverned_query(
     sparql: &str,
     base: Option<&str>,
 ) -> Result<SparqlResult, JobError> {
-    let governors = run.governors(QueryGovernors::METERED);
     let options = run.options(QueryOptions::EMPTY.env);
+    let Some(governors) = run.ungoverned_watch() else {
+        // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
+        // the plan, then its evaluation with no governor state.
+        return run
+            .evaluate(|| {
+                let prepared = engine.prepare_query_with_options(sparql, base, options)?;
+                engine.query_prepared(frozen, &prepared, &[], options)
+            })
+            .map_err(JobError::diagnostic);
+    };
     let outcome = run.evaluate(|| {
         engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
     });
@@ -664,8 +686,18 @@ impl OperationInput<'_> {
                 Ok(JobOutcome::Raw(explanation.render()))
             }
             AsyncOperationKind::Update => {
-                let governors = run.governors(QueryGovernors::METERED);
                 let mut target = Arc::clone(&frozen);
+                let Some(governors) = run.ungoverned_watch() else {
+                    run.evaluate(|| {
+                        engine.update_with_options(
+                            &mut target,
+                            request,
+                            run.options(QueryOptions::EMPTY.env),
+                        )
+                    })
+                    .map_err(JobError::diagnostic)?;
+                    return Ok(JobOutcome::Updated(target));
+                };
                 let outcome = run
                     .evaluate(|| {
                         engine.update_governed(
@@ -771,6 +803,75 @@ mod tests {
             assert_eq!(error.rendered(region), plain);
             assert_eq!(error.rendered(Lane::Sync), plain);
         }
+    }
+
+    /// A stop signal that never fires: something polls the run, nothing stops it.
+    #[derive(Debug)]
+    struct Quiet;
+
+    impl StopSignal for Quiet {
+        fn poll(&self) -> Option<StopCause> {
+            None
+        }
+    }
+
+    /// The synchronous lane's ungoverned operations take the engine's ungoverned entry:
+    /// no governor state is installed, so nothing is metered and no `SILENT` invocation
+    /// is recorded. The neighbour — the same operation with a signal to poll, as an
+    /// asynchronous job runs it — is metered, and records the invocation `SILENT`
+    /// absorbed. Both answer the same rows.
+    #[test]
+    fn an_ungoverned_offline_operation_installs_no_governor_state() {
+        let engine = Rc::new(NativeSparqlEngine::new());
+        let frozen = crate::dataset::Dataset::parse(
+            "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+            "ntriples",
+            None,
+        )
+        .expect("parses")
+        .view()
+        .freeze()
+        .expect("freezes");
+        let silent =
+            "SELECT ?s WHERE { ?s ?p ?o SERVICE SILENT <http://example.org/sparql> { ?o ?q ?x } }";
+        let run_with = |stop: Option<Arc<dyn StopSignal>>| {
+            let counters = AsyncCounters::default();
+            let run = JobRun {
+                stop,
+                remote: None,
+                load: None,
+                counters: Some(&counters),
+            };
+            for kind in [AsyncOperationKind::Query, AsyncOperationKind::Raw] {
+                let input = OperationInput::new(kind, &engine, Arc::clone(&frozen), silent, None);
+                assert!(input.execute(&run).is_ok(), "{kind:?}");
+            }
+            let update = OperationInput::new(
+                AsyncOperationKind::Update,
+                &engine,
+                Arc::clone(&frozen),
+                "LOAD SILENT <http://example.org/doc>",
+                None,
+            );
+            assert!(matches!(update.execute(&run), Ok(JobOutcome::Updated(_))));
+            counters.snapshot(0).silenced().len()
+        };
+        assert_eq!(
+            run_with(None),
+            0,
+            "an ungoverned run keeps no evidence at all"
+        );
+        assert_eq!(
+            run_with(Some(Arc::new(Quiet))),
+            3,
+            "a watched run is metered and records every silenced invocation"
+        );
+        assert!(JobRun::offline(None).ungoverned_watch().is_none());
+        assert!(
+            JobRun::offline(Some(Arc::new(Quiet)))
+                .ungoverned_watch()
+                .is_some()
+        );
     }
 
     /// Each kind of failure carries the code an HTTP host answers it by, read from its

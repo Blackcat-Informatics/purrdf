@@ -587,8 +587,9 @@ impl GovernorArgs {
     /// spending a long time inside one operator would notice a deadline or a cancellation
     /// late. Metering costs a saturating add per charge point and buys prompt interruption
     /// on every query shape, which is the trade a caller who asked for governors has
-    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) run on
-    /// the same metered base, with no ceiling and no stop signal, so they can never trip.
+    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) are
+    /// untouched by any of this: they take the engine's ungoverned entry, install no
+    /// governor state and charge nothing at all.
     pub(crate) fn stop_watch(
         self,
         cancel: Option<&CancellationToken>,
