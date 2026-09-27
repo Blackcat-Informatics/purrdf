@@ -1550,8 +1550,9 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
  * so this is where those documents arrive — and the `owl:imports` triple stays exactly
  * where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
- * resolve, and the premise does not already hold (`<X> a owl:Ontology`, or an
- * `owl:versionIRI` naming it), is an error naming the document, never a network access
+ * resolve, and the premise does not already hold (`<X> a owl:Ontology`, `<X> a
+ * sh:ShapesGraph`, or an `owl:versionIRI` naming it), is an error naming the document, never
+ * a network access
  * and never a silently empty import. `import_count == 0` with two NULL arrays is the
  * ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
  * caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
@@ -1559,8 +1560,9 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * `premise_iris` / `premise_iri_count` are the IRIs the premise DOCUMENT was read from —
  * its retrieval IRI, or the base it was parsed under, when the host knows one. Each is the
  * premise's own IRI: an `owl:imports` on one of these, like one on the premise's
- * `owl:Ontology` header, is an import, while an `owl:imports` on any other node is a premise
- * triple and names no document. An `owl:imports` of one of these names the premise itself,
+ * `owl:Ontology` header or on a `sh:ShapesGraph` it declares (`sh:RulesGraph` and subclasses
+ * included), is an import, while an `owl:imports` on any other node — one that is only a
+ * `sh:DataGraph` among them — is a premise triple and names no document. An `owl:imports` of one of these names the premise itself,
  * so it is resolved in place
  * rather than refused as missing. `premise_iri_count == 0` (the array may then be NULL) is
  * the ordinary case for a host handed bare text; like the import table it is required, in
@@ -2663,11 +2665,12 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
  * arrays may then be NULL) is the empty table. An `owl:imports` is an import only on the
  * shapes graph's own IRI (`shapes_base_iri`, or the document's own `@base`), on an
- * `owl:Ontology` header, or on a node naming either as its `owl:versionIRI`; on any other
- * node it is data. An import is resolved by a table
- * entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
- * document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
- * ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry
+ * `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included),
+ * or on a node naming one of those as its `owl:versionIRI`; on any other node — one that is
+ * only a `sh:DataGraph` among them — it is data. An import is resolved by a table entry, by
+ * `shapes_base_iri` (or the document's own `@base`) naming the imported document, or by the
+ * closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+ * `owl:versionIRI` is `<X>`); anything else — or a table entry
  * nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
  * smaller shapes graph than the one named. Read its kind and IRIs with
  * `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
@@ -2914,9 +2917,13 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
  * `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed),
  * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
  * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
- * declared for a built-in component) and `unexecuted` (`violation DECLARATION`, one
- * per query that violates a pre-binding restriction and that nothing executes)
- * sections, then `findings N` and `clean true|false`.
+ * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one
+ * per query that violates a pre-binding restriction and that nothing executes) and
+ * `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+ * `owl:imports` triple of the closure whose subject is no anchor of its document — not
+ * the IRI it was read or imported under, not an ontology header, not a shapes graph — so
+ * it is data and imported nothing; never a finding) sections, then `findings N` and
+ * `clean true|false`.
  *
  * `*out_clean` receives 1 when the report carries no finding — the loader accepted the
  * graph, every `shacl-shacl.ttl` result is superseded and no unexecuted query violates a

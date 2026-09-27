@@ -34,13 +34,16 @@
 //!
 //! What keeps this from refusing valid input is the rule in `purrdf_core::imports`, in two
 //! halves. An `owl:imports` triple is an import only when its subject is the shapes
-//! document's own IRI — a `loaded` IRI below — an `owl:Ontology` header of the document, or a
-//! node naming one of those as its `owl:versionIRI` (SHACL 1.2's `^owl:versionIRI?/owl:imports`,
-//! OWL 2's ontology header); on any other node it is data, and the W3C `validator-001` and
-//! `prefixes-001` vectors validate as written. And an import is resolved when it names a
-//! document already LOADED — the shapes document's own retrieval IRI or base (including an
-//! in-document `@base`), or an `--import` document's — or when the closure already HOLDS the
-//! ontology it names (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+//! document's own IRI — a `loaded` IRI below — an `owl:Ontology` header of the document, a
+//! `sh:ShapesGraph` it declares (`sh:RulesGraph` and subclasses included), or a node naming
+//! one of those as its `owl:versionIRI` (SHACL 1.2's `^owl:versionIRI?/owl:imports`, OWL 2's
+//! ontology header, SHACL 1.2 Core's `sh:ShapesGraph`); on any other node — one that is only
+//! a `sh:DataGraph` among them — it is data, and the W3C `validator-001` and `prefixes-001`
+//! vectors validate as written. And an import is resolved when it names a document already
+//! LOADED — the shapes document's own retrieval IRI or base (including an in-document
+//! `@base`), or an `--import` document's — or when the closure already HOLDS the graph it
+//! names (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+//! `owl:versionIRI` is `<X>`).
 //! A shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl` importing
 //! `sh:`, beside the `shacl.ttl` that declares it — is therefore complete as written and needs
 //! no `--import`.

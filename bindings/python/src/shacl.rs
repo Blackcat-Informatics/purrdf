@@ -23,10 +23,12 @@
 //! pairs — the same shape `purrdf.entail`'s `imports` takes — each document parsed with its
 //! ontology IRI as its base. An `owl:imports` in the shapes graph is an import only on the
 //! shapes graph's own IRI (`shapes_base`, or its own `@base`), on an `owl:Ontology` header,
-//! or on a node naming either as its `owl:versionIRI`; on any other node it is data. An
-//! import is resolved by one of these entries, by a document the shapes graph was read under
-//! (`shapes_base`, or its own `@base`), or by the closure declaring the ontology
-//! (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`). Anything else —
+//! on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming one
+//! of those as its `owl:versionIRI`; on any other node — one that is only a `sh:DataGraph`
+//! among them — it is data. An import is resolved by one of these entries, by a document
+//! the shapes graph was read under (`shapes_base`, or its own `@base`), or by the closure
+//! declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+//! `owl:versionIRI` is `<X>`). Anything else —
 //! or an entry no import names
 //! — raises `ShapesImportError` rather than validating a smaller shapes graph than the one
 //! named, exactly as the Rust API, the command line, WebAssembly and C refuse it. The
@@ -414,6 +416,11 @@ fn eval_node_expr(
 ///   validator no use of its component selects, a `sh:SPARQLFunction` nothing calls),
 ///   which the load accepts: `"declaration"`, `"message"`; each is a finding; `None`
 ///   when the loader refused the graph;
+/// - `"unanchored_imports"` — one dict per `owl:imports` triple of the closure whose
+///   subject is no anchor of its document (not the IRI it was read or imported under, not
+///   an ontology header, not a shapes graph, not a node versioning one of those), so it is
+///   data and imported nothing: `"document"` (`None` for the shapes document itself, else
+///   the IRI the document was imported under), `"subject"`, `"object"`; never findings;
 /// - `"report"` — the deterministic text every PurRDF host prints.
 ///
 /// The report certifies the shapes graph's whole `owl:imports` closure, resolved against
@@ -496,6 +503,15 @@ fn lint_shapes(
             out.set_item("unexecuted", unexecuted)?;
         }
     }
+    let unanchored = PyList::empty(py);
+    for entry in report.unanchored_imports() {
+        let d = PyDict::new(py);
+        d.set_item("document", entry.document.as_deref())?;
+        d.set_item("subject", entry.subject.to_string())?;
+        d.set_item("object", entry.object.to_string())?;
+        unanchored.append(d)?;
+    }
+    out.set_item("unanchored_imports", unanchored)?;
     out.set_item("report", report.render())?;
     Ok(out.into_any().unbind())
 }

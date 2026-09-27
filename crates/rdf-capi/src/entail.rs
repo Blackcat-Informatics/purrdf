@@ -906,8 +906,9 @@ unsafe fn premise_iri_list<'a>(
 /// an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
 /// so this is where those documents arrive — and the `owl:imports` triple stays exactly
 /// where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
-/// resolve, and the premise does not already hold (`<X> a owl:Ontology`, or an
-/// `owl:versionIRI` naming it), is an error naming the document, never a network access
+/// resolve, and the premise does not already hold (`<X> a owl:Ontology`, `<X> a
+/// sh:ShapesGraph`, or an `owl:versionIRI` naming it), is an error naming the document, never
+/// a network access
 /// and never a silently empty import. `import_count == 0` with two NULL arrays is the
 /// ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
 /// caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
@@ -915,8 +916,9 @@ unsafe fn premise_iri_list<'a>(
 /// `premise_iris` / `premise_iri_count` are the IRIs the premise DOCUMENT was read from —
 /// its retrieval IRI, or the base it was parsed under, when the host knows one. Each is the
 /// premise's own IRI: an `owl:imports` on one of these, like one on the premise's
-/// `owl:Ontology` header, is an import, while an `owl:imports` on any other node is a premise
-/// triple and names no document. An `owl:imports` of one of these names the premise itself,
+/// `owl:Ontology` header or on a `sh:ShapesGraph` it declares (`sh:RulesGraph` and subclasses
+/// included), is an import, while an `owl:imports` on any other node — one that is only a
+/// `sh:DataGraph` among them — is a premise triple and names no document. An `owl:imports` of one of these names the premise itself,
 /// so it is resolved in place
 /// rather than refused as missing. `premise_iri_count == 0` (the array may then be NULL) is
 /// the ordinary case for a host handed bare text; like the import table it is required, in

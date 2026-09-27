@@ -77,6 +77,15 @@
 //! `pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold`
 //! measures the same shape below the threshold and pins a slope of exactly zero.
 //!
+//! `shacl_shapes_graph_imports` is a shapes graph's `owl:imports` rule at load, over
+//! `n` node shapes in three documents: `no_imports`, the control, which interns no
+//! `owl:imports` and so pays one term lookup and never classifies a graph role;
+//! `graph_typed`, where `n` nodes are typed a class the document declares
+//! `rdfs:subClassOf sh:ShapesGraph` and each imports its own supplied document, so the
+//! classifier's backwards `rdfs:subClassOf*` walk runs and `n` documents are merged; and
+//! `unanchored`, where `n` untyped nodes carry an `owl:imports` that is data, so the
+//! classifier runs and imports nothing.
+//!
 //! Every group here is **report-only**: nothing in this file asserts a threshold,
 //! a ratio or a comparison against a baseline. The allocation invariants these
 //! groups illustrate are executed as contracts in
@@ -111,9 +120,11 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
+use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::{
-    __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes, validate_graphs,
-    validate_projected_dataset, validate_projected_dataset_with_focus_filter,
+    __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes,
+    parse_shapes_with_config, validate_graphs, validate_projected_dataset,
+    validate_projected_dataset_with_focus_filter,
 };
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::rules::entail_dataset;
@@ -1954,6 +1965,105 @@ fn bench_linkml_slot_emission(c: &mut Criterion) {
     group.finish();
 }
 
+/// The three documents of `shacl_shapes_graph_imports` (see the module docs).
+#[derive(Clone, Copy)]
+enum ImportsVariant {
+    NoImports,
+    GraphTyped,
+    Unanchored,
+}
+
+impl ImportsVariant {
+    const ALL: [Self; 3] = [Self::NoImports, Self::GraphTyped, Self::Unanchored];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NoImports => "no_imports",
+            Self::GraphTyped => "graph_typed",
+            Self::Unanchored => "unanchored",
+        }
+    }
+}
+
+/// `n` node shapes, plus the variant's graph declarations, and the import table that
+/// resolves them.
+fn imports_fixture(variant: ImportsVariant, n: usize) -> (String, ShapesImports) {
+    let mut shapes = String::from(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+         @prefix ex: <http://example.org/ns#> .\n\
+         ex:Module rdfs:subClassOf sh:ShapesGraph .\n",
+    );
+    let mut imports = ShapesImports::new();
+    for i in 0..n {
+        let _ = writeln!(
+            shapes,
+            "ex:S{i} a sh:NodeShape ; sh:targetClass ex:C{i} ; \
+             sh:property [ sh:path ex:p ; sh:minCount 1 ] ."
+        );
+        match variant {
+            ImportsVariant::NoImports => {}
+            ImportsVariant::GraphTyped => {
+                let _ = writeln!(
+                    shapes,
+                    "ex:G{i} a ex:Module ; owl:imports <http://example.org/lib/{i}> ."
+                );
+                imports
+                    .insert_turtle(
+                        &format!("http://example.org/lib/{i}"),
+                        &format!(
+                            "<http://example.org/lib/{i}#S> \
+                             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                             <http://www.w3.org/ns/shacl#NodeShape> .\n"
+                        ),
+                    )
+                    .expect("the bench's library parses");
+            }
+            ImportsVariant::Unanchored => {
+                let _ = writeln!(
+                    shapes,
+                    "ex:N{i} owl:imports <http://example.org/data/{i}> ."
+                );
+            }
+        }
+    }
+    (shapes, imports)
+}
+
+fn bench_shapes_graph_imports(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_shapes_graph_imports");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for n in [8_usize, 64, 512] {
+        for variant in ImportsVariant::ALL {
+            let (shapes, imports) = imports_fixture(variant, n);
+            let loaded = parse_shapes_with_config(&shapes, None, None, &imports)
+                .expect("the bench's shapes graph loads");
+            let expected = match variant {
+                ImportsVariant::GraphTyped => 2 * n,
+                ImportsVariant::NoImports | ImportsVariant::Unanchored => n,
+            };
+            assert_eq!(loaded.node_shapes.len(), expected, "{}", variant.label());
+            group.throughput(Throughput::Elements(n as u64));
+            group.bench_with_input(
+                BenchmarkId::new(variant.label(), n),
+                &(shapes, imports),
+                |bencher, (shapes, imports)| {
+                    bencher.iter(|| {
+                        black_box(
+                            parse_shapes_with_config(black_box(shapes), None, None, imports)
+                                .expect("loads"),
+                        );
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_validate,
@@ -1974,6 +2084,7 @@ criterion_group!(
     bench_rules_transitive_closure,
     bench_schema_import,
     bench_linkml_import,
-    bench_linkml_slot_emission
+    bench_linkml_slot_emission,
+    bench_shapes_graph_imports
 );
 criterion_main!(benches);

@@ -681,10 +681,12 @@ pub(crate) fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 ///
 /// A `Sequence[str]`: the premise's retrieval IRI, or the base it was parsed under, when
 /// the caller knows one. Each is the premise's own IRI: an `owl:imports` on one of these,
-/// like one on the premise's `owl:Ontology` header, is an import, while an `owl:imports` on
-/// any other node is a premise triple and names no document. An `owl:imports` of one of
-/// these names the premise ITSELF, so it is resolved in place rather than refused as missing (so is an import of an ontology the
-/// premise already declares, with no argument needed). A caller handed bare text has no
+/// like one on the premise's `owl:Ontology` header or on a `sh:ShapesGraph` it declares
+/// (`sh:RulesGraph` and subclasses included), is an import, while an `owl:imports` on any
+/// other node — one that is only a `sh:DataGraph` among them — is a premise triple and
+/// names no document. An `owl:imports` of one of these names the premise ITSELF, so it is
+/// resolved in place rather than refused as missing (so is an import of an ontology or
+/// shapes graph the premise already declares, with no argument needed). A caller handed bare text has no
 /// such IRI, and `[]` is that ordinary case; like `imports` the argument is required rather
 /// than defaulted, in the same position on all four hosts.
 ///

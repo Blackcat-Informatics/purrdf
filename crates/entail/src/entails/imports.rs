@@ -31,11 +31,18 @@
 //! §3.1.2: "The set Imp(G) of the IRIs of ontology documents that are directly imported into
 //! G contains exactly all *:z1, ..., *:zk that are matched in the pattern" of Table 4,
 //! `*:x rdf:type owl:Ontology . *:x owl:imports *:z1 ...` (or `_:x` for an anonymous
-//! ontology). So an `owl:imports` on a node of the premise that is not its ontology header,
-//! not an IRI the premise was loaded under ([`ImportMap::declare_loaded`]), and not a node
-//! naming either as its `owl:versionIRI` imports nothing: it is an ordinary premise triple,
-//! reasoned over like any other, and no document is looked for. The rule is
-//! [`purrdf_core::imports`]'s (see there for the full citation), and it is the same rule
+//! ontology). OWL 2 is the floor of the rule, not its limit: a node the premise declares a
+//! SHACL shapes graph (a SHACL instance of `sh:ShapesGraph`, `sh:RulesGraph` and user
+//! subclasses included — SHACL 1.2 Core §6.1) is an anchor too, because SHACL follows that
+//! graph's `owl:imports`, and one document must not mean one thing to validation and another
+//! to entailment. So an `owl:imports` on a node of the premise that is not its ontology
+//! header, not a shapes graph, not an IRI the premise was loaded under
+//! ([`ImportMap::declare_loaded`]), and not a node naming one of those as its
+//! `owl:versionIRI` imports nothing: it is an ordinary premise triple, reasoned over like any
+//! other, and no document is looked for. A node whose only role is `sh:DataGraph` is such a
+//! node (SHACL 1.2 Core §6.2: "owl:imports in the data graph is not enacted"). The rule is
+//! [`purrdf_core::imports`]'s (see there for the full citation), its anchors come from the
+//! kernel's one graph-role classifier ([`purrdf_core::graph_roles`]), and it is the same rule
 //! the SHACL engine applies to a shapes graph.
 //!
 //! # An ontology already in the graph is not missing
@@ -893,6 +900,75 @@ mod tests {
                 .expect("a node versioning another IRI imports nothing")
                 .is_none()
         );
+    }
+
+    // ── The graph roles SHACL names are the same anchors here ───────────────────────
+
+    const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
+    const SH_RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
+    const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
+    const MODULE: &str = "http://example.org/Module";
+
+    /// A premise node that is a SHACL instance of `sh:ShapesGraph` — typed it, typed
+    /// `sh:RulesGraph`, or typed a user subclass — imports what it names, exactly as SHACL
+    /// validation reads the same document: unsupplied, refused by name; supplied, the
+    /// conclusion only the imported schema licenses is entailed and the report says the
+    /// closure was resolved. One kernel rule, one verdict in both engines.
+    #[test]
+    fn a_shapes_graph_node_imports_in_entailment_as_in_validation() {
+        use crate::report::Construct;
+
+        for (class, axiom) in [
+            (SH_SHAPES_GRAPH, None),
+            (SH_RULES_GRAPH, None),
+            (MODULE, Some((MODULE, SUB_CLASS_OF, SH_SHAPES_GRAPH))),
+        ] {
+            let mut rows = vec![
+                (OTHER_NODE, RDF_TYPE, class),
+                (OTHER_NODE, OWL_IMPORTS, LIB),
+            ];
+            rows.extend(axiom);
+            let premise = premise_with(&rows);
+            let Err(EntailError::UnresolvedImport(iri)) =
+                run(&premise, &[(TOM, RDF_TYPE, CAT)], &ImportMap::new())
+            else {
+                panic!("{class}: an unsupplied import of a shapes graph is refused");
+            };
+            assert_eq!(iri, LIB, "{class}");
+            let (entailed, constructs) =
+                run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map()).expect("supplied");
+            assert!(entailed, "{class}: the imported schema's axiom took part");
+            assert!(
+                constructs.contains(&Construct::ResolvedOntologyImport),
+                "{class}: {constructs:?}"
+            );
+        }
+    }
+
+    /// The neighbour: a node whose only graph role is `sh:DataGraph` imports nothing (SHACL
+    /// 1.2 Core §6.2). Nothing is refused, the supplied schema is never merged — so the
+    /// conclusion only it licenses is NOT entailed — and the `owl:imports` triple is itself
+    /// entailed, because it is premise data.
+    #[test]
+    fn a_data_graph_only_node_imports_nothing_in_entailment() {
+        use crate::report::Construct;
+
+        let premise = premise_with(&[
+            (OTHER_NODE, RDF_TYPE, SH_DATA_GRAPH),
+            (OTHER_NODE, OWL_IMPORTS, LIB),
+        ]);
+        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
+            .expect("a data-graph import is not refused");
+        assert!(!entailed, "the schema was not imported");
+        assert!(!constructs.contains(&Construct::ResolvedOntologyImport));
+        assert!(!constructs.contains(&Construct::UnresolvedOntologyImport));
+        let (entailed, _) = run(
+            &premise,
+            &[(OTHER_NODE, OWL_IMPORTS, LIB)],
+            &ImportMap::new(),
+        )
+        .expect("a data-graph import is not refused");
+        assert!(entailed, "the triple is premise data");
     }
 
     /// A materialization is handed no loaded IRI, so its import boundary is raised by an

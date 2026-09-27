@@ -303,7 +303,21 @@ test("wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing 
     ),
     clean.report,
   );
+  assert.ok(clean.report.endsWith("unanchored-imports 0\nfindings 0\nclean true\n"), clean.report);
   clean.free();
+
+  // An owl:imports on a node that is no anchor is data: listed, never a finding.
+  const unanchored = shaclLintShapes(
+    SHAPES + "ex:Other <http://www.w3.org/2002/07/owl#imports> ex:Target .\n",
+  );
+  assert.equal(unanchored.clean, true, unanchored.report);
+  assert.ok(
+    unanchored.report.includes(
+      "unanchored-imports 1\nunanchored <http://example.org/ns#Other> <http://example.org/ns#Target> document -\n",
+    ),
+    unanchored.report,
+  );
+  unanchored.free();
 
   const malformed = shaclLintShapes(
     PREFIXES + SNIPPET + 'ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount "one" ] .\n',

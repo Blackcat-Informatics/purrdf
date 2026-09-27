@@ -712,15 +712,16 @@ pub(crate) fn certain_answers_impl(
 /// states that its axioms are its own PLUS those of the documents it names, so this is where
 /// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
 /// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve, and the premise
-/// does not already hold (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it), throws by
-/// name, never a network access and never a silently empty import. Two empty arrays are the
+/// does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an
+/// `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import. Two empty arrays are the
 /// ordinary "imports nothing" case, and both are required rather than defaulted.
 ///
 /// `premiseIris` are the IRIs the premise DOCUMENT was read from — its retrieval IRI, or the
 /// base it was parsed under, when the host knows one. Each is the premise's own IRI: an
-/// `owl:imports` on one of these, like one on the premise's `owl:Ontology` header, is an
-/// import, while an `owl:imports` on any other node is a premise triple and names no
-/// document. An `owl:imports` of one of these names the premise itself, so it is resolved
+/// `owl:imports` on one of these, like one on the premise's `owl:Ontology` header or on a
+/// `sh:ShapesGraph` it declares (`sh:RulesGraph` and subclasses included), is an import,
+/// while an `owl:imports` on any other node — one that is only a `sh:DataGraph` among them —
+/// is a premise triple and names no document. An `owl:imports` of one of these names the premise itself, so it is resolved
 /// in place rather than thrown as missing. A host
 /// handed bare text has no such IRI, and the empty array is that ordinary case; like the
 /// import table it is required rather than defaulted, in the same position on every host.

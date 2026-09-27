@@ -41,7 +41,7 @@
 //!
 //! Table 4's patterns are `*:x rdf:type owl:Ontology . [*:x owl:versionIRI *:y .] *:x
 //! owl:imports *:z1 ...` and, for an anonymous ontology, `_:x rdf:type owl:Ontology . _:x
-//! owl:imports *:z1 ...`. SHACL 1.2 Core reads a shapes graph's imports from the shapes
+//! owl:imports *:z1 ...`. SHACL 1.2 Core §6.1 reads a shapes graph's imports from the shapes
 //! graph's own IRI:
 //!
 //! > As a pre-validation step, SHACL processors should extend the originally provided shapes
@@ -52,26 +52,53 @@
 //! > of following further owl:imports statements. Formally, processors should use the
 //! > property path ^owl:versionIRI?/owl:imports iteratively
 //!
-//! PurRDF treats that SHOULD as a MUST. Together the two give the rule: an `owl:imports`
-//! triple is an import exactly when its subject is an ANCHOR of the document it occurs in,
-//! and the anchors of a document are
+//! and names the class a document declares a shapes graph with: "The sh:ShapesGraph class MAY
+//! be used as an rdf:type of the IRI of a graph that typically acts in the role of a shapes
+//! graph." PurRDF treats every SHOULD as a MUST, and OWL 2's Table 4 as the floor of the rule,
+//! not its limit. Together they give the rule: an `owl:imports` triple is an import exactly
+//! when its subject is an ANCHOR of the document it occurs in, and the anchors of a document
+//! are
 //!
 //! * each IRI the document was loaded under — the IRI a caller read it from or parsed it
 //!   under ([`ImportMap::declare_loaded`]) for the importing graph, and for an imported
 //!   document the IRI it was imported by;
-//! * each subject, IRI or blank node, the document types `owl:Ontology` — its OWL 2 header;
+//! * each subject, IRI or blank node, that is a SHACL instance of `owl:Ontology` — its OWL 2
+//!   header;
+//! * EVERY subject that is a SHACL instance of `sh:ShapesGraph` — `sh:RulesGraph` and any
+//!   class the document declares `rdfs:subClassOf*` `sh:ShapesGraph` included. A document may
+//!   declare several shapes graphs, and each one's imports are imports;
 //! * each subject `s` of a triple `s owl:versionIRI a` whose object `a` is one of the
 //!   anchors above — the `^owl:versionIRI?` step.
 //!
+//! The second and third are the kernel's ONE graph-role classifier,
+//! [`crate::graph_roles`], which SHACL-SPARQL's implicit prefix collection selects from too.
+//!
+//! A node whose only graph role is `sh:DataGraph` is NOT an anchor. SHACL 1.2 Core §6.2:
+//!
+//! > owl:imports in the data graph is not enacted, in order to avoid uncontrolled increase of
+//! > validation work.
+//!
+//! and its next note: "when using statements of the form X a sh:DataGraph ., X a owl:Ontology
+//! . should also be included" — the `owl:Ontology` type is what makes such a triple a
+//! directive. (A document a caller LOADS — as a shapes graph, or as an entailment premise — is
+//! in that role whatever it types itself, so its loaded IRI stays an anchor.) The W3C
+//! `shacl-shacl.ttl` checks the same thing from the other side: its `shsh:DataGraphImportsShape`
+//! reports a `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`.
+//!
 //! Any other `owl:imports` triple — one whose subject is some node of the document that is
-//! neither — imports nothing. It is DATA: it stays in the graph exactly as written, a SHACL
-//! shape may constrain it and a query may match it, but no document is looked for and none
-//! can be missing. The W3C SHACL suite relies on exactly that: `sparql/component/validator-001`
-//! writes `owl:imports <http://datashapes.org/dash>` on a node that is neither the test
-//! document's IRI nor an `owl:Ontology`, and its expected report is computed without DASH.
-//! Likewise SHACL-SPARQL's `sh:prefixes/owl:imports*/sh:declare` path walks `owl:imports`
-//! edges between prefix-declaring nodes of the shapes graph; that is prefix collection over
-//! the graph as it stands, not a document import, and it lives with the SPARQL prefix code.
+//! none of these — imports nothing. It is DATA: it stays in the graph exactly as written, a
+//! SHACL shape may constrain it and a query may match it, but no document is looked for and
+//! none can be missing. [`unanchored_import_triples`] and [`ImportMap::unanchored_imports`]
+//! list them, so a tool can show an author which of their `owl:imports` are not imports. The
+//! W3C SHACL suite relies on exactly that: `sparql/component/validator-001` writes
+//! `owl:imports <http://datashapes.org/dash>` on a node that is neither the test document's
+//! IRI nor a declared graph, and its expected report is computed without DASH. Likewise
+//! SHACL-SPARQL's `sh:prefixes/owl:imports*/sh:declare` path walks `owl:imports` edges between
+//! prefix-declaring nodes of the shapes graph; that is prefix collection over the graph as it
+//! stands, not a document import, and it lives with the SPARQL prefix code.
+//!
+//! A DATA graph's imports are never read by this module at all: SHACL validation resolves the
+//! shapes graph's closure and hands the data graph to the validator as given.
 //!
 //! [`imported_iris`] is the rule, and every consumer in this workspace takes its imports from
 //! it.
@@ -84,8 +111,9 @@
 //! * `X` names a document the graph was READ from — its retrieval IRI or the base it was
 //!   parsed under ([`ImportMap::declare_loaded`]) — so a document importing itself names the
 //!   document being read;
-//! * the closure holds `X rdf:type owl:Ontology` — the ontology header OWL 2's RDF mapping
-//!   reads an ontology's IRI from; or
+//! * `X` is an anchor the closure itself declares — an ontology header (`X rdf:type
+//!   owl:Ontology`, the header OWL 2's RDF mapping reads an ontology's IRI from) or a shapes
+//!   graph (`X rdf:type sh:ShapesGraph`), each through `rdfs:subClassOf*`; or
 //! * the closure holds some `O owl:versionIRI X` — an ontology whose VERSION IRI is `X`.
 //!   OWL 2 §3.2 makes a version IRI a name the ontology may be imported by, and
 //!   `owl:versionIRI`'s domain is `owl:Ontology`, so its subject is an ontology whether or
@@ -106,9 +134,10 @@
 //! import graph, visiting each document once — which also makes a cyclic import (`A`
 //! imports `B` imports `A`, which OWL 2 §3.4 explicitly permits) terminate rather than loop.
 //! A supplied document's own imports are read by the same rule, from its own anchors: the
-//! IRI it was imported by, its own `owl:Ontology` headers, and the subjects that name one of
-//! those as their `owl:versionIRI`. Whether an unsupplied import is declared in the closure is decided only once the walk is
-//! complete, because a document reached LATER may be the one that declares it.
+//! IRI it was imported by, its own ontology headers and shapes graphs, and the subjects that
+//! name one of those as their `owl:versionIRI`. Whether an unsupplied import is declared in
+//! the closure is decided only once the walk is complete, because a document reached LATER
+//! may be the one that declares it.
 //!
 //! # A supplied document the closure never reaches is reported too
 //!
@@ -133,17 +162,14 @@ use std::sync::Arc;
 
 use crate::RdfDiagnostic;
 use crate::dataset_view::{DatasetView, GraphMatch};
+use crate::graph_roles::GraphRoleIndex;
 use crate::ir::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 use crate::model::RdfLiteral;
 
 /// `owl:imports`.
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
-/// `owl:Ontology`.
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 /// `owl:versionIRI`.
 const OWL_VERSIONIRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
-/// `rdf:type`.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// The documents an `owl:imports` resolves to, and the IRIs the importing graph was read
 /// from.
@@ -240,12 +266,66 @@ impl ImportMap {
     }
 
     /// Every ontology IRI `graph` imports, read from the anchors this map declares loaded
-    /// and the graph's own ontology headers — [`imported_iris`] with this map's
-    /// [`declare_loaded`](Self::declare_loaded) IRIs as `loaded`.
+    /// and the graph's own ontology headers and shapes graphs — [`imported_iris`] with this
+    /// map's [`declare_loaded`](Self::declare_loaded) IRIs as `loaded`.
     #[must_use]
     pub fn imported_iris(&self, graph: &RdfDataset) -> Vec<String> {
-        let loaded: Vec<&str> = self.loaded.iter().map(String::as_str).collect();
-        imported_iris(graph, &loaded)
+        imported_iris(graph, &self.loaded_iris())
+    }
+
+    /// The [`declare_loaded`](Self::declare_loaded) IRIs, in IRI order.
+    fn loaded_iris(&self) -> Vec<&str> {
+        self.loaded.iter().map(String::as_str).collect()
+    }
+
+    /// Every `owl:imports` triple of `graph`'s closure that is NOT an import, because its
+    /// subject is no anchor of the document it occurs in — `graph` read under this map's
+    /// loaded IRIs, and each supplied document the closure reaches read under the IRI it was
+    /// imported by (see the [module documentation](self)).
+    ///
+    /// The importing graph's triples come first, then each reached document's, in walk
+    /// order; within a document, in frozen quad order, each `(subject, object)` once. This
+    /// is a COLD survey for tools that show an author which `owl:imports` are data: it walks
+    /// the closure again, and the hot resolution path never calls it.
+    ///
+    /// ```
+    /// use purrdf_core::{RdfDatasetBuilder, TermValue};
+    /// use purrdf_core::imports::ImportMap;
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let node = b.intern_iri("http://example.org/node");
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
+    /// let lib = b.intern_iri("http://example.org/lib");
+    /// b.push_quad(node, imports, lib, None);
+    /// let graph = b.freeze().expect("freeze");
+    ///
+    /// let listed = ImportMap::new().unanchored_imports(&graph);
+    /// assert_eq!(listed.len(), 1);
+    /// assert_eq!(listed[0].document, None);
+    /// assert_eq!(listed[0].subject, TermValue::iri("http://example.org/node"));
+    ///
+    /// // Read under the node's IRI, the same triple is an import, and nothing is listed.
+    /// let mut map = ImportMap::new();
+    /// map.declare_loaded("http://example.org/node");
+    /// assert!(map.unanchored_imports(&graph).is_empty());
+    /// ```
+    #[must_use]
+    pub fn unanchored_imports(&self, graph: &RdfDataset) -> Vec<UnanchoredImport> {
+        let mut out: Vec<UnanchoredImport> = Vec::new();
+        let mut survey = |document: Option<&str>, dataset: &RdfDataset, loaded: &[&str]| {
+            for (subject, object) in unanchored_import_triples(dataset, loaded) {
+                out.push(UnanchoredImport {
+                    document: document.map(ToOwned::to_owned),
+                    subject: dataset.term_value(subject),
+                    object: dataset.term_value(object),
+                });
+            }
+        };
+        survey(None, graph, &self.loaded_iris());
+        for (iri, document) in self.closure(graph).documents() {
+            survey(Some(iri), document, &[iri.as_str()]);
+        }
+        out
     }
 
     /// Walk `graph`'s transitive `owl:imports` closure against this map, to a fixpoint.
@@ -331,27 +411,24 @@ impl ImportMap {
         self.closure(graph).unresolved
     }
 
-    /// Add every import target `graph` resolves in place to `into`: each IRI typed
-    /// `owl:Ontology` and each IRI some ontology names as its `owl:versionIRI`.
+    /// Add every import target `graph` resolves in place to `into`: each IRI the graph
+    /// declares an import anchor — an ontology header or a shapes graph, by the one
+    /// classifier ([`crate::graph_roles`]) — and each IRI some ontology names as its
+    /// `owl:versionIRI`.
     ///
-    /// One pass over the quads, and none at all when `graph` interns none of the terms the
-    /// rule reads.
+    /// Indexed lookups only: the classifier reads the `rdf:type` quads of the graph classes,
+    /// and the version step reads the `owl:versionIRI` quads.
     fn declared_targets(graph: &RdfDataset, into: &mut BTreeSet<String>) {
-        let rdf_type = graph.term_id_by_iri(RDF_TYPE);
-        let ontology = graph.term_id_by_iri(OWL_ONTOLOGY);
-        let version_iri = graph.term_id_by_iri(OWL_VERSIONIRI);
-        if version_iri.is_none() && (rdf_type.is_none() || ontology.is_none()) {
-            return;
+        let mut named: Vec<TermId> = GraphRoleIndex::classify(graph).import_anchors().collect();
+        if let Some(version_iri) = graph.term_id_by_iri(OWL_VERSIONIRI) {
+            named.extend(
+                graph
+                    .quads_for_pattern(None, Some(version_iri), None, GraphMatch::Any)
+                    .map(|quad| quad.o),
+            );
         }
-        for quad in graph.quads() {
-            let named = if Some(quad.p) == rdf_type && Some(quad.o) == ontology {
-                quad.s
-            } else if Some(quad.p) == version_iri {
-                quad.o
-            } else {
-                continue;
-            };
-            if let TermValue::Iri(iri) = graph.term_value(named) {
+        for id in named {
+            if let TermValue::Iri(iri) = graph.term_value(id) {
                 into.insert(iri);
             }
         }
@@ -446,11 +523,12 @@ pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
 /// object of each `owl:imports` triple whose subject is an ANCHOR of `graph`.
 ///
 /// `loaded` is the IRIs `graph` was loaded under — the IRI a caller read it from or parsed it
-/// under, or, for an imported document, the IRI it was imported by. Those, every subject
-/// `graph` types `owl:Ontology` (IRI or blank node), and every subject naming one of either
-/// as its `owl:versionIRI` are the anchors; an `owl:imports` on any other subject is data and
-/// imports nothing. See the [module documentation](self) for the specification text this
-/// implements.
+/// under, or, for an imported document, the IRI it was imported by. Those, every SHACL
+/// instance of `owl:Ontology` or of `sh:ShapesGraph` in `graph` (IRI or blank node; see
+/// [`crate::graph_roles`]), and every subject naming one of them as its `owl:versionIRI` are
+/// the anchors; an `owl:imports` on any other subject — a node whose only graph role is
+/// `sh:DataGraph` included — is data and imports nothing. See the
+/// [module documentation](self) for the specification text this implements.
 ///
 /// Only IRI objects: `owl:imports` is defined to relate an ontology to an ontology IRI, and
 /// a blank node or literal object is not one — such a triple names no document and cannot
@@ -478,6 +556,8 @@ pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
 /// ```
 #[must_use]
 pub fn imported_iris<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<String> {
+    // The common case — a document that imports nothing — costs this one term lookup, and
+    // the graph-role classifier never runs.
     let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS)) else {
         return Vec::new();
     };
@@ -495,19 +575,67 @@ pub fn imported_iris<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<String> 
         .collect()
 }
 
+/// Every `owl:imports` triple of `graph` that is NOT an import — its subject is no anchor of
+/// `graph` read under `loaded` — as `(subject, object)` ids, in frozen quad order, each pair
+/// once. The complement of [`imported_iris`] over the same anchors; see the
+/// [module documentation](self).
+///
+/// ```
+/// use purrdf_core::RdfDatasetBuilder;
+/// use purrdf_core::imports::unanchored_import_triples;
+///
+/// let mut b = RdfDatasetBuilder::new();
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph");
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
+/// let data = b.intern_iri("http://example.org/data");
+/// let lib = b.intern_iri("http://example.org/lib");
+/// b.push_quad(data, rdf_type, data_graph, None);
+/// b.push_quad(data, imports, lib, None);
+/// let graph = b.freeze().expect("freeze");
+///
+/// // A node whose only graph role is sh:DataGraph anchors no import.
+/// assert_eq!(unanchored_import_triples(graph.as_ref(), &[]), [(data, lib)]);
+/// ```
+#[must_use]
+pub fn unanchored_import_triples<D: DatasetView>(
+    graph: &D,
+    loaded: &[&str],
+) -> Vec<(D::Id, D::Id)> {
+    let Some(imports) = graph.term_id_by_value(&TermValue::iri(OWL_IMPORTS)) else {
+        return Vec::new();
+    };
+    let anchors = anchors(graph, loaded);
+    let mut seen: BTreeSet<(D::Id, D::Id)> = BTreeSet::new();
+    graph
+        .quads()
+        .filter(|quad| quad.p == imports && anchors.binary_search(&quad.s).is_err())
+        .map(|quad| (quad.s, quad.o))
+        .filter(|pair| seen.insert(*pair))
+        .collect()
+}
+
+/// One `owl:imports` triple that is not an import: its subject is no anchor of the document
+/// it occurs in. See [`ImportMap::unanchored_imports`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnanchoredImport {
+    /// The document the triple occurs in: `None` for the importing graph, or the IRI a
+    /// supplied document was imported under.
+    pub document: Option<String>,
+    /// The triple's subject.
+    pub subject: TermValue,
+    /// The triple's object.
+    pub object: TermValue,
+}
+
 /// The anchors of `graph` read under `loaded`, sorted and deduplicated: each loaded IRI the
-/// graph interns, each subject typed `owl:Ontology`, and each subject naming one of those as
-/// its `owl:versionIRI` (the one `^owl:versionIRI?` step).
+/// graph interns, each import anchor of the one graph-role classifier (a SHACL instance of
+/// `owl:Ontology` or of `sh:ShapesGraph`), and each subject naming one of those as its
+/// `owl:versionIRI` (the one `^owl:versionIRI?` step).
 fn anchors<D: DatasetView>(graph: &D, loaded: &[&str]) -> Vec<D::Id> {
     let term = |iri: &str| graph.term_id_by_value(&TermValue::iri(iri));
     let mut anchors: Vec<D::Id> = loaded.iter().filter_map(|iri| term(iri)).collect();
-    if let (Some(rdf_type), Some(ontology)) = (term(RDF_TYPE), term(OWL_ONTOLOGY)) {
-        anchors.extend(
-            graph
-                .quads_for_pattern(None, Some(rdf_type), Some(ontology), GraphMatch::Any)
-                .map(|quad| quad.s),
-        );
-    }
+    anchors.extend(GraphRoleIndex::classify(graph).import_anchors());
     anchors.sort_unstable();
     anchors.dedup();
     if let Some(version_iri) = term(OWL_VERSIONIRI) {
@@ -669,13 +797,20 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        ImportMap, OWL_IMPORTS, OWL_ONTOLOGY, OWL_VERSIONIRI, RDF_TYPE, imported_iris,
-        unresolved_imports,
+        ImportMap, OWL_IMPORTS, OWL_VERSIONIRI, UnanchoredImport, imported_iris, unresolved_imports,
+    };
+    use crate::graph_roles::{
+        OWL_ONTOLOGY, RDF_TYPE, RDFS_SUB_CLASS_OF, SH_DATA_GRAPH, SH_RULES_GRAPH, SH_SHAPES_GRAPH,
     };
     use crate::ir::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
     /// The empty answer, spelled once for `assert_eq!`.
     const NONE: [String; 0] = [];
+    /// No unanchored `owl:imports`, spelled once for `assert_eq!`.
+    const NO_UNANCHORED: [UnanchoredImport; 0] = [];
+
+    /// One case of a shapes-graph class: the class, and the axioms that make it one.
+    type ClassCase<'a> = (&'a str, &'a [(&'a str, &'a str, &'a str)]);
 
     /// The IRI the importing graph in these tests is read under or declares as its header.
     const SHAPES: &str = "http://example.org/shapes";
@@ -1003,6 +1138,181 @@ mod tests {
             "three documents, three `_:b` nodes: {scopes:?}"
         );
         assert!(scopes.contains(&BlankScope::DEFAULT.ordinal()));
+    }
+
+    /// A SHACL instance of `sh:ShapesGraph` is an anchor however it gets there: typed
+    /// directly, typed `sh:RulesGraph` with no subclass axiom in the document, or typed a
+    /// user class the document declares `rdfs:subClassOf*` `sh:ShapesGraph`. Each import is
+    /// refused unsupplied and merged supplied; the control row — the same triple on a node
+    /// typed an unrelated class — is data in every case.
+    #[test]
+    fn every_shapes_graph_instance_imports_and_an_unrelated_type_does_not() {
+        const NODE: &str = "http://example.org/g";
+        const MODULE: &str = "http://example.org/Module";
+        const THING: &str = "http://example.org/Thing";
+        let cases: [ClassCase<'_>; 4] = [
+            (SH_SHAPES_GRAPH, &[]),
+            (SH_RULES_GRAPH, &[]),
+            (MODULE, &[(MODULE, RDFS_SUB_CLASS_OF, SH_SHAPES_GRAPH)]),
+            (
+                "http://example.org/SubModule",
+                &[
+                    (MODULE, RDFS_SUB_CLASS_OF, SH_RULES_GRAPH),
+                    ("http://example.org/SubModule", RDFS_SUB_CLASS_OF, MODULE),
+                ],
+            ),
+        ];
+        for (class, axioms) in cases {
+            let mut rows = vec![(NODE, RDF_TYPE, class), (NODE, OWL_IMPORTS, LIB)];
+            rows.extend_from_slice(axioms);
+            let graph = triples(&rows);
+            assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB], "{class}");
+            assert_eq!(
+                ImportMap::new().closure(&graph).unresolved(),
+                [LIB.to_owned()],
+                "{class}: refused unsupplied"
+            );
+            let mut map = ImportMap::new();
+            map.insert(
+                LIB,
+                triples(&[(LIB, "http://example.org/said", "http://example.org/v")]),
+            );
+            let closure = map.closure(&graph);
+            assert_eq!(closure.unresolved(), NONE, "{class}");
+            let merged = closure
+                .merge(&graph)
+                .expect("freeze")
+                .expect("the import was reached");
+            assert!(
+                holds(
+                    &merged,
+                    LIB,
+                    "http://example.org/said",
+                    "http://example.org/v"
+                ),
+                "{class}: merged supplied"
+            );
+            assert_eq!(ImportMap::new().unanchored_imports(&graph), NO_UNANCHORED);
+        }
+        let control = triples(&[(NODE, RDF_TYPE, THING), (NODE, OWL_IMPORTS, LIB)]);
+        assert_eq!(imported_iris(control.as_ref(), &[]), NONE);
+        assert_eq!(ImportMap::new().closure(&control).unresolved(), NONE);
+        let listed = ImportMap::new().unanchored_imports(&control);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].subject, TermValue::iri(NODE));
+        assert_eq!(listed[0].object, TermValue::iri(LIB));
+    }
+
+    /// Two shapes graphs declared in one document are both anchors: both imports are named,
+    /// in quad order. Anchoring only the first would silently drop the second's library.
+    #[test]
+    fn two_shapes_graphs_in_one_document_are_both_anchored() {
+        const DEEP: &str = "http://example.org/deep";
+        let graph = triples(&[
+            ("http://example.org/a", RDF_TYPE, SH_SHAPES_GRAPH),
+            ("http://example.org/a", OWL_IMPORTS, LIB),
+            ("http://example.org/b", RDF_TYPE, SH_SHAPES_GRAPH),
+            ("http://example.org/b", OWL_IMPORTS, DEEP),
+        ]);
+        assert_eq!(imported_iris(graph.as_ref(), &[]), [LIB, DEEP]);
+        assert_eq!(
+            ImportMap::new().closure(&graph).unresolved(),
+            [LIB.to_owned(), DEEP.to_owned()]
+        );
+    }
+
+    /// A node whose only graph role is `sh:DataGraph` anchors nothing (SHACL 1.2 Core §6.2,
+    /// "owl:imports in the data graph is not enacted"): its import is data, listed as
+    /// unanchored, and never refused. The neighbour adds `owl:Ontology` — the type §6.2's note
+    /// asks for — and the same triple is an import.
+    #[test]
+    fn a_data_graph_alone_anchors_nothing_and_a_data_graph_ontology_does() {
+        const NODE: &str = "http://example.org/data";
+        let data_only = triples(&[(NODE, RDF_TYPE, SH_DATA_GRAPH), (NODE, OWL_IMPORTS, LIB)]);
+        assert_eq!(imported_iris(data_only.as_ref(), &[]), NONE);
+        assert_eq!(ImportMap::new().closure(&data_only).unresolved(), NONE);
+        let listed = ImportMap::new().unanchored_imports(&data_only);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].subject, TermValue::iri(NODE));
+
+        let with_header = triples(&[
+            (NODE, RDF_TYPE, SH_DATA_GRAPH),
+            (NODE, RDF_TYPE, OWL_ONTOLOGY),
+            (NODE, OWL_IMPORTS, LIB),
+        ]);
+        assert_eq!(
+            ImportMap::new().closure(&with_header).unresolved(),
+            [LIB.to_owned()]
+        );
+        assert_eq!(
+            ImportMap::new().unanchored_imports(&with_header),
+            NO_UNANCHORED
+        );
+
+        // A document LOADED under the node's IRI is in the loading role whatever it types
+        // itself: the loaded IRI stays an anchor.
+        let mut map = ImportMap::new();
+        map.declare_loaded(NODE);
+        assert_eq!(map.closure(&data_only).unresolved(), [LIB.to_owned()]);
+    }
+
+    /// A shapes graph the closure itself declares is in hand, like an ontology header; a
+    /// node declared only a data graph is not, so an import of it is still refused.
+    #[test]
+    fn a_declared_shapes_graph_resolves_in_place_and_a_declared_data_graph_does_not() {
+        let importer = |class: &str| {
+            triples(&[
+                (SHAPES, RDF_TYPE, OWL_ONTOLOGY),
+                (SHAPES, OWL_IMPORTS, LIB),
+                (LIB, RDF_TYPE, class),
+            ])
+        };
+        assert_eq!(
+            ImportMap::new()
+                .closure(&importer(SH_SHAPES_GRAPH))
+                .unresolved(),
+            NONE
+        );
+        assert_eq!(
+            ImportMap::new()
+                .closure(&importer(SH_DATA_GRAPH))
+                .unresolved(),
+            [LIB.to_owned()]
+        );
+    }
+
+    /// A supplied document's unanchored `owl:imports` are listed under the IRI it was
+    /// imported by, after the importing graph's own; its anchored ones are not listed.
+    #[test]
+    fn unanchored_imports_are_listed_per_document() {
+        let root = triples(&[
+            (SHAPES, RDF_TYPE, SH_SHAPES_GRAPH),
+            (SHAPES, OWL_IMPORTS, LIB),
+            (OTHER_NODE, OWL_IMPORTS, "http://example.org/root-data"),
+        ]);
+        let mut map = ImportMap::new();
+        map.insert(
+            LIB,
+            triples(&[
+                (LIB, OWL_IMPORTS, SHAPES),
+                (OTHER_NODE, OWL_IMPORTS, "http://example.org/lib-data"),
+            ]),
+        );
+        let listed: Vec<(Option<String>, TermValue)> = map
+            .unanchored_imports(&root)
+            .into_iter()
+            .map(|entry| (entry.document, entry.object))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (None, TermValue::iri("http://example.org/root-data")),
+                (
+                    Some(LIB.to_owned()),
+                    TermValue::iri("http://example.org/lib-data")
+                ),
+            ]
+        );
     }
 
     /// No reached document, no copy.

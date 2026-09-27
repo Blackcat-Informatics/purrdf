@@ -564,7 +564,9 @@ fn cli_shapes_lint() {
         "{report}"
     );
     assert!(
-        report.ends_with("validators 0\nunexecuted 0\nfindings 0\nclean true\n"),
+        report.ends_with(
+            "validators 0\nunexecuted 0\nunanchored-imports 0\nfindings 0\nclean true\n"
+        ),
         "{report}"
     );
     assert!(stderr(&out).contains("shapes lint clean true\n"));
@@ -572,6 +574,26 @@ fn cli_shapes_lint() {
         stdout(&run(&["shapes", "lint", &clean])),
         report,
         "deterministic"
+    );
+
+    // An owl:imports on a node that is no anchor is data: listed, never a finding.
+    let unanchored = write_file(
+        dir.path(),
+        "unanchored.ttl",
+        &format!(
+            "{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}<http://example.org/ns#Other> <http://www.w3.org/2002/07/owl#imports> \
+             <http://example.org/ns#Target> .\n"
+        ),
+    );
+    let listed = run(&["shapes", "lint", &unanchored]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    assert!(
+        stdout(&listed).contains(
+            "unanchored-imports 1\nunanchored <http://example.org/ns#Other> \
+             <http://example.org/ns#Target> document -\nfindings 0\nclean true\n"
+        ),
+        "{}",
+        stdout(&listed)
     );
 
     let malformed = write_file(

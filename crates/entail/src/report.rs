@@ -649,8 +649,8 @@ impl Construct {
                  the union of the importing ontology with every document it transitively \
                  names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved every \
                  imported ontology before the chase started — either already IN the premise \
-                 (its owl:Ontology header, an owl:versionIRI naming it, or the premise \
-                 document's own IRI) or supplied by the \
+                 (its owl:Ontology header, a sh:ShapesGraph it declares, an owl:versionIRI \
+                 naming it, or the premise document's own IRI) or supplied by the \
                  caller's ImportMap and merged in transitively, to a fixpoint, each document \
                  standardized apart — and an import neither resolved would have refused the \
                  whole call with EntailError::UnresolvedImport rather than quietly shrinking \
@@ -1072,9 +1072,9 @@ struct DatasetSurvey {
     ///
     /// Exactly [`purrdf_core::imports::imported_iris`], the rule
     /// [`imports::resolve`](crate::entails::imports) applies: an `owl:imports` whose subject
-    /// is an ontology header of the dataset (or names one as its `owl:versionIRI`), with an
-    /// IRI object. A survey is handed no IRI the dataset was loaded under, so its anchors are
-    /// the dataset's own headers. An `owl:imports` on any other subject is data and names no
+    /// is an ontology header or a SHACL shapes graph of the dataset (or names one as its
+    /// `owl:versionIRI`), with an IRI object. A survey is handed no IRI the dataset was
+    /// loaded under, so its anchors are the dataset's own declared graphs. An `owl:imports` on any other subject is data and names no
     /// document, and a blank-node or literal object names none either; flagging either would
     /// have the boundary say a document's axioms are absent when no document was imported.
     ontology_import: bool,

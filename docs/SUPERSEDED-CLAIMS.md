@@ -714,3 +714,47 @@ for entailment and SHACL alike. Pinned by the kernel tests in
 `crates/entail/src/entails/imports.rs`,
 `the_prefixes_path_follows_version_iris_and_imports` (`tests/sparql_prefixes.rs`) and
 `the_w3c_validator_001_vectors_validate_with_no_import` (the command line).
+
+### The kernel's import rule names no vocabulary beyond OWL's own
+
+**Was stated in** `crates/rdf-core/src/imports.rs`, the module documentation of the one
+`owl:imports` rule:
+
+> The kernel registers no such predicate and names no vocabulary beyond OWL's own; an
+> `ImportMap` built with [`ImportMap::new`] applies the three routes above and nothing
+> else.
+
+The sentence left with the `sh:declare` route the entry above retires, but the rule it
+described kept its shape: the anchors were the loaded IRI, OWL 2's `owl:Ontology` header
+and the `^owl:versionIRI` step, and nothing SHACL names.
+
+**Why it was believed.** `owl:imports` is an OWL term, OWL 2's *Mapping to RDF Graphs*
+Table 4 reads it off the ontology header, and a kernel that stayed inside OWL's
+vocabulary looked like the neutral choice for a rule both engines share.
+
+**What changed.** OWL 2 is the floor of the rule, not its limit. SHACL 1.2 Core §6.1 names
+the class a document declares a shapes graph with — "The sh:ShapesGraph class MAY be used
+as an rdf:type of the IRI of a graph that typically acts in the role of a shapes graph" —
+and follows a shapes graph's `owl:imports`. Under the OWL-only rule,
+`<G> a sh:ShapesGraph ; owl:imports <lib>` was silently data: validation ran without
+`<lib>`'s shapes and nothing was refused. SHACL 1.2 SPARQL Extensions already read the
+same graph classes for its implicit prefixes, from a second, private list in
+`purrdf-shapes`, so two rules classified one document two ways.
+
+**The rule now.** The kernel names the W3C graph classes directly. `purrdf_core::graph_roles`
+classifies every node as a SHACL instance (`rdf:type/rdfs:subClassOf*`) of `owl:Ontology`,
+`sh:ShapesGraph` (with `sh:RulesGraph` counted in its own right) and `sh:DataGraph`. The
+import rule's anchors are the loaded IRI, every ontology header, every shapes graph, and
+the `^owl:versionIRI` step from any of them; a node whose only role is `sh:DataGraph` is
+not one (SHACL 1.2 Core §6.2, "owl:imports in the data graph is not enacted"). The
+implicit prefix collection selects every role from the same classifier. These are the
+W3C's classes, not minted ones; PurRDF still mints no vocabulary. Pinned by
+`graph_roles::tests`, `imports::tests::every_shapes_graph_instance_imports_and_an_unrelated_type_does_not`
+and `a_data_graph_alone_anchors_nothing_and_a_data_graph_ontology_does` in
+`crates/rdf-core`, the engine tests
+`an_import_on_every_shapes_graph_instance_is_followed_and_an_unrelated_type_is_data`
+(`crates/shapes/src/imports.rs`) and
+`a_shapes_graph_node_imports_in_entailment_as_in_validation`
+(`crates/entail/src/entails/imports.rs`), and
+`a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does`
+(`crates/validate/tests/shapes_owl_imports.rs`).

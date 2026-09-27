@@ -634,8 +634,11 @@ pub(crate) enum Command {
         /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
         /// resolves, that does not name the premise document itself (its `file://`
         /// retrieval IRI or `--base`), and whose ontology the premise does not already
-        /// hold (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it), is refused by name rather
-        /// than treated as an empty document.
+        /// hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI`
+        /// naming it), is refused by name rather than treated as an empty document. The
+        /// premise's imports are the `owl:imports` on its own IRI, on an `owl:Ontology`
+        /// header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a
+        /// node naming one of those as its `owl:versionIRI`; any other is a premise triple.
         /// The IRI half must be ABSOLUTE — it is matched against the premise's
         /// `owl:imports` objects, which are — and a relative or malformed one is
         /// refused by name here rather than surfacing as an unresolved import
@@ -930,12 +933,15 @@ pub(crate) enum Command {
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
         /// import is only ever the document the operator named. An import of the shapes
-        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of an
-        /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`) needs no pair. Only an `owl:imports` on the shapes
-        /// document's own IRI, on an `owl:Ontology` header, or on a node naming either as
-        /// its `owl:versionIRI` is an import; on any other node it is data (SHACL's
-        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges among them). Any import no pair resolves
+        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of a
+        /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
+        /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
+        /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
+        /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
+        /// node that is only a `sh:DataGraph`, and SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). The data
+        /// graph's own `owl:imports` are never enacted. Any import no pair resolves
         /// is refused by name (exit 1) rather than validated as if the shapes graph were
         /// complete, and a pair the closure never reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
@@ -1419,7 +1425,7 @@ pub(crate) enum ShapesCommand {
     /// Certify a shapes graph, COLD: everything PurRDF can say about it before any data is
     /// validated, in one deterministic report.
     ///
-    /// Five sections. `load`: the loader's own verdict — accepted, or the refusal it
+    /// Six sections. `load`: the loader's own verdict — accepted, or the refusal it
     /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, a
     /// SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule — every such
     /// violation, each with its rule id, whether or not a shape reaches it — or a
@@ -1436,7 +1442,11 @@ pub(crate) enum ShapesCommand {
     /// query that violates a pre-binding restriction (a `MINUS`, a `VALUES`, an `AS ?var`
     /// for a pre-bound variable) and that nothing executes — a validator of a built-in
     /// component, a validator no use of its component selects, a `sh:SPARQLFunction`
-    /// nothing calls — which the load accepts; each is a finding.
+    /// nothing calls — which the load accepts; each is a finding. `unanchored-imports`:
+    /// every `owl:imports` triple of the closure whose subject is no anchor of its
+    /// document — not the IRI it was read or imported under, not an ontology header, not a
+    /// shapes graph, not a node versioning one of those — so it is data and imported
+    /// nothing (`unanchored SUBJECT OBJECT document -|<IRI>`); never a finding.
     ///
     /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
     /// on request.
@@ -1634,13 +1644,15 @@ pub(crate) enum ShaclCommand {
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
         /// import is only ever the document the operator named. An import of the shapes
-        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), of an
-        /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`) needs no pair. Only an `owl:imports` on the shapes
-        /// document's own IRI, on an `owl:Ontology` header, or on a node naming either as
-        /// its `owl:versionIRI` is an import; on any other node it is data (SHACL's
-        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges among them). Any import no pair resolves
-        /// is refused by name (exit 1) rather than packed as if the shapes graph were
+        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), of a
+        /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
+        /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
+        /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
+        /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
+        /// node that is only a `sh:DataGraph`, and SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). Any import no
+        /// pair resolves is refused by name (exit 1) rather than packed as if the shapes graph were
         /// complete, exactly as `validate --shapes` refuses it, and a pair the closure never
         /// reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]

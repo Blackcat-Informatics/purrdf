@@ -211,11 +211,14 @@ the empty table. PurRDF fetches nothing.
 
 An `owl:imports` triple is an import only when its subject is the shapes graph's own IRI
 (`shapes_base_iri`, or the document's own `@base`; for an imported document, the IRI it
-was imported by), a node the document types `owl:Ontology`, or a node naming either as its
-`owl:versionIRI`. On any other node — SHACL's `sh:prefixes/owl:imports*/sh:declare` prefix
-edges among them — it is data. An import `<X>` is resolved by a table entry for `<X>`, by
-`shapes_base_iri` (or the document's own `@base`) being `<X>`, or by the closure declaring
-the ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+was imported by), a node the document types `owl:Ontology`, every `sh:ShapesGraph` it
+declares (`sh:RulesGraph` and subclasses included), or a node naming one of those as its
+`owl:versionIRI`. On any other node — a node that is only a `sh:DataGraph`, and SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges, among them — it is data, and
+`purrdf_shacl_lint_shapes` lists it under `unanchored-imports`. An import `<X>` is resolved
+by a table entry for `<X>`, by `shapes_base_iri` (or the document's own `@base`) being
+`<X>`, or by the closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an
+ontology whose `owl:versionIRI` is `<X>`).
 Anything else —
 and a table entry no import names — fails the call with
 `PURRDF_STATUS_SHAPES_IMPORT_ERROR`: the same refusal the Rust API, the `purrdf` command

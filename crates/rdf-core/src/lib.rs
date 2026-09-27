@@ -102,6 +102,10 @@ pub mod hash;
 // `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
 // `core`/`alloc`, dependency-free and wasm-clean.
 pub mod hex;
+// The one graph-role classifier: which nodes declare an OWL 2 ontology header, a SHACL
+// shapes graph or a SHACL data graph. The import rule and SHACL-SPARQL's implicit prefixes
+// both select from it.
+pub mod graph_roles;
 // `owl:imports`: the one rule for when a graph's imports closure is in hand, and the one
 // merge that folds a resolved closure into a dataset. Shared by entailment and SHACL, which
 // do not depend on each other; it reads nothing but the IR it sits beside.

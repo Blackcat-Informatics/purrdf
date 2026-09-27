@@ -491,3 +491,66 @@ fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_not() 
     .expect_err("the string boundary refuses it too");
     assert_eq!(refused.as_imports(), Some(&neighbour), "{refused}");
 }
+
+// ── The data-graph role never enacts an import ────────────────────────────────
+
+/// One document, in N-Triples so it reads both as a data graph and as a shapes graph: `ex:g`
+/// declared a graph of `class`, importing [`LIB`], beside [`DATA`]'s `ex:alice`.
+fn graph_document(class: &str) -> String {
+    format!(
+        "<http://example.org/g> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{class}> .\n\
+         <http://example.org/g> <http://www.w3.org/2002/07/owl#imports> <{LIB}> .\n\
+         {DATA}"
+    )
+}
+
+/// A shapes graph that imports nothing and sees the data graph's `owl:imports` triple:
+/// `ex:g` may have no `owl:imports`.
+const NO_IMPORTS_SHAPE: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+    <http://example.org/NoImports> a sh:NodeShape ; sh:targetNode <http://example.org/g> ;\n\
+      sh:property [ sh:path owl:imports ; sh:maxCount 0 ] .\n";
+
+/// SHACL 1.2 Core §6.2: "owl:imports in the data graph is not enacted". The same document,
+/// validated as the DATA graph, enacts nothing whatever `ex:g` is typed — a shapes graph
+/// included: validation is not refused, the imported shape does not fire (only the shape
+/// over the `owl:imports` triple does, which proves the triple is there as data), and a
+/// table entry for [`LIB`] is refused as unreached rather than used. Loaded as the SHAPES
+/// graph, the identical document's import IS enacted: refused unsupplied, and supplied, the
+/// imported shape fires on [`DATA`].
+#[test]
+fn a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does() {
+    const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
+    const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
+    const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+    const MAX_COUNT: &str = "MaxCountConstraintComponent";
+    let options = SarifOptions::default();
+    for class in [SH_SHAPES_GRAPH, SH_DATA_GRAPH, OWL_ONTOLOGY] {
+        let document = graph_document(class);
+
+        let sarif = validate_to_sarif_string(NO_IMPORTS_SHAPE, None, &document, &options, &[])
+            .unwrap_or_else(|error| panic!("{class}: the data graph's import is data: {error}"));
+        assert!(sarif.contains(MAX_COUNT), "{class}: {sarif}");
+        assert!(
+            !sarif.contains("MinCountConstraintComponent"),
+            "{class}: the imported shape never reached validation: {sarif}"
+        );
+        let refused = validate_to_sarif_string(NO_IMPORTS_SHAPE, None, &document, &options, TABLE)
+            .expect_err("the data graph's import reaches no table entry");
+        assert_eq!(
+            refused.as_imports(),
+            Some(&ShapesImportError::Unreached {
+                iris: vec![LIB.to_owned()]
+            }),
+            "{class}"
+        );
+    }
+
+    let as_shapes = graph_document(SH_SHAPES_GRAPH);
+    let refused = validate_to_sarif_string(&as_shapes, None, DATA, &options, &[])
+        .expect_err("loaded as shapes, the import is enacted");
+    assert_unresolved(&refused, "validate_to_sarif_string");
+    let sarif = validate_to_sarif_string(&as_shapes, None, DATA, &options, TABLE)
+        .expect("supplied, the import is merged");
+    assert!(sarif.contains("MinCountConstraintComponent"), "{sarif}");
+}

@@ -1329,8 +1329,8 @@ export function entailExplainConclusion(
  * an `owl:imports` states that its axioms are its own PLUS those of the documents it
  * names, so this is where those documents go — and the `owl:imports` triple stays exactly
  * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve,
- * and the premise does not already hold (`<X> a owl:Ontology`, or an `owl:versionIRI`
- * naming it), throws by name, never a network access and never a silently empty import. Two empty
+ * and the premise does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or
+ * an `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import. Two empty
  * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
  * resolution is transitive to a fixpoint.
  *
@@ -1345,8 +1345,9 @@ export function entailExplainConclusion(
  *
  * `premiseIris` are the IRIs the premise document was read from — its retrieval IRI or
  * parse base, when the host knows one. Each is the premise's own IRI: an `owl:imports` on
- * one of them, like one on the premise's `owl:Ontology` header, is an import, while one on
- * any other node is a premise triple. An `owl:imports` of one of them names the premise
+ * one of them, like one on the premise's `owl:Ontology` header or on a `sh:ShapesGraph` it
+ * declares (`sh:RulesGraph` and subclasses included), is an import, while one on any other
+ * node — one that is only a `sh:DataGraph` among them — is a premise triple. An `owl:imports` of one of them names the premise
  * itself and is resolved in place. The empty array is the ordinary case for bare text;
  * like the import arrays it is required, in the same position on every host.
  */
@@ -1418,11 +1419,13 @@ export function entailVerifyEntailment(
  * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
  * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
  * IRI as its base. An `owl:imports` is an import only on the shapes graph's own IRI
- * (`shapesBase`, or the document's own `@base`), on an `owl:Ontology` header, or on a node
- * naming either as its `owl:versionIRI`; on any other node it is data. An import is
- * resolved by a table entry, by `shapesBase` (or the document's own `@base`) naming the
- * imported document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
- * ontology whose `owl:versionIRI` is `<X>`). Anything else throws this class rather than validating a smaller shapes graph than the
+ * (`shapesBase`, or the document's own `@base`), on an `owl:Ontology` header, on a
+ * `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming one of
+ * those as its `owl:versionIRI`; on any other node — one that is only a `sh:DataGraph`
+ * among them — it is data. An import is resolved by a table entry, by `shapesBase` (or the
+ * document's own `@base`) naming the imported document, or by the closure declaring it
+ * (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is
+ * `<X>`). Anything else throws this class rather than validating a smaller shapes graph than the
  * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
  * enforces the rule.
  *
@@ -1571,9 +1574,13 @@ export class ShaclLintReport {
    * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl`,
    * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
    * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
-   * declared for a built-in component) and `unexecuted` (`violation DECLARATION`, one per
-   * query that violates a pre-binding restriction and that nothing executes) sections,
-   * then `findings N` and `clean true|false`.
+   * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one per
+   * query that violates a pre-binding restriction and that nothing executes) and
+   * `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+   * `owl:imports` triple of the closure whose subject is no anchor of its document — not
+   * the IRI it was read or imported under, not an ontology header, not a shapes graph —
+   * so it is data and imported nothing; never a finding) sections, then `findings N` and
+   * `clean true|false`.
    */
   readonly report: string;
 }

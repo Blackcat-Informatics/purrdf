@@ -10,7 +10,7 @@
 //! parameter value, an unresolved or duplicate function definition (the
 //! [linker](crate::spec)) — and it deliberately does not validate the graph against the
 //! W3C's `shacl-shacl.ttl`, because a load pays for that on every validation. [`lint`]
-//! is where that price is paid once, on request. It reports five sections:
+//! is where that price is paid once, on request. It reports six sections:
 //!
 //! 1. **load** — the loader's own verdict: accepted, or the refusal it raised.
 //! 2. **shacl-shacl** — every result of validating the shapes graph, as DATA, against
@@ -32,6 +32,19 @@
 //!    violation is not silenced. A declaration that violates a SYNTAX rule is never
 //!    listed here: it refuses the load ([`ShapesError::IllFormed`]), and the report
 //!    carries that refusal in `load`.
+//! 6. **unanchored-imports** — every `owl:imports` triple of the shapes graph's closure
+//!    that is NOT an import, because its subject is no anchor of the document it occurs in
+//!    ([`purrdf_core::imports::ImportMap::unanchored_imports`]): not the IRI the document
+//!    was read or imported under, not an ontology header, not a shapes graph, and not a
+//!    node versioning one of those. Such a triple is data — SHACL 1.2 Core §6.2 enacts no
+//!    `owl:imports` of a data graph, and the kernel's one import rule follows none off a
+//!    node whose only graph role is `sh:DataGraph` — so no document was looked for. The
+//!    section is informational, never a finding: the triple is well-formed RDF the author
+//!    may mean as data (the W3C test `sparql/component/validator-001` does). It is listed
+//!    so an author who meant an import sees that it is not one. The `shacl-shacl` section
+//!    covers the case the W3C flags: `shsh:DataGraphImportsShape` reports, at severity
+//!    `sh:Info`, a `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`,
+//!    and that result is a finding like every other.
 //!
 //! # Where `shacl-shacl.ttl` lags SHACL 1.2 Core
 //!
@@ -47,7 +60,9 @@
 //! graph and hundreds of mutants); over a graph the loader refused, every result counts.
 //!
 //! A report is CLEAN exactly when the loader accepted the graph, every `shacl-shacl`
-//! result is superseded, and no unexecuted query violates a pre-binding restriction.
+//! result is superseded (whatever its severity: an `sh:Info` result counts), and no
+//! unexecuted query violates a pre-binding restriction. `unanchored-imports` never
+//! affects it.
 //!
 //! # An incomplete `owl:imports` closure is not a report
 //!
@@ -73,7 +88,7 @@ use crate::model::BoxRoleVocab;
 use crate::shapes::{
     Shapes, alternative_validators, from_dataset_with_base, from_resolved_dataset_with_unexecuted,
 };
-use crate::term::Term;
+use crate::term::{Term, term_value_to_native};
 use crate::validator_alternatives::AlternativeValidator;
 
 /// The W3C shapes graph for shapes graphs, vendored byte-exact.
@@ -236,6 +251,19 @@ pub struct ShaclShaclResult {
     pub superseded: Option<&'static Supersession>,
 }
 
+/// One `owl:imports` triple of the shapes graph's closure that is not an import. See the
+/// [module docs](self).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnanchoredImport {
+    /// The document it occurs in: `None` for the shapes document itself, or the IRI a
+    /// supplied document was imported under.
+    pub document: Option<String>,
+    /// The triple's subject: no anchor of `document`.
+    pub subject: Term,
+    /// The triple's object.
+    pub object: Term,
+}
+
 /// The whole cold-certify report for one shapes graph. See the [module docs](self).
 #[derive(Debug, Clone)]
 pub struct LintReport {
@@ -250,6 +278,8 @@ pub struct LintReport {
     /// The pre-binding violations of the queries nothing executes, when the loader
     /// accepted the graph.
     unexecuted: Option<Vec<PrebindingViolation>>,
+    /// Every `owl:imports` triple of the closure that is not an import.
+    unanchored_imports: Vec<UnanchoredImport>,
 }
 
 impl LintReport {
@@ -288,6 +318,15 @@ impl LintReport {
         self.unexecuted.as_deref()
     }
 
+    /// Every `owl:imports` triple of the shapes graph's closure whose subject is no anchor of
+    /// the document it occurs in: the shapes document's first, then each imported
+    /// document's in the order the closure reached it, each in document order. Never
+    /// findings; see the [module docs](self).
+    #[must_use]
+    pub fn unanchored_imports(&self) -> &[UnanchoredImport] {
+        &self.unanchored_imports
+    }
+
     /// How many findings the report carries: one for a load refusal, plus every
     /// `shacl-shacl.ttl` result no [`Supersession`] covers, plus every unexecuted query
     /// that violates a pre-binding restriction.
@@ -324,6 +363,8 @@ impl LintReport {
     /// unexecuted N|unavailable
     /// violation DECLARATION
     ///   error LINE                     (one per line of the violated restriction)
+    /// unanchored-imports N
+    /// unanchored SUBJECT OBJECT document -|<IRI>
     /// findings N
     /// clean true|false
     /// ```
@@ -333,7 +374,9 @@ impl LintReport {
     /// `functions unavailable` means the loader refused the graph. `LANGUAGE` is
     /// [`ValidatorLanguage::label`](crate::validator_alternatives::ValidatorLanguage::label);
     /// `validators unavailable` means the loader refused the graph, and so does
-    /// `unexecuted unavailable`. Every list is in the
+    /// `unexecuted unavailable`. `unanchored-imports` is always present (the closure is
+    /// resolved before the load); its `document` is `-` for the shapes document itself and
+    /// the import IRI for an imported one. Every list is in the
     /// order its accessor documents, so the text is a pure function of the shapes graph.
     #[must_use]
     pub fn render(&self) -> String {
@@ -412,6 +455,19 @@ impl LintReport {
                 }
             }
         }
+        let _ = writeln!(out, "unanchored-imports {}", self.unanchored_imports.len());
+        for entry in &self.unanchored_imports {
+            let _ = writeln!(
+                out,
+                "unanchored {} {} document {}",
+                entry.subject,
+                entry.object,
+                entry
+                    .document
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), |iri| format!("<{iri}>")),
+            );
+        }
         let _ = writeln!(out, "findings {}", self.findings());
         let _ = writeln!(out, "clean {}", self.is_clean());
         out
@@ -440,6 +496,16 @@ pub fn lint(
     imports: &ShapesImports,
 ) -> Result<LintReport, ShapesError> {
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
+    let unanchored_imports = imports
+        .import_map()
+        .unanchored_imports(dataset)
+        .into_iter()
+        .map(|entry| UnanchoredImport {
+            document: entry.document,
+            subject: term_value_to_native(&entry.subject),
+            object: term_value_to_native(&entry.object),
+        })
+        .collect();
     let dataset = &resolved.dataset;
     let loaded = from_resolved_dataset_with_unexecuted(
         dataset,
@@ -517,6 +583,7 @@ pub fn lint(
         functions,
         alternatives,
         unexecuted,
+        unanchored_imports,
     })
 }
 
@@ -551,3 +618,135 @@ const SH_NAMESPACE: &str = "http://www.w3.org/ns/shacl#";
 /// The W3C SHACL vocabulary, vendored byte-exact: the document that declares
 /// [`SH_NAMESPACE`] an ontology.
 const SHACL_VOCABULARY: &str = include_str!("../spec/shacl.ttl");
+
+#[cfg(test)]
+mod tests {
+    use super::{LintReport, lint};
+    use crate::imports::ShapesImports;
+
+    const PREFIXES: &str = "@prefix ex: <http://example.org/ns#> .\n\
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+        @prefix sh: <http://www.w3.org/ns/shacl#> .\n";
+
+    /// A shape every report below carries, so the graph is never empty.
+    const SHAPE: &str = "ex:S a sh:NodeShape ; sh:targetNode ex:x ; sh:nodeKind sh:IRI .\n";
+
+    const LIB: &str = "http://example.org/lib";
+
+    fn report(shapes: &str, imports: &ShapesImports) -> LintReport {
+        let document =
+            crate::text_ingest::parse_turtle_document(&format!("{PREFIXES}{SHAPE}{shapes}"), None)
+                .expect("turtle");
+        lint(&document.dataset, &document.prefixes, None, None, imports).expect("lints")
+    }
+
+    /// The `(focus, source shape, severity)` of every `shacl-shacl` result.
+    fn shacl_shacl(report: &LintReport) -> Vec<(String, String, String)> {
+        report
+            .shacl_shacl()
+            .iter()
+            .map(|result| {
+                (
+                    result.focus.to_string(),
+                    result.source_shape.to_string(),
+                    result.severity.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// An `owl:imports` on a node that is no anchor is listed under `unanchored-imports`,
+    /// and the section is informational: the finding count and `clean` are exactly the
+    /// control's, which lacks the triple. The control lists nothing, so a section that
+    /// listed every graph's imports regardless would be observed.
+    #[test]
+    fn an_unanchored_import_is_listed_and_is_never_a_finding() {
+        let control = report("", &ShapesImports::new());
+        assert_eq!(control.unanchored_imports(), []);
+        assert!(control.render().contains("unanchored-imports 0\n"));
+
+        let listed = report("ex:Other owl:imports ex:Target .\n", &ShapesImports::new());
+        assert_eq!(listed.unanchored_imports().len(), 1, "{}", listed.render());
+        assert!(
+            listed.render().contains(
+                "unanchored-imports 1\nunanchored <http://example.org/ns#Other> \
+                 <http://example.org/ns#Target> document -\n"
+            ),
+            "{}",
+            listed.render()
+        );
+        assert_eq!(listed.findings(), control.findings());
+        assert_eq!(listed.is_clean(), control.is_clean());
+        assert!(listed.is_clean(), "{}", listed.render());
+    }
+
+    /// W3C `shsh:DataGraphImportsShape` — "sh:DataGraphs using owl:imports should
+    /// explicitly include the type owl:Ontology", severity `sh:Info` — surfaces in the
+    /// `shacl-shacl` section and is a finding: an `sh:Info` result is not dropped. The
+    /// data-graph node's triple is also listed as unanchored, since it is not an import.
+    /// The neighbour types the node `owl:Ontology` too: the shape is satisfied, the import
+    /// is followed (and supplied), and nothing is unanchored.
+    #[test]
+    fn a_data_graph_import_without_an_ontology_type_is_an_info_finding() {
+        const SHSH_DATA_GRAPH_IMPORTS: &str =
+            "<http://www.w3.org/ns/shacl-shacl#DataGraphImportsShape>";
+        const SH_INFO: &str = "http://www.w3.org/ns/shacl#Info";
+        let flagged = report(
+            &format!("ex:D a sh:DataGraph ; owl:imports <{LIB}> .\n"),
+            &ShapesImports::new(),
+        );
+        assert!(
+            shacl_shacl(&flagged).contains(&(
+                "<http://example.org/ns#D>".to_owned(),
+                SHSH_DATA_GRAPH_IMPORTS.to_owned(),
+                SH_INFO.to_owned()
+            )),
+            "{}",
+            flagged.render()
+        );
+        assert!(!flagged.is_clean(), "{}", flagged.render());
+        assert_eq!(flagged.unanchored_imports().len(), 1);
+
+        let mut imports = ShapesImports::new();
+        imports.insert_turtle(LIB, "").expect("empty document");
+        let typed = report(
+            &format!("ex:D a sh:DataGraph , owl:Ontology ; owl:imports <{LIB}> .\n"),
+            &imports,
+        );
+        assert!(
+            !shacl_shacl(&typed)
+                .iter()
+                .any(|(_, shape, _)| shape == SHSH_DATA_GRAPH_IMPORTS),
+            "{}",
+            typed.render()
+        );
+        assert_eq!(typed.unanchored_imports(), [], "{}", typed.render());
+        assert!(typed.is_clean(), "{}", typed.render());
+    }
+
+    /// An imported document's unanchored `owl:imports` is listed under the IRI it was
+    /// imported by; the importing document's anchored import is not listed.
+    #[test]
+    fn an_imported_documents_unanchored_import_names_its_document() {
+        let mut imports = ShapesImports::new();
+        imports
+            .insert_turtle(
+                LIB,
+                "<http://example.org/ns#LibNode> <http://www.w3.org/2002/07/owl#imports> \
+                 <http://example.org/ns#Elsewhere> .\n",
+            )
+            .expect("turtle");
+        let listed = report(
+            &format!("ex:G a sh:ShapesGraph ; owl:imports <{LIB}> .\n"),
+            &imports,
+        );
+        assert!(
+            listed.render().contains(
+                "unanchored-imports 1\nunanchored <http://example.org/ns#LibNode> \
+                 <http://example.org/ns#Elsewhere> document <http://example.org/lib>\n"
+            ),
+            "{}",
+            listed.render()
+        );
+    }
+}

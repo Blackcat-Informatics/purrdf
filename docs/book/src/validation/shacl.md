@@ -127,8 +127,8 @@ prepared validator instead of re-parsing Turtle — see
 
 ## `owl:imports` in a shapes graph
 
-A shapes document may carry an `owl:Ontology` header that `owl:imports` other
-documents, and the shapes it constrains with may live entirely in those imports.
+A shapes document may carry an `owl:Ontology` header or a `sh:ShapesGraph`
+declaration that `owl:imports` other documents, and the shapes it constrains with may live entirely in those imports.
 PurRDF resolves that closure — **but it never fetches it**. There is no HTTP
 client in the workspace, every release crate builds for
 `wasm32-unknown-unknown`, and a validation verdict that depends on what a URL
@@ -157,14 +157,31 @@ Turtle specifies.
 
 Not every `owl:imports` triple is an import. OWL 2 reads a document's imports
 off its ontology header (*Mapping to RDF Graphs* §3.1.2, Table 4:
-`x rdf:type owl:Ontology . x owl:imports y`), and SHACL 1.2 Core follows them
-from the shapes graph's own IRI along `^owl:versionIRI?/owl:imports`. So an
-`owl:imports` is an import only when its subject is the shapes document's own
-IRI (its `file://` retrieval IRI, `--shapes-base`, `shacl pack --base` or an
-in-document `@base`; for an imported document, the IRI it was imported by), a
-node the document types `owl:Ontology`, or a node naming either as its
-`owl:versionIRI`. On any other node it is data: it stays in the shapes graph as
-written, and no document is looked for.
+`x rdf:type owl:Ontology . x owl:imports y`). SHACL 1.2 Core follows them from
+the shapes graph's own IRI along `^owl:versionIRI?/owl:imports`, and names the
+class that declares a shapes graph: "The sh:ShapesGraph class MAY be used as an
+rdf:type of the IRI of a graph that typically acts in the role of a shapes
+graph." PurRDF takes OWL 2 as the floor of the rule and SHACL's shapes graphs on
+top of it. So an `owl:imports` is an import only when its subject is one of
+these:
+
+- the shapes document's own IRI (its `file://` retrieval IRI, `--shapes-base`,
+  `shacl pack --base` or an in-document `@base`; for an imported document, the
+  IRI it was imported by);
+- a node the document types `owl:Ontology`;
+- a node the document types `sh:ShapesGraph`. Every such node counts, and so does
+  a `sh:RulesGraph` or a node of a class the document declares
+  `rdfs:subClassOf sh:ShapesGraph`;
+- a node naming one of those as its `owl:versionIRI`.
+
+On any other node it is data: it stays in the shapes graph as written, and no
+document is looked for. A node that is only a `sh:DataGraph` is such a node.
+SHACL 1.2 Core §6.2 says "owl:imports in the data graph is not enacted", and
+its note asks a data graph that means an import to be typed `owl:Ontology` as
+well. The data graph's own `owl:imports` are never read at all. `purrdf shapes
+lint` lists every `owl:imports` that is data under `unanchored-imports`. The
+same rule decides entailment's imports, and the node set it reads is the one
+the implicit SPARQL prefixes below are collected from.
 
 SHACL-SPARQL's prefix path is such data. A query collects its prefixes along
 `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, and the W3C test
@@ -176,8 +193,8 @@ ex:TestPrefixes owl:imports <http://example.com/ns#> ;
   sh:declare [ sh:prefix "test" ; sh:namespace "http://test.com/ns#"^^xsd:anyURI ] .
 ```
 
-`ex:TestPrefixes` is neither the document's IRI nor an ontology header, so that
-`owl:imports` is a prefix edge, not an import, and the test validates as
+`ex:TestPrefixes` is neither the document's IRI nor an ontology header nor a
+shapes graph, so that `owl:imports` is a prefix edge, not an import, and the test validates as
 written. So does `sparql/component/validator-001`, whose
 `owl:imports <http://datashapes.org/dash>` sits on a node that is neither.
 
@@ -185,8 +202,8 @@ An import whose document or ontology is **already loaded** needs no pair. It
 is resolved when it names a document that was read: the shapes document's
 own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack
 --base`), an in-document `@base`, or an `--import` document's IRI. An import
-is also resolved when the graph holds `<X> a owl:Ontology`, or an ontology
-whose `owl:versionIRI` is `<X>`.
+is also resolved when the graph holds `<X> a owl:Ontology`,
+`<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is `<X>`.
 
 Every one of these rules applies across the whole closure, so a declaration
 that arrives in an imported document counts too. A
@@ -280,7 +297,8 @@ header before it is compiled. The header follows SHACL 1.2 SPARQL Extensions,
 - **A query without `sh:prefixes`** uses every `sh:declare` of every SHACL
   instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or
   `sh:RulesGraph` in the shapes graph. A subclass of one of those classes
-  counts too.
+  counts too. These are the same nodes the `owl:imports` rule reads: one
+  classifier decides both.
 - **Two different namespaces for one prefix** in the declarations a query
   reaches make the shapes graph ill-formed. The load fails, and the error names
   the prefix and both namespaces. The same prefix declared twice with the same
@@ -437,8 +455,8 @@ comparing values. They are counted on their own line,
 `sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
 passes by name with no import supplied. Its
 `owl:imports <http://datashapes.org/dash>` sits on a node that is neither the
-document's own IRI nor an `owl:Ontology`, nor names one as its
-`owl:versionIRI`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core
+document's own IRI nor an `owl:Ontology` nor a `sh:ShapesGraph`, nor names one
+as its `owl:versionIRI`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core
 the triple is data, not an import (see
 [`owl:imports` in a shapes graph](#owlimports-in-a-shapes-graph)). The harness
 loads the case with an empty import table.
@@ -1008,7 +1026,7 @@ purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
 **Certifying a shapes graph.** Loading a shapes graph is the hot path: it
 refuses the first construct it cannot evaluate faithfully, and does not pay for
 validating the graph against the W3C `shacl-shacl.ttl`. Linting pays that cost
-once, on request, and reports five sections:
+once, on request, and reports six sections:
 
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
@@ -1029,10 +1047,18 @@ once, on request, and reports five sections:
    component selects, or a `sh:SPARQLFunction` nothing calls. The load accepts
    them, and each is a finding here. A declaration that breaks a syntax rule is
    never listed here, because it fails the load.
+6. `unanchored-imports`: every `owl:imports` triple of the closure that is not
+   an import, because its subject is no anchor of its document (see
+   [`owl:imports` in a shapes graph](#owlimports-in-a-shapes-graph)). Each is
+   data, so no document was looked for. These lines are never findings. The
+   case the W3C flags is reported by `shacl-shacl` instead: its
+   `shsh:DataGraphImportsShape` reports, at severity `sh:Info`, a
+   `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded and no unexecuted query violates a pre-binding
-restriction. Every host renders the same deterministic text; the
+result is superseded (an `sh:Info` result counts like any other) and no
+unexecuted query violates a pre-binding restriction. `unanchored-imports` never
+affects it. Every host renders the same deterministic text; the
 [CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)
 shows it.
 

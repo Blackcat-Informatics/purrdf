@@ -35,8 +35,14 @@
 //!   union, over every such owner, of the declarations the path above reaches. When
 //!   none has, the collection is the IMPLICIT one: every `sh:declare` value of every
 //!   SHACL instance (`rdf:type/rdfs:subClassOf*` in the shapes graph) of the four
-//!   classes. `sh:RulesGraph` is listed as a class of its own, so its instances count
-//!   whether or not the shapes graph states its subclass axiom.
+//!   classes. Which nodes those are is not decided here: it is the kernel's ONE
+//!   graph-role classifier ([`purrdf_core::graph_roles`]), the same answer the
+//!   `owl:imports` rule selects its anchors from, so the node set a query's implicit
+//!   prefixes come from and the node set whose imports are followed can never drift
+//!   apart. Every role counts here ([`GraphRoles::declares_implicit_prefixes`]), the
+//!   data-graph role included; `sh:RulesGraph` counts whether or not the shapes graph
+//!   states its subclass axiom. A shapes graph that interns no `sh:declare` has an empty
+//!   implicit collection and is never classified.
 //! * **Conflicts are refused**, in both collections: two different namespaces for one
 //!   prefix is the spec's ill-formed shapes graph, and the load error names the
 //!   prefix, both namespaces and both declarations. The same prefix bound to the same
@@ -71,23 +77,16 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use ::purrdf::RdfDataset;
+use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 
 use super::objects_of;
 use crate::data::{GraphFilter, native_quads};
-use crate::model::{rdf, sh, xsd};
+use crate::model::{sh, xsd};
 use crate::term::{NamedNode, Term};
 
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
 const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
-const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
-const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
-const SH_RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
 const XSD_ANY_URI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
-
-/// The classes whose SHACL instances supply the implicit prefix declarations.
-const IMPLICIT_HOLDER_CLASSES: [&str; 4] =
-    [OWL_ONTOLOGY, SH_DATA_GRAPH, SH_SHAPES_GRAPH, SH_RULES_GRAPH];
 
 /// One collection of prefix mappings: label → (namespace, the declaration node that
 /// bound it). The declaration is kept for the conflict diagnostic.
@@ -237,38 +236,21 @@ fn reached_holders(data: &RdfDataset, root: &Term) -> Vec<Term> {
     reached
 }
 
-/// The implicit collection: every `sh:declare` value of every SHACL instance of
-/// [`IMPLICIT_HOLDER_CLASSES`], holders in canonical order so a conflict is reported
-/// the same way on every run.
+/// The implicit collection: every `sh:declare` value of every node the kernel's graph-role
+/// classifier gives a role ([`GraphRoles::declares_implicit_prefixes`]), holders in
+/// canonical order so a conflict is reported the same way on every run.
+///
+/// A shapes graph that interns no `sh:declare` has nothing to collect, and is not
+/// classified at all.
 fn implicit_collection(data: &RdfDataset) -> Result<Collection, String> {
-    let mut instances = super::parser::shacl_instance::ShaclInstances::new(data);
-    let classes: Vec<_> = IMPLICIT_HOLDER_CLASSES
-        .iter()
-        .filter_map(|class| data.term_id_by_iri(class))
-        .collect();
-    let mut holders: Vec<Term> = Vec::new();
-    if !classes.is_empty()
-        && let Some(rdf_type) = data.term_id_by_iri(rdf::TYPE)
-    {
-        let mut seen = ::purrdf::IdSet::default();
-        for quad in crate::data::quads_for_pattern_ids(
-            data,
-            None,
-            Some(rdf_type),
-            None,
-            GraphFilter::AnyGraph,
-        ) {
-            if !seen.insert(quad.s) {
-                continue;
-            }
-            if classes
-                .iter()
-                .any(|&class| instances.is_instance(quad.s, Some(class)))
-            {
-                holders.push(crate::term::term_id_to_native(data, quad.s));
-            }
-        }
+    if data.term_id_by_iri(sh::DECLARE).is_none() {
+        return Ok(Collection::new());
     }
+    let mut holders: Vec<Term> = GraphRoleIndex::classify(data)
+        .iter()
+        .filter(|(_, roles)| GraphRoles::declares_implicit_prefixes(*roles))
+        .map(|(node, _)| crate::term::term_id_to_native(data, node))
+        .collect();
     crate::term::sort_terms_canonical(&mut holders);
     let origin = "the shapes graph's owl:Ontology / sh:DataGraph / sh:ShapesGraph / \
                   sh:RulesGraph declarations (used by every SPARQL query without \

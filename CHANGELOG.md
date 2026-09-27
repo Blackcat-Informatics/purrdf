@@ -754,6 +754,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `owl:imports` triple is data. Entailment and SHACL both take their verdict from it;
   `purrdf-entail` re-exports it from `entails::imports`.
 
+- **core:** `purrdf_core::graph_roles`, the one graph-role classifier: `GraphRoles`
+  (`ONTOLOGY_HEADER`, `SHAPES_GRAPH`, `DATA_GRAPH`; `is_import_anchor`,
+  `declares_implicit_prefixes`, `labels`) and `GraphRoleIndex::classify`, which gives
+  every node of a document its roles as a SHACL instance (`rdf:type/rdfs:subClassOf*`
+  over the document) of `owl:Ontology`, `sh:ShapesGraph` (with `sh:RulesGraph` counted
+  as one whether or not the document states its subclass axiom) and `sh:DataGraph`. The
+  `owl:imports` rule and SHACL-SPARQL's implicit prefix collection both select from it,
+  so the two node sets cannot drift apart. `purrdf_core::imports` gains
+  `unanchored_import_triples`, `ImportMap::unanchored_imports` and `UnanchoredImport`:
+  every `owl:imports` triple of a closure that is data rather than an import.
+
+- **shapes, validate, cli, python, wasm, capi:** `shapes lint` reports a sixth,
+  informational section, `unanchored-imports N`, with one `unanchored SUBJECT OBJECT
+  document -|<IRI>` line per `owl:imports` triple of the shapes graph's closure whose
+  subject is no anchor of its document, so it is data and imported nothing. The lines are
+  never findings and do not affect `clean`. `LintReport::unanchored_imports` and
+  `lint::UnanchoredImport` carry it, and Python's `lint_shapes` dict gains
+  `"unanchored_imports"` (`document`, `subject`, `object`). The `shacl-shacl` section
+  already reports W3C `shsh:DataGraphImportsShape`, at severity `sh:Info`, for a
+  `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`; that result is
+  a finding, and a test now pins it.
+
 - **shapes:** `purrdf_shapes::imports`: the `ShapesImports` table (`from_turtle`,
   `insert`, `insert_turtle`, `declare_loaded`), the typed `ShapesImportError`
   (`Unresolved`, `Unreached`, `InvalidEntry`, with a stable `kind()` label:
@@ -831,6 +853,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **core, shapes, entail:** `<G> a sh:ShapesGraph ; owl:imports <lib>` was silently not
+  an import: validation ran without `<lib>`'s shapes, and entailment without its axioms,
+  with no refusal. It is now an import on every host (see Changed). The implicit
+  SHACL-SPARQL prefix collection and the import rule now read one classifier, so a node
+  whose `sh:declare` supplies a query's prefixes is classified exactly as the import rule
+  classifies it.
+
+- **shapes:** the `README.md` example of a shapes graph with an import used an
+  `owl:imports` on a node that is no anchor, so the table entry it supplied would have
+  been refused as unreached. It declares the node a `sh:ShapesGraph` now.
 
 - **shapes:** the JSON Schema compiler projects `sh:someValue`, `sh:node`,
   `sh:and`, `sh:or`, `sh:xone` and `sh:not` on a property shape, instead of
@@ -2734,6 +2767,24 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `purrdf_shapes::validator_alternatives` module (`AlternativeValidator`,
   `ValidatorLanguage`) carry it, `LinkedDeclarations` gains `alternative_validators`,
   and Python's `lint_shapes` dict gains `"alternatives"`.
+
+- **BREAKING** **core, shapes, entail, validate, cli, python, wasm, capi:** one import
+  rule reads OWL headers and SHACL shapes-graph roles in every engine. An `owl:imports`
+  on EVERY SHACL instance of `sh:ShapesGraph` — typed `sh:ShapesGraph` or
+  `sh:RulesGraph`, or typed a class the document declares `rdfs:subClassOf*`
+  `sh:ShapesGraph` — is now an import (SHACL 1.2 Core §6.1), in validation, rules,
+  node expressions, lint, shapes products and entailment alike: unsupplied it is refused
+  by name, supplied it is merged. Such a triple was data before. OWL 2's `owl:Ontology`
+  header is read through `rdfs:subClassOf*` too. A node whose only graph role is
+  `sh:DataGraph` still imports nothing (SHACL 1.2 Core §6.2, "owl:imports in the data
+  graph is not enacted"), and the data graph's own `owl:imports` are never enacted
+  whatever they sit on. An import of `<X>` is now also resolved in place when the closure
+  declares `<X> a sh:ShapesGraph`. The kernel's module documentation no longer claims to
+  name no vocabulary beyond OWL's (`docs/SUPERSEDED-CLAIMS.md`).
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report text gains
+  the `unanchored-imports N` section between `unexecuted` and `findings` on every host,
+  so a consumer that matched the report's tail sees one more section.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as

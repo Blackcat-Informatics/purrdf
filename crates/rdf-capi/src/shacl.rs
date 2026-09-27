@@ -188,11 +188,12 @@ unsafe fn cstr_array<'a>(
 /// `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
 /// arrays may then be NULL) is the empty table. An `owl:imports` is an import only on the
 /// shapes graph's own IRI (`shapes_base_iri`, or the document's own `@base`), on an
-/// `owl:Ontology` header, or on a node naming either as its `owl:versionIRI`; on any other
-/// node it is data. An import is resolved by a table
-/// entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
-/// document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
-/// ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry
+/// `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included),
+/// or on a node naming one of those as its `owl:versionIRI`; on any other node — one that is
+/// only a `sh:DataGraph` among them — it is data. An import is resolved by a table entry, by
+/// `shapes_base_iri` (or the document's own `@base`) naming the imported document, or by the
+/// closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+/// `owl:versionIRI` is `<X>`); anything else — or a table entry
 /// nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
 /// smaller shapes graph than the one named. Read its kind and IRIs with
 /// `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
@@ -735,9 +736,13 @@ fn lint_shapes_report(
 /// `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed),
 /// `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
 /// <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
-/// declared for a built-in component) and `unexecuted` (`violation DECLARATION`, one
-/// per query that violates a pre-binding restriction and that nothing executes)
-/// sections, then `findings N` and `clean true|false`.
+/// declared for a built-in component), `unexecuted` (`violation DECLARATION`, one
+/// per query that violates a pre-binding restriction and that nothing executes) and
+/// `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+/// `owl:imports` triple of the closure whose subject is no anchor of its document — not
+/// the IRI it was read or imported under, not an ontology header, not a shapes graph — so
+/// it is data and imported nothing; never a finding) sections, then `findings N` and
+/// `clean true|false`.
 ///
 /// `*out_clean` receives 1 when the report carries no finding — the loader accepted the
 /// graph, every `shacl-shacl.ttl` result is superseded and no unexecuted query violates a
@@ -2705,6 +2710,22 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             report.contains(
                 "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on \
                  <http://example.org/ns#Tagger>\n"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.ends_with("unanchored-imports 0\nfindings 0\nclean true\n"),
+            "{report}"
+        );
+        // An owl:imports on a node that is no anchor is data: listed, never a finding.
+        let (status, clean, findings, report) = lint(&format!(
+            "{TOOLS_SHAPES}ex:Other <http://www.w3.org/2002/07/owl#imports> ex:Target .\n"
+        ));
+        assert_eq!((status, clean, findings), (PurrdfStatus::Ok as i32, 1, 0));
+        assert!(
+            report.contains(
+                "unanchored-imports 1\nunanchored <http://example.org/ns#Other> \
+                 <http://example.org/ns#Target> document -\n"
             ),
             "{report}"
         );

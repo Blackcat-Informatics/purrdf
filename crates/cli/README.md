@@ -482,8 +482,13 @@ asked about. **PurRDF fetches nothing and mints no vocabulary**, so each pair
 resolves one ontology IRI to one local document; an `owl:imports` no pair resolves,
 that does not name the premise document itself (its `file://` retrieval IRI or
 `--base`), and whose ontology the premise does not already hold (`<X> a
-owl:Ontology`, or an `owl:versionIRI` naming it), is refused by name (exit 1) rather than treated as an
-empty document, and a
+owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming it), is
+refused by name (exit 1) rather than treated as an empty document. The
+`owl:imports` read are the ones `shapes lint` and `validate` read: on the premise
+document's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph`
+(`sh:RulesGraph` and subclasses included), or on a node naming one of those as
+its `owl:versionIRI`; an `owl:imports` on any other node — one that is only a
+`sh:DataGraph` among them — is a premise triple. A
 malformed pair (no `=`) is a usage error (exit 2) rather than a skipped import. The
 IRI is everything before the *first* `=`.
 
@@ -685,15 +690,21 @@ it is refused against `--shapes-product` and against a container.
 <IRI>=<FILE>` (repeatable, followed transitively) resolves one imported
 ontology to one local document. An `owl:imports` is an import only on the
 shapes document's own IRI (its `file://` retrieval IRI, `--shapes-base` or
-`@base`), on an `owl:Ontology` header, or on a node naming either as its
-`owl:versionIRI` — OWL 2's ontology header and SHACL 1.2's
-`^owl:versionIRI?/owl:imports`. On any other node it is data: SHACL's
-`sh:prefixes/owl:imports*/sh:declare` prefix edges are such triples, and the
-W3C `prefixes-001` and `validator-001` vectors validate as written. An import
-needs no pair when it names a document already read — the shapes document's
-own IRI, or an `--import` document — or an ontology already in the shapes
-graph: `<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`,
-as when the W3C SHACL 1.2 vocabularies are merged into one document. Any other
+`@base`), on an `owl:Ontology` header, on a `sh:ShapesGraph` — every one the
+document declares, `sh:RulesGraph` and classes declared `rdfs:subClassOf
+sh:ShapesGraph` included — or on a node naming one of those as its
+`owl:versionIRI`: OWL 2's ontology header, SHACL 1.2 Core's `sh:ShapesGraph`
+and SHACL 1.2's `^owl:versionIRI?/owl:imports`. On any other node it is data:
+a node that is only a `sh:DataGraph` ("owl:imports in the data graph is not
+enacted", SHACL 1.2 Core §6.2) and SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges are such triples, `shapes
+lint` lists them under `unanchored-imports`, and the W3C `prefixes-001` and
+`validator-001` vectors validate as written. The data graph's own
+`owl:imports` are never enacted. An import needs no pair when it names a
+document already read — the shapes document's own IRI, or an `--import`
+document — or a graph already in the shapes graph: `<X> a owl:Ontology`,
+`<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is `<X>`, as
+when the W3C SHACL 1.2 vocabularies are merged into one document. Any other
 unresolved
 import is refused (exit `1`), naming each IRI, the `--import` pair that
 resolves it, and — for a document that imports its own published IRI — the
@@ -894,7 +905,7 @@ Certify a shapes graph cold: everything PurRDF can say about it before any data
 is validated, in one deterministic report. Validation never pays for this; the
 verb is where it is paid, on request. The loader is configured by the same
 `--import`, `--box-role-vocab` and `--shapes-graph` flags `validate` takes, so
-the graph certified is the graph validation would use. The report has five
+the graph certified is the graph validation would use. The report has six
 sections:
 
 ```text
@@ -906,6 +917,8 @@ call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <htt
 validators 1
 alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
 unexecuted 0
+unanchored-imports 1
+unanchored <http://example.org/Other> <http://example.org/Target> document -
 findings 0
 clean true
 ```
@@ -950,10 +963,27 @@ clean true
   followed by its `error` lines, and each is a finding here. A declaration
   that violates a syntax rule never appears here: it refuses the load. It
   reads `unexecuted unavailable` when the loader refused the graph.
+- **`unanchored-imports`** lists every `owl:imports` triple of the shapes
+  graph's closure that is **not** an import, because its subject is no anchor of
+  the document it occurs in. The anchors are the IRI the document was read
+  under (`--base`, or for an imported document the IRI it was imported by), every
+  `owl:Ontology` header, every `sh:ShapesGraph` (a `sh:RulesGraph`, or a class the
+  document declares `rdfs:subClassOf sh:ShapesGraph`, included), and a node that
+  names one of those as its `owl:versionIRI`. A node whose only graph role is
+  `sh:DataGraph` is not one: SHACL 1.2 Core says "owl:imports in the data graph
+  is not enacted". Such a triple is data, so no document was looked for; each is
+  an `unanchored SUBJECT OBJECT document D` line, where `D` is `-` for the shapes
+  document itself and the import IRI for an imported one. These lines are never
+  findings: the triple may well be meant as data. They are listed so that an
+  author who meant an import can see it is not one. The case the W3C flags is
+  covered by `shacl-shacl`: its `shsh:DataGraphImportsShape` reports, at
+  severity `sh:Info`, a `sh:DataGraph` that uses `owl:imports` without also
+  being typed `owl:Ontology`, and that result is a finding like any other.
 
 A report is clean when the loader accepted the graph, every `shacl-shacl`
-result is superseded and no unexecuted query violates a pre-binding
-restriction.
+result is superseded (an `sh:Info` result counts like any other) and no
+unexecuted query violates a pre-binding restriction. `unanchored-imports` never
+affects it.
 
 The report goes to `OUT` either way, and `shapes lint clean true|false` and
 `shapes lint findings N` always go to stderr.

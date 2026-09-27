@@ -113,9 +113,14 @@ the question rather than of any host:
   when it names the premise document itself — the CLI's `file://` retrieval IRI or
   `--base`, and on the Python, WebAssembly and C hosts the `premise_iris` argument
   (`premiseIris` in JavaScript), the IRIs the caller read the premise from, `[]` for
-  bare text — or an ontology the premise already holds (`<X> a owl:Ontology`, or an
-  `owl:versionIRI` naming it). Any other unresolved import is a refusal naming the document, never
-  a silently truncated premise.
+  bare text — or a graph the premise already holds (`<X> a owl:Ontology`,
+  `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming it). Any other unresolved
+  import is a refusal naming the document, never a silently truncated premise.
+  The `owl:imports` read are the same ones SHACL validation reads: on the premise's
+  own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and
+  subclasses included), or on a node naming one of those as its `owl:versionIRI`.
+  An `owl:imports` on any other node, a node that is only a `sh:DataGraph`
+  included, is an ordinary premise triple.
 
 A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicate**
 included. RDF reserves that position for an IRI, so the boundary reaches it by

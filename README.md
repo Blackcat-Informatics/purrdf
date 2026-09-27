@@ -451,12 +451,15 @@ triple pattern.
   `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
   the same shape `entails` and `shex` take, and the closure is followed
   transitively from that table. Only an `owl:imports` on the shapes
-  document's own IRI, on an `owl:Ontology` header, or on a node naming either
-  as its `owl:versionIRI` is an import; on any other node — SHACL's
-  `sh:prefixes/owl:imports*/sh:declare` prefix edges among them — it is data.
-  An import of the shapes document's own IRI or of an ontology already in the
-  shapes graph (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it) needs
-  no pair; any other unresolved import is
+  document's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph`
+  (`sh:RulesGraph` and subclasses included), or on a node naming one of those
+  as its `owl:versionIRI` is an import; on any other node — a node that is only
+  a `sh:DataGraph`, and SHACL's `sh:prefixes/owl:imports*/sh:declare` prefix
+  edges, among them — it is data, and `shapes lint` lists it under
+  `unanchored-imports`. Entailment follows the same rule. An import of the
+  shapes document's own IRI or of a graph already in the shapes graph
+  (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming
+  it) needs no pair; any other unresolved import is
   refused by name rather than validated against a smaller shapes graph.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`

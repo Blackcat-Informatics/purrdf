@@ -68,10 +68,12 @@ use purrdf_validate::{ShapesError, ShapesProductRefusal};
 /// with that IRI as its base; the same convention `entailCertainAnswers` uses. Omitted,
 /// the table is empty, and the rule still applies. An `owl:imports` is an import only on
 /// the shapes graph's own IRI (`shapesBase`, or the document's own `@base`), on an
-/// `owl:Ontology` header, or on a node naming either as its `owl:versionIRI`; on any other
-/// node it is data. An import is resolved by a table entry, by `shapesBase` (or the
-/// document's own `@base`) naming the imported document, or by the closure declaring the
-/// ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`). Anything
+/// `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included),
+/// or on a node naming one of those as its `owl:versionIRI`; on any other node — one that is
+/// only a `sh:DataGraph` among them — it is data. An import is resolved by a table entry, by
+/// `shapesBase` (or the document's own `@base`) naming the imported document, or by the
+/// closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+/// `owl:versionIRI` is `<X>`). Anything
 /// else rejects with this class rather than validating a smaller shapes graph than the one
 /// named. PurRDF fetches nothing.
 ///
@@ -719,8 +721,10 @@ impl ShaclLintReport {
     /// `validators` (`alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE
     /// superseded-by-native`, one per validator declared for a built-in component) and
     /// `unexecuted` (`violation DECLARATION`, one per query that violates a pre-binding
-    /// restriction and that nothing executes) sections, then `findings N` and
-    /// `clean true|false`.
+    /// restriction and that nothing executes) and `unanchored-imports` (`unanchored
+    /// SUBJECT OBJECT document -|<IRI>`, one per `owl:imports` triple of the closure whose
+    /// subject is no anchor of its document, so it is data and imported nothing; never a
+    /// finding) sections, then `findings N` and `clean true|false`.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn report(&self) -> String {

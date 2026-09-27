@@ -152,9 +152,9 @@ or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six 
 substituting the canonical spelling, which for them equals value comparison. They
 are counted apart from the passes. `sparql/component/validator-001` passes by
 name with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits
-on a node that is neither the document's own IRI nor an `owl:Ontology`, so under
-OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the triple is data, not an
-import. SPARQL 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
+on a node that is neither the document's own IRI nor an `owl:Ontology` nor a
+`sh:ShapesGraph`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the
+triple is data, not an import. SPARQL 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
 `data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
 well; `docs/CONFORMANCE.md` has the live numbers.
 
@@ -909,14 +909,27 @@ closure, as the constructor resolved it.
 
 Every `Shapes` constructor resolves the shapes graph's `owl:imports` closure through
 `imports::resolve_shapes_imports` before it reads a shape. An `owl:imports` triple is an
-import only when its subject is the shapes graph's own IRI (the IRI it was read under; for
-an imported document, the IRI it was imported by), a node the document types
-`owl:Ontology`, or a node naming either as its `owl:versionIRI` — OWL 2's ontology header
-and SHACL 1.2's `^owl:versionIRI?/owl:imports`. On any other node it is data, as SHACL's
-`sh:prefixes/owl:imports*/sh:declare` prefix edges are. An import is resolved by a
-document in the caller's `ShapesImports` table, by the IRI the shapes document was read
-under, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology
-whose `owl:versionIRI` is `<X>`). The supplied documents are merged in, and an import
+import only when its subject is an anchor of its document:
+
+- the shapes graph's own IRI (the IRI it was read under; for an imported document, the IRI
+  it was imported by);
+- a SHACL instance of `owl:Ontology`, OWL 2's ontology header;
+- every SHACL instance of `sh:ShapesGraph` (SHACL 1.2 Core §6.1), including
+  `sh:RulesGraph` and any class the document declares `rdfs:subClassOf sh:ShapesGraph`;
+- a node naming one of those as its `owl:versionIRI` (SHACL 1.2's
+  `^owl:versionIRI?/owl:imports`).
+
+A node whose only graph role is `sh:DataGraph` is not an anchor. SHACL 1.2 Core §6.2 says
+"owl:imports in the data graph is not enacted", and the data graph's own `owl:imports` are
+never read at all. The anchors come from the kernel's one graph-role classifier
+(`purrdf_core::graph_roles`), which SHACL-SPARQL's implicit prefixes (`sh:declare` on an
+`owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or `sh:RulesGraph`) select from too, and
+entailment follows the same rule. On any other node the triple is data, as SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges are, and `lint::lint` lists it in its
+informational `unanchored-imports` section. An import is resolved by a document in the
+caller's `ShapesImports` table, by the IRI the shapes document was read under, or by the
+closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+`owl:versionIRI` is `<X>`). The supplied documents are merged in, and an import
 nothing resolves — or a table entry nothing imports — is refused with the typed
 `ShapesError::Imports`. So a `Shapes` value is complete by construction, and every
 entry point built on one gives the same verdict on every host. PurRDF fetches nothing.
@@ -925,7 +938,8 @@ entry point built on one gives the same verdict on every host. PurRDF fetches no
 use purrdf_shapes::{ShapesImports, engine};
 
 let shapes_ttl = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-    <http://example.org/shapes> owl:imports <http://example.org/lib> .\n";
+    @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    <http://example.org/shapes> a sh:ShapesGraph ; owl:imports <http://example.org/lib> .\n";
 let lib_ttl = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
     <http://example.org/lib#S> a sh:NodeShape .\n";
 

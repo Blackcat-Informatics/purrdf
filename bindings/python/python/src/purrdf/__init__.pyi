@@ -1773,13 +1773,16 @@ class shapes:
     #
     # `imports` is the shapes graph's owl:imports table: (ontology IRI, Turtle
     # document) pairs, each document parsed under its IRI. Every shapes-graph function
-    # here takes it. An owl:imports is resolved by a table entry, by `shapes_base` (or
-    # the document's own @base) naming the imported document, by the closure
-    # declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
-    # owl:versionIRI is `<X>`), or by the closure describing `<X>` with sh:declare
-    # (SHACL's prefix-declaration idiom); anything else — or a table entry no import names —
-    # raises ShapesImportError. PurRDF fetches nothing; an omitted table still
-    # enforces the rule.
+    # here takes it. An owl:imports in the shapes graph is an import only on the
+    # shapes graph's own IRI (`shapes_base`, or its own @base), on an owl:Ontology
+    # header, on a sh:ShapesGraph (sh:RulesGraph and subclasses included), or on a
+    # node naming one of those as its owl:versionIRI; on any other node — a node
+    # that is only a sh:DataGraph among them — it is data. An import is resolved by a
+    # table entry, by `shapes_base` (or the document's own @base) naming the imported
+    # document, or by the closure declaring it (`<X> a owl:Ontology`,
+    # `<X> a sh:ShapesGraph`, or an ontology whose owl:versionIRI is `<X>`); anything
+    # else — or a table entry no import names — raises ShapesImportError. PurRDF
+    # fetches nothing; an omitted table still enforces the rule.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1879,7 +1882,11 @@ class shapes:
     # when the loader refused the graph), "unexecuted" (each query the graph declares
     # that violates a pre-binding restriction and that nothing executes, which the
     # load accepts: "declaration" / "message"; each is a finding; None when the loader
-    # refused the graph), "report" (the deterministic text every host prints)}. The
+    # refused the graph), "unanchored_imports" (each owl:imports triple of the closure
+    # whose subject is no anchor of its document, so it is data and imported nothing:
+    # "document" (None for the shapes document itself, else the IRI it was imported
+    # under) / "subject" / "object"; never findings), "report" (the deterministic text
+    # every host prints)}. The
     # report certifies the whole owl:imports closure; one not in hand
     # raises ShapesImportError, never a report about the importing document alone.
     # Otherwise raises ValueError only when the document is not Turtle.

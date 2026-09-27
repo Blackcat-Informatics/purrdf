@@ -77,10 +77,12 @@ purrdf shacl pack \
 ```
 
 Only an `owl:imports` on the shapes document's own IRI, on an `owl:Ontology`
-header, or on a node naming either as its `owl:versionIRI` is an import; on any
-other node it is data. An import of the shapes document's own IRI (`--base`,
-its `file://` retrieval IRI, or an in-document `@base`) or of an ontology
-already in the shapes graph (`<X> a owl:Ontology`, or an ontology whose
+header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on
+a node naming one of those as its `owl:versionIRI` is an import; on any other
+node, a node that is only a `sh:DataGraph` included, it is data. An import of
+the shapes document's own IRI (`--base`, its `file://` retrieval IRI, or an
+in-document `@base`) or of a graph already in the shapes graph
+(`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
 `owl:versionIRI` is `<X>`) needs no pair.
 Every other `owl:imports` no pair resolves is refused by name, exactly as it is
 for `validate --shapes`, and a pair the closure never reaches is refused as

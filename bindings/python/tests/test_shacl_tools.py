@@ -259,7 +259,10 @@ def test_py_lint_shapes() -> None:
     } in clean["calls"]
     assert clean["alternatives"] == []
     assert clean["unexecuted"] == []
-    assert clean["report"].endswith("validators 0\nunexecuted 0\nfindings 0\nclean true\n")
+    assert clean["unanchored_imports"] == []
+    assert clean["report"].endswith(
+        "validators 0\nunexecuted 0\nunanchored-imports 0\nfindings 0\nclean true\n"
+    )
 
     malformed = purrdf.shapes.lint_shapes(
         _PREFIXES + _SNIPPET + 'ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount "one" ] .\n'
@@ -274,6 +277,18 @@ def test_py_lint_shapes() -> None:
         result["path"] == "<http://www.w3.org/ns/shacl#minCount>" and result["superseded"] is None
         for result in malformed["shacl_shacl"]
     )
+
+    # An owl:imports on a node that is no anchor is data: listed, never a finding.
+    unanchored = purrdf.shapes.lint_shapes(_SHAPES + "ex:Other <http://www.w3.org/2002/07/owl#imports> ex:Target .\n")
+    assert unanchored["unanchored_imports"] == [
+        {
+            "document": None,
+            "subject": "<http://example.org/ns#Other>",
+            "object": "<http://example.org/ns#Target>",
+        }
+    ]
+    assert unanchored["clean"] is True
+    assert unanchored["findings"] == 0
 
     by_types = purrdf.shapes.lint_shapes(_PREFIXES + _SNIPPET + "ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n")
     assert by_types["clean"] is True

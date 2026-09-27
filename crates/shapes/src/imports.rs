@@ -27,17 +27,29 @@
 //! > of following further owl:imports statements. Formally, processors should use the
 //! > property path ^owl:versionIRI?/owl:imports iteratively
 //!
-//! and OWL 2's mapping to RDF (§3.1.1, §3.1.2, Table 4) reads the imports of a document off
-//! its ontology header, `x rdf:type owl:Ontology . x owl:imports *:y`. PurRDF treats the
-//! SHOULD as a MUST. So an `owl:imports` triple of a shapes graph is an import only when its
-//! subject is the shapes graph's own IRI — the IRI it was read or parsed under
-//! ([`ShapesImports::declare_loaded`], the `loaded` argument of [`resolve_shapes_imports`]),
-//! or for an imported document the IRI it was imported by — a node the document types
-//! `owl:Ontology`, or a node naming one of those as its `owl:versionIRI`. Any other
+//! and names the class that declares one: "The sh:ShapesGraph class MAY be used as an
+//! rdf:type of the IRI of a graph that typically acts in the role of a shapes graph." OWL 2's
+//! mapping to RDF (§3.1.1, §3.1.2, Table 4) reads the imports of a document off its ontology
+//! header, `x rdf:type owl:Ontology . x owl:imports *:y`. PurRDF treats the SHOULD as a MUST
+//! and OWL 2 as the floor. So an `owl:imports` triple of a shapes graph is an import only when
+//! its subject is an ANCHOR of its document:
+//!
+//! * the shapes graph's own IRI — the IRI it was read or parsed under
+//!   ([`ShapesImports::declare_loaded`], the `loaded` argument of [`resolve_shapes_imports`]),
+//!   or for an imported document the IRI it was imported by;
+//! * a SHACL instance of `owl:Ontology` (IRI or blank node);
+//! * EVERY SHACL instance of `sh:ShapesGraph` — `sh:RulesGraph`, and a class the document
+//!   declares `rdfs:subClassOf*` `sh:ShapesGraph`, included;
+//! * a node naming one of those as its `owl:versionIRI`.
+//!
+//! A node whose only graph role is `sh:DataGraph` is not an anchor — SHACL 1.2 Core §6.2:
+//! "owl:imports in the data graph is not enacted" — and the DATA graph's imports are never
+//! read at all: validation resolves the shapes graph's closure and nothing else. Any other
 //! `owl:imports` triple is data: it stays in the shapes graph as written, and no document is
 //! looked for. The W3C test `sparql/component/validator-001` is that case — its
-//! `owl:imports <http://datashapes.org/dash>` sits on a node that is neither, and its
-//! expected report is computed without DASH.
+//! `owl:imports <http://datashapes.org/dash>` sits on a node that is none of these, and its
+//! expected report is computed without DASH. `shapes lint` lists every such triple in its
+//! `unanchored-imports` section ([`crate::lint`]).
 //!
 //! SHACL-SPARQL's prefix path `sh:prefixes/owl:imports*/sh:declare` is not an import either.
 //! It walks `owl:imports` edges between prefix-declaring nodes WITHIN the shapes graph (the
@@ -48,7 +60,9 @@
 //! # One rule, every host
 //!
 //! The rule, and when an import counts as in hand, is [`purrdf_core::imports`] — the same
-//! rule entailment applies, stated once in the kernel both engines sit on. This module adds
+//! rule entailment applies, stated once in the kernel both engines sit on — and its anchors
+//! come from the kernel's one graph-role classifier, [`purrdf_core::graph_roles`], the same
+//! answer SHACL-SPARQL's implicit prefixes select from. This module adds
 //! only what a SHACL shapes graph needs beyond it: each supplied document's own `@prefix`
 //! map (a SHACL-SPARQL query in an imported document resolves prefixed names against ITS
 //! declarations), and the refusal of a supplied document nothing imports.
@@ -737,6 +751,111 @@ mod tests {
             panic!("a document only a data triple names is never reached");
         };
         assert_eq!(iris, [DEEP]);
+    }
+
+    /// An `owl:imports` on a SHACL instance of `sh:ShapesGraph` is an import, whichever way
+    /// the node is one: typed `sh:ShapesGraph`, typed `sh:RulesGraph` (a subclass by the
+    /// SPARQL Extensions' own text, stated here without the axiom), or typed a user class
+    /// the shapes graph declares `rdfs:subClassOf sh:ShapesGraph`. Each is refused
+    /// unsupplied and, supplied, the imported shape fires. The control row types the node an
+    /// unrelated class: its triple is data, nothing is refused and no shape fires.
+    #[test]
+    fn an_import_on_every_shapes_graph_instance_is_followed_and_an_unrelated_type_is_data() {
+        const NODE: &str = "ex:Module";
+        let typed = |class: &str, axioms: &str| {
+            format!("{axioms}{NODE} a {class} ; owl:imports <{LIB}> .\n")
+        };
+        for shapes in [
+            typed("sh:ShapesGraph", ""),
+            typed("sh:RulesGraph", ""),
+            typed(
+                "ex:ShapesModule",
+                "ex:ShapesModule <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+                 sh:ShapesGraph .\n",
+            ),
+        ] {
+            assert_eq!(
+                unresolved(results(&shapes, &ShapesImports::new())),
+                [LIB],
+                "{shapes}"
+            );
+            assert_eq!(
+                results(&shapes, &table(&[(LIB, LIB_SHAPE)])).expect("supplied"),
+                lib_shape_fired(),
+                "{shapes}"
+            );
+        }
+        let control = typed("ex:Unrelated", "");
+        assert_eq!(
+            results(&control, &ShapesImports::new()).expect("an unrelated type anchors nothing"),
+            []
+        );
+    }
+
+    /// Two shapes graphs declared in one document: BOTH imports are named when unsupplied,
+    /// and both documents' shapes fire when supplied — anchoring only one would silently drop
+    /// the other's.
+    #[test]
+    fn two_shapes_graphs_in_one_document_are_both_anchored() {
+        const OTHER_LIB: &str = "http://example.org/other-lib";
+        const OTHER_SHAPE: &str = "ex:OtherShape a sh:NodeShape ; sh:targetNode ex:Focus ;\n\
+            sh:property [ sh:path ex:q ; sh:maxCount 0 ] .\n";
+        let shapes = format!(
+            "ex:A a sh:ShapesGraph ; owl:imports <{LIB}> .\n\
+             ex:B a sh:ShapesGraph ; owl:imports <{OTHER_LIB}> .\n"
+        );
+        assert_eq!(
+            unresolved(results(&shapes, &ShapesImports::new())),
+            [LIB, OTHER_LIB]
+        );
+        let mut fired = results(
+            &shapes,
+            &table(&[(LIB, LIB_SHAPE), (OTHER_LIB, OTHER_SHAPE)]),
+        )
+        .expect("both supplied");
+        fired.sort();
+        assert_eq!(
+            fired,
+            [
+                (
+                    "<http://example.org/ns#Focus>".to_owned(),
+                    "<http://example.org/ns#p>".to_owned()
+                ),
+                (
+                    "<http://example.org/ns#Focus>".to_owned(),
+                    "<http://example.org/ns#q>".to_owned()
+                ),
+            ]
+        );
+    }
+
+    /// A node whose only graph role is `sh:DataGraph` anchors no import (SHACL 1.2 Core
+    /// §6.2): nothing is refused, no document is looked for, and a supplied one is refused
+    /// as unreached rather than silently used. The neighbour types the same node
+    /// `owl:Ontology` as well — §6.2's note — and its import is followed.
+    #[test]
+    fn a_data_graph_only_import_is_not_followed_and_a_data_graph_ontology_is() {
+        let data_only = format!("ex:D a sh:DataGraph ; owl:imports <{LIB}> .\n");
+        assert_eq!(
+            results(&data_only, &ShapesImports::new()).expect("a data-graph import is data"),
+            []
+        );
+        let Err(ShapesError::Imports(ShapesImportError::Unreached { iris })) =
+            results(&data_only, &table(&[(LIB, LIB_SHAPE)]))
+        else {
+            panic!("a document only a data-graph triple names is never reached");
+        };
+        assert_eq!(iris, [LIB]);
+
+        let with_header = format!("ex:D a sh:DataGraph , owl:Ontology ; owl:imports <{LIB}> .\n");
+        assert_eq!(
+            unresolved(results(&with_header, &ShapesImports::new())),
+            [LIB]
+        );
+        assert_eq!(
+            results(&with_header, &table(&[(LIB, LIB_SHAPE)])).expect("supplied"),
+            lib_shape_fired()
+        );
     }
 
     #[test]
