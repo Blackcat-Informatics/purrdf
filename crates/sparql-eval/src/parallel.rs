@@ -460,6 +460,39 @@ pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
     found
 }
 
+/// Whether evaluating `expr` for one row can charge a governor at all.
+///
+/// Expression evaluation charges nothing of its own; the two ways out of it that do are
+/// an embedded `EXISTS`, which re-enters whole-pattern evaluation (see
+/// [`expression_re_enters_evaluation`]), and a call to a SPARQL-bodied or
+/// expression-bodied user function, which charges its invocation and evaluates a body.
+/// A native function is handed values and nothing else, so it charges nothing.
+///
+/// A row loop asks this to decide where it charges each row's admission: an expression
+/// that charges nothing can be admitted row by row, immediately before its own work,
+/// without moving any charge relative to any other; one that charges keeps every
+/// admission ahead of the work, so its own charges still follow them.
+pub(crate) fn expression_may_charge(expr: &Expression, functions: &UserFunctionRegistry) -> bool {
+    // Out of stack for the walk: answer "charges", the side that keeps today's order.
+    if crate::stack::is_low() {
+        return true;
+    }
+    let mut found = false;
+    visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            ExpressionPart::Sub(sub) => expression_may_charge(sub, functions),
+            ExpressionPart::Call(Function::Custom(iri)) => {
+                functions.resolve(iri.as_str()).is_some()
+                    || functions.resolve_expr(iri.as_str()).is_some()
+            }
+            ExpressionPart::Call(_) => false,
+            ExpressionPart::Exists(_) => true,
+        };
+        found
+    });
+    found
+}
+
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single

@@ -246,31 +246,49 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     // that only reported the cost after paying it would bound nothing. The trip itself
     // is latched in the governor state, which is where `eval` reads it to certify this
     // node's output.
-    let _ = ctx.admit_rows(
-        &mut seq.rows,
-        crate::governor::ChargePoint::RowExpressionEvaluation,
-    );
-    let rows = if ctx.may_fork_row_loop(expr) {
+    //
+    // Where each row is admitted — in a sweep ahead of the loop, or immediately before
+    // the row's own work — is `EvalCtx::row_admission`'s decision; either way the
+    // charges, their order and the row they trip at are the same.
+    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
+    let forked = ctx.may_fork_row_loop(expr);
+    let admission = ctx.row_admission(point, expr, forked);
+    if admission.is_ahead() {
+        let _ = ctx.admit_rows(&mut seq.rows, point);
+    }
+    let rows = if forked {
+        let checkpoint = admission.checkpoint();
         // Harvesting, not plain: a predicate can reach a property function through an
         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
-        let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
+        let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
-            || ctx.fork_for_worker(),
-            |child, acc, row| {
+            || (ctx.fork_for_worker(), checkpoint),
+            |worker, acc, row| {
+                let (child, checkpoint) = worker;
+                if checkpoint.stops(child) {
+                    return Ok(());
+                }
                 if eval_ebv(expr, row, &schema, child)? == Some(true) {
                     acc.push(row.clone());
+                    checkpoint.keep();
                 }
                 Ok(())
             },
-            |child| core::mem::take(&mut child.witness),
+            |worker| (core::mem::take(&mut worker.0.witness), worker.1),
         )?;
-        ctx.absorb_worker_witnesses(witnesses);
+        let mut rows = rows;
+        crate::eval::RowCheckpoint::keep_prefix(&mut rows, harvests.iter().map(|h| h.1));
+        ctx.absorb_worker_witnesses(harvests.into_iter().map(|h| h.0));
         rows
     } else {
+        let each_row = admission.is_each_row();
         let mut rows = Vec::new();
         for row in seq.rows {
+            if each_row && ctx.charge(point).is_err() {
+                break;
+            }
             if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
                 rows.push(row);
             }
@@ -316,16 +334,21 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
     // row rather than per sub-expression, and why the refused rows are cut before the
     // expression runs rather than after.
-    let _ = ctx.admit_rows(
-        &mut seq.rows,
-        crate::governor::ChargePoint::RowExpressionEvaluation,
-    );
+    // Where each row is admitted is `EvalCtx::row_admission`'s decision, as in
+    // `eval_filter`.
+    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
+    let forked = ctx.may_fork_row_loop(expr);
+    let admission = ctx.row_admission(point, expr, forked);
+    if admission.is_ahead() {
+        let _ = ctx.admit_rows(&mut seq.rows, point);
+    }
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
     let schema = Arc::new(schema);
 
-    let rows = if ctx.may_fork_row_loop(expr) {
+    let rows = if forked {
+        let checkpoint = admission.checkpoint();
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
@@ -333,27 +356,38 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
-        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
+        let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
-            || ctx.fork_for_worker(),
-            |child, acc, in_row| {
+            || (ctx.fork_for_worker(), checkpoint),
+            |worker, acc, in_row| {
+                let (child, checkpoint) = worker;
+                if checkpoint.stops(child) {
+                    return Ok(());
+                }
                 let mut row = in_row.clone();
                 row.resize(width, None);
                 let value = eval_expr(expr, &row, &schema, child)?;
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                checkpoint.keep();
                 Ok(())
             },
-            |child| core::mem::take(&mut child.witness),
+            |worker| (core::mem::take(&mut worker.0.witness), worker.1),
         )?;
-        ctx.absorb_worker_witnesses(witnesses);
+        let mut minted = minted;
+        crate::eval::RowCheckpoint::keep_prefix(&mut minted, harvests.iter().map(|h| h.1));
+        ctx.absorb_worker_witnesses(harvests.into_iter().map(|h| h.0));
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
             .collect()
     } else {
+        let each_row = admission.is_each_row();
         let mut rows = Vec::with_capacity(seq.rows.len());
         for (idx, mut row) in seq.rows.into_iter().enumerate() {
+            if each_row && ctx.charge(point).is_err() {
+                break;
+            }
             row.resize(width, None);
             // §17.4.2.2: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
             // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position

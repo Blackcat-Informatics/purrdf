@@ -144,10 +144,14 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // expression evaluation per input row is what this operator spends before it
     // knows how far that row expands. See `crate::expr::eval_filter` for why the
     // refused rows are cut before the expression runs rather than after.
-    let _ = ctx.admit_rows(
-        &mut seq.rows,
-        crate::governor::ChargePoint::RowExpressionEvaluation,
-    );
+    // Where each input row is admitted is `EvalCtx::row_admission`'s decision; this
+    // loop is never forked.
+    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
+    let admission = ctx.row_admission(point, expression, false);
+    if admission.is_ahead() {
+        let _ = ctx.admit_rows(&mut seq.rows, point);
+    }
+    let each_row = admission.is_each_row();
 
     let in_width = seq.schema.len();
     let mut schema = (*seq.schema).clone();
@@ -168,6 +172,11 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     let mut tripped: Option<TrippedGovernor> = None;
 
     'input: for (idx, mu) in seq.rows.iter().enumerate() {
+        // The row's admission, when it is charged here rather than ahead of the loop: a
+        // refusal ends the loop where the sweep would have truncated it.
+        if each_row && ctx.charge(point).is_err() {
+            break 'input;
+        }
         // §17.4.2.2: `BNODE(strExpr)` memoizes per solution — see `ctx.current_row`'s
         // doc. The position here is the INPUT row's, which is the solution the
         // expression is evaluated against, and it advances once per input row

@@ -210,7 +210,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -311,7 +311,8 @@ const STACK_OVERRUN_FLOOR_BYTES: usize = 256 * 1024;
 /// an overrun that wrote only the fill would go unseen.
 const STACK_ZONE_FILL: u8 = 0xA5;
 
-/// Polls between clock reads for the wall deadline.
+/// Work between clock reads for the wall deadline, counted as polls are (see
+/// [`JspiStopWatch::poll_after_work`]).
 const CLOCK_EVERY_POLLS: u64 = 1_024;
 
 /// The word written at the base of every region, checked by the host at every
@@ -1111,9 +1112,14 @@ struct JspiStopWatch {
     /// When the deadline falls, on [`now_ms`]'s clock, for the remaining budget handed
     /// to the host.
     deadline_at_ms: Option<f64>,
-    /// Polls per yield; `0` yields at every poll.
+    /// Work per yield, counted in polls; `0` yields at every poll.
     quantum: u32,
-    polls_since_yield: AtomicU32,
+    /// Work since the last yield. A poll counts as the work its checkpoint stands for
+    /// ([`StopSignal::poll_after_work`]): one for a checkpoint the evaluator passes per
+    /// item, a whole interval for one it passes once an interval of charged fuel.
+    work_since_yield: AtomicU64,
+    /// Work since the job began, for the clock-read cadence.
+    work: AtomicU64,
     /// The resolved cause, written once; a fired signal stays fired.
     latched: OnceLock<StopCause>,
 }
@@ -1126,7 +1132,8 @@ impl JspiStopWatch {
             deadline: deadline_ms.map(|ms| WallDeadline::after(Duration::from_millis(ms))),
             deadline_at_ms: deadline_ms.map(|ms| now_ms() + ms as f64),
             quantum,
-            polls_since_yield: AtomicU32::new(0),
+            work_since_yield: AtomicU64::new(0),
+            work: AtomicU64::new(0),
             latched: OnceLock::new(),
         }
     }
@@ -1207,7 +1214,7 @@ impl JspiStopWatch {
             .counters
             .record_suspension(kind, now_ms() - started);
         // Any suspension gave the event loop back, so the slice starts again.
-        self.polls_since_yield.store(0, Ordering::Relaxed);
+        self.work_since_yield.store(0, Ordering::Relaxed);
         match status {
             SUSPEND_ANSWERED | SUSPEND_ABANDONED | SUSPEND_FAULT => status,
             other => {
@@ -1266,7 +1273,16 @@ impl JspiStopWatch {
 
 impl StopSignal for JspiStopWatch {
     fn poll(&self) -> Option<StopCause> {
-        let total = self.slots.counters.polls.fetch_add(1, Ordering::Relaxed) + 1;
+        self.poll_after_work(1)
+    }
+
+    /// One poll, standing for `work` units of evaluation. The evidence counts polls; the
+    /// clock read and the yield are paced by work, so a charged row loop — which polls
+    /// once per interval of fuel rather than once per row — is sliced into turns of the
+    /// same size as a scan that polls at every candidate.
+    fn poll_after_work(&self, work: u64) -> Option<StopCause> {
+        let work = work.max(1);
+        self.slots.counters.polls.fetch_add(1, Ordering::Relaxed);
         if let Some(cause) = self.peek() {
             return Some(cause);
         }
@@ -1274,13 +1290,17 @@ impl StopSignal for JspiStopWatch {
             self.slots.latch_fault(fault);
             return Some(self.latch(StopCause::Cancelled));
         }
-        if total.is_multiple_of(CLOCK_EVERY_POLLS)
+        let before = self.work.fetch_add(work, Ordering::Relaxed);
+        if before / CLOCK_EVERY_POLLS != before.saturating_add(work) / CLOCK_EVERY_POLLS
             && let Some(cause) = self.deadline.as_ref().and_then(StopSignal::poll)
         {
             return Some(self.latch(cause));
         }
-        let since = self.polls_since_yield.fetch_add(1, Ordering::Relaxed) + 1;
-        if self.quantum == 0 || since >= self.quantum {
+        let since = self
+            .work_since_yield
+            .fetch_add(work, Ordering::Relaxed)
+            .saturating_add(work);
+        if self.quantum == 0 || since >= u64::from(self.quantum) {
             self.yield_now();
             return self.observe_now();
         }

@@ -127,6 +127,20 @@ use crate::eval::MAX_UDF_DEPTH;
 pub trait StopSignal: Send + Sync + std::fmt::Debug {
     /// The cause, if this signal has fired. Latching: see the trait documentation.
     fn poll(&self) -> Option<StopCause>;
+
+    /// [`Self::poll`], at a checkpoint that stands for `work` units of evaluation since
+    /// the previous one.
+    ///
+    /// The evaluator does not poll at a uniform rate. A scan polls once per candidate,
+    /// but a charged row loop under an engaged fuel ceiling polls once every
+    /// [`STOP_POLL_FUEL`] units, and a forked row loop once every stride of rows. A
+    /// signal that slices evaluation by the amount of work done — rather than only
+    /// observing whether it should stop — reads `work` to keep one slice the same size
+    /// wherever it falls. Every checkpoint passes at least `1`. The default ignores it.
+    fn poll_after_work(&self, work: u64) -> Option<StopCause> {
+        let _ = work;
+        self.poll()
+    }
 }
 
 /// A shareable cancellation bit a host can flip from any thread.
@@ -809,7 +823,9 @@ impl GovernorState {
             && self.stop.is_some()
             && previous / STOP_POLL_FUEL != updated / STOP_POLL_FUEL
         {
-            self.check_stop()?;
+            // The checkpoint stands for every poll interval this charge crossed.
+            let work = (updated / STOP_POLL_FUEL - previous / STOP_POLL_FUEL) * STOP_POLL_FUEL;
+            self.check_stop_after(work)?;
         }
 
         Ok(())
@@ -849,7 +865,13 @@ impl GovernorState {
     /// trip stays the reported one: precedence is evaluated over conditions true at a
     /// charge point, and an earlier point's conditions were resolved when they were true.
     pub fn poll_stop(&self) -> Option<StopCause> {
-        let cause = self.stop.as_ref()?.poll()?;
+        self.poll_stop_after(1)
+    }
+
+    /// [`Self::poll_stop`] at a checkpoint that stands for `work` units of evaluation
+    /// since the previous one (see [`StopSignal::poll_after_work`]).
+    pub fn poll_stop_after(&self, work: u64) -> Option<StopCause> {
+        let cause = self.stop.as_ref()?.poll_after_work(work)?;
         self.tripped
             .get_or_init(|| TrippedGovernor::Stopped { cause });
         self.abandon.store(true, Ordering::Relaxed);
@@ -1153,8 +1175,8 @@ impl GovernorState {
     }
 
     /// Poll the stop signal and convert a fired signal into a trip.
-    fn check_stop(&self) -> Result<(), TrippedGovernor> {
-        match self.poll_stop() {
+    fn check_stop_after(&self, work: u64) -> Result<(), TrippedGovernor> {
+        match self.poll_stop_after(work) {
             Some(cause) => Err(self.trip(TrippedGovernor::Stopped { cause })),
             None => Ok(()),
         }

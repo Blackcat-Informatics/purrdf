@@ -138,39 +138,6 @@ function diagnostics(lines) {
   }
 }
 
-/**
- * For each candidate yield primitive the Worker has, whether a request dispatched while
- * a spinner awaits that primitive between chunks of synchronous work is served before
- * the spinner finishes, and at which of its turns.
- */
-async function yieldExperiment(mf, candidates) {
-  const turns = 100;
-  const units = 20;
-  const rows = [`yield experiment (${turns} turns of ${units} work units each):`];
-  for (const name of candidates) {
-    const started = performance.now();
-    const spinQuery = new URLSearchParams({ primitive: name, turns: String(turns), work: String(units) });
-    let spinDone = null;
-    let pingDone = null;
-    const spin = mf.dispatchFetch(`${WORKER}/__spin?${spinQuery}`).then(async (response) => {
-      await response.text();
-      spinDone = performance.now() - started;
-    });
-    await sleep(30);
-    const ping = mf.dispatchFetch(`${WORKER}/__ping`).then(async (response) => {
-      const body = await response.json();
-      pingDone = performance.now() - started;
-      return body;
-    });
-    const [, pinged] = await Promise.all([spin, ping]);
-    rows.push(
-      `  ${name.padEnd(24)} spin ${Math.round(spinDone)} ms, ping answered at ${Math.round(pingDone)} ms, ` +
-        `servedAtTurn ${pinged.servedAtTurn}, interleaved ${pingDone < spinDone && pinged.servedAtTurn !== null}`,
-    );
-  }
-  return rows;
-}
-
 function summary(lines) {
   console.log(lines.join("\n"));
   if (process.env.GITHUB_STEP_SUMMARY) {
@@ -243,7 +210,6 @@ async function main() {
         `typeof scheduler.wait = ${probe.typeofSchedulerWait}, typeof scheduler.yield = ${probe.typeofSchedulerYield}`,
       `probe: navigator.userAgent = ${JSON.stringify(probe.userAgent)}`,
     ]);
-    diagnostics(await yieldExperiment(mf, probe.candidates));
     assert.equal(probe.hasAsyncQueries, true, "workerd provides JSPI and a yield primitive");
     // workerd delivers a MessageChannel message without letting another request in, so
     // a Worker must yield through the timer (the experiment above shows both).
