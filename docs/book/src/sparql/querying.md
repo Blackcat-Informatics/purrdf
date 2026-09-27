@@ -236,17 +236,18 @@ or `dayTimeDuration` component decides the same way, in the same bounded
 work, as a small one. The computation is judged as
 a whole, not component by component: a duration's months half can land on an
 intermediate day whose clamp is itself year-dependent even though the
-*finished* answer, after the days half also runs, is not — `"--01-31"^^xsd:gMonthDay
-+ "P1M1D"^^xsd:duration` is `"--03-01"` from every anchor (the day after
-either Feb 28 or Feb 29 is always Mar 1), even though `"--01-31"^^xsd:gMonthDay
-+ "P1M"^^xsd:yearMonthDuration` alone is genuinely ambiguous. The one
+*finished* answer, after the days half also runs, is not —
+`"--01-31"^^xsd:gMonthDay + "P1M1D"^^xsd:duration` is `"--03-01"` from every
+anchor (the day after either Feb 28 or Feb 29 is always Mar 1), even though
+`"--01-31"^^xsd:gMonthDay + "P1M"^^xsd:yearMonthDuration` alone is genuinely
+ambiguous. The one
 recurring example of a refused class is February: every other month has the
 same length in every year, so a shift landing there is always safe, while a
 shift landing on February with the day being clamped the 29th or later is
 the case whose answer can turn on a year `xsd:gMonthDay` does not carry —
 that is an example of the refused class, not the rule itself.
-RDF4J answers these by fabricating the missing field (year 0, January, or day
-1) through its underlying JAXP calendar and returning a value built on that
+RDF4J answers these by fabricating the missing field (year 0, January, or
+day 1) through its underlying JAXP calendar and returning a value built on that
 fabrication — for example `"---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration`
 answers `"---29"`, clamped against a fabricated leap year. `purrdf` matches
 RDF4J on every case whose answer does not depend on the fabricated field —

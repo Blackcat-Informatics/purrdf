@@ -540,7 +540,9 @@ triple pattern.
   (`--path-relation`) are re-derived from the closure so a walk sees the
   derived edges, and the OWL-Direct lane wraps every binding leaf in a `MINUS`
   against the chase's witness list before evaluation. Where it stops: a
-  rebuilder beside a witness-minting chase is refused by name
+  closure relation rebuilder (the host code that re-derives path relations
+  from the closure) supplied to an OWL-Direct run whose restricted chase
+  minted existential witnesses is refused by name
   (`reasoning-closure-relation-witness`); the closure phase honours only the
   stop signal (cancellation or wall deadline) while the numeric ceilings reach
   the query phase alone; and a `ClosureStopped` outcome carries no rows and

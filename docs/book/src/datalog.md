@@ -75,8 +75,8 @@ The stored-fact defaults differ because the memory the store lives in does: a
 `wasm32` evaluation shares one linear memory with the rest of its page, and its
 default is the value every target used while the limit was fixed. A native
 process can hold a far larger least model, and a ceiling sized for a browser
-refused ordinary terminating rule sets there — a single rule copying one
-predicate over 70,000 triples. The default is chosen at compile time from the
+refused ordinary terminating rule sets there — a single rule that copies
+each of 70,000 `ex:p` triples to `ex:q`. The default is chosen at compile time from the
 target architecture, never by a Cargo feature.
 
 The join-step default is the same on every target, for two measured reasons.

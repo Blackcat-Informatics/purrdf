@@ -151,7 +151,7 @@ For large LPG carriers, `purrdf.project_artifacts(...)` invokes a transactional
 artifact callback with package/artifact begin, bounded chunk, artifact finish,
 commit, and abort events. An optional progress callback receives immutable
 `ProjectionProgress` snapshots; callback exceptions abort the package and are
-returned unchanged. This path retains the selected canonical LPG model but not
+re-raised unchanged. This path retains the selected canonical LPG model but not
 complete artifact bodies or USTAR bytes. See the runnable atomic-directory
 [`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
 example.

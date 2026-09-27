@@ -1084,8 +1084,8 @@ Every host takes the same four **rule-evaluation limits**:
 - The **stored-fact limit** bounds the facts the evaluation store holds: the
   data graph, a rule set's data and every inferred triple. The default is
   4,194,304 facts natively and 131,072 in WebAssembly, where the store lives in
-  one linear memory. A rule copying a predicate over 70,000 triples, or the
-  transitive closure of a thousand-node chain (500,500 triples), completes
+  one linear memory. A rule that copies each of 70,000 `ex:p` triples to
+  `ex:q`, or the transitive closure of a thousand-node chain (500,500 triples), completes
   natively.
 - The **join-step limit** bounds the candidate solutions the rule bodies
   enumerate. The default is 1,048,576 on every host. It is the limit that
