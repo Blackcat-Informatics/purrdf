@@ -40,6 +40,11 @@ Usage:
     python3 scripts/conformance-matrix.py            # full matrix
     python3 scripts/conformance-matrix.py --no-python  # native Rust suites only
     python3 scripts/conformance-matrix.py --self-test  # scrape fail-closed proof
+
+    # The same matrix in two halves on two machines, then one verdict:
+    python3 scripts/conformance-matrix.py --part native --report R/native.json
+    python3 scripts/conformance-matrix.py --part python --report R/python.json
+    python3 scripts/conformance-matrix.py --merge-reports R
 """
 
 from __future__ import annotations
@@ -54,7 +59,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1603,6 +1608,49 @@ def self_test(report: bool) -> list[str]:
     return problems
 
 
+# The two halves `--part` runs, and the report file each writes into a
+# `--merge-reports` directory. The merge requires exactly these files.
+PARTS = ("native", "python")
+
+
+def write_report(path: Path, part: str, results: list[SuiteResult]) -> None:
+    """Write *results* as measured (before the ratchet) for `--merge-reports`.
+
+    The ratchet is applied once, by the merge, over the whole matrix: applying
+    it here as well would annotate a red row twice, and the orphan-key half of
+    it can only be judged with both halves in hand.
+    """
+    rows = [{k: v for k, v in asdict(r).items() if k not in ("log", "budget")} for r in results]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    scratch = path.with_suffix(path.suffix + ".partial")
+    scratch.write_text(json.dumps({"part": part, "results": rows}, indent=1) + "\n", encoding="utf-8")
+    scratch.replace(path)
+
+
+def load_reports(directory: Path) -> list[SuiteResult]:
+    """Both halves' rows, native first, refusing a missing, extra or mislabelled report."""
+    found = sorted(p.name for p in directory.glob("*.json")) if directory.is_dir() else []
+    expected = sorted(f"{part}.json" for part in PARTS)
+    if found != expected:
+        raise SystemExit(
+            f"conformance-matrix: --merge-reports needs exactly {expected} in "
+            f"{directory}, found {found}. A missing half is an unmeasured half."
+        )
+    results: list[SuiteResult] = []
+    for part in PARTS:
+        data = json.loads((directory / f"{part}.json").read_text(encoding="utf-8"))
+        if data.get("part") != part:
+            raise SystemExit(
+                f"conformance-matrix: {part}.json records part {data.get('part')!r}"
+            )
+        results.extend(SuiteResult(**row) for row in data["results"])
+    names = [r.name for r in results]
+    duplicated = sorted({n for n in names if names.count(n) > 1})
+    if duplicated:
+        raise SystemExit(f"conformance-matrix: a suite is reported twice: {duplicated}")
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="PurRDF conformance matrix")
     parser.add_argument(
@@ -1627,9 +1675,33 @@ def main() -> int:
         help="run only the fail-closed proof (no harness, no build): every scraped "
         "row must go RED when its scoreboard line is withheld",
     )
+    parser.add_argument(
+        "--part",
+        choices=PARTS,
+        help="run only one half of the matrix (native Rust suites, or the two Python "
+        "gates); with --report, for a later --merge-reports",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        help="with --part: write the half's measured rows to this JSON file",
+    )
+    parser.add_argument(
+        "--merge-reports",
+        type=Path,
+        metavar="DIR",
+        help="run nothing: judge the whole matrix from DIR/native.json and "
+        "DIR/python.json (the ratchet, the scoreboard and the document drift check)",
+    )
     args = parser.parse_args()
 
-    if args.write_doc and args.no_python:
+    if args.part and args.no_python:
+        parser.error("--part already names the half to run; drop --no-python")
+    if (args.part is None) != (args.report is None):
+        parser.error("--part and --report go together")
+    if args.merge_reports and (args.part or args.no_python or args.no_build):
+        parser.error("--merge-reports runs nothing; it takes no run options")
+    if args.write_doc and (args.no_python or args.part):
         # The committed doc block reflects the full matrix (every native Rust
         # suite PLUS the two Python gates); a native-only run cannot reproduce it,
         # and writing it from one would silently delete the Python rows.
@@ -1665,19 +1737,30 @@ def main() -> int:
         )
         return 0
 
-    results = native_suites()
-    if not args.no_python:
-        # Build the native module once (in the rdflib gate); the compat suite
-        # then reuses that editable install.
-        build = not args.no_build
-        results.append(_suite_py_rdflib_gate(build))
-        results.append(_suite_py_compat(build=False))
+    budget = load_budget()
+    if args.merge_reports:
+        results = load_reports(args.merge_reports)
+        not_run: frozenset[str] = frozenset()
+    else:
+        results = [] if args.part == "python" else native_suites()
+        if not args.no_python and args.part != "native":
+            # Build the native module once (in the rdflib gate); the compat suite
+            # then reuses that editable install.
+            build = not args.no_build
+            results.append(_suite_py_rdflib_gate(build))
+            results.append(_suite_py_compat(build=False))
+        if args.report:
+            write_report(args.report, args.part, results)
+        if args.part == "python":
+            not_run = frozenset(budget) - PYTHON_SUITES
+        elif args.no_python or args.part == "native":
+            not_run = PYTHON_SUITES
+        else:
+            not_run = frozenset()
 
     # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
     # its committed budget (growth and silent shrink both fail RED).
-    enforce_ratchet(
-        results, load_budget(), not_run=PYTHON_SUITES if args.no_python else frozenset()
-    )
+    enforce_ratchet(results, budget, not_run=not_run)
 
     text = render(results)
     print(text)
@@ -1689,7 +1772,7 @@ def main() -> int:
             print(r.log, file=sys.stderr)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_path:
+    if summary_path and not args.part:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(render_markdown(results))
             fh.write("\n")
@@ -1698,7 +1781,7 @@ def main() -> int:
     # block in docs/CONFORMANCE.md against the freshly measured results. Only in
     # a full run (a native-only run cannot reproduce the whole table).
     doc_ok = True
-    if not args.no_python:
+    if not args.no_python and not args.part:
         block = render_matrix_table(results)
         if args.write_doc:
             write_doc_block(block)

@@ -187,9 +187,24 @@ jobs:
       - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  test:
+  # The workspace tests, sharded by package across runners: one runner building
+  # and linking every test target in the workspace took longer than a job may.
+  # Each named shard tests its packages; the `rest` shard tests the whole
+  # workspace EXCEPT every package a named shard owns, so a member crate added
+  # later is tested there without being listed anywhere. The lists live once, in
+  # this job's env, and the `rest` shard's exclusions are derived from them.
+  test-shard:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [rdf, core, sparql, shapes, rest]
+    env:
+      SHARD_RDF: purrdf-rdf purrdf-iri purrdf-xsd purrdf-hash purrdf-gts
+      SHARD_CORE: purrdf-core purrdf-hnsw purrdf-geo purrdf-text purrdf-cdt purrdf-testkit
+      SHARD_SPARQL: purrdf-sparql-eval purrdf-sparql-conformance purrdf-sparql-algebra purrdf-sparql-results purrdf-retrieval
+      SHARD_SHAPES: purrdf-shapes purrdf-shex purrdf-jsonschema purrdf-validate purrdf-entail purrdf-datalog
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
@@ -240,7 +255,41 @@ jobs:
         # requires the rest.
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
-        run: cargo test --workspace --locked
+          SHARD: ${{ matrix.shard }}
+        run: |
+          case "$SHARD" in
+          rdf) packages="$SHARD_RDF" ;;
+          core) packages="$SHARD_CORE" ;;
+          sparql) packages="$SHARD_SPARQL" ;;
+          shapes) packages="$SHARD_SHAPES" ;;
+          rest) packages="" ;;
+          *) echo "unknown shard $SHARD"; exit 1 ;;
+          esac
+          args=()
+          if [ "$SHARD" = rest ]; then
+            args+=(--workspace)
+            for package in $SHARD_RDF $SHARD_CORE $SHARD_SPARQL $SHARD_SHAPES; do
+              args+=(--exclude "$package")
+            done
+          else
+            for package in $packages; do
+              args+=(-p "$package")
+            done
+          fi
+          cargo test --locked "${args[@]}"
+
+  # The stable name for the sharded workspace tests: it succeeds only when every
+  # shard did.
+  test:
+    needs: test-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every shard to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.test-shard.result }}
+        run: test "$MATRIX_RESULT" = success
 
   projection-oracles:
     runs-on: ubuntu-latest
@@ -409,23 +458,6 @@ jobs:
             -p purrdf-wasm \
             -p purrdf-bench
 
-      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
-        # purrdf-geo claims that every geometric answer is the same on both
-        # targets because every computation is integer arithmetic. This RUNS the
-        # same named test cases on both (wasm32 through scripts/wasm-test-runner.sh,
-        # the one cargo runner every wasm32 test uses) and compares the digest each
-        # reports, rather than trusting the argument.
-        run: make geo-determinism
-
-      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
-        # purrdf-hnsw claims its canonical index image is a pure function of the
-        # input, so a native build and a wasm32 build must produce the same bytes.
-        # This RUNS the same named test cases natively, on wasm32 and on wasm32
-        # +simd128 (through scripts/wasm-test-runner.sh) and compares the FNV-1a
-        # digest of the canonical payload each reports, rather than trusting the
-        # argument.
-        run: make hnsw-determinism
-
       - name: Build the optimized wasm package
         # Builds the +simd128 release artifact, runs wasm-bindgen + wasm-opt -Oz,
         # and verifies SIMD codegen.
@@ -442,8 +474,64 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: TypeScript emitter schema oracle
+        run: node crates/shapes/tests/typescript_oracle.mjs
+
+      - name: GraphQL emitter schema oracle
+        run: node crates/shapes/tests/graphql_oracle.mjs
+
+  # The wasm32 execution gates, one per runner. Each builds its own test targets
+  # natively and for wasm32 and runs them in Node, so together with the wasm
+  # job's release build and package they do not fit one 30-minute job.
+  wasm-exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [geo-determinism, hnsw-determinism, wasm-test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown
+
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        uses: ./.github/actions/wasm-toolchain
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
+        if: matrix.gate == 'geo-determinism'
+        # purrdf-geo claims that every geometric answer is the same on both
+        # targets because every computation is integer arithmetic. This RUNS the
+        # same named test cases on both (wasm32 through scripts/wasm-test-runner.sh,
+        # the one cargo runner every wasm32 test uses) and compares the digest each
+        # reports, rather than trusting the argument.
+        run: make geo-determinism
+
+      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
+        if: matrix.gate == 'hnsw-determinism'
+        # purrdf-hnsw claims its canonical index image is a pure function of the
+        # input, so a native build and a wasm32 build must produce the same bytes.
+        # This RUNS the same named test cases natively, on wasm32 and on wasm32
+        # +simd128 (through scripts/wasm-test-runner.sh) and compares the FNV-1a
+        # digest of the canonical payload each reports, rather than trusting the
+        # argument.
+        run: make hnsw-determinism
+
       - name: Execute the cross-target determinism tests on wasm32 (Node)
-        # The build step above proves the crates COMPILE for wasm32. This one proves
+        if: matrix.gate == 'wasm-test'
+        # The wasm job proves the crates COMPILE for wasm32. This one proves
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
@@ -455,16 +543,10 @@ jobs:
         # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test
 
-      - name: TypeScript emitter schema oracle
-        run: node crates/shapes/tests/typescript_oracle.mjs
-
-      - name: GraphQL emitter schema oracle
-        run: node crates/shapes/tests/graphql_oracle.mjs
-
   # One configuration per runner; the stable aggregate requires every shard.
   simd-asm-config:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -829,9 +911,19 @@ jobs:
   # failure (a red run, an XPASS, or a stale ledger key). The matrix is also
   # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
   # differential oracle (installed by uv), never the top-level rdflib shadow.
-  conformance:
+  #
+  # The two halves run on two runners (the native Rust suites, and the Python
+  # gates with the module build they need), because together they do not fit one
+  # 30-minute job. Each writes its measured rows; the `conformance` job judges the
+  # whole matrix from both -- the ratchet, the scoreboard and the document drift
+  # check -- exactly as a single `make conformance` run does.
+  conformance-part:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [native, python]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -844,9 +936,43 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
+        if: matrix.part == 'python'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Conformance matrix half
+        run: make conformance CONFORMANCE_ARGS="--part ${{ matrix.part }} --report target/conformance-reports/${{ matrix.part }}.json"
+
+      - name: Upload this half's report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-${{ matrix.part }}
+          path: target/conformance-reports/${{ matrix.part }}.json
+          if-no-files-found: error
+
+  conformance:
+    needs: conformance-part
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require both halves to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.conformance-part.result }}
+        run: test "$MATRIX_RESULT" = success
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download both halves' reports
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: conformance-*
+          merge-multiple: true
+          path: target/conformance-reports
+
       - name: Conformance matrix (native Rust suites + rdflib gate)
-        run: make conformance
+        run: make conformance CONFORMANCE_ARGS="--merge-reports target/conformance-reports"

@@ -399,7 +399,7 @@ miri: ## Run the SmallVec unsafe-storage tests under Miri: Stacked and Tree Borr
 	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
 
 conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
-	python3 scripts/conformance-matrix.py
+	python3 scripts/conformance-matrix.py $(CONFORMANCE_ARGS)
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
