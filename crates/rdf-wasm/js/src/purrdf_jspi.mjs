@@ -67,9 +67,12 @@
 //   and `purrdf_idle`. Whenever JavaScript runs with no wasm frame unwound,
 //   `active − parked = outbound`. A trap, or a JavaScript exception thrown through wasm
 //   frames, unwinds an entry without its exit, so the next entry sees the imbalance,
-//   sets `purrdf_poisoned` and traps; from then on every entry traps. A call the glue or
-//   a sink callback makes back into the instance from inside an import passes, because
-//   the import's trampoline counted it in `purrdf_outbound`.
+//   sets `purrdf_poisoned` and traps; from then on every entry traps, except the release
+//   exports (`__wbg_<type>_free`, behind `free()`, `[Symbol.dispose]()` and the glue's
+//   finalization registries), whose gate is inert: on a poisoned instance they return
+//   without entering it, so a finalizer never throws where nothing can catch it. A call
+//   the glue or a sink callback makes back into the instance from inside an import
+//   passes, because the import's trampoline counted it in `purrdf_outbound`.
 //
 // This module's part: it passes the region top; it sets `purrdf_poisoned` when it learns
 // of a fault first (a Rust panic's hook, a run whose promise rejected); it treats a
@@ -948,10 +951,10 @@ function startRun(record) {
  * asynchronous — poisons from its hook, before its trap unwinds (`purrdf_jspi_panicked`).
  * Nothing repairs that, so the instance is dead: `purrdf_poisoned` is set, so the gate
  * linked into the module traps every later entry — synchronous calls, constructors, and
- * objects created before the trap included — every in-flight job is rejected with the
- * poison error, every later asynchronous call refuses with it, and suspended runs are
- * never resumed. The first reason is kept: a panic's trap, arriving after its hook, stays
- * named as the panic.
+ * objects created before the trap included; the release exports alone return, releasing
+ * nothing — every in-flight job is rejected with the poison error, every later
+ * asynchronous call refuses with it, and suspended runs are never resumed. The first
+ * reason is kept: a panic's trap, arriving after its hook, stays named as the panic.
  */
 function poison(reason) {
   if (poisonReason !== null) return;

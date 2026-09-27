@@ -617,7 +617,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   }
   assert.deepEqual(report.gateAfter, { poisoned: 1, balanced: false });
   // Every synchronous entry — on objects created before the trap, new objects, statics,
-  // free functions, `free()` too — traps at the gate linked into the module.
+  // free functions — traps at the gate linked into the module.
   for (const name of [
     "syncAfter",
     "syncDeepAfter",
@@ -629,10 +629,16 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
     "newDatasetAfter",
     "parseAfter",
     "versionAfter",
-    "freeAfter",
   ]) {
     assert.deepEqual(report[name], threwAtGate, name);
   }
+  // Releasing is the one entry that returns: the release exports' gate is inert on a
+  // poisoned instance, so `free()` and `[Symbol.dispose]()` return without entering it.
+  assert.deepEqual(report.freeAfter, { settled: "returned" });
+  assert.ok(
+    report.disposeAfter.settled === "returned" || report.disposeAfter.settled === "absent",
+    `[Symbol.dispose]() on the poisoned instance: ${JSON.stringify(report.disposeAfter)}`,
+  );
 
   // The enumerated surface: every entry refuses — with the poison or at the gate — and
   // the enumeration reached every function the package root exports, so it cannot pass

@@ -100,7 +100,11 @@ report.newEngineAfter = settleSync(() => new QueryEngine());
 report.newDatasetAfter = settleSync(() => new Dataset());
 report.versionAfter = settleSync(() => version());
 report.readyAfter = await settle(() => ready());
+// Releasing is the one entry that returns: the release exports' gate is inert on a
+// poisoned instance, so `free()` and `[Symbol.dispose]()` release nothing and throw nothing.
 report.freeAfter = settleSync(() => data.free());
+report.disposeAfter =
+  typeof engine[Symbol.dispose] === "function" ? settleSync(() => engine[Symbol.dispose]()) : { settled: "absent" };
 report.surface = await enumerateSurface(purrdf, data, engine);
 
 process.stdout.write(`${JSON.stringify(report)}\n`);

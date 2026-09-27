@@ -646,10 +646,12 @@ used again. Every in-flight job rejects with the poison error, and so does every
 asynchronous twin, `hasAsyncQueries()`, `configureAsync()` and `ready()` — because there
 is one instance per JavaScript realm. Every later synchronous call into the instance — a
 constructor, a static, a free function, a method or getter of an object created before
-the trap, `free()` too — traps at the instance's own entry with a
-`WebAssembly.RuntimeError`: the package build links a poison gate into the wasm module
-itself, so no JavaScript stands between a caller and the refusal. Only a fresh realm (a
-new page, Worker isolate or process) can load the package again.
+the trap — traps at the instance's own entry with a `WebAssembly.RuntimeError`: the
+package build links a poison gate into the wasm module itself, so no JavaScript stands
+between a caller and the refusal. `free()` and `[Symbol.dispose]()` are the exception:
+they return without entering the instance and release nothing, because the instance's
+memory is abandoned whole and a finalizer has no caller to report an error to. Only a
+fresh realm (a new page, Worker isolate or process) can load the package again.
 
 A trap poisons the instance the same way when it comes out of a synchronous call. The
 trapping call throws the trap itself, the engine's `WebAssembly.RuntimeError`; the entry

@@ -112,9 +112,12 @@ report.newDatasetAfter = settleSync(() => new Dataset());
 report.parseAfter = settleSync(() => Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"));
 report.versionAfter = settleSync(() => version());
 report.readyAfter = await settle(() => ready());
-// Releasing an object reaches the instance too, so it traps at the gate like every
-// other entry.
+// Releasing an object is the one entry that returns: the release exports' gate is inert
+// on a poisoned instance, so `free()` and `[Symbol.dispose]()` release nothing and throw
+// nothing (the memory is abandoned whole, and a finalizer has no caller to report to).
 report.freeAfter = settleSync(() => data.free());
+report.disposeAfter =
+  typeof engine[Symbol.dispose] === "function" ? settleSync(() => engine[Symbol.dispose]()) : { settled: "absent" };
 // The gate's globals: the trapped run's entry never returned, and the flag is set.
 const raw = await init();
 report.gateAfter = {

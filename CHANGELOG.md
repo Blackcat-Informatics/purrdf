@@ -631,9 +631,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `scripts/check-wasm-jspi-frame.py`, which rewrote the wasm-bindgen glue and text-checked
   the frame function, are deleted. A JavaScript exception thrown through wasm frames now
   poisons the instance as a trap does; the trapping call throws the trap itself, every
-  later synchronous entry — `free()` included — traps at the gate, and the asynchronous
-  twins and `ready()` reject with the poison error. A job started from inside a
-  synchronous sink callback is counted by the import's trampoline and runs as before.
+  later synchronous entry traps at the gate, and the asynchronous twins and `ready()`
+  reject with the poison error. The release exports behind `free()`,
+  `[Symbol.dispose]()` and the glue's finalization registries have an inert gate: on a
+  poisoned instance they return without entering it, releasing nothing (the instance's
+  memory is abandoned whole), so a finalizer never throws where nothing can catch it. A
+  job started from inside a synchronous sink callback is counted by the import's
+  trampoline and runs as before.
   The pack checks now fail when the tarball lacks a path `package.json` promises.
 
 ### Measured

@@ -71,7 +71,7 @@ test("a panic in a synchronous call poisons every entry point, and typed errors 
     assert.deepEqual(report[name], REJECTED, name);
   }
   // Every synchronous entry — the typed-error call included — on objects created before
-  // the panic, new objects, statics, free functions and `free()` traps at the gate.
+  // the panic, new objects, statics and free functions traps at the gate.
   for (const name of [
     "syncAfter",
     "parseErrorAfter",
@@ -82,9 +82,15 @@ test("a panic in a synchronous call poisons every entry point, and typed errors 
     "newEngineAfter",
     "newDatasetAfter",
     "versionAfter",
-    "freeAfter",
   ]) {
     assert.deepEqual(report[name], threwAtGate, name);
   }
+  // Releasing is the one entry that returns: the release exports' gate is inert on a
+  // poisoned instance, so `free()` and `[Symbol.dispose]()` return without entering it.
+  assert.deepEqual(report.freeAfter, { settled: "returned" });
+  assert.ok(
+    report.disposeAfter.settled === "returned" || report.disposeAfter.settled === "absent",
+    `[Symbol.dispose]() on the poisoned instance: ${JSON.stringify(report.disposeAfter)}`,
+  );
   assertSurfacePoisoned(report.surface, packageRoot, POISON);
 });

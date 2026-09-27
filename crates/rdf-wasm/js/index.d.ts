@@ -1071,10 +1071,11 @@ export class QueryEngine {
   // trap, a Rust panic or a JavaScript exception thrown through wasm frames in any
   // synchronous call: every job in flight rejects with the poison error, and from then on
   // every asynchronous twin and `ready()` reject with it, while every synchronous call
-  // into the instance — on objects created before the trap too, `free()` included — traps
-  // at the instance's entry with a `WebAssembly.RuntimeError`. The instance cannot be used
-  // again, and only a fresh JavaScript realm (a new page, Worker isolate or process) can
-  // load the package again.
+  // into the instance — on objects created before the trap too — traps at the instance's
+  // entry with a `WebAssembly.RuntimeError`; `free()` and `[Symbol.dispose]()` return
+  // without entering it and release nothing. The instance cannot be used again, and only a
+  // fresh JavaScript realm (a new page, Worker isolate or process) can load the package
+  // again.
 
   /** The twin of `query`. */
   queryAsync(

@@ -85,7 +85,7 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
   assert.deepEqual(report.gateAfter, { poisoned: 1, balanced: false });
 
   // Every synchronous entry into the instance — on objects created before the trap, new
-  // objects, statics, free functions, `free()` too — traps at the gate.
+  // objects, statics, free functions — traps at the gate.
   for (const name of [
     "syncAfter",
     "parseErrorAfter",
@@ -96,10 +96,17 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
     "newEngineAfter",
     "newDatasetAfter",
     "versionAfter",
-    "freeAfter",
   ]) {
     assert.deepEqual(report[name], threwAtGate, name);
   }
+  // Releasing is the one entry that returns: the release exports' gate is inert on a
+  // poisoned instance, so `free()` and `[Symbol.dispose]()` return without entering it
+  // (the memory is abandoned whole, and a finalizer has no caller to report to).
+  assert.deepEqual(report.freeAfter, { settled: "returned" });
+  assert.ok(
+    report.disposeAfter.settled === "returned" || report.disposeAfter.settled === "absent",
+    `[Symbol.dispose]() on the poisoned instance: ${JSON.stringify(report.disposeAfter)}`,
+  );
   assertSurfacePoisoned(report.surface, packageRoot, poisonMessage(GATE_CLOSED_REASON));
 });
 
