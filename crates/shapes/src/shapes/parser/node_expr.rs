@@ -509,8 +509,17 @@ impl Parser<'_> {
                     // Extensions, Appendix A (no
                     // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
                     // project $this) reject it as a hard failure at load.
-                    crate::prebinding::check_select(&query, &["this"])
-                        .map_err(|e| format!("sh:sparql constraint on shape {id}: {e}"))?;
+                    // Typed ([`crate::error::ShapesError::Prebinding`]) like every other
+                    // executed query's violation: this constraint executes wherever the
+                    // shape does.
+                    if let Err(e) = crate::prebinding::check_select(&query, &["this"]) {
+                        return Err(self.refuse_prebinding(
+                            crate::error::PrebindingViolation::new(
+                                format!("sh:sparql constraint {c_node} on shape {id}"),
+                                e,
+                            ),
+                        ));
+                    }
                 }
                 Ok(_) => {
                     return Err(format!(

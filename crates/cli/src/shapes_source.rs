@@ -225,6 +225,9 @@ pub(crate) fn shapes_error(
         ShapesError::Prebinding(violation) => {
             return CliError::Runtime(format!("{context}: {violation}"));
         }
+        ShapesError::UnsupportedTarget(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
     };
     match error {
         ShapesImportError::Unresolved { iris } => {

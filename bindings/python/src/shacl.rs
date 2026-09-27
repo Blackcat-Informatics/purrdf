@@ -1565,6 +1565,9 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
         purrdf_validate::ShapesError::Prebinding(violation) => {
             pyo3::exceptions::PyValueError::new_err(violation.to_string())
         }
+        purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
     }
 }
 

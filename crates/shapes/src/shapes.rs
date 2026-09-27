@@ -1335,6 +1335,9 @@ pub(crate) struct Parser<'s> {
     /// The pre-binding refusal of a query the parse found executes, when it raised
     /// one, so [`Self::load_error`] returns it typed ([`ShapesError::Prebinding`]).
     prebinding_refusal: std::cell::RefCell<Option<crate::error::PrebindingViolation>>,
+    /// The unsupported-custom-target refusal of the parse, when it raised one, so
+    /// [`Self::load_error`] returns it typed ([`ShapesError::UnsupportedTarget`]).
+    unsupported_target: std::cell::RefCell<Option<crate::error::UnsupportedTargetRefusal>>,
     /// The pre-binding violation of every well-formed `sh:SPARQLFunction` body that
     /// has one, by IRI. Filled by `check_sparql_function_declarations`; a call a shape
     /// reaches refuses the load, and the rest are unexecuted (see
@@ -1535,6 +1538,7 @@ impl<'s> Parser<'s> {
             shacl_js: std::cell::RefCell::new(None),
             ill_formed: std::cell::RefCell::new(None),
             prebinding_refusal: std::cell::RefCell::new(None),
+            unsupported_target: std::cell::RefCell::new(None),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
@@ -1595,6 +1599,11 @@ impl<'s> Parser<'s> {
             && message == violation.to_string()
         {
             return ShapesError::Prebinding(violation);
+        }
+        if let Some(refusal) = self.unsupported_target.borrow_mut().take()
+            && message == refusal.to_string()
+        {
+            return ShapesError::UnsupportedTarget(refusal);
         }
         shacl_js_or_invalid(&self.shacl_js, message)
     }
@@ -1840,6 +1849,16 @@ impl<'s> Parser<'s> {
         };
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
+        if let Some((site, violation)) =
+            crate::extension_usage::reachable_select_expression_violation(&shapes)
+        {
+            return Err(
+                self.refuse_prebinding(crate::error::PrebindingViolation::new(
+                    format!("the {site}"),
+                    violation,
+                )),
+            );
+        }
         self.record_unexecuted();
         Ok((shapes, expressions))
     }
@@ -1947,6 +1966,16 @@ impl<'s> Parser<'s> {
                 format!("the sh:SPARQLFunction <{iri}>, which nothing calls"),
                 message.clone(),
             ));
+        }
+        // A violating target type an instance executed has already refused the load, so
+        // every one left is one no shape instantiates.
+        for (iri, target_type) in &self.target_types {
+            if let Some(message) = &target_type.prebinding {
+                unexecuted.push(crate::error::PrebindingViolation::new(
+                    format!("the sh:SPARQLTargetType <{iri}>, which no shape instantiates"),
+                    message.clone(),
+                ));
+            }
         }
     }
 
@@ -2412,7 +2441,19 @@ impl<'s> Parser<'s> {
                 // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
                 // at the boundary.
                 match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
-                    Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
+                    Ok(query @ purrdf_sparql_algebra::Query::Select { .. }) => {
+                        // The target's query pre-binds nothing, so Appendix A's MUSTs
+                        // have no variable to guard; its SERVICE sentence applies to
+                        // every SHACL-SPARQL query, and this one executes.
+                        if let Err(e) = crate::prebinding::check_no_service(&query) {
+                            return Err(self.refuse_prebinding(
+                                crate::error::PrebindingViolation::new(
+                                    format!("the sh:SPARQLTarget {t_node} of shape {id}"),
+                                    e,
+                                ),
+                            ));
+                        }
+                    }
                     Ok(_) => {
                         return Err(format!(
                             "sh:SPARQLTarget on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
@@ -2471,14 +2512,30 @@ impl<'s> Parser<'s> {
                 ));
             }
             let Some((type_iri, target_type)) = matched else {
-                return Err(format!(
-                    "unsupported sh:target type on shape {id}: target node {t_node} \
-                     is neither typed sh:SPARQLTarget nor a declared sh:SPARQLTargetType"
-                ));
+                // SHACL Advanced Features, "Custom Targets": an engine that "cannot
+                // handle a given custom target SHOULD at least report a warning". A
+                // warning beside a report about fewer focus nodes than the shape names
+                // is still that report, so the shapes graph is refused, typed.
+                let refusal = crate::error::UnsupportedTargetRefusal::new(
+                    id.to_string(),
+                    t_node.to_string(),
+                    format!(
+                        "unsupported sh:target on shape {id}: the custom target {t_node} is \
+                         neither typed sh:SPARQLTarget nor an instance of a declared \
+                         sh:SPARQLTargetType, so this engine cannot compute its focus nodes; \
+                         SHACL Advanced Features says an engine that \"cannot handle a given \
+                         custom target SHOULD at least report a warning\", and the shape is \
+                         refused rather than validated against focus nodes nobody computed"
+                    ),
+                );
+                let message = refusal.to_string();
+                self.unsupported_target.borrow_mut().get_or_insert(refusal);
+                return Err(message);
             };
             let parser::target_types::ParsedTargetType {
                 declaration: target_type,
                 optional_predicates,
+                prebinding,
             } = target_type;
 
             // Collect parameter bindings from the target instance.
@@ -2510,6 +2567,19 @@ impl<'s> Parser<'s> {
             // applying this activation rule so malformed values still fail.
             if missing_required {
                 continue;
+            }
+            // This instance executes the target type's query with its parameters
+            // pre-bound, so a pre-binding violation of that query refuses the load here
+            // (SHACL 1.2 SPARQL Extensions, Appendix A).
+            if let Some(message) = prebinding {
+                return Err(
+                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
+                        format!(
+                            "the sh:SPARQLTargetType <{type_iri}>, which shape {id} instantiates"
+                        ),
+                        message,
+                    )),
+                );
             }
 
             // Build the query with prefixes from the shape, the target instance,

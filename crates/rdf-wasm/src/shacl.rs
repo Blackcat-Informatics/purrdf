@@ -152,6 +152,7 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
         ShapesError::ShaclJs(refusal) => JsError::new(refusal.message()).into(),
         ShapesError::IllFormed(refusal) => JsError::new(&refusal.to_string()).into(),
         ShapesError::Prebinding(violation) => JsError::new(&violation.to_string()).into(),
+        ShapesError::UnsupportedTarget(refusal) => JsError::new(refusal.message()).into(),
     }
 }
 

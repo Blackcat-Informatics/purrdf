@@ -496,12 +496,32 @@ with all of them named.
 A pre-binding violation is judged where the query runs. SHACL 1.2 SPARQL
 Extensions requires a failure for a query "executed with pre-bound variables"
 that contains a `MINUS`, a `VALUES` or an `AS ?var` for a pre-bound variable.
-The load therefore fails, with `ShapesError::Prebinding`, when a use of a custom
-component selects such a validator, or when a node expression or a query a
-shape reaches calls such a `sh:SPARQLFunction`. A function's parameters are its
-pre-bound variables. A validator of a built-in component never runs, and neither
-does a validator no use selects or a function nothing calls. Those load, and
-`purrdf shapes lint` lists each one as a finding.
+The load therefore fails, with `ShapesError::Prebinding`, when a shape's
+`sh:sparql` constraint violates one, when a use of a custom component selects such
+a validator, when a node expression or a query a shape reaches calls such a
+`sh:SPARQLFunction`, when a shape instantiates such a `sh:SPARQLTargetType`, or
+when a shape reaches such a `sh:select` node expression. A function's or target
+type's parameters are its pre-bound variables, and a select expression's is
+`$this`. A validator of a built-in component never runs, and neither does a
+validator no use selects, a function nothing calls or a target type no shape
+instantiates. Those load, and `purrdf shapes lint` lists each one as a finding.
+
+The same appendix says "SPARQL queries SHOULD not contain a federated query
+(SERVICE)", and "Implementations that do not permit SERVICE MUST report a failure".
+PurRDF permits `SERVICE` in no SHACL-SPARQL query, including a `sh:SPARQLTarget`
+and a function with no parameters, which pre-bind nothing. A verdict that
+depended on what a remote endpoint answered would not be a verdict about the data
+graph, and PurRDF fetches nothing. Such a query fails the load where it runs, with
+`ShapesError::Prebinding`, and is listed by `lint` where nothing runs it. The word
+inside a string literal is not a `SERVICE`.
+
+A shape whose `sh:target` is a custom target PurRDF cannot compute is refused
+with `ShapesError::UnsupportedTarget`, naming the shape and the target. PurRDF
+computes a `sh:SPARQLTarget` and an instance of a declared `sh:SPARQLTargetType`.
+SHACL Advanced Features says an engine that "cannot handle a given custom target
+SHOULD at least report a warning". A warning beside a report about focus nodes
+nobody computed would still be that report, so PurRDF refuses, which is stronger.
+A SHACL-JS target is refused as `ShapesError::ShaclJs`.
 
 ## SHACL 1.2 conformance
 
@@ -1181,7 +1201,8 @@ once, on request, and reports six sections:
    runs. These lines are never findings.
 5. `unexecuted`: every query that violates a pre-binding restriction and that
    nothing runs: a validator of a built-in component, a validator no use of its
-   component selects, or a `sh:SPARQLFunction` nothing calls. The load accepts
+   component selects, a `sh:SPARQLFunction` nothing calls, or a
+   `sh:SPARQLTargetType` no shape instantiates. The load accepts
    them, and each is a finding here. A declaration that breaks a syntax rule is
    never listed here, because it fails the load.
 6. `unanchored-imports`: every `owl:imports` triple of the closure that is not

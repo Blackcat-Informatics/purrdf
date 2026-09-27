@@ -22,6 +22,11 @@ use crate::shapes::{Parser, SparqlTargetType, TargetTypeParam};
 pub(crate) struct ParsedTargetType {
     pub(crate) declaration: SparqlTargetType,
     pub(crate) optional_predicates: BTreeSet<NamedNode>,
+    /// The pre-binding restriction its `sh:select` violates, when it violates one
+    /// ([`crate::prebinding::check_target_type`]). Not a syntax error: it is judged where
+    /// an instance executes the query, and a type no shape instantiates is reported by
+    /// `lint` instead.
+    pub(crate) prebinding: Option<String>,
 }
 
 impl Parser<'_> {
@@ -149,8 +154,17 @@ impl Parser<'_> {
                 format!("sh:SPARQLTargetType <{iri}> is missing a sh:select string literal")
             })?;
         let select = format!("{}{raw_select}", self.prefix_header(&[id])?);
-        match SparqlParser::new().parse_query(&select) {
-            Ok(Query::Select { .. }) => {}
+        let prebinding = match SparqlParser::new().parse_query(&select) {
+            Ok(query @ Query::Select { .. }) => {
+                let parameters: Vec<&str> = params.iter().map(|param| param.var.as_str()).collect();
+                crate::prebinding::check_target_type(&query, &parameters)
+                    .err()
+                    .map(|e| {
+                        format!(
+                            "sh:SPARQLTargetType <{iri}> violates pre-binding restrictions: {e}"
+                        )
+                    })
+            }
             Ok(_) => {
                 return Err(format!(
                     "sh:SPARQLTargetType <{iri}> must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid)"
@@ -161,7 +175,7 @@ impl Parser<'_> {
                     "sh:SPARQLTargetType <{iri}> has an unparsable sh:select query: {e}"
                 ));
             }
-        }
+        };
 
         Ok(ParsedTargetType {
             declaration: SparqlTargetType {
@@ -170,6 +184,7 @@ impl Parser<'_> {
                 select: raw_select,
             },
             optional_predicates,
+            prebinding,
         })
     }
 }

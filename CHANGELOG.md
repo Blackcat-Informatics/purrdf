@@ -10,6 +10,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** `SERVICE` is refused in every
+  SHACL-SPARQL query that runs. SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries
+  SHOULD not contain a federated query (SERVICE). Implementations that do not permit
+  SERVICE MUST report a failure", read as a must. It was already refused in constraints,
+  validators and rules; a `sh:SPARQLFunction` body (with or without parameters), a
+  `sh:SPARQLTarget`, a `sh:SPARQLTargetType` and a `sh:select` / `sh:sparqlExpr` node
+  expression used to run it. The refusal is `ShapesError::Prebinding`, raised where the
+  query runs; a declaration nothing runs is listed by `lint` under `unexecuted`. Appendix
+  A's MUSTs now apply where they were not checked: to a `sh:SPARQLTargetType` a shape
+  instantiates (its parameters are pre-bound) and to a `sh:select` node expression a shape
+  reaches (`$this` is pre-bound, §6.1). A `sh:sparql` constraint's pre-binding violation is
+  now typed `ShapesError::Prebinding` too; it was `ShapesError::Invalid`.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** a shape whose `sh:target` is a
+  custom target PurRDF cannot compute — neither a `sh:SPARQLTarget` nor an instance of a
+  declared `sh:SPARQLTargetType` — is refused typed, `ShapesError::UnsupportedTarget`
+  (`UnsupportedTargetRefusal`: the shape, the target, the message). SHACL Advanced
+  Features says such an engine "SHOULD at least report a warning"; the refusal is stronger,
+  since a warning would sit beside a report about focus nodes nobody computed. The refusal
+  used to be the untyped `ShapesError::Invalid`. Hosts report it as they report the other
+  shapes-graph refusals (Python `ValueError`, WebAssembly `Error`, C
+  `PURRDF_STATUS_PARSE_ERROR`, CLI exit `1`).
+
 - **shapes, validate, python, wasm, capi:** every validation report states
   `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4: a processor that checks the
   shapes graph "SHOULD use the property sh:shapesGraphWellFormed to inform the consumer

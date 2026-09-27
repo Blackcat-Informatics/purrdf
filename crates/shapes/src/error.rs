@@ -56,6 +56,9 @@ pub enum ShapesError {
     /// A query the engine executes with pre-bound variables violates a pre-binding
     /// restriction. See [`PrebindingViolation`].
     Prebinding(PrebindingViolation),
+    /// A shape declares a SHACL-AF custom target (`sh:target`) this engine cannot
+    /// compute. See [`UnsupportedTargetRefusal`].
+    UnsupportedTarget(UnsupportedTargetRefusal),
     /// Anything else: a document that does not parse, an unsupported or malformed SHACL
     /// construct, a failure during evaluation. The engine's own diagnostic.
     Invalid(String),
@@ -67,7 +70,11 @@ impl ShapesError {
     pub const fn as_imports(&self) -> Option<&ShapesImportError> {
         match self {
             Self::Imports(error) => Some(error),
-            Self::ShaclJs(_) | Self::IllFormed(_) | Self::Prebinding(_) | Self::Invalid(_) => None,
+            Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
+            | Self::Invalid(_) => None,
         }
     }
 
@@ -76,7 +83,11 @@ impl ShapesError {
     pub const fn as_shacl_js(&self) -> Option<&ShaclJsRefusal> {
         match self {
             Self::ShaclJs(refusal) => Some(refusal),
-            Self::Imports(_) | Self::IllFormed(_) | Self::Prebinding(_) | Self::Invalid(_) => None,
+            Self::Imports(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
+            | Self::Invalid(_) => None,
         }
     }
 
@@ -85,7 +96,24 @@ impl ShapesError {
     pub const fn as_ill_formed(&self) -> Option<&IllFormedShapesGraph> {
         match self {
             Self::IllFormed(refusal) => Some(refusal),
-            Self::Imports(_) | Self::ShaclJs(_) | Self::Prebinding(_) | Self::Invalid(_) => None,
+            Self::Imports(_)
+            | Self::ShaclJs(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
+            | Self::Invalid(_) => None,
+        }
+    }
+
+    /// The unsupported-custom-target refusal, when this is one.
+    #[must_use]
+    pub const fn as_unsupported_target(&self) -> Option<&UnsupportedTargetRefusal> {
+        match self {
+            Self::UnsupportedTarget(refusal) => Some(refusal),
+            Self::Imports(_)
+            | Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::Invalid(_) => None,
         }
     }
 
@@ -94,7 +122,11 @@ impl ShapesError {
     pub const fn as_prebinding(&self) -> Option<&PrebindingViolation> {
         match self {
             Self::Prebinding(violation) => Some(violation),
-            Self::Imports(_) | Self::ShaclJs(_) | Self::IllFormed(_) | Self::Invalid(_) => None,
+            Self::Imports(_)
+            | Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::UnsupportedTarget(_)
+            | Self::Invalid(_) => None,
         }
     }
 }
@@ -106,6 +138,7 @@ impl fmt::Display for ShapesError {
             Self::ShaclJs(refusal) => refusal.fmt(f),
             Self::IllFormed(refusal) => refusal.fmt(f),
             Self::Prebinding(violation) => violation.fmt(f),
+            Self::UnsupportedTarget(refusal) => refusal.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
     }
@@ -118,6 +151,7 @@ impl std::error::Error for ShapesError {
             Self::ShaclJs(refusal) => Some(refusal),
             Self::IllFormed(refusal) => Some(refusal),
             Self::Prebinding(violation) => Some(violation),
+            Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::Invalid(_) => None,
         }
     }
@@ -183,6 +217,60 @@ impl fmt::Display for ShaclJsRefusal {
 }
 
 impl std::error::Error for ShaclJsRefusal {}
+
+/// A shape refused because it declares a custom target this engine cannot compute.
+///
+/// SHACL Advanced Features, "Custom Targets": "The behavior of a SHACL engine that is
+/// unable to handle a given custom target is left undefined. [...] Engines that are aware
+/// of this property and cannot handle a given custom target SHOULD at least report a
+/// warning." PurRDF computes a `sh:SPARQLTarget` and an instance of a declared
+/// `sh:SPARQLTargetType`; any other value of `sh:target` — a node of another target type,
+/// or of none — would validate the shape against focus nodes it never computed. A warning
+/// beside a report would still be a report about fewer focus nodes than the shape names,
+/// so PurRDF refuses the shapes graph instead, which is stronger than the warning the
+/// specification asks for. (A SHACL-JS target is refused as [`ShapesError::ShaclJs`].)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedTargetRefusal {
+    shape: String,
+    target: String,
+    message: String,
+}
+
+impl UnsupportedTargetRefusal {
+    pub(crate) const fn new(shape: String, target: String, message: String) -> Self {
+        Self {
+            shape,
+            target,
+            message,
+        }
+    }
+
+    /// The shape that declares the target, as the engine renders a term.
+    #[must_use]
+    pub fn shape(&self) -> &str {
+        &self.shape
+    }
+
+    /// The `sh:target` value, as the engine renders a term.
+    #[must_use]
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    /// The engine's full diagnostic.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for UnsupportedTargetRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for UnsupportedTargetRefusal {}
 
 /// A syntax-rule violation as a declaration's parser reports it, before the declaration
 /// is named: the id of the rule, when a numbered rule states it, and the diagnostic.

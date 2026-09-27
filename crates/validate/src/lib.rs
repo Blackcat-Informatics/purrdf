@@ -117,7 +117,7 @@ pub use purrdf_shapes::report::ConformanceDisallows;
 /// depending on the engine crate.
 pub use purrdf_shapes::{
     IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
-    ShapesImportError,
+    ShapesImportError, UnsupportedTargetRefusal,
 };
 pub use shacl::{
     validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,

@@ -120,7 +120,8 @@ impl ShapesProductRefusal {
                 error @ (ShapesError::Imports(_)
                 | ShapesError::ShaclJs(_)
                 | ShapesError::IllFormed(_)
-                | ShapesError::Prebinding(_)),
+                | ShapesError::Prebinding(_)
+                | ShapesError::UnsupportedTarget(_)),
             ) => error.to_string().into(),
             Self::Admission(error) => error.message().into(),
         }

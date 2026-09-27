@@ -2253,3 +2253,222 @@ fn a_repeated_message_language_is_ill_formed_and_one_per_language_loads() {
         "every message is copied"
     );
 }
+
+/// SHACL Advanced Features, "Custom Targets": an engine that "cannot handle a given
+/// custom target SHOULD at least report a warning". PurRDF refuses instead — typed
+/// `ShapesError::UnsupportedTarget`, naming the shape and the target — because a warning
+/// beside a report about focus nodes nobody computed is still that report. The
+/// neighbours, a `sh:SPARQLTarget` and an instance of a declared `sh:SPARQLTargetType`,
+/// load, and each target's focus node is observed on the report beside a control node
+/// the target does not select.
+#[test]
+fn a_custom_target_the_engine_cannot_compute_is_refused_typed() {
+    for target in ["[ a ex:SomeOtherTarget ; ex:p 1 ]", "[ ex:p 1 ]"] {
+        let error = load_error(&format!(
+            "ex:S a sh:NodeShape ; sh:target {target} ; sh:nodeKind sh:Literal ."
+        ));
+        let refusal = error
+            .as_unsupported_target()
+            .unwrap_or_else(|| panic!("typed ShapesError::UnsupportedTarget: {error:?}"));
+        assert_eq!(refusal.shape(), "<http://example.org/ns#S>", "{refusal}");
+        assert!(
+            refusal
+                .message()
+                .contains("SHOULD at least report a warning"),
+            "{refusal}"
+        );
+    }
+
+    let data = "ex:a ex:p 1 . ex:control ex:q 1 .";
+    let sparql_target = validate(
+        "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+           sh:target [ a sh:SPARQLTarget ;
+                       sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o }\" ] .",
+        data,
+    );
+    assert_eq!(
+        results(&sparql_target),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
+    );
+    let target_type = validate(
+        "ex:ByPredicate a sh:SPARQLTargetType ;
+           rdfs:subClassOf sh:Target ;
+           sh:parameter [ sh:path ex:predicate ] ;
+           sh:select \"SELECT ?this WHERE { ?this $predicate ?o }\" .
+         ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+           sh:target [ a ex:ByPredicate ; ex:predicate ex:p ] .",
+        data,
+    );
+    assert_eq!(results(&target_type), results(&sparql_target));
+}
+
+/// SHACL 1.2 SPARQL Extensions, Appendix A: "Furthermore, SPARQL queries SHOULD not
+/// contain a federated query (SERVICE). Implementations that do not permit SERVICE MUST
+/// report a failure as mentioned above." PurRDF reads the SHOULD as a MUST and permits
+/// SERVICE nowhere: every SHACL-SPARQL query that executes with it refuses the load, typed
+/// `ShapesError::Prebinding` — a `sh:sparql` constraint, a `sh:SPARQLTarget`, an instance
+/// of a `sh:SPARQLTargetType`, a called `sh:SPARQLFunction` (with or without parameters),
+/// and a `sh:select` node expression. Each neighbour is the same query without the
+/// `SERVICE` — its body inlined, or the word only inside a string — and each is executed
+/// and observed: `ex:a` (which has `ex:p`) is selected and `ex:control` (which has not)
+/// is not. A declaration nothing executes loads and is listed by `lint` as unexecuted.
+#[test]
+fn a_service_in_any_executed_shacl_sparql_query_is_refused() {
+    const SERVICE: &str =
+        "SERVICE <http://example.org/endpoint> { ?this <http://example.org/ns#p> ?o }";
+    const LOCAL: &str = "?this <http://example.org/ns#p> ?o . FILTER (?o != \\\"SERVICE\\\")";
+    let cases = |pattern: &str| -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "sh:sparql",
+                format!(
+                    "ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+                       sh:sparql [ sh:select \"SELECT $this WHERE {{ {} }}\" ] .",
+                    pattern.replace("?this", "$this")
+                ),
+            ),
+            (
+                "sh:SPARQLTarget",
+                format!(
+                    "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
+                       sh:target [ a sh:SPARQLTarget ; sh:select \"SELECT ?this WHERE {{ {pattern} }}\" ] ."
+                ),
+            ),
+            (
+                "sh:SPARQLTargetType",
+                format!(
+                    "ex:T a sh:SPARQLTargetType ; rdfs:subClassOf sh:Target ;
+                       sh:parameter [ sh:path ex:unused ; sh:optional true ] ;
+                       sh:select \"SELECT ?this WHERE {{ {pattern} }}\" .
+                     ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ; sh:target [ a ex:T ] ."
+                ),
+            ),
+            (
+                "sh:SPARQLFunction without parameters",
+                format!(
+                    "ex:f a sh:SPARQLFunction ;
+                       sh:select \"SELECT ?this WHERE {{ {pattern} }} LIMIT 1\" .
+                     ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+                       sh:sparql [ sh:select \"SELECT $this WHERE {{ FILTER ($this = <http://example.org/ns#f>()) }}\" ] ."
+                ),
+            ),
+            (
+                "sh:SPARQLFunction with a parameter",
+                format!(
+                    "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ;
+                       sh:ask \"ASK {{ {} }}\" .
+                     ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+                       sh:sparql [ sh:select \"SELECT $this WHERE {{ FILTER (<http://example.org/ns#f>($this)) }}\" ] .",
+                    pattern.replace("?this", "$node")
+                ),
+            ),
+            (
+                "sh:select node expression",
+                format!(
+                    "ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+                       sh:property [ sh:path ex:computed ; sh:maxCount 0 ;
+                         sh:values [ sh:select \"SELECT ?o WHERE {{ {} }}\" ] ] .",
+                    pattern.replace("?this", "$this")
+                ),
+            ),
+        ]
+    };
+    for (kind, shapes) in cases(SERVICE) {
+        let error = load_error(&shapes);
+        let violation = error
+            .as_prebinding()
+            .unwrap_or_else(|| panic!("{kind}: typed ShapesError::Prebinding: {error:?}"));
+        assert!(
+            violation.message().contains("SERVICE"),
+            "{kind}: {violation}"
+        );
+    }
+    let data = "ex:a ex:p \"x\" . ex:control ex:q \"y\" .";
+    for (kind, shapes) in cases(LOCAL) {
+        let report = validate(&shapes, data);
+        let focus: Vec<String> = results(&report)
+            .into_iter()
+            .map(|(focus, _)| focus)
+            .collect();
+        assert!(
+            focus.contains(&"<http://example.org/ns#a>".to_owned()),
+            "{kind}: ex:a is selected: {focus:?}"
+        );
+        assert!(
+            !focus.contains(&"<http://example.org/ns#control>".to_owned()),
+            "{kind}: ex:control is not: {focus:?}"
+        );
+    }
+
+    // Declared and never executed: loads, and lint lists it.
+    let uncalled = format!(
+        "ex:f a sh:SPARQLFunction ; sh:parameter [ sh:path ex:node ] ;
+           sh:ask \"ASK {{ {} }}\" .{LENGTH_SHAPE}",
+        SERVICE.replace("?this", "$node")
+    );
+    let lint = lint_of(&uncalled);
+    let unexecuted = lint.unexecuted().expect("the load accepted the graph");
+    assert_eq!(unexecuted.len(), 1, "{}", lint.render());
+    assert!(
+        unexecuted[0].message().contains("SERVICE"),
+        "{}",
+        lint.render()
+    );
+}
+
+/// A `sh:select` node expression runs with `$this` pre-bound ("The value of focusNode is
+/// pre-bound as the value of the SPARQL variable this", SHACL 1.2 SPARQL Extensions
+/// §6.1), and a `sh:SPARQLTargetType` with its parameters pre-bound; so Appendix A's
+/// MUSTs apply to both where they execute. A `MINUS` in a reached select expression, and
+/// a `VALUES` naming a target type's parameter, refuse the load typed; the neighbours —
+/// `FILTER NOT EXISTS`, and a `VALUES` over a local variable — load and are observed.
+#[test]
+fn select_expressions_and_target_types_answer_to_the_prebinding_restrictions() {
+    let select_expression = |body: &str| {
+        format!(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:control ;
+               sh:property [ sh:path ex:computed ; sh:maxCount 0 ;
+                 sh:values [ sh:select \"SELECT ?o WHERE {{ {body} }}\" ] ] ."
+        )
+    };
+    let error = load_error(&select_expression(
+        "$this ex:p ?o MINUS { $this ex:hidden true }",
+    ));
+    let violation = error
+        .as_prebinding()
+        .unwrap_or_else(|| panic!("typed ShapesError::Prebinding: {error:?}"));
+    assert!(violation.message().contains("MINUS"), "{violation}");
+    let data = "ex:a ex:p \"x\" . ex:control ex:p \"y\" ; ex:hidden true .";
+    let report = validate(
+        &select_expression("$this ex:p ?o FILTER NOT EXISTS { $this ex:hidden true }"),
+        data,
+    );
+    let focus: Vec<String> = results(&report)
+        .into_iter()
+        .map(|(focus, _)| focus)
+        .collect();
+    assert_eq!(focus, ["<http://example.org/ns#a>".to_owned()]);
+
+    let target_type = |values: &str| {
+        format!(
+            "ex:T a sh:SPARQLTargetType ; rdfs:subClassOf sh:Target ;
+               sh:parameter [ sh:path ex:predicate ] ;
+               sh:select \"SELECT ?this WHERE {{ {values} ?this $predicate ?o }}\" .
+             ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ; sh:target [ a ex:T ; ex:predicate ex:p ] ."
+        )
+    };
+    let error = load_error(&target_type("VALUES $predicate { ex:q }"));
+    let violation = error
+        .as_prebinding()
+        .unwrap_or_else(|| panic!("typed ShapesError::Prebinding: {error:?}"));
+    assert!(violation.message().contains("?predicate"), "{violation}");
+    let report = validate(&target_type("VALUES ?o { \\\"x\\\" }"), data);
+    let focus: Vec<String> = results(&report)
+        .into_iter()
+        .map(|(focus, _)| focus)
+        .collect();
+    assert_eq!(focus, ["<http://example.org/ns#a>".to_owned()]);
+}
