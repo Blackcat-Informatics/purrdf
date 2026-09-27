@@ -489,7 +489,7 @@ static int check_shapes_graph_iri(void) {
         const uint8_t *bytes = NULL;
         size_t len = 0;
         int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, graphs[i], data, NULL, 0, NULL,
-                                                    NULL, 0, &sarif, &error);
+                                                    NULL, 0, false, &sarif, &error);
         CHECK(rc == PURRDF_STATUS_OK && sarif != NULL, "validate_to_sarif(shapes_graph_iri)");
         purrdf_buffer_data(sarif, &bytes, &len);
         if (graphs[i] != NULL) {
@@ -505,7 +505,7 @@ static int check_shapes_graph_iri(void) {
     PurrdfBuffer *refused = NULL;
     PurrdfError *error = NULL;
     int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, "shapes", data, NULL, 0, NULL, NULL,
-                                                0, &refused, &error);
+                                                0, false, &refused, &error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR && refused == NULL,
           "a relative shapes graph with no base names no graph");
     CHECK(strstr(purrdf_error_message(error), "iri-relative-no-base") != NULL,

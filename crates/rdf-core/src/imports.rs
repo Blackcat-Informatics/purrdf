@@ -374,6 +374,7 @@ impl ImportMap {
                 documents: Vec::new(),
                 unresolved: Vec::new(),
                 unreached: self.documents.keys().cloned().collect(),
+                conflicts: Vec::new(),
             };
         }
         let mut declared: BTreeSet<String> = self.loaded.clone();
@@ -400,10 +401,12 @@ impl ImportMap {
             .filter(|iri| !seen.contains(*iri))
             .cloned()
             .collect();
+        let conflicts = version_conflicts(graph, &self.loaded_iris(), &documents);
         ImportClosure {
             documents,
             unresolved: unsupplied,
             unreached,
+            conflicts,
         }
     }
 
@@ -461,6 +464,218 @@ impl ImportMap {
     }
 }
 
+/// `owl:incompatibleWith`.
+const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+
+/// Two graphs of one import closure that the closure should not hold together.
+///
+/// *OWL 2 Web Ontology Language Structural Specification* §3.4: "The import closure of O
+/// SHOULD NOT contain ontologies O1 and O2 such that O1 and O2 are different ontology
+/// versions from the same ontology series, or O1 contains an ontology annotation
+/// owl:incompatibleWith with the value equal to either the ontology IRI or the version IRI of
+/// O2." SHACL 1.2 Core §1.3 makes the same two conditions part of a well-formed shapes graph
+/// ("Its import closure ... does not contain two shapes graphs where: they are different
+/// versions of the same series (i.e., they share the same shapes graph IRI but have different
+/// owl:versionIRI values), or one contains an owl:incompatibleWith annotation whose value is
+/// equal to either the shapes graph IRI or the owl:versionIRI of the other"), and its §6.1
+/// note repeats it: the import closure "SHOULD NOT contain two graphs that are different
+/// versions of the same series". PurRDF reads SHOULD NOT as MUST NOT, so every engine refuses
+/// a closure with a conflict.
+///
+/// A graph of the closure is the importing graph or one supplied document. Its names are the
+/// IRIs of its anchors (the IRI it was loaded or imported under, its ontology headers and its
+/// shapes graphs) and the `owl:versionIRI` of each; its versions are the `owl:versionIRI`
+/// values of its anchors; and what it declares incompatible is the `owl:incompatibleWith`
+/// values of its anchors. Only two DIFFERENT graphs conflict: a graph that names itself in an
+/// `owl:incompatibleWith`, or a document supplied under two IRIs, is not a pair of versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionConflict {
+    /// The first graph: `None` for the importing graph, or the IRI a supplied document was
+    /// imported under.
+    pub first: Option<String>,
+    /// The second graph, spelled as [`Self::first`] is.
+    pub second: Option<String>,
+    /// What makes the two conflict.
+    pub kind: VersionConflictKind,
+}
+
+/// Why two graphs of one import closure conflict. See [`VersionConflict`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionConflictKind {
+    /// Both graphs declare the ontology or shapes graph `series`, with different
+    /// `owl:versionIRI` values.
+    SameSeries {
+        /// The series IRI both graphs declare.
+        series: String,
+        /// A version IRI the first graph gives the series and the second does not.
+        first_version: String,
+        /// A version IRI the second graph gives the series and the first does not.
+        second_version: String,
+    },
+    /// The first graph declares `owl:incompatibleWith <iri>`, and `iri` is a name of the
+    /// second graph — its ontology or shapes graph IRI, or its `owl:versionIRI`.
+    IncompatibleWith {
+        /// The `owl:incompatibleWith` value.
+        iri: String,
+    },
+}
+
+impl std::fmt::Display for VersionConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let graph = |g: &Option<String>| {
+            g.as_ref().map_or_else(
+                || "the importing graph".to_owned(),
+                |iri| format!("<{iri}>"),
+            )
+        };
+        match &self.kind {
+            VersionConflictKind::SameSeries {
+                series,
+                first_version,
+                second_version,
+            } => write!(
+                f,
+                "{} and {} are different versions of the series <{series}> (owl:versionIRI \
+                 <{first_version}> and <{second_version}>)",
+                graph(&self.first),
+                graph(&self.second),
+            ),
+            VersionConflictKind::IncompatibleWith { iri } => write!(
+                f,
+                "{} declares owl:incompatibleWith <{iri}>, which names {}",
+                graph(&self.first),
+                graph(&self.second),
+            ),
+        }
+    }
+}
+
+/// One graph of a closure as the version constraints read it. See [`VersionConflict`].
+struct ClosureGraphIdentity {
+    /// The graph: `None` for the importing graph, or the IRI it was imported under.
+    graph: Option<String>,
+    /// Its anchors' IRIs and their version IRIs.
+    names: BTreeSet<String>,
+    /// Series IRI → the version IRIs this graph gives it.
+    versions: BTreeMap<String, BTreeSet<String>>,
+    /// The `owl:incompatibleWith` IRI values of its anchors.
+    incompatible: BTreeSet<String>,
+}
+
+impl ClosureGraphIdentity {
+    /// Read `dataset`'s identity, loaded under `loaded`.
+    fn read(graph: Option<String>, dataset: &RdfDataset, loaded: &[&str]) -> Self {
+        let mut names: BTreeSet<String> = loaded.iter().map(|iri| (*iri).to_owned()).collect();
+        let mut versions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut incompatible: BTreeSet<String> = BTreeSet::new();
+        let version_iri = dataset.term_id_by_iri(OWL_VERSIONIRI);
+        let incompatible_with = dataset.term_id_by_iri(OWL_INCOMPATIBLE_WITH);
+        let objects = |subject: TermId, predicate: Option<TermId>| -> Vec<String> {
+            predicate.map_or_else(Vec::new, |predicate| {
+                dataset
+                    .quads_for_pattern(Some(subject), Some(predicate), None, GraphMatch::Any)
+                    .filter_map(|quad| match dataset.term_value(quad.o) {
+                        TermValue::Iri(iri) => Some(iri),
+                        _ => None,
+                    })
+                    .collect()
+            })
+        };
+        for anchor in anchors(dataset, loaded) {
+            incompatible.extend(objects(anchor, incompatible_with));
+            // A series is named by an IRI; an anonymous ontology has no version.
+            let TermValue::Iri(series) = dataset.term_value(anchor) else {
+                continue;
+            };
+            let declared = objects(anchor, version_iri);
+            names.insert(series.clone());
+            names.extend(declared.iter().cloned());
+            if !declared.is_empty() {
+                versions.entry(series).or_default().extend(declared);
+            }
+        }
+        Self {
+            graph,
+            names,
+            versions,
+            incompatible,
+        }
+    }
+
+    /// Every way `self` and `other` conflict, `self` first.
+    fn conflicts_with(&self, other: &Self, out: &mut Vec<VersionConflict>) {
+        let pair = |kind| VersionConflict {
+            first: self.graph.clone(),
+            second: other.graph.clone(),
+            kind,
+        };
+        for (series, mine) in &self.versions {
+            let Some(theirs) = other.versions.get(series) else {
+                continue;
+            };
+            if mine == theirs {
+                continue;
+            }
+            let first_version = mine
+                .difference(theirs)
+                .next()
+                .unwrap_or_else(|| mine.iter().next().expect("a declared series has a version"));
+            let second_version = theirs.difference(mine).next().unwrap_or_else(|| {
+                theirs
+                    .iter()
+                    .next()
+                    .expect("a declared series has a version")
+            });
+            out.push(pair(VersionConflictKind::SameSeries {
+                series: series.clone(),
+                first_version: first_version.clone(),
+                second_version: second_version.clone(),
+            }));
+        }
+        for (declarer, target) in [(self, other), (other, self)] {
+            for iri in &declarer.incompatible {
+                if target.names.contains(iri) && !declarer.names.contains(iri) {
+                    out.push(VersionConflict {
+                        first: declarer.graph.clone(),
+                        second: target.graph.clone(),
+                        kind: VersionConflictKind::IncompatibleWith { iri: iri.clone() },
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Every [`VersionConflict`] between two graphs of a closure: `graph` read under `loaded`,
+/// and each supplied `documents` entry read under the IRI it was imported by.
+///
+/// A closure that reached no document is one graph, which cannot conflict with itself, so
+/// the common case costs nothing.
+fn version_conflicts(
+    graph: &RdfDataset,
+    loaded: &[&str],
+    documents: &[(String, Arc<RdfDataset>)],
+) -> Vec<VersionConflict> {
+    if documents.is_empty() {
+        return Vec::new();
+    }
+    let mut graphs = vec![ClosureGraphIdentity::read(None, graph, loaded)];
+    for (iri, document) in documents {
+        graphs.push(ClosureGraphIdentity::read(
+            Some(iri.clone()),
+            document,
+            &[iri.as_str()],
+        ));
+    }
+    let mut conflicts = Vec::new();
+    for (index, first) in graphs.iter().enumerate() {
+        for second in &graphs[index + 1..] {
+            first.conflicts_with(second, &mut conflicts);
+        }
+    }
+    conflicts
+}
+
 /// Every IRI `graph` resolves an import of IN PLACE, with no document supplied: each IRI the
 /// graph declares an import anchor — a SHACL instance of `owl:Ontology` or `sh:ShapesGraph`
 /// ([`crate::graph_roles`]) — and each IRI some node of the graph names as its
@@ -507,6 +722,8 @@ pub struct ImportClosure {
     unresolved: Vec<String>,
     /// Each map entry the walk never visited, in IRI order.
     unreached: Vec<String>,
+    /// Each pair of graphs of the closure that OWL 2 §3.4 says it should not hold together.
+    conflicts: Vec<VersionConflict>,
 }
 
 impl ImportClosure {
@@ -527,6 +744,15 @@ impl ImportClosure {
     #[must_use]
     pub fn unreached(&self) -> &[String] {
         &self.unreached
+    }
+
+    /// Every pair of graphs this closure holds that are different versions of one series, or
+    /// of which one declares `owl:incompatibleWith` the other — in walk order of the first
+    /// graph, then of the second. Empty exactly when the closure meets the import-closure
+    /// constraints of OWL 2 §3.4 (see [`VersionConflict`]).
+    #[must_use]
+    pub fn conflicts(&self) -> &[VersionConflict] {
+        &self.conflicts
     }
 
     /// `graph` together with every document this closure reached, as one dataset — or
@@ -1388,5 +1614,139 @@ mod tests {
         assert_eq!(closure.unresolved(), NONE);
         assert!(closure.merge(&graph).expect("freeze").is_none());
         assert_eq!(imported_iris(graph.as_ref(), &[]), vec![LIB.to_owned()]);
+    }
+
+    /// The version constraints of OWL 2 §3.4 over a closure of three graphs: the importing
+    /// graph imports `lib/1` and a second document. Each treatment row is beside the
+    /// neighbour that differs only in the one fact the rule reads, and the neighbour's
+    /// closure is complete and conflict-free.
+    #[test]
+    fn two_versions_of_one_series_conflict_and_two_series_do_not() {
+        use super::{VersionConflict, VersionConflictKind};
+        const LIB_1: &str = "http://example.org/lib/1";
+        const LIB_2: &str = "http://example.org/lib/2";
+        const OLD: &str = "http://example.org/old";
+        const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+        let importer = |second: &str| {
+            triples(&[
+                (SHAPES, RDF_TYPE, OWL_ONTOLOGY),
+                (SHAPES, OWL_IMPORTS, LIB_1),
+                (SHAPES, OWL_IMPORTS, second),
+            ])
+        };
+        let first = triples(&[(LIB, OWL_VERSIONIRI, LIB_1)]);
+        let conflicts = |second: &str, rows: &[(&str, &str, &str)]| {
+            let mut map = ImportMap::new();
+            map.insert(LIB_1, Arc::clone(&first));
+            map.insert(second, triples(rows));
+            let closure = map.closure(&importer(second));
+            assert_eq!(closure.unresolved(), NONE, "the closure is complete");
+            assert_eq!(closure.documents().len(), 2, "both documents are reached");
+            closure.conflicts().to_vec()
+        };
+
+        // Same series, another version: a conflict naming both documents.
+        assert_eq!(
+            conflicts(LIB_2, &[(LIB, OWL_VERSIONIRI, LIB_2)]),
+            [VersionConflict {
+                first: Some(LIB_1.to_owned()),
+                second: Some(LIB_2.to_owned()),
+                kind: VersionConflictKind::SameSeries {
+                    series: LIB.to_owned(),
+                    first_version: LIB_1.to_owned(),
+                    second_version: LIB_2.to_owned(),
+                },
+            }]
+        );
+        // Neighbour: another series with its own version.
+        assert_eq!(
+            conflicts(
+                LIB_2,
+                &[("http://example.org/lib-two", OWL_VERSIONIRI, LIB_2)]
+            ),
+            []
+        );
+
+        // One declares owl:incompatibleWith the other's version IRI, or its series IRI.
+        for named in [LIB_1, LIB] {
+            assert_eq!(
+                conflicts(
+                    OLD,
+                    &[
+                        (OLD, RDF_TYPE, OWL_ONTOLOGY),
+                        (OLD, OWL_INCOMPATIBLE_WITH, named)
+                    ]
+                ),
+                [VersionConflict {
+                    first: Some(OLD.to_owned()),
+                    second: Some(LIB_1.to_owned()),
+                    kind: VersionConflictKind::IncompatibleWith {
+                        iri: named.to_owned()
+                    },
+                }],
+                "{named}"
+            );
+        }
+        // Neighbour: incompatible with a graph the closure does not hold.
+        assert_eq!(
+            conflicts(
+                OLD,
+                &[
+                    (OLD, RDF_TYPE, OWL_ONTOLOGY),
+                    (OLD, OWL_INCOMPATIBLE_WITH, "http://example.org/elsewhere")
+                ]
+            ),
+            []
+        );
+        // Neighbour: the declaration sits on a node that is no anchor, so it is data.
+        assert_eq!(
+            conflicts(
+                OLD,
+                &[
+                    (OLD, RDF_TYPE, OWL_ONTOLOGY),
+                    (OTHER_NODE, OWL_INCOMPATIBLE_WITH, LIB_1)
+                ]
+            ),
+            []
+        );
+    }
+
+    /// The importing graph is a graph of its closure too, named by the IRI it was loaded
+    /// under, and a closure that reached no document holds one graph and no conflict.
+    #[test]
+    fn the_importing_graph_conflicts_with_a_version_it_imports() {
+        use super::{VersionConflict, VersionConflictKind};
+        const V1: &str = "http://example.org/shapes/1";
+        const V2: &str = "http://example.org/shapes/2";
+        let graph = triples(&[
+            (SHAPES, RDF_TYPE, OWL_ONTOLOGY),
+            (SHAPES, OWL_VERSIONIRI, V2),
+            (SHAPES, OWL_IMPORTS, V1),
+        ]);
+        let mut map = ImportMap::new();
+        map.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V1)]));
+        let closure = map.closure(&graph);
+        assert_eq!(
+            closure.conflicts(),
+            [VersionConflict {
+                first: None,
+                second: Some(V1.to_owned()),
+                kind: VersionConflictKind::SameSeries {
+                    series: SHAPES.to_owned(),
+                    first_version: V2.to_owned(),
+                    second_version: V1.to_owned(),
+                },
+            }]
+        );
+        assert_eq!(
+            closure.conflicts()[0].to_string(),
+            "the importing graph and <http://example.org/shapes/1> are different versions of \
+             the series <http://example.org/shapes> (owl:versionIRI \
+             <http://example.org/shapes/2> and <http://example.org/shapes/1>)"
+        );
+        // Neighbour: the imported document is the same version.
+        let mut same = ImportMap::new();
+        same.insert(V1, triples(&[(SHAPES, OWL_VERSIONIRI, V2)]));
+        assert_eq!(same.closure(&graph).conflicts(), []);
     }
 }

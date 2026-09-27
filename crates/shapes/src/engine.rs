@@ -1261,6 +1261,24 @@ pub struct ValidationOptions {
     /// defaults"). The report echoes a non-default set as
     /// `sh:conformanceDisallows` triples; see [`ConformanceDisallows`].
     pub conformance_disallows: ConformanceDisallows,
+    /// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: when `true`, the
+    /// `rdfs:subClassOf` triples of the shapes graph are read, in addition to the
+    /// data graph's, wherever SHACL type decides whether a node is a SHACL instance
+    /// of a class — `sh:targetClass`, implicit class targets, `sh:class`,
+    /// `sh:rootClass` and `shnex:instancesOf`. "SHACL processors SHOULD offer a
+    /// parameter subClassOfInShapesGraph that, if set to true, should alter the
+    /// definition of SHACL Type so that the rdfs:subClassOf triples are queried from
+    /// the shapes graph in addition to the data graph. The rdf:type triples are always
+    /// expected to be in the data graph."
+    ///
+    /// `false` by default, as the specification's own default: "By default, this is
+    /// determined by looking up rdfs:subClassOf and rdf:type triples in the data
+    /// graph." Only SHACL type changes: a shapes-graph `rdfs:subClassOf` triple does
+    /// not become a triple of the data graph, so a path, a target over
+    /// `rdfs:subClassOf` or a SPARQL pattern that matches it still reads the data
+    /// graph alone. Blank-node classes of a shapes graph that is not the data graph
+    /// name no node of the data graph and are not read.
+    pub subclass_of_in_shapes_graph: bool,
 }
 
 impl ValidationOptions {
@@ -1268,6 +1286,14 @@ impl ValidationOptions {
     #[must_use]
     pub fn with_conformance_disallows(mut self, disallows: ConformanceDisallows) -> Self {
         self.conformance_disallows = disallows;
+        self
+    }
+
+    /// These options with SHACL 1.2 Core §6.3's `subClassOfInShapesGraph` set (see
+    /// [`Self::subclass_of_in_shapes_graph`]).
+    #[must_use]
+    pub const fn with_subclass_of_in_shapes_graph(mut self, enabled: bool) -> Self {
+        self.subclass_of_in_shapes_graph = enabled;
         self
     }
 }
@@ -1684,6 +1710,10 @@ impl PreparedValidator {
         // The rules entailment regime applies to every validation this binding answers.
         let data = match entailed_for_validation(&data, &shapes)? {
             Some(entailed) => entailed,
+            None => data,
+        };
+        let data = match with_shapes_graph_subclasses(&data, &shapes)? {
+            Some(supplemented) => supplemented,
             None => data,
         };
         let _function_scope = crate::sparql::enter_function_scope(
@@ -2774,8 +2804,10 @@ fn validate_linked_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    match entailed_for_validation(data, shapes)? {
-        Some(entailed) => validate_data_with_focus_filter(&entailed, shapes, include_focus),
+    let entailed = entailed_for_validation(data, shapes)?;
+    let data = entailed.as_ref().unwrap_or(data);
+    match with_shapes_graph_subclasses(data, shapes)? {
+        Some(supplemented) => validate_data_with_focus_filter(&supplemented, shapes, include_focus),
         None => validate_data_with_focus_filter(data, shapes, include_focus),
     }
 }
@@ -2820,6 +2852,48 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
     let entailed = crate::rules::apply_rules(data, shapes)
         .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
+}
+
+/// The data graph validation reads under SHACL 1.2 Core §6.3's
+/// `subClassOfInShapesGraph` ([`ValidationOptions::subclass_of_in_shapes_graph`]):
+/// `data` with SHACL type also following the shapes graph's `rdfs:subClassOf` triples,
+/// or `None` when the option is off or the shapes graph (its whole import closure) has
+/// no such triple between two IRIs.
+///
+/// The shapes graph's triples join the edge set SHACL type is derived from and nothing
+/// else ([`ShaclData::with_class_supplement`]): the data graph's rows are unchanged, and
+/// "The rdf:type triples are always expected to be in the data graph."
+///
+/// # Errors
+/// The supplemented views exceed the default view limits.
+fn with_shapes_graph_subclasses(
+    data: &ShaclData,
+    shapes: &Shapes,
+) -> Result<Option<ShaclData>, String> {
+    if !shapes.validation_options.subclass_of_in_shapes_graph {
+        return Ok(None);
+    }
+    let graph = shapes.shapes_dataset.as_ref();
+    let Some(subclass_of) = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF) else {
+        return Ok(None);
+    };
+    let mut supplement: Vec<(String, String)> = graph
+        .quads_for_pattern(None, Some(subclass_of), None, ::purrdf::GraphMatch::Any)
+        .filter_map(
+            |quad| match (graph.term_value(quad.s), graph.term_value(quad.o)) {
+                (::purrdf::TermValue::Iri(child), ::purrdf::TermValue::Iri(parent)) => {
+                    Some((child, parent))
+                }
+                _ => None,
+            },
+        )
+        .collect();
+    if supplement.is_empty() {
+        return Ok(None);
+    }
+    supplement.sort_unstable();
+    supplement.dedup();
+    data.with_class_supplement(&supplement).map(Some)
 }
 
 /// [`validate_with_focus_filter`] over data the entailment regime has already been

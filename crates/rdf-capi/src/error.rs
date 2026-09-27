@@ -39,8 +39,8 @@ pub struct PurrdfError {
 /// accessors can hand out borrows valid until `purrdf_error_free`.
 #[derive(Debug)]
 pub(crate) struct ImportRefusal {
-    /// `unresolved-import`, `unreached-import`, `invalid-import`,
-    /// `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+    /// `unresolved-import`, `unreached-import`, `incompatible-import-versions`,
+    /// `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
     /// `invalid-shapes-graph-link`.
     pub(crate) kind: CString,
     /// The IRIs the refusal names, in the engine's order.

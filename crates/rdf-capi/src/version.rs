@@ -140,6 +140,12 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// for the reason the others do, and sits beside the base it resolves against for the
 /// reason `shapes_base_iri` sits beside the document it qualifies.
 ///
+/// The same unshipped bump carries SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
+/// `purrdf_shacl_validate_to_sarif` gained `bool subclass_of_in_shapes_graph` between
+/// `import_count` and `out_buffer` — `false` is the specification's default. Incompatible
+/// (a `0.7.0` host passes its out-pointer into the new slot); it rides this bump for the
+/// reason the others do.
+///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
 /// and never sees an enumerator's value move. The discriminants are therefore pinned

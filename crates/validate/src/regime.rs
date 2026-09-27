@@ -811,6 +811,7 @@ pub fn render_entail_error_for(regime: &str, error: &EntailError, host: RegimeHo
         | EntailError::MalformedList(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
+        | EntailError::IncompatibleImports(_)
         | EntailError::MatchBudget
         | EntailError::Unsatisfiable => head,
         // `EntailError` is `#[non_exhaustive]`, so a variant added in its own crate arrives

@@ -981,6 +981,15 @@ pub(crate) enum Command {
         /// one blocks exactly when it is named here.
         #[arg(long = "conformance-disallows", value_name = "IRI")]
         conformance_disallows: Vec<String>,
+        /// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: read the shapes graph's
+        /// `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL
+        /// type decides class membership — `sh:targetClass`, implicit class targets,
+        /// `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Off by default, as the
+        /// specification's default is the data graph alone. Only class membership
+        /// changes: the shapes graph's triples do not become data-graph triples, and
+        /// `rdf:type` triples are still read from the data graph only.
+        #[arg(long = "subclass-of-in-shapes-graph")]
+        subclass_of_in_shapes_graph: bool,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

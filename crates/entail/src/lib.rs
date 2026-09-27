@@ -428,6 +428,17 @@ pub enum EntailError {
     /// configuration, and its absence is a refusal that carries the IRI so the caller learns
     /// exactly which document to supply.
     UnresolvedImport(String),
+    /// The premise's `owl:imports` closure holds two ontologies that are different versions
+    /// of one ontology series, or of which one declares `owl:incompatibleWith` the other.
+    ///
+    /// OWL 2 Structural Specification §3.4: "The import closure of O SHOULD NOT contain
+    /// ontologies O1 and O2 such that O1 and O2 are different ontology versions from the same
+    /// ontology series, or O1 contains an ontology annotation owl:incompatibleWith with the
+    /// value equal to either the ontology IRI or the version IRI of O2." PurRDF reads that
+    /// SHOULD NOT as a MUST NOT, in every engine: the kernel's closure walk finds each pair
+    /// ([`purrdf_core::imports::ImportClosure::conflicts`]), and SHACL refuses the same
+    /// closure. Each conflict names both ontologies.
+    IncompatibleImports(Vec<purrdf_core::imports::VersionConflict>),
     /// A blank-node match visited [`MATCH_BUDGET`] candidate triples without finishing.
     ///
     /// Graph homomorphism is NP-complete in general, and a conclusion with many blank nodes
@@ -507,6 +518,23 @@ impl std::fmt::Display for EntailError {
                 "the premise owl:imports <{iri}>, which the supplied import map does not \
                  resolve and the premise does not contain"
             ),
+            Self::IncompatibleImports(conflicts) => {
+                write!(
+                    f,
+                    "the premise's owl:imports closure holds {} pair{} of ontologies OWL 2 \
+                     section 3.4 says it SHOULD NOT hold together (two versions of one \
+                     ontology series, or one declaring owl:incompatibleWith the other):",
+                    conflicts.len(),
+                    if conflicts.len() == 1 { "" } else { "s" },
+                )?;
+                for conflict in conflicts {
+                    let rendered = conflict
+                        .to_string()
+                        .replace("the importing graph", "the premise");
+                    write!(f, "\n  {rendered}")?;
+                }
+                Ok(())
+            }
             Self::MatchBudget => write!(
                 f,
                 "the blank-node match exceeded its {MATCH_BUDGET}-candidate budget"
@@ -536,7 +564,8 @@ impl std::error::Error for EntailError {
     ///
     /// The rest return `None` because they genuinely have no cause to name.
     /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — and `Unsatisfiable`, `MatchBudget` and
+    /// rendered message, not an error value — `IncompatibleImports` carries the conflicting
+    /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
     /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
     /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
     /// that the premise has no model, and the run it describes succeeded at producing
@@ -554,6 +583,7 @@ impl std::error::Error for EntailError {
             | Self::Unsatisfiable
             | Self::UnsupportedRegime(_)
             | Self::UnresolvedImport(_)
+            | Self::IncompatibleImports(_)
             | Self::MatchBudget
             | Self::ProofsNotRecorded
             | Self::Stopped => None,

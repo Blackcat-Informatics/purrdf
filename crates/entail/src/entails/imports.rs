@@ -161,8 +161,10 @@ pub fn rif_resolver(
 /// # Errors
 ///
 /// [`EntailError::UnresolvedImport`] naming the first ontology IRI, in import order, that
-/// neither `map` nor the closure resolves; [`EntailError::Build`] if the merged dataset
-/// cannot be frozen.
+/// neither `map` nor the closure resolves; [`EntailError::IncompatibleImports`] naming every
+/// pair of ontologies of the closure that are two versions of one series or of which one
+/// declares `owl:incompatibleWith` the other (OWL 2 §3.4); [`EntailError::Build`] if the
+/// merged dataset cannot be frozen.
 pub(crate) fn resolve(
     premise: &RdfDataset,
     map: &ImportMap,
@@ -170,6 +172,11 @@ pub(crate) fn resolve(
     let closure = map.closure(premise);
     if let Some(iri) = closure.unresolved().first() {
         return Err(EntailError::UnresolvedImport(iri.clone()));
+    }
+    if !closure.conflicts().is_empty() {
+        return Err(EntailError::IncompatibleImports(
+            closure.conflicts().to_vec(),
+        ));
     }
     closure
         .merge(premise)
@@ -215,6 +222,38 @@ mod tests {
             resolve(&premise, &ImportMap::new())
                 .expect("no import to resolve")
                 .is_none()
+        );
+    }
+
+    /// OWL 2 §3.4, read as a MUST NOT: a premise whose closure holds two versions of one
+    /// ontology series is refused naming both; the neighbour importing one version merges.
+    #[test]
+    fn two_versions_of_one_series_are_refused_and_one_version_merges() {
+        const V1: &str = "http://example.org/lib/1";
+        const V2: &str = "http://example.org/lib/2";
+        let version = |v: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let lib = b.intern_iri("http://example.org/lib");
+            let version_iri = b.intern_iri(OWL_VERSIONIRI);
+            let v = b.intern_iri(v);
+            b.push_quad(lib, version_iri, v, None);
+            b.freeze().expect("freeze")
+        };
+        let mut map = ImportMap::new();
+        map.insert(V1, version(V1));
+        map.insert(V2, version(V2));
+        let Err(EntailError::IncompatibleImports(conflicts)) =
+            resolve(&document("b", "http://example.org/o", &[V1, V2]), &map)
+        else {
+            panic!("two versions of one series must refuse");
+        };
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].first.as_deref(), Some(V1));
+        assert_eq!(conflicts[0].second.as_deref(), Some(V2));
+        assert!(
+            resolve(&document("b", "http://example.org/o", &[V2]), &map)
+                .expect("one version")
+                .is_some()
         );
     }
 

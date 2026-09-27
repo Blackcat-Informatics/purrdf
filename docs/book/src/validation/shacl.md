@@ -225,6 +225,16 @@ shapes graph than the one named, so there is no warn-and-continue path. A pair
 the closure never reaches is refused as unused (exit 2) rather than read and
 ignored.
 
+A closure must also hold **one version of each series**. SHACL 1.2 Core §1.3 makes
+a shapes graph ill-formed when its import closure holds two graphs that "are
+different versions of the same series (i.e., they share the same shapes graph IRI
+but have different owl:versionIRI values), or one contains an owl:incompatibleWith
+annotation whose value is equal to either the shapes graph IRI or the
+owl:versionIRI of the other", and §6.1 says the closure "SHOULD NOT" hold them.
+PurRDF reads that as a MUST NOT. Such a closure is refused with the typed import
+error, kind `incompatible-import-versions`, naming both graphs, on every host.
+Entailment refuses the same closure (OWL 2 §3.4 states the same two conditions).
+
 ### A data graph names its shapes graphs
 
 SHACL 1.2 Core §6.4 lets the DATA graph suggest shapes graphs:
@@ -392,6 +402,31 @@ A `Shapes` parsed under the IRI carries it into every validation, every
 The W3C SHACL 1.0 test `sparql/pre-binding/shapesGraph-001` shows the difference.
 With the IRI named, it reports the one approved result. With none, `$shapesGraph`
 is unbound, the query selects nothing, and the data graph conforms.
+
+## Class hierarchies kept in the shapes graph: `subClassOfInShapesGraph`
+
+SHACL type — whether a node is a SHACL instance of a class, which `sh:targetClass`,
+implicit class targets, `sh:class`, `sh:rootClass` and `shnex:instancesOf` all
+ask — is read from the data graph's `rdf:type` and `rdfs:subClassOf` triples. The
+class hierarchy often lives beside the shapes instead, so SHACL 1.2 Core §6.3 says
+"SHACL processors SHOULD offer a parameter subClassOfInShapesGraph that, if set to
+true, should alter the definition of SHACL Type so that the rdfs:subClassOf triples
+are queried from the shapes graph in addition to the data graph." PurRDF offers it
+on every host. It is off by default, which is the specification's default.
+
+With it on, the shapes graph's `rdfs:subClassOf` triples (its whole import closure's)
+join the data graph's wherever SHACL type is decided, and nowhere else. They do not
+become data-graph triples, so a path, a `sh:targetSubjectsOf rdfs:subClassOf` or a
+SPARQL pattern still reads the data graph alone. `rdf:type` triples are always read
+from the data graph.
+
+| Host | Spelling |
+|---|---|
+| CLI | `--subclass-of-in-shapes-graph` on `validate` (document and product routes) |
+| Python | `subclass_of_in_shapes_graph=True` on `validate` and `Shapes(...)` |
+| WebAssembly | a trailing `subClassOfInShapesGraph` on `shaclValidateToSarif` |
+| C | `bool subclass_of_in_shapes_graph` after the import table on `purrdf_shacl_validate_to_sarif` |
+| Rust | `ValidationOptions::with_subclass_of_in_shapes_graph` |
 
 ## Built-in declarations and the W3C vocabularies
 

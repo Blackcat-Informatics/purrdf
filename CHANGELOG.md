@@ -10,6 +10,35 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, cli, python, wasm, capi (BREAKING for C):** SHACL 1.2 Core
+  §6.3's `subClassOfInShapesGraph` ("SHACL processors SHOULD offer a parameter
+  subClassOfInShapesGraph"), on every host. When set, the shapes graph's
+  `rdfs:subClassOf` triples (its whole import closure's) are read, in addition to the
+  data graph's, wherever SHACL type decides class membership: `sh:targetClass`,
+  implicit class targets, `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Only
+  class membership changes: the shapes graph's triples do not become data-graph
+  triples, and `rdf:type` is still read from the data graph alone. Off by default,
+  the specification's default. Rust:
+  `ValidationOptions::subclass_of_in_shapes_graph` /
+  `with_subclass_of_in_shapes_graph`; CLI: `purrdf validate
+  --subclass-of-in-shapes-graph` (document and `--shapes-product` routes); Python:
+  `subclass_of_in_shapes_graph=` on `shapes.validate` and `shapes.Shapes`;
+  WebAssembly: a trailing `subClassOfInShapesGraph` on `shaclValidateToSarif`; C:
+  `bool subclass_of_in_shapes_graph` between `import_count` and `out_buffer` on
+  `purrdf_shacl_validate_to_sarif` (incompatible; rides the unshipped `0.8.0` ABI
+  bump). A binding over a mutation snapshot keeps its change path.
+
+- **core, shapes, entail, validate, cli, python, wasm, capi (BREAKING):** an
+  `owl:imports` closure that holds two versions of one series — two graphs declaring
+  one IRI with different `owl:versionIRI` values — or a graph another declares
+  `owl:incompatibleWith` is refused, naming both graphs. SHACL 1.2 Core §1.3 makes
+  such a shapes graph ill-formed and §6.1 says the closure "SHOULD NOT" hold them; OWL
+  2 §3.4 states the same two conditions for an ontology. The kernel's closure walk
+  reports each pair (`ImportClosure::conflicts`, `VersionConflict`), SHACL refuses
+  with the typed import error kind `incompatible-import-versions`
+  (`ShapesImportError::IncompatibleVersions`) on every host, and entailment with
+  `EntailError::IncompatibleImports`. Such a closure used to be merged and used.
+
 - **shapes, validate, python, wasm, capi (BREAKING for C):** the shapes-graph IRI
   that `purrdf validate --shapes-graph` names — the IRI SHACL-SPARQL's `$shapesGraph`
   is pre-bound to, with the shapes graph exposed under it (SHACL 1.0 pre-binding,

@@ -1578,7 +1578,9 @@ class _Shapes:
     # parsed shapes are the whole closure, and one not in hand raises
     # ShapesImportError. `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph
     # under (see `shapes.validate`), resolved against `base`; every validation,
-    # `prepare()` and `to_product()` carry it.
+    # `prepare()` and `to_product()` carry it. `subclass_of_in_shapes_graph` is SHACL
+    # 1.2 Core section 6.3's `subClassOfInShapesGraph` (see `shapes.validate`); every
+    # validation and `prepare()` carry it.
     def __init__(
         self,
         shapes_ttl: str,
@@ -1586,6 +1588,7 @@ class _Shapes:
         base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        subclass_of_in_shapes_graph: bool = False,
     ) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
@@ -1638,7 +1641,10 @@ class _ShapesImportError(ValueError):
     `kind` is `unresolved-import` (pass the named documents in `imports`),
     `unreached-import` (a table entry neither an import nor a data-graph link names),
     `invalid-import` (a key that is not an absolute IRI, a key named twice, or a
-    document that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a
+    document that is not Turtle), `incompatible-import-versions` (the closure holds two
+    versions of one series, or a graph another declares `owl:incompatibleWith`, SHACL
+    1.2 Core sections 1.3 and 6.1 — `iris` are the conflicting documents),
+    `unresolved-shapes-graph-link` (the data graph links a
     graph with `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand
     resolves — pass it in `imports`) or `invalid-shapes-graph-link` (a data-graph
     `sh:shapesGraph` value that is not an IRI); `iris` are the IRIs (or values) it
@@ -1806,6 +1812,14 @@ class shapes:
     # which SHACL 1.2 removed). None names no graph, and $shapesGraph is then an
     # ordinary variable. A relative IRI resolves against `shapes_base`; one with no
     # base raises ValueError (iri-relative-no-base).
+    #
+    # `subclass_of_in_shapes_graph` is SHACL 1.2 Core section 6.3's
+    # `subClassOfInShapesGraph`: True reads the shapes graph's rdfs:subClassOf triples,
+    # in addition to the data graph's, wherever SHACL type decides class membership
+    # (sh:targetClass, implicit class targets, sh:class, sh:rootClass,
+    # shnex:instancesOf). False, the default, is the specification's default: the data
+    # graph alone. Only class membership changes; rdf:type triples are always read from
+    # the data graph.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1815,6 +1829,7 @@ class shapes:
         conformance_disallows: Sequence[str] | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        subclass_of_in_shapes_graph: bool = False,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by

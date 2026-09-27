@@ -152,11 +152,25 @@ impl ShaclData {
         sparql: Arc<ShaclDatasetView>,
         shapes_graph_iri: Option<String>,
     ) -> Self {
-        let class_membership = ClassMembershipView::from_view(Arc::clone(&core));
+        Self::from_views_with_supplement(core, sparql, shapes_graph_iri, &[])
+    }
+
+    /// [`Self::from_views`], with SHACL type also following `supplement`: the
+    /// `(subclass, superclass)` IRI pairs of the shapes graph's `rdfs:subClassOf`
+    /// triples, when the caller asked for them (SHACL 1.2 Core §6.3,
+    /// `subClassOfInShapesGraph`). Both views must intern every IRI of the pairs.
+    pub(crate) fn from_views_with_supplement(
+        core: Arc<ShaclDatasetView>,
+        sparql: Arc<ShaclDatasetView>,
+        shapes_graph_iri: Option<String>,
+        supplement: &[(String, String)],
+    ) -> Self {
+        let class_membership =
+            ClassMembershipView::from_view_with_supplement(Arc::clone(&core), supplement);
         let sparql_view = if Arc::ptr_eq(&core, &sparql) {
             class_membership.clone()
         } else {
-            ClassMembershipView::from_view(Arc::clone(&sparql))
+            ClassMembershipView::from_view_with_supplement(Arc::clone(&sparql), supplement)
         };
         Self {
             core,
@@ -250,6 +264,55 @@ impl ShaclData {
     #[inline]
     pub(crate) fn sparql_view_shares_core_ids(&self) -> bool {
         Arc::ptr_eq(&self.core, &self.sparql)
+    }
+
+    /// This holder with SHACL type also following `supplement`, the `(subclass,
+    /// superclass)` IRI pairs of the shapes graph's `rdfs:subClassOf` triples (SHACL 1.2
+    /// Core §6.3, `subClassOfInShapesGraph`).
+    ///
+    /// The rows both views read are unchanged. An IRI of the pairs the Core view does
+    /// not intern — a class only the shapes graph names — is added to both views' term
+    /// tables ([`ShaclDatasetView::with_extra_terms`]), so a class target or
+    /// `sh:class` naming it resolves and derives its members through the supplement.
+    ///
+    /// # Errors
+    /// A composite or handle mapping exceeding the default view limits.
+    pub(crate) fn with_class_supplement(
+        &self,
+        supplement: &[(String, String)],
+    ) -> Result<Self, String> {
+        let mut missing: Vec<&str> = supplement
+            .iter()
+            .flat_map(|(child, parent)| [child.as_str(), parent.as_str()])
+            .filter(|iri| self.core.term_id_by_iri(iri).is_none())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        let (core, sparql) = if missing.is_empty() {
+            (Arc::clone(&self.core), Arc::clone(&self.sparql))
+        } else {
+            let mut terms = ::purrdf::RdfDatasetBuilder::new();
+            for iri in missing {
+                terms.intern_iri(iri);
+            }
+            let terms = terms
+                .freeze()
+                .map_err(|error| format!("the subClassOfInShapesGraph terms: {error}"))?;
+            let limits = ::purrdf::ir::ViewLimits::default();
+            let core = Arc::new(self.core.with_extra_terms(Arc::clone(&terms), limits)?);
+            let sparql = if self.sparql_view_shares_core_ids() {
+                Arc::clone(&core)
+            } else {
+                Arc::new(self.sparql.with_extra_terms(terms, limits)?)
+            };
+            (core, sparql)
+        };
+        Ok(Self::from_views_with_supplement(
+            core,
+            sparql,
+            self.shapes_graph_iri.clone(),
+            supplement,
+        ))
     }
 
     /// Retain the native validation carrier for repeated prepared bindings.

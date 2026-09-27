@@ -92,9 +92,17 @@ use crate::py_store::PyStore;
 ///
 /// `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under — see the
 /// [module documentation](self).
+///
+/// `subclass_of_in_shapes_graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: when
+/// `True`, the shapes graph's `rdfs:subClassOf` triples are read, in addition to the data
+/// graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit class
+/// targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). `False`, the default, is the
+/// specification's default: the data graph alone.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one keyword per validation-request option
+#[allow(clippy::fn_params_excessive_bools)] // one keyword per validation-request option
 fn validate(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -103,10 +111,13 @@ fn validate(
     conformance_disallows: Option<Vec<String>>,
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
+    subclass_of_in_shapes_graph: bool,
 ) -> PyResult<Py<PyAny>> {
+    let base_options = engine::ValidationOptions::default()
+        .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
     let options = match conformance_disallows {
-        None => engine::ValidationOptions::default(),
-        Some(iris) => engine::ValidationOptions::default().with_conformance_disallows(
+        None => base_options,
+        Some(iris) => base_options.with_conformance_disallows(
             purrdf_shapes::report::ConformanceDisallows::from_iris(&iris)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?,
         ),
@@ -664,8 +675,11 @@ impl PyShapes {
     /// `shapes_graph` is the IRI SHACL-SPARQL sees the shapes graph under (see the
     /// [module documentation](self)), resolved against `base`; every validation of these
     /// shapes, `prepare()` and `to_product()` carry it.
+    ///
+    /// `subclass_of_in_shapes_graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`
+    /// (see [`validate`]); every validation of these shapes and `prepare()` carry it.
     #[new]
-    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None))]
+    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false))]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     fn new(
         py: Python<'_>,
@@ -673,15 +687,20 @@ impl PyShapes {
         base: Option<&str>,
         imports: Vec<(String, String)>,
         shapes_graph: Option<&str>,
+        subclass_of_in_shapes_graph: bool,
     ) -> PyResult<Self> {
         let pairs = crate::py_entail::import_list(&imports);
         // Shapes-graph parsing runs detached (GIL released).
-        let inner = py
+        let mut inner = py
             .detach(|| {
                 let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
                 engine::parse_shapes_with_graph(shapes_ttl, base, None, shapes_graph, &table)
             })
             .map_err(|error| shapes_error(py, error))?;
+        inner.set_validation_options(
+            engine::ValidationOptions::default()
+                .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
+        );
         Ok(Self { inner })
     }
 
@@ -1503,7 +1522,9 @@ create_exception!(
      \n\
      Carries `.kind`: `unresolved-import` (the closure imports ontologies nothing in \
      hand resolves — pass their documents in `imports`), `unreached-import` (the table \
-     supplies documents no import names, which would be read and never used) or \
+     supplies documents no import names, which would be read and never used), \
+     `incompatible-import-versions` (the closure holds two versions of one series, or a \
+     graph another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1), \
      `invalid-import` (a key that is not an absolute IRI, a key named twice, or a \
      document that is not Turtle), `unresolved-shapes-graph-link` (the data graph links \
      a graph with `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand \

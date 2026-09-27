@@ -1431,7 +1431,9 @@ export function entailVerifyEntailment(
  *
  * `kind` is the matchable half: `"unresolved-import"` (pass the named documents),
  * `"unreached-import"` (a table entry neither an import nor a data-graph link names),
- * `"invalid-import"` (a key that is not an absolute IRI, a key named twice, or a document
+ * `"incompatible-import-versions"` (the closure holds two versions of one series, or a
+ * graph another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1 —
+ * `iris` are the conflicting documents), `"invalid-import"` (a key that is not an absolute IRI, a key named twice, or a document
  * that is not Turtle), `"unresolved-shapes-graph-link"` (the data graph links a graph with
  * `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
  * `importIris` / `importDocuments`), `"unheld-shapes-graph-link"` (a prepared product does
@@ -1443,6 +1445,7 @@ export class ShaclImportError {
   readonly kind:
     | "unresolved-import"
     | "unreached-import"
+    | "incompatible-import-versions"
     | "invalid-import"
     | "unresolved-shapes-graph-link"
     | "unheld-shapes-graph-link"
@@ -1710,6 +1713,13 @@ export interface ShaclSarifMessage {
  * … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
  * Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
  * resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
+ *
+ * `subClassOfInShapesGraph` is SHACL 1.2 Core section 6.3's parameter of that name:
+ * `true` reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data
+ * graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit
+ * class targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`,
+ * the specification's default: the data graph alone. Only class membership changes;
+ * `rdf:type` triples are always read from the data graph.
  */
 export function shaclValidateToSarif(
   shapesTtl: string,
@@ -1719,6 +1729,7 @@ export function shaclValidateToSarif(
   importIris?: readonly string[],
   importDocuments?: readonly string[],
   shapesGraph?: string,
+  subClassOfInShapesGraph?: boolean,
 ): string;
 
 /**

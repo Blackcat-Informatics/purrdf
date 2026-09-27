@@ -615,7 +615,7 @@ purrdf consistency ontology.purrpck
 purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
                  [--shapes-base <IRI>] [--import <IRI>=<FILE>]... [--box-role-vocab <NS>]
                  | --shapes-product <FILE> [--expect-identity <HEX>] [--rebuild])
-                [--conformance-disallows <IRI>]...
+                [--conformance-disallows <IRI>]... [--subclass-of-in-shapes-graph]
                 [--changes <FILE>] [--changes-removed <FILE>] [--changes-from <F>]
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
@@ -665,6 +665,17 @@ license a `conforms`.
 results make the data non-conforming. Omitted, the set is SHACL's default:
 `sh:Violation`, `sh:Warning` and `sh:Info` (`sh:Debug` and `sh:Trace` never
 block). A non-default set is echoed in the report as `sh:conformanceDisallows`.
+
+**`--subclass-of-in-shapes-graph`** is SHACL 1.2 Core §6.3's
+`subClassOfInShapesGraph`: the shapes graph's `rdfs:subClassOf` triples are read,
+in addition to the data graph's, wherever SHACL type decides class membership —
+`sh:targetClass`, implicit class targets, `sh:class`, `sh:rootClass` and
+`shnex:instancesOf` — so a class hierarchy kept beside the shapes reaches
+instance data that states only `rdf:type`. Off by default, as the specification's
+default is the data graph alone. Only class membership changes: the shapes
+graph's triples do not become data-graph triples, and `rdf:type` is still read
+from the data graph only. It applies on the `--shapes-product` route too.
+
 `--shapes-product` restores a prepared product written by `purrdf shacl pack`
 instead of parsing a shapes document, and `--changes` / `--changes-removed`
 validate a change set incrementally; `purrdf validate --help` describes both.
@@ -709,7 +720,11 @@ unresolved
 import is refused (exit `1`), naming each IRI, the `--import` pair that
 resolves it, and — for a document that imports its own published IRI — the
 `--shapes-base` that reads it under that IRI; a pair the closure never reaches
-is a usage error (exit `2`).
+is a usage error (exit `2`). A closure that holds two versions of one series
+(two graphs declaring one IRI with different `owl:versionIRI` values), or a graph
+another declares `owl:incompatibleWith`, is ill-formed (SHACL 1.2 Core §1.3 and
+§6.1, OWL 2 §3.4) and refused (exit `1`, `incompatible-import-versions`), naming
+both graphs.
 
 **`sh:shapesGraph` in the data graph.** SHACL 1.2 Core §6.4 lets a data graph
 name the shapes graphs that validate it: `<G> a sh:DataGraph ; sh:shapesGraph

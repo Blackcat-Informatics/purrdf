@@ -153,7 +153,10 @@ executes that example against the generated shared library and committed header.
   `PurrdfSrlCheckLevel` discriminant, and gives `purrdf_shacl_validate_to_sarif`,
   `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
   `purrdf_shapes_product_encode` a nullable `shapes_graph_iri` immediately after
-  `shapes_base_iri` (see [The shapes-graph IRI](#the-shapes-graph-iri)).
+  `shapes_base_iri` (see [The shapes-graph IRI](#the-shapes-graph-iri)), and
+  `purrdf_shacl_validate_to_sarif` a `bool subclass_of_in_shapes_graph` between
+  `import_count` and `out_buffer` (see
+  [`subClassOfInShapesGraph`](#subclassofinshapesgraph)).
   It bumps in any case because `0.7.0` is the ABI of the released
   `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
@@ -238,7 +241,9 @@ and a table entry no import names — fails the call with
 `PURRDF_STATUS_SHAPES_IMPORT_ERROR`: the same refusal the Rust API, the `purrdf` command
 line, Python and WebAssembly raise for the same shapes graph, rather than a verdict about
 a smaller shapes graph than the one named. `purrdf_shapes_import_error_kind(err)` reads
-its kind (`unresolved-import`, `unreached-import` or `invalid-import`), and
+its kind (`unresolved-import`, `unreached-import`, `incompatible-import-versions` — the
+closure holds two versions of one series, or a graph another declares
+`owl:incompatibleWith` — or `invalid-import`), and
 `purrdf_shapes_import_error_iri_count` / `purrdf_shapes_import_error_iri` the IRIs it
 names. A data graph's `sh:shapesGraph` links (SHACL 1.2 Core section 6.4) are resolved
 through the same `import_iris` / `import_documents` table and unioned into the shapes
@@ -259,6 +264,16 @@ pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. That is
 is then an ordinary variable. A relative IRI resolves against `shapes_base_iri`; one
 with no base is a `ParseError` (`iri-relative-no-base`). A product records the IRI
 and its identity binds it, so a restore exposes the shapes graph under it.
+
+## `subClassOfInShapesGraph`
+
+`purrdf_shacl_validate_to_sarif` takes `bool subclass_of_in_shapes_graph` after the
+import table: SHACL 1.2 Core §6.3's parameter of that name. `true` reads the shapes
+graph's `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL type
+decides class membership (`sh:targetClass`, implicit class targets, `sh:class`,
+`sh:rootClass`, `shnex:instancesOf`). `false` is the specification's default, the data
+graph alone. Only class membership changes: the shapes graph's triples do not become
+data-graph triples, and `rdf:type` triples are always read from the data graph.
 
 ## Base IRIs across the surface
 

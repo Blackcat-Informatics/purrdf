@@ -65,6 +65,32 @@ test("wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformance
   assert.throws(() => shaclValidateToSarif(warning, DATA, undefined, ["Violation"]));
 });
 
+// SHACL 1.2 Core section 6.3's subClassOfInShapesGraph: a class target reached only through
+// the shapes graph's rdfs:subClassOf fires with the parameter and not without it; the
+// control, a direct instance of the target class, fires both ways.
+test("wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph", () => {
+  const shapes = `@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <http://example.org/> .
+ex:Student rdfs:subClassOf ex:Person .
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+`;
+  const data = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .
+<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
+`;
+  const run = (on) =>
+    shaclValidateToSarif(shapes, data, undefined, undefined, undefined, undefined, undefined, on);
+  for (const off of [run(undefined), run(false)]) {
+    assert.ok(off.includes("http://example.org/bob"), off);
+    assert.ok(!off.includes("http://example.org/alice"), off);
+  }
+  const on = run(true);
+  assert.ok(on.includes("http://example.org/bob"), on);
+  assert.ok(on.includes("http://example.org/alice"), on);
+});
+
 // The W3C SHACL 1.2 vocabulary's declaration of the built-in sh:SPARQLExprExpression,
 // verbatim: a sh:NamedParameterExpressionFunction with the two sh:Parameters -prefixes
 // and -sparqlExpr and no sh:bodyExpression.

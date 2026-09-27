@@ -231,6 +231,12 @@ ownership, and all limits. Complete examples are in
   resolves against `shapesBase`, and one with no base throws.
   `shaclValidateChangesToSarif`, `shaclPackProduct` (which records it in the
   product) and `shaclLintShapes` take the same trailing `shapesGraph?`.
+  `shaclValidateToSarif` takes one more, `subClassOfInShapesGraph?`: SHACL 1.2
+  Core §6.3's parameter of that name. `true` reads the shapes graph's
+  `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL type
+  decides class membership (`sh:targetClass`, implicit class targets, `sh:class`,
+  `sh:rootClass`, `shnex:instancesOf`); omitted or `false`, the specification's
+  default, the data graph alone.
 - `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
   — validates a CHANGE to `dataNt` rather than the whole graph: hand it the rows
   joining and the rows leaving, and the engine re-validates only the focus nodes

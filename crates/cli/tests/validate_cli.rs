@@ -2671,6 +2671,77 @@ fn cli_validate_conformance_disallows() {
     assert!(stderr(&refused).contains("--conformance-disallows"));
 }
 
+/// `--subclass-of-in-shapes-graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`, on
+/// the parse route and the product route alike: a class target the data reaches only through
+/// the shapes graph's `rdfs:subClassOf` fires with the flag and not without it, and the
+/// control — a direct instance of the target class — fires both ways.
+#[test]
+fn cli_validate_subclass_of_in_shapes_graph() {
+    const SHAPES: &str = concat!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+        "@prefix ex: <http://example.org/> .\n",
+        "ex:Student rdfs:subClassOf ex:Person .\n",
+        "ex:PersonShape a sh:NodeShape ;\n",
+        "  sh:targetClass ex:Person ;\n",
+        "  sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n",
+    );
+    const DATA_TTL: &str = concat!(
+        "@prefix ex: <http://example.org/> .\n",
+        "ex:alice a ex:Student .\n",
+        "ex:bob a ex:Person .\n",
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "subclass.ttl", SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let alice = "<http://example.org/alice>";
+
+    let off = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&off), 0, "{}", stderr(&off));
+    assert!(
+        stderr(&off).contains("shacl results 1\n"),
+        "{}",
+        stderr(&off)
+    );
+    assert!(!stdout(&off).contains(alice), "{}", stdout(&off));
+
+    let on = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--subclass-of-in-shapes-graph",
+        &data,
+    ]);
+    assert_eq!(code(&on), 0, "{}", stderr(&on));
+    assert!(stderr(&on).contains("shacl results 2\n"), "{}", stderr(&on));
+    assert!(stdout(&on).contains(alice), "{}", stdout(&on));
+
+    let product = dir.path().join("subclass.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--subclass-of-in-shapes-graph",
+        &data,
+    ]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(
+        stderr(&restored).contains("shacl results 2\n"),
+        "{}",
+        stderr(&restored)
+    );
+    let restored_off = run(&["validate", "--shapes-product", product_path, &data]);
+    assert_eq!(code(&restored_off), 0, "{}", stderr(&restored_off));
+    assert!(
+        stderr(&restored_off).contains("shacl results 1\n"),
+        "{}",
+        stderr(&restored_off)
+    );
+}
+
 // ── One shapes graph, three syntaxes ─────────────────────────────────────────────
 
 /// A SHACL-SPARQL constraint whose `sh:select` uses the `ex:` prefix the shapes DOCUMENT

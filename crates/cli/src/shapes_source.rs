@@ -310,9 +310,9 @@ pub(crate) fn shapes_error(
                 it = if iris.len() == 1 { "it" } else { "them" },
             ))
         }
-        error @ (ShapesImportError::UnheldLink { .. } | ShapesImportError::InvalidLink { .. }) => {
-            CliError::Runtime(error.to_string())
-        }
+        error @ (ShapesImportError::UnheldLink { .. }
+        | ShapesImportError::InvalidLink { .. }
+        | ShapesImportError::IncompatibleVersions { .. }) => CliError::Runtime(error.to_string()),
     }
 }
 

@@ -241,6 +241,9 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`validation_options`] turns it into the engine's
     /// [`ValidationOptions`](purrdf_shapes::engine::ValidationOptions).
     pub(crate) conformance_disallows: &'a [String],
+    /// `--subclass-of-in-shapes-graph`: SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`
+    /// ([`ValidationOptions::subclass_of_in_shapes_graph`](purrdf_shapes::engine::ValidationOptions::subclass_of_in_shapes_graph)).
+    pub(crate) subclass_of_in_shapes_graph: bool,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the DATA graph resolve against.
@@ -349,8 +352,9 @@ impl ShapesSource {
     }
 }
 
-/// The validation-request options `--conformance-disallows` names: SHACL's default
-/// set when the flag is absent, exactly the named IRIs otherwise.
+/// The validation-request options: `--conformance-disallows` — SHACL's default set
+/// when the flag is absent, exactly the named IRIs otherwise — and
+/// `--subclass-of-in-shapes-graph`.
 ///
 /// # Errors
 ///
@@ -358,13 +362,15 @@ impl ShapesSource {
 fn validation_options(
     options: &ValidateOptions<'_>,
 ) -> Result<engine::ValidationOptions, CliError> {
+    let validation = engine::ValidationOptions::default()
+        .with_subclass_of_in_shapes_graph(options.subclass_of_in_shapes_graph);
     if options.conformance_disallows.is_empty() {
-        return Ok(engine::ValidationOptions::default());
+        return Ok(validation);
     }
     let set =
         purrdf::shapes::report::ConformanceDisallows::from_iris(options.conformance_disallows)
             .map_err(|message| CliError::Usage(format!("--conformance-disallows: {message}")))?;
-    Ok(engine::ValidationOptions::default().with_conformance_disallows(set))
+    Ok(validation.with_conformance_disallows(set))
 }
 
 /// Run the `validate` subcommand.

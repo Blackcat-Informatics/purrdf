@@ -146,6 +146,21 @@
  * entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
  * the reason the other added symbols ride it.
  *
+ * The same unshipped bump carries the shapes-graph IRI. `purrdf_shacl_validate_to_sarif`,
+ * `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+ * `purrdf_shapes_product_encode` each gained a nullable `shapes_graph_iri` immediately
+ * after `shapes_base_iri` — the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, which
+ * `purrdf validate --shapes-graph` names and no C host could until now. Incompatible (a
+ * `0.7.0` host passes its data or import table into the new slot); it rides this bump
+ * for the reason the others do, and sits beside the base it resolves against for the
+ * reason `shapes_base_iri` sits beside the document it qualifies.
+ *
+ * The same unshipped bump carries SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
+ * `purrdf_shacl_validate_to_sarif` gained `bool subclass_of_in_shapes_graph` between
+ * `import_count` and `out_buffer` — `false` is the specification's default. Incompatible
+ * (a `0.7.0` host passes its out-pointer into the new slot); it rides this bump for the
+ * reason the others do.
+ *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
  * and never sees an enumerator's value move. The discriminants are therefore pinned
@@ -227,7 +242,7 @@ enum PurrdfStatus
      * caller passed cannot be used — the one refusal every shapes-graph entry point
      * raises, on every PurRDF host alike. The error carries the refusal's KIND
      * (`purrdf_shapes_import_error_kind`: `unresolved-import`, `unreached-import`,
-     * `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+     * `incompatible-import-versions`, `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
      * `invalid-shapes-graph-link` — the last three for a data graph's `sh:shapesGraph`
      * links, SHACL 1.2 Core section 6.4) and the IRIs it names
      * (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
@@ -2724,6 +2739,13 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * relative IRI resolves against `shapes_base_iri`; one with no base is a `ParseError`
  * (`iri-relative-no-base`).
  *
+ * `subclass_of_in_shapes_graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
+ * `true` reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data
+ * graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit class
+ * targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`); `false`, the specification's
+ * default, reads the data graph alone. Only class membership changes: `rdf:type` triples
+ * are always read from the data graph.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
  * `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C
@@ -2741,6 +2763,7 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        const char *const *import_iris,
                                        const char *const *import_documents,
                                        size_t import_count,
+                                       bool subclass_of_in_shapes_graph,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
 
@@ -3307,6 +3330,8 @@ const char *purrdf_shapes_product_error_dimension(const PurrdfError *err);
  * must not free it. One of `unresolved-import` (the closure imports ontologies nothing
  * in hand resolves — pass their documents in the import table), `unreached-import` (the
  * table supplies documents neither an import nor a data-graph link names),
+ * `incompatible-import-versions` (the closure holds two versions of one series, or a graph
+ * another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1),
  * `invalid-import` (a key that is not an absolute IRI, a key named twice, or a document
  * that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a graph with
  * `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in

@@ -78,7 +78,9 @@ use purrdf_validate::{ShapesError, ShapesProductRefusal};
 /// named. PurRDF fetches nothing.
 ///
 /// `kind` is the matchable half — `unresolved-import`, `unreached-import` (a table entry
-/// neither an import nor a data-graph link names), `invalid-import` (a key that is not an
+/// neither an import nor a data-graph link names), `incompatible-import-versions` (the
+/// closure holds two versions of one series, or a graph another declares
+/// `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1), `invalid-import` (a key that is not an
 /// absolute IRI, a key named twice, or a document that is not Turtle),
 /// `unresolved-shapes-graph-link` (the data graph links a graph with `sh:shapesGraph`,
 /// SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in the import
@@ -100,8 +102,8 @@ pub struct ShaclImportError {
 
 #[wasm_bindgen]
 impl ShaclImportError {
-    /// `unresolved-import`, `unreached-import`, `invalid-import`,
-    /// `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+    /// `unresolved-import`, `unreached-import`, `incompatible-import-versions`,
+    /// `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
     /// `invalid-shapes-graph-link`.
     #[wasm_bindgen(getter)]
     #[must_use]
@@ -170,6 +172,10 @@ fn shapes_import_pairs<'a>(
 ///
 /// `conformance_disallows` is the request's conformance-disallow set as severity
 /// IRIs; `None` is SHACL's default set, and an empty list or a non-IRI is an error.
+///
+/// The native tests' spelling of [`validate_to_sarif_with_options_impl`] with every
+/// validation option at its default.
+#[cfg(test)]
 pub(crate) fn validate_to_sarif_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -179,10 +185,43 @@ pub(crate) fn validate_to_sarif_impl(
     import_documents: &[String],
     shapes_graph: Option<&str>,
 ) -> Result<String, ShapesError> {
+    validate_to_sarif_with_options_impl(
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        conformance_disallows,
+        import_iris,
+        import_documents,
+        shapes_graph,
+        false,
+    )
+}
+
+/// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0, with
+/// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph` set as `subclass_of_in_shapes_graph`.
+///
+/// Returns the plain Rust [`ShapesError`] (NOT a `JsValue`) so it is unit-testable on
+/// the native build; the `#[wasm_bindgen]` wrapper maps it through [`shapes_rejection`].
+/// `conformance_disallows` is the request's conformance-disallow set as severity IRIs;
+/// `None` is SHACL's default set, and an empty list or a non-IRI is an error.
+#[allow(clippy::too_many_arguments)] // one argument per request input, as the JS signature
+#[allow(clippy::fn_params_excessive_bools)] // one argument per request input
+pub(crate) fn validate_to_sarif_with_options_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    conformance_disallows: Option<&[String]>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+    subclass_of_in_shapes_graph: bool,
+) -> Result<String, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let base_options = purrdf_validate::ValidationOptions::default()
+        .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
     let validation = match conformance_disallows {
-        None => purrdf_validate::ValidationOptions::default(),
-        Some(iris) => purrdf_validate::ValidationOptions::default()
+        None => base_options,
+        Some(iris) => base_options
             .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
     };
     purrdf_validate::validate_to_sarif_string_with_shapes_graph(
@@ -227,8 +266,15 @@ pub(crate) fn validate_to_sarif_impl(
 /// … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
 /// Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
 /// resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
+///
+/// `subClassOfInShapesGraph` is SHACL 1.2 Core §6.3's parameter of that name: `true`
+/// reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data graph's,
+/// wherever SHACL type decides class membership (`sh:targetClass`, implicit class targets,
+/// `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`, the
+/// specification's default: the data graph alone.
 #[wasm_bindgen(js_name = shaclValidateToSarif)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
 pub fn shacl_validate_to_sarif(
     shapes_ttl: &str,
     data_nt: &str,
@@ -237,8 +283,9 @@ pub fn shacl_validate_to_sarif(
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
     shapes_graph: Option<String>,
+    subclass_of_in_shapes_graph: Option<bool>,
 ) -> Result<String, JsValue> {
-    validate_to_sarif_impl(
+    validate_to_sarif_with_options_impl(
         shapes_ttl,
         shapes_base.as_deref(),
         data_nt,
@@ -246,6 +293,7 @@ pub fn shacl_validate_to_sarif(
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
         shapes_graph.as_deref(),
+        subclass_of_in_shapes_graph.unwrap_or(false),
     )
     .map_err(shapes_rejection)
 }
@@ -1338,6 +1386,33 @@ mod tests {
     /// The conformance-disallow set reaches the validation: a Warning-only
     /// graph does not conform under the default set, conforms under
     /// {sh:Violation}, and an empty set or a non-IRI is an error.
+    #[test]
+    fn wasm_validate_subclass_of_in_shapes_graph() {
+        // A class target reached only through the shapes graph's rdfs:subClassOf fires
+        // with the parameter and not without it; the control, a direct instance of the
+        // target class, fires both ways.
+        let shapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:Student rdfs:subClassOf ex:Person .\n\
+            ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+        let data = "<http://example.org/alice> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .\n\
+            <http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+        let run = |on: bool| {
+            validate_to_sarif_with_options_impl(shapes, None, data, None, &[], &[], None, on)
+                .expect("validates")
+        };
+        let off = run(false);
+        assert!(off.contains("http://example.org/bob"), "{off}");
+        assert!(!off.contains("http://example.org/alice"), "{off}");
+        let on = run(true);
+        assert!(on.contains("http://example.org/bob"), "{on}");
+        assert!(on.contains("http://example.org/alice"), "{on}");
+    }
+
     #[test]
     fn wasm_validate_conformance_disallows() {
         let shapes = SHAPES.replace(

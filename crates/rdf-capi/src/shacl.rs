@@ -103,7 +103,8 @@ use crate::{cstr_to_str, opt_cstr_to_str};
 /// adds the C-ABI byte framing.
 ///
 /// `conformance_disallows` is the request's conformance-disallow set as severity
-/// IRIs; empty is SHACL's default set.
+/// IRIs; empty is SHACL's default set. `subclass_of_in_shapes_graph` is SHACL 1.2 Core
+/// §6.3's `subClassOfInShapesGraph`.
 fn validate_to_sarif_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -111,11 +112,14 @@ fn validate_to_sarif_bytes(
     data_nt: &str,
     conformance_disallows: &[&str],
     imports: &[(&str, &str)],
+    subclass_of_in_shapes_graph: bool,
 ) -> Result<Vec<u8>, ShapesError> {
+    let base_options =
+        ValidationOptions::default().with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
     let validation = if conformance_disallows.is_empty() {
-        ValidationOptions::default()
+        base_options
     } else {
-        ValidationOptions::default()
+        base_options
             .with_conformance_disallows(ConformanceDisallows::from_iris(conformance_disallows)?)
     };
     let options = SarifOptions {
@@ -215,6 +219,13 @@ unsafe fn cstr_array<'a>(
 /// relative IRI resolves against `shapes_base_iri`; one with no base is a `ParseError`
 /// (`iri-relative-no-base`).
 ///
+/// `subclass_of_in_shapes_graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
+/// `true` reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data
+/// graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit class
+/// targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`); `false`, the specification's
+/// default, reads the data graph alone. Only class membership changes: `rdf:type` triples
+/// are always read from the data graph.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C
@@ -233,6 +244,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
+    subclass_of_in_shapes_graph: bool,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -259,8 +271,16 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 "purrdf_shacl_validate_to_sarif",
             )?;
             let graph = opt_cstr_to_str(shapes_graph_iri)?;
-            let bytes = validate_to_sarif_bytes(shapes, base, graph, data, &disallows, &imports)
-                .map_err(PurrdfError::shapes)?;
+            let bytes = validate_to_sarif_bytes(
+                shapes,
+                base,
+                graph,
+                data,
+                &disallows,
+                &imports,
+                subclass_of_in_shapes_graph,
+            )
+            .map_err(PurrdfError::shapes)?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
         })
@@ -1480,6 +1500,8 @@ pub unsafe extern "C" fn purrdf_shapes_product_error_dimension(
 /// must not free it. One of `unresolved-import` (the closure imports ontologies nothing
 /// in hand resolves — pass their documents in the import table), `unreached-import` (the
 /// table supplies documents neither an import nor a data-graph link names),
+/// `incompatible-import-versions` (the closure holds two versions of one series, or a graph
+/// another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1),
 /// `invalid-import` (a key that is not an absolute IRI, a key named twice, or a document
 /// that is not Turtle), `unresolved-shapes-graph-link` (the data graph links a graph with
 /// `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
@@ -1570,8 +1592,8 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_bytes() {
-        let bytes =
-            validate_to_sarif_bytes(SHAPES, None, None, DATA, &[], &[]).expect("sarif produced");
+        let bytes = validate_to_sarif_bytes(SHAPES, None, None, DATA, &[], &[], false)
+            .expect("sarif produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains("\"version\": \"2.1.0\""));
         assert!(text.contains("\"level\": \"error\""));
@@ -1579,7 +1601,9 @@ mod tests {
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_bytes("@@@ not turtle", None, None, DATA, &[], &[]).is_err());
+        assert!(
+            validate_to_sarif_bytes("@@@ not turtle", None, None, DATA, &[], &[], false).is_err()
+        );
     }
 
     /// Across the C boundary, a shapes graph carrying the W3C
@@ -1604,8 +1628,9 @@ ex:StatusShape a sh:NodeShape ;
 "
         );
         let run = |levels: &[&str]| -> serde_json::Value {
-            let sarif = validate_to_sarif_bytes(&shapes, None, None, TOOLS_DATA, levels, &[])
-                .expect("the declaration-bearing shapes graph loads and validates");
+            let sarif =
+                validate_to_sarif_bytes(&shapes, None, None, TOOLS_DATA, levels, &[], false)
+                    .expect("the declaration-bearing shapes graph loads and validates");
             serde_json::from_slice(&sarif).expect("json")
         };
         let default = run(&[]);
@@ -1626,6 +1651,76 @@ ex:StatusShape a sh:NodeShape ;
     /// default set (count 0, NULL array) and conforms under `sh:Violation` alone; a
     /// non-IRI level is a `ParseError`, and a NULL array with a non-zero count a
     /// `NullPointer`, each refused before anything is validated.
+    #[test]
+    fn capi_validate_subclass_of_in_shapes_graph() {
+        use std::ffi::CString;
+
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+
+        // A class target reached only through the shapes graph's rdfs:subClassOf fires
+        // with the parameter and not without it; the control, a direct instance of the
+        // target class, fires both ways.
+        let shapes = CString::new(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             @prefix ex: <http://example.org/> .\n\
+             ex:Student rdfs:subClassOf ex:Person .\n\
+             ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+               sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n",
+        )
+        .expect("no NUL");
+        let data = CString::new(
+            "<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Student> .\n\
+             <http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Person> .\n",
+        )
+        .expect("no NUL");
+        let run = |on: bool| -> String {
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString or a writable local; the disallow
+            // set and the import table are empty (NULL arrays, zero counts).
+            let status = unsafe {
+                purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    on,
+                    &raw mut buffer,
+                    &raw mut error,
+                )
+            };
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            // SAFETY: a successful call wrote a live buffer.
+            unsafe {
+                let mut ptr: *const u8 = std::ptr::null();
+                let mut len = 0usize;
+                assert_eq!(
+                    purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                    PurrdfStatus::Ok as i32
+                );
+                let text = std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
+                    .expect("utf8")
+                    .to_owned();
+                purrdf_buffer_free(buffer);
+                text
+            }
+        };
+        let off = run(false);
+        assert!(off.contains("http://example.org/bob"), "{off}");
+        assert!(!off.contains("http://example.org/alice"), "{off}");
+        let on = run(true);
+        assert!(on.contains("http://example.org/bob"), "{on}");
+        assert!(on.contains("http://example.org/alice"), "{on}");
+    }
+
     #[test]
     fn capi_validate_conformance_disallows() {
         use std::ffi::CString;
@@ -1663,6 +1758,7 @@ ex:StatusShape a sh:NodeShape ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    false,
                     &raw mut buffer,
                     &raw mut error,
                 )
@@ -1716,6 +1812,7 @@ ex:StatusShape a sh:NodeShape ;
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
+                false,
                 &raw mut buffer,
                 &raw mut error,
             )
@@ -1937,7 +2034,7 @@ ex:StatusShape a sh:NodeShape ;
         // Admitting the product and parsing the shapes graph are two routes to ONE
         // verdict, which is the property a cache is only allowed to have.
         let via_product = admit_product_bytes(&product, DATA).expect("validated via product");
-        let via_document = validate_to_sarif_bytes(SHAPES, None, None, DATA, &[], &[])
+        let via_document = validate_to_sarif_bytes(SHAPES, None, None, DATA, &[], &[], false)
             .expect("validated directly");
         assert_eq!(via_product, via_document);
 
@@ -2663,6 +2760,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    false,
                     &raw mut buffer,
                     &raw mut error,
                 );
@@ -2767,6 +2865,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
+                false,
                 &raw mut buffer,
                 &raw mut error,
             );
@@ -2785,6 +2884,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             data.to_str().expect("utf-8"),
             &[],
             &[],
+            false,
         )
         .expect("resolves against the base");
         assert_eq!(results(std::str::from_utf8(&resolved).expect("utf-8")), 1);
@@ -3307,6 +3407,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     import_iris,
                     import_documents,
                     import_count,
+                    false,
                     &raw mut buffer,
                     &raw mut error,
                 );
@@ -3527,6 +3628,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    false,
                     &raw mut buffer,
                     &raw mut error,
                 )
@@ -3618,6 +3720,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     import_iris,
                     import_documents,
                     import_count,
+                    false,
                     &raw mut buffer,
                     &raw mut error,
                 )

@@ -201,6 +201,10 @@ pub struct ShaclDatasetView {
     source_can_duplicate: bool,
     materialized: OnceLock<Arc<RdfDataset>>,
     materializations: AtomicUsize,
+    /// The mutation snapshot this view reads THROUGH a composite that added terms to
+    /// it ([`Self::with_extra_terms`]), as source 0 of that composite; `None` for
+    /// every other view.
+    wrapped_delta: Option<Arc<DeltaDatasetView>>,
 }
 
 impl ShaclDatasetView {
@@ -280,7 +284,66 @@ impl ShaclDatasetView {
             source_can_duplicate,
             materialized: OnceLock::new(),
             materializations: AtomicUsize::new(0),
+            wrapped_delta: None,
         }
+    }
+
+    /// This view with the terms of `terms` added to its term table and nothing else:
+    /// the same rows, read the same way (graph union and statement projection as this
+    /// view reads them), the same blank-node identities, and every IRI `terms` interns
+    /// now resolvable through [`ShaclRead::term_id_by_iri`].
+    ///
+    /// `terms` must hold no row; it is how a term the data graph never mentions — a
+    /// class only the shapes graph names, read under `subClassOfInShapesGraph` — gets
+    /// an id in this validation's id space. A view over a mutation snapshot stays
+    /// usable by the change path: [`Self::delta_source`] and [`Self::local_delta_id`]
+    /// answer for the snapshot it wraps.
+    ///
+    /// # Errors
+    /// Refuses a composite or handle mapping exceeding `limits`.
+    pub(crate) fn with_extra_terms(
+        &self,
+        terms: Arc<RdfDataset>,
+        limits: ViewLimits,
+    ) -> Result<Self, String> {
+        debug_assert_eq!(terms.quad_count(), 0, "a term supplement carries no rows");
+        let extra = ::purrdf::ir::CompositeSource::new(terms);
+        let (composite, wrapped_delta) = match &self.source {
+            Source::Native(native) => (
+                CompositeDatasetView::from_shared_sources(
+                    vec![
+                        ::purrdf::ir::CompositeSource::new(Arc::clone(native)),
+                        extra,
+                    ],
+                    limits,
+                ),
+                None,
+            ),
+            Source::Delta(dense) => (
+                CompositeDatasetView::from_shared_sources(
+                    vec![
+                        ::purrdf::ir::CompositeSource::from_delta(Arc::clone(&dense.source)),
+                        extra,
+                    ],
+                    limits,
+                ),
+                Some(Arc::clone(&dense.source)),
+            ),
+            Source::Composite(dense) => (
+                dense.source.extend(extra, limits),
+                self.wrapped_delta.clone(),
+            ),
+        };
+        let composite = composite.map_err(|error| error.to_string())?;
+        let dense = Dense::new(
+            Arc::new(composite),
+            |source| source.term_ids().collect(),
+            limits,
+        )?;
+        let mut view = Self::new(Source::Composite(dense), self.projected);
+        view.statements_projected = self.statements_projected;
+        view.wrapped_delta = wrapped_delta;
+        Ok(view)
     }
 
     /// Whether the statement projection over `source` can yield one row twice.
@@ -347,7 +410,8 @@ impl ShaclDatasetView {
     pub(crate) fn delta_source(&self) -> Option<&Arc<DeltaDatasetView>> {
         match &self.source {
             Source::Delta(dense) => Some(&dense.source),
-            Source::Native(_) | Source::Composite(_) => None,
+            Source::Composite(_) => self.wrapped_delta.as_ref(),
+            Source::Native(_) => None,
         }
     }
 
@@ -356,6 +420,12 @@ impl ShaclDatasetView {
     pub(crate) fn local_delta_id(&self, id: ::purrdf::ir::DeltaViewId) -> Option<TermId> {
         match &self.source {
             Source::Delta(dense) => dense.local_ids.get(&id).copied(),
+            // The wrapped snapshot is source 0 of the composite (see
+            // `Self::with_extra_terms`).
+            Source::Composite(dense) if self.wrapped_delta.is_some() => dense
+                .local_ids
+                .get(&dense.source.delta_source_id(0, id))
+                .copied(),
             Source::Native(_) | Source::Composite(_) => None,
         }
     }

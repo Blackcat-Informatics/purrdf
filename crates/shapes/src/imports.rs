@@ -126,6 +126,7 @@ use ::purrdf::RdfDataset;
 use purrdf_core::dataset_view::{DatasetView, GraphMatch};
 use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 use purrdf_core::imports::{ImportMap, declared_import_targets};
+pub use purrdf_core::imports::{VersionConflict, VersionConflictKind};
 use purrdf_core::ir::{TermRef, TermValue};
 
 /// `sh:shapesGraph`: on a data-graph anchor, a link to a graph the shapes graph includes.
@@ -393,6 +394,16 @@ pub enum ShapesImportError {
         /// Each offending value, rendered as an N-Triples-style term.
         values: Vec<String>,
     },
+    /// The closure holds two graphs that are different versions of one series, or of which
+    /// one declares `owl:incompatibleWith` the other. SHACL 1.2 Core §1.3 makes such a
+    /// shapes graph ill-formed, and its §6.1 says the import closure "SHOULD NOT contain two
+    /// graphs that are different versions of the same series, or where one declares
+    /// owl:incompatibleWith the other". Every conflicting pair, each naming both graphs
+    /// (see [`VersionConflict`]).
+    IncompatibleVersions {
+        /// The conflicting pairs, in closure walk order.
+        conflicts: Vec<VersionConflict>,
+    },
     /// A table entry that cannot be used: a key that is not an absolute IRI, a key named
     /// twice, or a document that does not parse.
     InvalidEntry {
@@ -405,14 +416,16 @@ pub enum ShapesImportError {
 
 impl ShapesImportError {
     /// The stable kebab-case label of the variant: `unresolved-import`,
-    /// `unreached-import`, `invalid-import`, `unresolved-shapes-graph-link`,
-    /// `unheld-shapes-graph-link` or `invalid-shapes-graph-link`. It is what the Python,
-    /// JavaScript and C hosts carry in their own typed slot.
+    /// `unreached-import`, `incompatible-import-versions`, `invalid-import`,
+    /// `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+    /// `invalid-shapes-graph-link`. It is what the Python, JavaScript and C hosts carry in
+    /// their own typed slot.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Unresolved { .. } => "unresolved-import",
             Self::Unreached { .. } => "unreached-import",
+            Self::IncompatibleVersions { .. } => "incompatible-import-versions",
             Self::InvalidEntry { .. } => "invalid-import",
             Self::UnresolvedLink { .. } => "unresolved-shapes-graph-link",
             Self::UnheldLink { .. } => "unheld-shapes-graph-link",
@@ -420,10 +433,23 @@ impl ShapesImportError {
         }
     }
 
-    /// The IRIs the refusal names — for [`Self::InvalidLink`], the offending values.
+    /// The IRIs the refusal names — for [`Self::InvalidLink`], the offending values; for
+    /// [`Self::IncompatibleVersions`], each conflicting supplied document once, in the order
+    /// the conflicts first name it (the shapes graph itself has no table IRI).
     #[must_use]
     pub fn iris(&self) -> Vec<&str> {
         match self {
+            Self::IncompatibleVersions { conflicts } => {
+                let mut named: Vec<&str> = Vec::new();
+                for conflict in conflicts {
+                    for graph in [&conflict.first, &conflict.second].into_iter().flatten() {
+                        if !named.contains(&graph.as_str()) {
+                            named.push(graph.as_str());
+                        }
+                    }
+                }
+                named
+            }
             Self::Unresolved { iris }
             | Self::Unreached { iris }
             | Self::UnresolvedLink { iris }
@@ -466,6 +492,25 @@ impl fmt::Display for ShapesImportError {
                 it = if iris.len() == 1 { "it" } else { "they" },
                 entry = if iris.len() == 1 { "entry" } else { "entries" },
             ),
+            Self::IncompatibleVersions { conflicts } => {
+                write!(
+                    f,
+                    "{kind}: the shapes graph's owl:imports closure holds {count} pair{s} of \
+                     graphs that SHACL 1.2 Core says it SHOULD NOT hold together (\"different \
+                     versions of the same series, or where one declares owl:incompatibleWith \
+                     the other\"); such a shapes graph is ill-formed. Supply one version of \
+                     each series, and remove a graph another declares incompatible:",
+                    kind = self.kind(),
+                    count = conflicts.len(),
+                    s = if conflicts.len() == 1 { "" } else { "s" },
+                )?;
+                for conflict in conflicts {
+                    let rendered = conflict.to_string();
+                    let rendered = rendered.replace("the importing graph", "the shapes graph");
+                    write!(f, "\n  {rendered}")?;
+                }
+                Ok(())
+            }
             Self::InvalidEntry { iri, reason } => {
                 write!(
                     f,
@@ -555,7 +600,9 @@ pub struct ResolvedShapesGraph {
 /// [`ShapesImportError::UnresolvedLink`] naming every data-graph link nothing in hand
 /// resolves; then [`ShapesImportError::Unresolved`] naming every import nothing in hand
 /// resolves; then [`ShapesImportError::Unreached`] naming every table entry neither an
-/// import nor a link reaches.
+/// import nor a link reaches; then [`ShapesImportError::IncompatibleVersions`] naming every
+/// pair of graphs of the closure that are two versions of one series or of which one
+/// declares `owl:incompatibleWith` the other.
 pub fn resolve_shapes_imports(
     dataset: &Arc<RdfDataset>,
     prefixes: &[(String, String)],
@@ -600,6 +647,11 @@ pub fn resolve_shapes_imports(
     if !closure.unreached().is_empty() {
         return Err(ShapesImportError::Unreached {
             iris: closure.unreached().to_vec(),
+        });
+    }
+    if !closure.conflicts().is_empty() {
+        return Err(ShapesImportError::IncompatibleVersions {
+            conflicts: closure.conflicts().to_vec(),
         });
     }
     let merged = closure
@@ -960,6 +1012,88 @@ mod tests {
                     && resolved.dataset.term_value(quad.o) == target
             }),
             "the non-anchor owl:imports stays in the shapes graph as data"
+        );
+    }
+
+    /// SHACL 1.2 Core §1.3 / §6.1: an import closure holding two versions of one series, or
+    /// a graph another declares `owl:incompatibleWith`, is ill-formed and refused, naming
+    /// both graphs. The neighbour — the same closure with one version of the series, the
+    /// shape of Example 23 — validates, and its shape fires, so the refusal is observed
+    /// against a closure that is honoured.
+    #[test]
+    fn two_versions_of_one_series_are_refused_and_one_version_validates() {
+        const V1: &str = "http://example.org/lib/v1";
+        const V2: &str = "http://example.org/lib/v2";
+        let shapes = "<http://example.org/shapes> a owl:Ontology ;\n\
+            owl:imports <http://example.org/lib/v2> , <http://example.org/app> .\n";
+        let series = |version: &str| {
+            format!("<http://example.org/lib> owl:versionIRI <{version}> .\n{LIB_SHAPE}")
+        };
+        let app = |imports: &str, extra: &str| {
+            format!("<http://example.org/app> a owl:Ontology ; owl:imports <{imports}> .\n{extra}")
+        };
+
+        // Two versions of <http://example.org/lib>: v2 directly, v1 through app.
+        let outcome = results(
+            shapes,
+            &table(&[
+                (V2, &series(V2)),
+                (V1, &series(V1)),
+                ("http://example.org/app", &app(V1, "")),
+            ]),
+        );
+        let Err(ShapesError::Imports(error @ ShapesImportError::IncompatibleVersions { .. })) =
+            outcome
+        else {
+            panic!("expected an incompatible-versions refusal, got {outcome:?}");
+        };
+        assert_eq!(error.kind(), "incompatible-import-versions");
+        assert_eq!(error.iris(), [V2, V1]);
+        let message = error.to_string();
+        assert!(
+            message.contains(
+                "<http://example.org/lib/v2> and <http://example.org/lib/v1> are different \
+                 versions of the series <http://example.org/lib>"
+            ),
+            "{message}"
+        );
+
+        // A graph declaring owl:incompatibleWith a version the closure holds.
+        let outcome = results(
+            shapes,
+            &table(&[
+                (V2, &series(V2)),
+                (
+                    "http://example.org/app",
+                    &app(
+                        "http://example.org/other",
+                        "<http://example.org/app> owl:incompatibleWith <http://example.org/lib/v2> .\n",
+                    ),
+                ),
+                ("http://example.org/other", "ex:x ex:y ex:z .\n"),
+            ]),
+        );
+        let Err(ShapesError::Imports(ShapesImportError::IncompatibleVersions { conflicts })) =
+            outcome
+        else {
+            panic!("expected an incompatible-versions refusal, got {outcome:?}");
+        };
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].first.as_deref(),
+            Some("http://example.org/app")
+        );
+        assert_eq!(conflicts[0].second.as_deref(), Some(V2));
+
+        // Neighbour: app imports the same version, so the closure holds one version, and
+        // the series' shape fires.
+        assert_eq!(
+            results(
+                shapes,
+                &table(&[(V2, &series(V2)), ("http://example.org/app", &app(V2, ""))]),
+            )
+            .expect("one version of the series"),
+            lib_shape_fired()
         );
     }
 

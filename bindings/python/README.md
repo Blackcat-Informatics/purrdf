@@ -182,6 +182,14 @@ the shapes graph under, as `purrdf validate --shapes-graph` does: `$shapesGraph`
 is pre-bound to it and `GRAPH $shapesGraph { ... }` reads the shapes graph
 (SHACL 1.0's pre-binding, which SHACL 1.2 removed). Omitted, `$shapesGraph` is
 an ordinary variable. A `Shapes` carries it into `prepare()` and its products.
+`subclass_of_in_shapes_graph=True` on `shapes.validate` and `shapes.Shapes` is
+SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: the shapes graph's
+`rdfs:subClassOf` triples are read, in addition to the data graph's, wherever
+SHACL type decides class membership (`sh:targetClass`, implicit class targets,
+`sh:class`, `sh:rootClass`, `shnex:instancesOf`). It is off by default, the
+specification's default. A shapes graph whose `owl:imports` closure holds two
+versions of one series, or a graph another declares `owl:incompatibleWith`,
+raises `ShapesImportError` with kind `incompatible-import-versions`.
 
 Four tools sit beside validation, each the same library call the CLI, WebAssembly
 and C surfaces make:
