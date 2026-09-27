@@ -203,6 +203,14 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "errno": "std::io::Error::last_os_error (in purrdf_cli::mmap)",
     "bitflags": "plain libc::c_int seal masks (in purrdf_cli::mmap)",
     "smallvec": "purrdf_core::SmallVec (an in-house small-vector type)",
+    "flate2": "purrdf-deflate (native RFC 1951 DEFLATE and RFC 1952 gzip)",
+    # flate2's pure-Rust backend and its closure. The committed Cargo.lock listed
+    # flate2 as the only dependent of miniz_oxide and crc32fast, and miniz_oxide as
+    # the only dependent of adler2 and simd-adler32, before they left.
+    "miniz_oxide": "purrdf-deflate (native RFC 1951 DEFLATE and RFC 1952 gzip)",
+    "adler2": "purrdf-deflate (gzip carries no Adler-32; no zlib framing is used)",
+    "simd-adler32": "purrdf-deflate (gzip carries no Adler-32; no zlib framing is used)",
+    "crc32fast": "purrdf_hash::crc32 (CRC-32/ISO-HDLC with pclmulqdq and Armv8 CRC32 paths)",
     "csv": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
     # csv's own field-scanning engine; nothing else in the graph pulled it in.
     "csv-core": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",

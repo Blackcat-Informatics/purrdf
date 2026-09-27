@@ -8,8 +8,9 @@
 //! GTS authoring and reader hot-path benchmarks.
 //!
 //! Report-only, `cargo bench -p purrdf-gts` (the `make bench` lane). This keeps
-//! the core container work measurable: rsyncable zstd block compression and
-//! deterministic snapshot emission over a representative folded graph.
+//! the core container work measurable: rsyncable zstd block compression,
+//! `.nq.gz` transport decoding and gzip encoding, and deterministic snapshot
+//! emission over a representative folded graph.
 //! Reader cases vary blob count independently of payload size and compare
 //! standalone decryption with encrypted frame streaming. Allocation counters
 //! report cumulative traffic on the calling thread, not peak memory, unless
@@ -238,6 +239,69 @@ fn bench_rsyncable_zstd(c: &mut Criterion) {
     let mut group = c.benchmark_group("gts_codec");
     group.throughput(Throughput::Bytes(payload.len() as u64));
     group.bench_function("zstd_rsyncable_512k", |bencher| {
+        bencher.iter(|| {
+            let encoded = encode_chain(black_box(&chain), black_box(&payload)).expect("encode");
+            black_box(encoded);
+        });
+    });
+    group.finish();
+}
+
+/// A `.nq.gz` input: deterministic N-Quads, gzipped, decoded through the
+/// transport layer both buffered (`decode_transport`) and streamed
+/// (`transport_reader` drained in 64 KiB reads), plus the `gzip` transform's
+/// encode. Report-only.
+fn bench_transport_nq_gz(c: &mut Criterion) {
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+
+    use purrdf_gts::transport::{TransportEncoding, decode_transport, transport_reader};
+
+    let mut nquads = String::with_capacity(4 << 20);
+    let mut row = 0u64;
+    while nquads.len() < 4 << 20 {
+        writeln!(
+            nquads,
+            "<http://example.org/s{}> <http://example.org/p{}> \"value {}\" <http://example.org/g{}> .",
+            row % 9973,
+            row % 17,
+            row,
+            row % 5
+        )
+        .expect("writing to a String cannot fail");
+        row += 1;
+    }
+    let payload = nquads.into_bytes();
+    let framed = encode_chain(&["gzip".to_string()], &payload).expect("gzip encode");
+
+    let mut group = c.benchmark_group("gts_transport");
+    group.throughput(Throughput::Bytes(payload.len() as u64));
+    group.bench_function("nq_gz_decode_buffered_4m", |bencher| {
+        bencher.iter(|| {
+            let decoded =
+                decode_transport(black_box(&framed), TransportEncoding::Gzip).expect("decode");
+            black_box(decoded);
+        });
+    });
+    group.bench_function("nq_gz_decode_streamed_4m", |bencher| {
+        let mut buf = vec![0u8; 64 * 1024];
+        bencher.iter(|| {
+            let mut reader =
+                transport_reader(black_box(framed.as_slice()), Some(TransportEncoding::Gzip))
+                    .expect("reader");
+            let mut total = 0usize;
+            loop {
+                let n = reader.read(&mut buf).expect("read");
+                if n == 0 {
+                    break;
+                }
+                total += n;
+            }
+            black_box(total);
+        });
+    });
+    group.bench_function("nq_gz_encode_4m", |bencher| {
+        let chain = vec!["gzip".to_string()];
         bencher.iter(|| {
             let encoded = encode_chain(black_box(&chain), black_box(&payload)).expect("encode");
             black_box(encoded);
@@ -591,6 +655,7 @@ fn bench_dict_compaction(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_rsyncable_zstd,
+    bench_transport_nq_gz,
     bench_snapshot_authoring,
     bench_canonical_authoring,
     bench_mmr_root,

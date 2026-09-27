@@ -562,6 +562,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
 | [`purrdf-hash`](./crates/hash/) | 零依赖的 MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
+| [`purrdf-deflate`](./crates/deflate/) | 原生 DEFLATE 与 gzip：推送式流解码器逐一解码每个 gzip 成员、校验每个尾部，并拒绝尾随垃圾字节或超出调用方上限的输出；确定性编码器的输出只取决于输入与压缩级别。匹配复制与比较在 SSE2/AVX2、NEON 与 wasm simd128 上向量化；仅依赖 `purrdf-hash`。 |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | `purrdf` ESM 包背后的 wasm32 引擎。 |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI（不发布；经由 cargo-c 构建）。 |
 | [`purrdf-cli`](./crates/cli/) | `purrdf` 命令行工具：`convert`、`query`、`update`、`reason`、`entails`、`consistency`、`validate`、`shex`、`describe`、`project`、`lift`、`pack verify`（不发布）。`convert` 接受任意数量的 `--input` 源，按确定性的并集合并，每个源使用独立的空节点作用域；`--transport auto\|none\|gzip\|zstd` 先根据魔数检测 gzip 或 zstd 包装再参考后缀，并以全有或全无的方式解码；传输包装从不在输出时施加，对 pack 源则拒绝。 |

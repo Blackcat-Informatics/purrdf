@@ -55,9 +55,11 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
 | `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, with AES rounds for byte slices over 16 bytes on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors |
+| `purrdf-deflate` (`crates/deflate`) | Native DEFLATE (RFC 1951) and gzip (RFC 1952): a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage and output past a caller's limit, and a deterministic encoder (gzip `MTIME` 0, `XFL` 0, `OS` 255; the same bytes on every path and however the input is chunked); match copies, match-length compares and window hashing run on SSE2/AVX2, NEON or wasm simd128, portable code otherwise; sole runtime dependency is `purrdf-hash` (the CRC-32) |
 | `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema draft 2020-12 validation: every vocabulary, `$dynamicRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, ECMA-262 `pattern` translated to `regex` with the ECMA-262 class sets spelled out; depends on `serde_json`, `regex` and `purrdf-iri` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash` | Zero-dependency foundations |
+| `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
@@ -76,7 +78,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   optional dependency, or feature-gated behavior.
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, and `purrdf-hash` must keep
-  **zero runtime dependencies**.
+  **zero runtime dependencies**, and `purrdf-deflate`'s only runtime
+  dependency is `purrdf-hash` (`make rdf-core-hygiene` checks both).
 * **Terminal ring-fence: a scanner's character classes are exact, in both
   directions.** They decide **token boundaries**, not merely membership, so
   substituting a Unicode property for a production's enumerated set does not
@@ -97,7 +100,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 27 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 28 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -253,7 +256,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (27 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (28 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Eight members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,

@@ -98,7 +98,7 @@ purrdf-shapes = { workspace = true }
 purrdf-gts = { workspace = true }
 # Frames the gzip and zstd fixtures the transport integration tests feed to the binary.
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
-flate2 = { workspace = true }
+purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }

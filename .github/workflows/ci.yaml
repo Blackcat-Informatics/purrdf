@@ -356,7 +356,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 27 publishable crates with rustdoc lints promoted
+      # Document exactly the 28 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -435,6 +435,7 @@ jobs:
             -p purrdf-cdt \
             -p purrdf-jsonschema \
             -p purrdf-hash \
+            -p purrdf-deflate \
             -p purrdf-gts \
             -p purrdf-core \
             -p purrdf-columnar \
@@ -669,6 +670,16 @@ jobs:
         env:
           RUSTFLAGS: "-C target-feature=+aes"
         run: cargo test --locked -p purrdf-hash --test fixed_hasher
+
+      - name: Run the DEFLATE NEON kernels against the portable ones on aarch64
+        # purrdf-deflate's match copy, match-length compare and window hashing
+        # have NEON kernels that only an aarch64 runner executes: the kernel
+        # differentials and the encoder/decoder agreement cases must run on the
+        # NEON path here, beside the portable one.
+        env:
+          PURRDF_REQUIRE_DEFLATE_PATHS: portable,neon
+        run: cargo test --locked -p purrdf-deflate
+
 
       # The CSV field scanner's explicit NEON kernel against the portable kernel and
       # the per-byte scan at every alignment and length (the test asserts the NEON

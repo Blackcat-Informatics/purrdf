@@ -29,6 +29,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   case folding, NFD/NFC/NFKD/NFKC and UAX 29 word boundaries, generated from
   the vendored database. `caseless`, `unicode-normalization`,
   `unicode-segmentation` and `tinyvec` leave the dependency graph.
+- **deflate:** `purrdf-deflate`, a native DEFLATE (RFC 1951) and gzip (RFC 1952)
+  crate whose only runtime dependency is `purrdf-hash`. `Inflater` and
+  `GzipDecoder` are push-based (`feed` input in chunks of any size; usable from a
+  wasm32 stream callback), `GzipReader` is the `Read` adapter over them, and
+  `set_limit` / `decompress_with_limit` refuse output past a caller's byte limit
+  with `Error::LimitExceeded`. `Deflater`, `GzipWriter` and `gzip::compress` encode
+  deterministically at `Level` 0–9. Match copies, match-length compares and window
+  hashing have SSE2/AVX2, NEON and wasm simd128 kernels that return exactly what
+  the portable ones do.
+
 
 - **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
   ranked-retrieval surface computes with. The module holds:
@@ -2079,6 +2089,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
+- **gts:** gzip now runs on `purrdf-deflate`, and `flate2` (with `miniz_oxide`,
+  `crc32fast`, `adler2` and `simd-adler32`) left the dependency graph. Decoding a
+  gzip transform, a `.gz` transport stream or a gzip tar stream now decodes
+  **every** member and refuses bytes after the last member that do not begin
+  another; before, only the first member was decoded and anything after it was
+  ignored. The `gzip` transform and gzip tar output are still deterministic
+  (`MTIME` 0) but their compressed bytes differ from earlier releases (the header
+  is now `XFL` 0, `OS` 255, and the encoder is a different one); the decoded bytes,
+  and so content identities over them, are unchanged.
+- **gts:** the zstd transport decoder reads frame by frame: every frame is
+  decoded, skippable frames are skipped wherever they occur (a leading one was
+  refused before), and bytes after the last frame that do not begin another are
+  refused.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as

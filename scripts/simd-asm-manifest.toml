@@ -33,7 +33,7 @@ packages = [
   "purrdf-core", "purrdf-iri", "purrdf-xsd", "purrdf-json", "purrdf-rdf", "purrdf-sparql-algebra",
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
-  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice",
+  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -6020,5 +6020,172 @@ summary = "`json_schema::compile_schema`, the SHACL to JSON Schema compiler"
   crate = "purrdf_shapes"
   symbol = "purrdf_shapes::json_schema::compile_schema"
   min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+# purrdf-deflate. UNMEASURED: these measures are derived from the kernel source
+# (the intrinsics each kernel calls); `make simd-asm` has not yet been run over
+# them, and the document's cells read "pending measurement" until it is.
+[[site]]
+id = "deflate.match-copy"
+summary = "the decoder's back-reference copy: wide unaligned load/store pairs, period-doubled below the vector width"
+
+  # Moves only: the evidence is the wide load/store pairs, not vector work.
+  [[site.measure]]
+  label = "copy sse2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::copy_chunks_sse2"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "copy avx2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::copy_chunks_avx2"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "copy neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::aarch64::copy_chunks_neon"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "copy portable"
+  configs = ["wasm32"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::copy_match_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "copy simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::wasm32::copy_simd128"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "deflate.match-length"
+summary = "the encoder's candidate compare: byte-lane equality folded to a mask, trailing zeros of its complement"
+
+  [[site.measure]]
+  label = "compare sse2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::prefix_sse2"
+  min_vector_ops = 1
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare sse2 (avx512 build)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::prefix_sse2"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare avx2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::prefix_avx2"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare avx2 (avx512 build)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::prefix_avx2"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::aarch64::prefix_neon"
+  min_vector_ops = 1
+  require_mnemonics = ["cmeq .16b", "shrn"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare portable"
+  configs = ["wasm32"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::match_length_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "compare simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::wasm32::match_length_simd128"
+  min_vector_ops = 1
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "deflate.hash-windows"
+summary = "the encoder's window hashing: one 16-byte load, a byte shuffle into 4-byte windows, a lane multiply and a shift"
+
+  [[site.measure]]
+  label = "hash avx2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::hash8_avx2"
+  min_vector_ops = 1
+  require_mnemonics = ["vpshufb", "vpmulld"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "hash neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::aarch64::hash4_neon"
+  min_vector_ops = 1
+  require_mnemonics = ["tbl", "mul .4s"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "hash portable"
+  configs = ["wasm32"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::hash_windows_portable"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "hash simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::wasm32::hash_simd128"
+  min_vector_ops = 1
+  require_mnemonics = ["i8x16.swizzle", "i32x4.mul"]
   max_fma = 0
   forbid_relaxed = true

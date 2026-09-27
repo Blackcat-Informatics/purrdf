@@ -22,6 +22,13 @@
 //! prefix it managed to inflate. There is no partial success, and therefore no way
 //! for a downstream parser to be handed a silently-shortened document.
 //!
+//! Decoding is also **whole-stream**. A gzip file is a series of members and zstd
+//! data a series of frames (RFC 1952 §2.2, RFC 8878 §3.1); every member and every
+//! frame is decoded, zstd skippable frames (magic `0x184D2A50`–`0x184D2A5F`) are
+//! skipped, and bytes after the last member or frame that do not begin another one
+//! are refused rather than ignored — a stream is never silently cut short at its
+//! first member.
+//!
 //! ## Buffered and streaming halves
 //!
 //! [`decode_transport`] inflates into one `Vec<u8>`; [`transport_reader`] hands back a
@@ -41,18 +48,30 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::{self, Chain, Cursor, Read};
 
+use purrdf_deflate::GzipReader;
+use structured_zstd::decoding::{BlockDecodingStrategy, FrameDecoder};
+
 /// The gzip magic bytes (RFC 1952 §2.3.1: `ID1 = 0x1f`, `ID2 = 0x8b`).
 const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
 
 /// The zstd frame magic number (RFC 8878 §3.1.1: `0xFD2FB528`, little-endian).
 const ZSTD_MAGIC: &[u8] = &[0x28, 0xb5, 0x2f, 0xfd];
 
+/// The zstd frame magic number as a value.
+const ZSTD_FRAME_MAGIC: u32 = 0xFD2F_B528;
+
+/// Skippable frames carry a magic number `0x184D2A5?` (RFC 8878 §3.1.2): the high
+/// 28 bits are fixed and the low four are free.
+const ZSTD_SKIPPABLE_MASK: u32 = 0xFFFF_FFF0;
+const ZSTD_SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
+
 /// A recognized transport encoding wrapping a payload byte stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransportEncoding {
-    /// gzip (RFC 1952), decoded by `flate2`'s pure-Rust `miniz_oxide` backend.
+    /// gzip (RFC 1952), decoded by the workspace's native `purrdf-deflate`.
     Gzip,
-    /// zstd (RFC 8878), decoded by the pure-Rust `structured-zstd` streaming decoder.
+    /// zstd (RFC 8878): frames decoded by the pure-Rust `structured-zstd` frame
+    /// decoder, sequenced frame by frame here.
     Zstd,
 }
 
@@ -146,31 +165,21 @@ pub fn strip_transport_suffix(name: &str) -> Option<(&str, TransportEncoding)> {
 
 /// Decode `data` under `encoding`, draining the decoder to completion.
 ///
-/// Both decoders are `Read` adapters read with `read_to_end`, so a truncated or
-/// corrupt stream returns `Err` and **no** bytes: there is no partial success.
+/// This drains exactly the reader [`transport_reader`] builds, so the buffered and
+/// streaming halves cannot disagree. A truncated or corrupt stream, or bytes after
+/// the last member or frame that do not begin another, return `Err` and **no**
+/// bytes: there is no partial success.
 pub fn decode_transport(
     data: &[u8],
     encoding: TransportEncoding,
 ) -> Result<Vec<u8>, TransportError> {
     let mut out = Vec::new();
-    let _decoded_len = match encoding {
-        TransportEncoding::Gzip => flate2::read::GzDecoder::new(data)
-            .read_to_end(&mut out)
-            .map_err(|err| TransportError {
-                encoding,
-                message: err.to_string(),
-            })?,
-        TransportEncoding::Zstd => structured_zstd::decoding::StreamingDecoder::new(data)
-            .map_err(|err| TransportError {
-                encoding,
-                message: err.to_string(),
-            })?
-            .read_to_end(&mut out)
-            .map_err(|err| TransportError {
-                encoding,
-                message: err.to_string(),
-            })?,
-    };
+    transport_reader(data, Some(encoding))?
+        .read_to_end(&mut out)
+        .map_err(|err| TransportError {
+            encoding,
+            message: err.to_string(),
+        })?;
     Ok(out)
 }
 
@@ -232,17 +241,163 @@ pub struct TransportReader<R: Read> {
 enum TransportReaderInner<R: Read> {
     /// No transport wrapper: bytes pass through untouched.
     Plain(R),
-    /// gzip, decoded by `flate2`'s pure-Rust `miniz_oxide` backend.
-    // Boxed: the decoder owns a multi-kilobyte inflate window, and an unboxed variant
+    /// gzip, every member decoded by `purrdf-deflate`.
+    // Boxed: the decoder owns its tables and input buffer, and an unboxed variant
     // would make every `TransportReader` — including `Plain` — that large.
-    Gzip(Box<flate2::read::GzDecoder<R>>),
-    /// zstd, decoded by the pure-Rust `structured-zstd` streaming decoder. Boxed for
-    /// the same reason as [`Self::Gzip`] (its window is larger still).
-    Zstd(
-        Box<
-            structured_zstd::decoding::StreamingDecoder<R, structured_zstd::decoding::FrameDecoder>,
-        >,
-    ),
+    Gzip(Box<GzipReader<R>>),
+    /// zstd, every frame decoded. Boxed for the same reason as [`Self::Gzip`].
+    Zstd(Box<ZstdFrames<R>>),
+}
+
+/// A `Read` over zstd data that decodes it frame by frame (RFC 8878 §3.1).
+///
+/// Between frames it reads the next four-byte magic number itself: a Zstandard
+/// frame is handed to `structured-zstd`'s [`FrameDecoder`], which reads exactly that
+/// frame; a skippable frame's user data is skipped by its `Frame_Size`; a clean end
+/// of input after at least one frame ends the stream; anything else — a partial
+/// magic number, or bytes that begin no frame — is refused.
+struct ZstdFrames<R: Read> {
+    inner: Counted<R>,
+    decoder: FrameDecoder,
+    in_frame: bool,
+    frames: u64,
+    done: bool,
+}
+
+/// A reader that counts the bytes it yields, so a decode step that consumed nothing
+/// and produced nothing is recognized as stuck rather than retried forever.
+struct Counted<R> {
+    inner: R,
+    count: u64,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count += n as u64;
+        Ok(n)
+    }
+}
+
+/// Decoded bytes one decode step asks the frame decoder for.
+const ZSTD_STEP: usize = 128 * 1024;
+
+fn zstd_error(message: impl fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+}
+
+impl<R: Read> ZstdFrames<R> {
+    /// Start decoding, reading up to the first frame's header so a stream that is
+    /// not zstd at all is refused here.
+    fn new(inner: R) -> io::Result<Self> {
+        let mut frames = Self {
+            inner: Counted { inner, count: 0 },
+            decoder: FrameDecoder::new(),
+            in_frame: false,
+            frames: 0,
+            done: false,
+        };
+        frames.next_frame()?;
+        Ok(frames)
+    }
+
+    /// Read into `buf` until it is full or the source ends; the count read.
+    fn fill(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match self.inner.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(filled)
+    }
+
+    /// Between frames: skip skippable frames until a Zstandard frame starts
+    /// (`in_frame`) or the input ends cleanly (`done`).
+    fn next_frame(&mut self) -> io::Result<()> {
+        loop {
+            let mut magic = [0u8; 4];
+            let got = self.fill(&mut magic)?;
+            if got == 0 {
+                if self.frames == 0 {
+                    return Err(zstd_error("no zstd frame in the input"));
+                }
+                self.done = true;
+                return Ok(());
+            }
+            if got < magic.len() {
+                return Err(zstd_error(format!(
+                    "{got} byte(s) after the last zstd frame do not begin another frame"
+                )));
+            }
+            let value = u32::from_le_bytes(magic);
+            if value == ZSTD_FRAME_MAGIC {
+                let mut source = magic.as_slice().chain(&mut self.inner);
+                self.decoder.reset(&mut source).map_err(zstd_error)?;
+                self.frames += 1;
+                self.in_frame = true;
+                return Ok(());
+            }
+            if value & ZSTD_SKIPPABLE_MASK == ZSTD_SKIPPABLE_MAGIC {
+                let mut size = [0u8; 4];
+                if self.fill(&mut size)? < size.len() {
+                    return Err(zstd_error(
+                        "skippable zstd frame truncated in its size field",
+                    ));
+                }
+                let size = u64::from(u32::from_le_bytes(size));
+                let skipped = io::copy(&mut (&mut self.inner).take(size), &mut io::sink())?;
+                if skipped < size {
+                    return Err(zstd_error(format!(
+                        "skippable zstd frame truncated: {skipped} of {size} bytes"
+                    )));
+                }
+                self.frames += 1;
+                continue;
+            }
+            return Err(zstd_error(format!(
+                "bytes {magic:02x?} after the last zstd frame do not begin another frame"
+            )));
+        }
+    }
+}
+
+impl<R: Read> Read for ZstdFrames<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.in_frame {
+                let n = self.decoder.read(buf)?;
+                if n > 0 {
+                    return Ok(n);
+                }
+                if self.decoder.is_finished() {
+                    self.in_frame = false;
+                    continue;
+                }
+                let before = self.inner.count;
+                self.decoder
+                    .decode_blocks(&mut self.inner, BlockDecodingStrategy::UptoBytes(ZSTD_STEP))
+                    .map_err(zstd_error)?;
+                if self.inner.count == before
+                    && self.decoder.can_collect() == 0
+                    && !self.decoder.is_finished()
+                {
+                    return Err(zstd_error("zstd frame truncated"));
+                }
+                continue;
+            }
+            if self.done {
+                return Ok(0);
+            }
+            self.next_frame()?;
+        }
+    }
 }
 
 impl<R: Read> fmt::Debug for TransportReader<R> {
@@ -281,8 +436,9 @@ impl<R: Read> Read for TransportReader<R> {
 ///
 /// # Errors
 ///
-/// Returns [`TransportError`] when the zstd frame header itself cannot be read (gzip's
-/// adapter is infallible to construct and reports damage on the first read instead).
+/// Returns [`TransportError`] when the stream does not begin with a readable zstd
+/// frame header (a leading skippable frame is skipped first). gzip's adapter is
+/// infallible to construct and reports damage on the first read instead.
 pub fn transport_reader<R: Read>(
     reader: R,
     encoding: Option<TransportEncoding>,
@@ -290,16 +446,16 @@ pub fn transport_reader<R: Read>(
     let inner = match encoding {
         None => TransportReaderInner::Plain(reader),
         Some(TransportEncoding::Gzip) => {
-            TransportReaderInner::Gzip(Box::new(flate2::read::GzDecoder::new(reader)))
+            TransportReaderInner::Gzip(Box::new(GzipReader::new(reader)))
         }
-        Some(TransportEncoding::Zstd) => TransportReaderInner::Zstd(Box::new(
-            structured_zstd::decoding::StreamingDecoder::new(reader).map_err(|err| {
+        Some(TransportEncoding::Zstd) => {
+            TransportReaderInner::Zstd(Box::new(ZstdFrames::new(reader).map_err(|err| {
                 TransportError {
                     encoding: TransportEncoding::Zstd,
                     message: err.to_string(),
                 }
-            })?,
-        )),
+            })?))
+        }
     };
     Ok(TransportReader { inner })
 }
@@ -317,14 +473,10 @@ pub fn decode_detected<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
-
     use super::*;
 
     fn gzip(payload: &[u8]) -> Vec<u8> {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(payload).expect("gzip write");
-        encoder.finish().expect("gzip finish")
+        purrdf_deflate::gzip::compress(payload, purrdf_deflate::Level::DEFAULT)
     }
 
     #[test]
@@ -448,6 +600,122 @@ mod tests {
             .expect_err("plain bytes are not gzip");
         transport_reader(b"plain text".as_slice(), Some(TransportEncoding::Zstd))
             .expect_err("plain bytes are not a zstd frame");
+    }
+
+    fn zstd(payload: &[u8]) -> Vec<u8> {
+        structured_zstd::encoding::compress_to_vec(
+            payload,
+            structured_zstd::encoding::CompressionLevel::Fastest,
+        )
+    }
+
+    /// A skippable frame (RFC 8878 §3.1.2) with magic nibble `nibble`.
+    fn skippable(nibble: u8, user_data: &[u8]) -> Vec<u8> {
+        let mut frame = vec![0x50 | nibble, 0x2a, 0x4d, 0x18];
+        frame.extend_from_slice(&(user_data.len() as u32).to_le_bytes());
+        frame.extend_from_slice(user_data);
+        frame
+    }
+
+    /// Both halves, which must agree on every stream they accept.
+    fn both(data: &[u8], encoding: TransportEncoding) -> Result<Vec<u8>, String> {
+        let buffered = decode_transport(data, encoding).map_err(|e| e.to_string());
+        let streamed = transport_reader(data, Some(encoding))
+            .map_err(|e| e.to_string())
+            .and_then(|mut reader| {
+                let mut out = Vec::new();
+                reader
+                    .read_to_end(&mut out)
+                    .map(|_| out)
+                    .map_err(|e| e.to_string())
+            });
+        assert_eq!(
+            buffered.is_ok(),
+            streamed.is_ok(),
+            "buffered {buffered:?} vs streamed {streamed:?}"
+        );
+        if let (Ok(a), Ok(b)) = (&buffered, &streamed) {
+            assert_eq!(a, b);
+        }
+        buffered
+    }
+
+    #[test]
+    fn zstd_two_frames_both_decoded() {
+        let data = [zstd(b"first frame, "), zstd(b"second frame")].concat();
+        assert_eq!(
+            both(&data, TransportEncoding::Zstd).expect("two frames"),
+            b"first frame, second frame"
+        );
+        // One frame alone is the neighbour: exactly its own payload.
+        assert_eq!(
+            both(&zstd(b"first frame, "), TransportEncoding::Zstd).expect("one frame"),
+            b"first frame, "
+        );
+    }
+
+    #[test]
+    fn zstd_skippable_frame_skipped() {
+        let a = zstd(b"alpha ");
+        let b = zstd(b"beta");
+        for data in [
+            [skippable(0, b"meta"), a.clone(), b.clone()].concat(),
+            [a.clone(), skippable(0xf, b"x"), b.clone()].concat(),
+            [a.clone(), b, skippable(7, b"")].concat(),
+        ] {
+            assert_eq!(
+                both(&data, TransportEncoding::Zstd).expect("skippable"),
+                b"alpha beta"
+            );
+        }
+        // A stream of skippable frames only is a stream of zero bytes.
+        assert_eq!(
+            both(&skippable(1, b"only"), TransportEncoding::Zstd).expect("only skippable"),
+            b""
+        );
+        // A skippable frame whose data is cut short is refused.
+        let mut cut = [a.clone(), skippable(0, b"metadata")].concat();
+        cut.truncate(cut.len() - 1);
+        both(&cut, TransportEncoding::Zstd).expect_err("truncated skippable frame");
+        // Magic numbers just outside the skippable range are not skippable.
+        let mut outside = skippable(0, b"meta");
+        outside[0] = 0x60;
+        both(&[a, outside].concat(), TransportEncoding::Zstd)
+            .expect_err("0x184D2A60 is not a skippable magic");
+    }
+
+    #[test]
+    fn zstd_trailing_bytes_refused() {
+        let frame = zstd(b"payload");
+        assert_eq!(
+            both(&frame, TransportEncoding::Zstd).expect("valid"),
+            b"payload"
+        );
+        for trailing in [&b"junk"[..], b"\0", b"\x28\xb5\x2f", b"\0\0\0\0\0\0\0\0"] {
+            both(
+                &[frame.as_slice(), trailing].concat(),
+                TransportEncoding::Zstd,
+            )
+            .expect_err("trailing bytes after the last frame");
+        }
+        both(b"", TransportEncoding::Zstd).expect_err("no frame at all");
+        let mut truncated = frame;
+        truncated.pop();
+        both(&truncated, TransportEncoding::Zstd).expect_err("a truncated frame");
+    }
+
+    #[test]
+    fn gzip_transport_decodes_every_member_and_refuses_garbage() {
+        let data = [gzip(b"one "), gzip(b"two")].concat();
+        assert_eq!(
+            both(&data, TransportEncoding::Gzip).expect("members"),
+            b"one two"
+        );
+        both(
+            &[data.as_slice(), b"garbage"].concat(),
+            TransportEncoding::Gzip,
+        )
+        .expect_err("trailing garbage");
     }
 
     #[test]

@@ -108,9 +108,8 @@ pub fn to_tar<W: Write>(
     match options.compression {
         TarCompression::None => write_tar_stream(graph, writer, options),
         TarCompression::Gzip => {
-            let mut encoder = flate2::GzBuilder::new()
-                .mtime(0)
-                .write(writer, flate2::Compression::default());
+            let mut encoder =
+                purrdf_deflate::GzipWriter::new(writer, purrdf_deflate::Level::DEFAULT);
             write_tar_stream(graph, &mut encoder, options)?;
             encoder
                 .finish()

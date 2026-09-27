@@ -11,6 +11,7 @@ members = [
     "crates/cli",
     "crates/columnar",
     "crates/datalog",
+    "crates/deflate",
     "crates/entail",
     "crates/envelope-probe",
     "crates/geo",
@@ -72,6 +73,7 @@ purrdf-cdt = { path = "crates/cdt", version = "2.0.2" }
 purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
 purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }
 purrdf-datalog = { path = "crates/datalog", version = "2.0.2" }
+purrdf-deflate = { path = "crates/deflate", version = "2.0.2" }
 purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
@@ -117,7 +119,6 @@ ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
-flate2 = "1"
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.3"

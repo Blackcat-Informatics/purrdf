@@ -17,7 +17,6 @@
 //! * a truncated or mis-declared transport stream fails closed, with no partial output
 //!   file left behind.
 
-use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -114,9 +113,7 @@ fn canonical_of(dir: &Path, args: &[&str]) -> Vec<u8> {
 
 /// gzip-frame `payload`.
 fn gzip(payload: &[u8]) -> Vec<u8> {
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(payload).expect("gzip write");
-    encoder.finish().expect("gzip finish")
+    purrdf_deflate::gzip::compress(payload, purrdf_deflate::Level::DEFAULT)
 }
 
 /// zstd-frame `payload`.

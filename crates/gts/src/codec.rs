@@ -10,7 +10,6 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::io::{Read, Write};
 
 use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
 use structured_zstd::encoding::{
@@ -129,28 +128,15 @@ fn decode_one<'a>(
         "identity" if data.len() <= limit => Ok(Cow::Borrowed(data)),
         "identity" => Err(decoded_limit(limit)),
         "gzip" => {
-            let mut decoder = flate2::read::GzDecoder::new(data);
-            let mut out = Vec::new();
-            if limit == usize::MAX {
-                decoder
-                    .read_to_end(&mut out)
-                    .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
-                return Ok(Cow::Owned(out));
+            // Every member is decoded and verified; bytes after the last member
+            // that do not begin another are refused. The limit counts decoded
+            // bytes, so a bomb stops at `limit + 1` without being materialised.
+            let bound = u64::try_from(limit).unwrap_or(u64::MAX);
+            match purrdf_deflate::gzip::decompress_with_limit(data, bound) {
+                Ok(out) => Ok(Cow::Owned(out)),
+                Err(purrdf_deflate::Error::LimitExceeded { .. }) => Err(decoded_limit(limit)),
+                Err(e) => Err(CodecError::Failed(format!("gzip decode failed: {e}"))),
             }
-            let mut chunk = [0_u8; 8192];
-            loop {
-                let read = decoder
-                    .read(&mut chunk)
-                    .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
-                if read == 0 {
-                    break;
-                }
-                if read > limit.saturating_sub(out.len()) {
-                    return Err(decoded_limit(limit));
-                }
-                out.extend_from_slice(&chunk[..read]);
-            }
-            Ok(Cow::Owned(out))
         }
         "zstd" | "zstd-rsyncable" => {
             let mut decoder = FrameDecoder::new();
@@ -255,18 +241,12 @@ fn encode_one<'a>(
 ) -> Result<Cow<'a, [u8]>, CodecError> {
     match name {
         "identity" => Ok(Cow::Borrowed(data)),
-        "gzip" => {
-            let mut encoder = flate2::GzBuilder::new()
-                .mtime(0)
-                .write(Vec::new(), flate2::Compression::default());
-            encoder
-                .write_all(data)
-                .map_err(|e| CodecError::Failed(format!("gzip encode failed: {e}")))?;
-            encoder
-                .finish()
-                .map(Cow::Owned)
-                .map_err(|e| CodecError::Failed(format!("gzip encode failed: {e}")))
-        }
+        // Deterministic: MTIME 0, XFL 0, OS 255, and bytes that depend only on
+        // the payload.
+        "gzip" => Ok(Cow::Owned(purrdf_deflate::gzip::compress(
+            data,
+            purrdf_deflate::Level::DEFAULT,
+        ))),
         "zstd" => match options.dict {
             Some(dict) => encode_zstd_with_dict(data, options.zstd_level, dict).map(Cow::Owned),
             None => Ok(Cow::Owned(encode_zstd(data, options.zstd_level))),

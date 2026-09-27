@@ -244,7 +244,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 27 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 28 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -284,7 +284,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-deflate
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -434,6 +434,11 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 		fi; \
 		echo "OK: $$leaf is zero-dependency"; \
 	done
+	@deps=$$(cargo tree -p purrdf-deflate --edges normal --depth 1 -f "{p}" | tail -n +2 | sed 's/ v.*//; s/^[^a-z]*//'); \
+	if [ "$$deps" != "purrdf-hash" ]; then \
+		echo "FAIL: purrdf-deflate must depend on purrdf-hash alone but depends on:"; echo "$$deps"; exit 1; \
+	fi; \
+	echo "OK: purrdf-deflate depends on purrdf-hash alone"
 
 cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
 	python3 scripts/cnschema-probe.py --self-test
@@ -508,7 +513,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -623,7 +628,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# baseline and +simd128 builds, through the doc-hidden `csv::backend`
 	@# module (the in-crate differential is a #[cfg(test)] unit test, which does
 	@# not exist on wasm32 at all), so the +simd128 build's `i8x16.eq` kernel is
-	@# executed against the portable one rather than merely built.
+	@# executed against the portable one rather than merely built. purrdf-deflate
+	@# runs its round trips, refusals and kernel differentials on the baseline
+	@# build (portable kernels) and the +simd128 build (simd128 kernels), so the
+	@# encoder's bytes and the decoder's output are held to one answer there.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -724,7 +732,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-core --test csv_scan_wasm; \
+			-p purrdf-core --test csv_scan_wasm \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-deflate --test deflate_conformance \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-deflate --test deflate_conformance; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

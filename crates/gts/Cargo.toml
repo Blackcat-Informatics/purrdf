@@ -50,7 +50,9 @@ rayon = { workspace = true }
 ciborium = { workspace = true }
 # Borrowed deterministic-CBOR views serialize recursively without cloning Value trees.
 serde = { workspace = true }
-flate2 = { workspace = true }
+# gzip (RFC 1952) for the `gzip` transform, the transport decoder and gzip tar
+# streams: the workspace's native DEFLATE leaf, deterministic and wasm-clean.
+purrdf-deflate = { workspace = true }
 # pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly. The
 # `dict_builder` capability (pure-Rust FastCOVER training) is enabled here for the
 # in-band pack dictionaries (GTS-SPEC §5 "dct"); it pulls only std + fastrand,
