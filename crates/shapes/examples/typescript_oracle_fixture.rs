@@ -352,7 +352,7 @@ fn validates_in(
     let location = "mem:///typescript-oracle.schema.json";
     Ok(
         purrdf_jsonschema::Schema::from_document(metaschemas, location, wrapper)?
-            .is_valid(instance),
+            .is_valid(instance)?,
     )
 }
 

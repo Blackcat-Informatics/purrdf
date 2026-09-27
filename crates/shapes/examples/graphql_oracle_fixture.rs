@@ -318,7 +318,7 @@ fn validates_in(
     let location = "mem:///graphql-oracle.schema.json";
     Ok(
         purrdf_jsonschema::Schema::from_document(metaschemas, location, wrapper)?
-            .is_valid(instance),
+            .is_valid(instance)?,
     )
 }
 

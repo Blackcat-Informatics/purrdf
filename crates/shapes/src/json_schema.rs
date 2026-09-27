@@ -3102,6 +3102,7 @@ mod tests {
         emitted_schema(metaschemas(), schema_json)
             .expect("emitted schema compiles under draft 2020-12")
             .is_valid(instance)
+            .expect("emitted schema evaluation completes")
     }
 
     /// The draft 2020-12 meta-schemas the emitted schema declares, from the

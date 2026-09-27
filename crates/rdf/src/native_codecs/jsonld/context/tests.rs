@@ -664,7 +664,11 @@ fn options_schema(
 #[test]
 fn options_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
     let schema = options_schema(metaschemas()).expect("compiles with the 2020-12 meta-schemas");
-    assert!(schema.is_valid(&json!({"mode": "expanded", "version": 1})));
+    assert!(
+        schema
+            .is_valid(&json!({"mode": "expanded", "version": 1}))
+            .expect("evaluation")
+    );
     let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
         .expect("an empty set is a set");
     match options_schema(&none) {
@@ -681,6 +685,7 @@ fn options_schema_and_decoder_have_identical_mode_field_constraints() {
         options_schema(metaschemas())
             .expect("compile options schema")
             .is_valid(instance)
+            .expect("evaluation")
     }
 
     let cases = [
