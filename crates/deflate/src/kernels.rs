@@ -8,6 +8,11 @@
 //! for every input, so the decoder's output and the encoder's bytes do not
 //! depend on which path ran. The differential tests hold each available path
 //! to the portable one.
+//!
+//! The portable kernels are `#[inline(never)]`, as the vector ones in
+//! `crate::arch` are: each is one out-of-line function at a stable path, the
+//! symbol the asm audit measures, rather than a body inlined into a vector
+//! path's tail in some builds and not in others.
 
 /// Bytes a match copy may write past the end of the match. The decoder keeps
 /// this much writable room after every position it copies to.
@@ -46,6 +51,7 @@ pub(crate) const fn hash4(window: u32) -> u32 {
 
 /// Portable match copy: non-overlapping runs, doubling the run while the
 /// distance is shorter than what is left.
+#[inline(never)]
 pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     check_copy(buf, dst, dist, len);
     let src = dst - dist;
@@ -65,6 +71,7 @@ pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: 
 }
 
 /// Portable match length: eight bytes at a time by XOR and trailing zeros.
+#[inline(never)]
 pub(crate) fn match_length_portable(a: &[u8], b: &[u8]) -> usize {
     let n = a.len().min(b.len());
     let (a, b) = (&a[..n], &b[..n]);
@@ -85,6 +92,7 @@ pub(crate) fn match_length_portable(a: &[u8], b: &[u8]) -> usize {
 }
 
 /// Portable window hashing.
+#[inline(never)]
 pub(crate) fn hash_windows_portable(data: &[u8], start: usize, out: &mut [u32]) {
     assert!(
         start + out.len() + 3 <= data.len(),

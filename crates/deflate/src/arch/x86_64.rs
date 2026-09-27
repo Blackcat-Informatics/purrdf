@@ -66,6 +66,7 @@ fn copy_sse2(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     unsafe { copy_chunks_sse2(buf.as_mut_ptr(), start, dst + len, period) }
 }
 
+#[inline(never)]
 #[target_feature(enable = "sse2")]
 unsafe fn copy_chunks_sse2(base: *mut u8, mut d: usize, end: usize, period: usize) {
     while d < end {
@@ -92,6 +93,7 @@ fn copy_avx2(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     unsafe { copy_chunks_avx2(buf.as_mut_ptr(), start, dst + len, period) }
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
 unsafe fn copy_chunks_avx2(base: *mut u8, mut d: usize, end: usize, period: usize) {
     while d < end {
@@ -117,6 +119,7 @@ fn match_length_sse2(a: &[u8], b: &[u8]) -> usize {
     whole + match_length_portable(&a[whole..n], &b[whole..n])
 }
 
+#[inline(never)]
 #[target_feature(enable = "sse2")]
 unsafe fn prefix_sse2(a: *const u8, b: *const u8, whole: usize) -> usize {
     let mut i = 0;
@@ -148,6 +151,7 @@ fn match_length_avx2(a: &[u8], b: &[u8]) -> usize {
     whole + match_length_portable(&a[whole..n], &b[whole..n])
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
 unsafe fn prefix_avx2(a: *const u8, b: *const u8, whole: usize) -> usize {
     let mut i = 0;
@@ -184,6 +188,7 @@ fn hash_avx2(data: &[u8], start: usize, out: &mut [u32]) {
     hash_windows_portable(data, start + i, &mut out[i..]);
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
 unsafe fn hash8_avx2(src: *const u8, dst: *mut u32) {
     // SAFETY: 16 readable bytes at `src`, by the caller.

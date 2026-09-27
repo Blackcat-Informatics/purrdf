@@ -6024,9 +6024,14 @@ summary = "`json_schema::compile_schema`, the SHACL to JSON Schema compiler"
   max_fma = 0
   forbid_relaxed = true
 
-# purrdf-deflate. UNMEASURED: these measures are derived from the kernel source
-# (the intrinsics each kernel calls); `make simd-asm` has not yet been run over
-# them, and the document's cells read "pending measurement" until it is.
+# purrdf-deflate. Every symbol below is `#[inline(never)]` in the source, so each build
+# emits it once, out of line, at this path; before that, a kernel whose features the
+# build's baseline already had (SSE2 on every x86_64 build, AVX2 on x86-64-v3/v4) was
+# inlined into its safe wrapper on some builds and not others. Measured on all seven
+# configurations, and again on the x86_64 family from fresh build contexts with every
+# count unchanged: copies v0 everywhere (moves only); compares v2 (v1 on x86_64-v4, whose
+# AVX-512 build compares into a mask register); hashing v4 (AVX2), v3 (NEON, simd128);
+# the portable kernels v0 on wasm32.
 [[site]]
 id = "deflate.match-copy"
 summary = "the decoder's back-reference copy: wide unaligned load/store pairs, period-doubled below the vector width"
@@ -6083,11 +6088,23 @@ summary = "the encoder's candidate compare: byte-lane equality folded to a mask,
 
   [[site.measure]]
   label = "compare sse2"
-  configs = ["x86_64", "x86_64-v3"]
+  configs = ["x86_64"]
   crate = "purrdf_deflate"
   symbol = "purrdf_deflate::arch::x86_64::prefix_sse2"
   min_vector_ops = 1
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same SSE2 intrinsics on a build whose baseline has AVX: VEX-encoded. Measured
+  # v2 (`vpcmpeqb`, `vpmovmskb`).
+  [[site.measure]]
+  label = "compare sse2 (avx2 build)"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::arch::x86_64::prefix_sse2"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -6157,7 +6174,7 @@ summary = "the encoder's window hashing: one 16-byte load, a byte shuffle into 4
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
   crate = "purrdf_deflate"
   symbol = "purrdf_deflate::arch::x86_64::hash8_avx2"
-  min_vector_ops = 1
+  min_vector_ops = 2
   require_mnemonics = ["vpshufb", "vpmulld"]
   max_fma = 0
   forbid_relaxed = true
@@ -6181,13 +6198,16 @@ summary = "the encoder's window hashing: one 16-byte load, a byte shuffle into 4
   max_fma = 0
   forbid_relaxed = true
 
+  # The source's `u8x16_swizzle` takes a constant index, which LLVM compiles to the
+  # immediate-lane `i8x16.shuffle`; measured v3 (`i8x16.shuffle`, `i32x4.mul`,
+  # `i32x4.shr_u`).
   [[site.measure]]
   label = "hash simd128"
   configs = ["wasm32-simd128"]
   crate = "purrdf_deflate"
   symbol = "purrdf_deflate::arch::wasm32::hash_simd128"
   min_vector_ops = 1
-  require_mnemonics = ["i8x16.swizzle", "i32x4.mul"]
+  require_mnemonics = ["i8x16.shuffle", "i32x4.mul"]
   max_fma = 0
   forbid_relaxed = true
 

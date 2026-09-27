@@ -11,6 +11,13 @@
 //! the slice bounds its kernel's raw loads and stores rely on, so no caller
 //! can reach out-of-bounds memory through it. On any other processor the
 //! accessor returns `None`.
+//!
+//! Every kernel `scripts/simd-asm-manifest.toml` names is `#[inline(never)]`,
+//! so each build emits exactly one out-of-line copy of it at its own path for
+//! the asm audit to measure. Without that, a `#[target_feature]` kernel whose
+//! features the build's baseline already has (SSE2 everywhere on x86_64, AVX2
+//! on an `x86-64-v3` build, NEON on aarch64) may be inlined into its safe
+//! wrapper or not, build by build.
 
 use crate::kernels::{CopyMatch, HashWindows, MatchLength};
 

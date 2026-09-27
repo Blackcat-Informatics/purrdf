@@ -47,6 +47,7 @@ fn copy_neon(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     unsafe { copy_chunks_neon(buf.as_mut_ptr(), start, dst + len, period) }
 }
 
+#[inline(never)]
 #[target_feature(enable = "neon")]
 unsafe fn copy_chunks_neon(base: *mut u8, mut d: usize, end: usize, period: usize) {
     while d < end {
@@ -70,6 +71,7 @@ fn match_length_neon(a: &[u8], b: &[u8]) -> usize {
     whole + match_length_portable(&a[whole..n], &b[whole..n])
 }
 
+#[inline(never)]
 #[target_feature(enable = "neon")]
 unsafe fn prefix_neon(a: *const u8, b: *const u8, whole: usize) -> usize {
     let mut i = 0;
@@ -105,6 +107,7 @@ fn hash_neon(data: &[u8], start: usize, out: &mut [u32]) {
     hash_windows_portable(data, start + i, &mut out[i..]);
 }
 
+#[inline(never)]
 #[target_feature(enable = "neon")]
 unsafe fn hash4_neon(src: *const u8, dst: *mut u32) {
     const INDEX: [u8; 16] = [0, 1, 2, 3, 1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6];

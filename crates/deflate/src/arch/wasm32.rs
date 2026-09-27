@@ -24,6 +24,7 @@ pub(crate) fn simd128() -> Option<VectorKernels> {
     })
 }
 
+#[inline(never)]
 fn copy_simd128(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     check_copy(buf, dst, dist, len);
     let period = if dist >= 16 {
@@ -51,6 +52,7 @@ fn copy_simd128(buf: &mut [u8], dst: usize, dist: usize, len: usize) {
     }
 }
 
+#[inline(never)]
 fn match_length_simd128(a: &[u8], b: &[u8]) -> usize {
     let n = a.len().min(b.len());
     let mut i = 0;
@@ -71,6 +73,7 @@ fn match_length_simd128(a: &[u8], b: &[u8]) -> usize {
     i + match_length_portable(&a[i..n], &b[i..n])
 }
 
+#[inline(never)]
 fn hash_simd128(data: &[u8], start: usize, out: &mut [u32]) {
     assert!(
         start + out.len() + 3 <= data.len(),
