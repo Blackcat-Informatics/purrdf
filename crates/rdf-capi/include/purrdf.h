@@ -1540,8 +1540,11 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
  *
  * `premise_iris` / `premise_iri_count` are the IRIs the premise DOCUMENT was read from —
- * its retrieval IRI, or the base it was parsed under, when the host knows one. An
- * `owl:imports` of one of these names the premise itself, so it is resolved in place
+ * its retrieval IRI, or the base it was parsed under, when the host knows one. Each is the
+ * premise's own IRI: an `owl:imports` on one of these, like one on the premise's
+ * `owl:Ontology` header, is an import, while an `owl:imports` on any other node is a premise
+ * triple and names no document. An `owl:imports` of one of these names the premise itself,
+ * so it is resolved in place
  * rather than refused as missing. `premise_iri_count == 0` (the array may then be NULL) is
  * the ordinary case for a host handed bare text; like the import table it is required, in
  * the same position on every host.
@@ -2641,11 +2644,13 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * `import_iris` / `import_documents` / `import_count` are the shapes graph's
  * `owl:imports` table: entry `i` declares that `import_iris[i]` names the Turtle document
  * `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
- * arrays may then be NULL) is the empty table. An `owl:imports` is resolved by a table
+ * arrays may then be NULL) is the empty table. An `owl:imports` is an import only on the
+ * shapes graph's own IRI (`shapes_base_iri`, or the document's own `@base`), on an
+ * `owl:Ontology` header, or on a node naming either as its `owl:versionIRI`; on any other
+ * node it is data. An import is resolved by a table
  * entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
- * document, by the closure declaring the ontology (`<X> a owl:Ontology`, or an
- * ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
- * `sh:declare` — SHACL's prefix-declaration idiom; anything else — or a table entry
+ * document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+ * ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry
  * nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
  * smaller shapes graph than the one named. Read its kind and IRIs with
  * `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
