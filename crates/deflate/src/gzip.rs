@@ -524,6 +524,7 @@ pub struct GzipWriter<W: Write> {
     crc: Crc32,
     size: u64,
     out: Vec<u8>,
+    out_pos: usize,
 }
 
 impl<W: Write> std::fmt::Debug for GzipWriter<W> {
@@ -536,7 +537,7 @@ impl<W: Write> std::fmt::Debug for GzipWriter<W> {
 }
 
 /// Output gathered before it is passed to the inner writer.
-const WRITE_CHUNK: usize = 64 * 1024;
+const WRITE_CHUNK: usize = 16 * 1024;
 
 impl<W: Write> GzipWriter<W> {
     /// Gzip into `inner` at `level`.
@@ -556,7 +557,22 @@ impl<W: Write> GzipWriter<W> {
             crc: Crc32::new(),
             size: 0,
             out: HEADER.to_vec(),
+            out_pos: 0,
         }
+    }
+
+    fn drain(&mut self) -> io::Result<()> {
+        while self.out_pos < self.out.len() {
+            match self.inner.write(&self.out[self.out_pos..]) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                Ok(n) => self.out_pos += n,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.out.clear();
+        self.out_pos = 0;
+        Ok(())
     }
 
     /// Write the final block and the trailer, flush, and return the inner
@@ -567,7 +583,7 @@ impl<W: Write> GzipWriter<W> {
         self.out.extend_from_slice(&crc.to_le_bytes());
         self.out
             .extend_from_slice(&(self.size as u32).to_le_bytes());
-        self.inner.write_all(&self.out)?;
+        self.drain()?;
         self.inner.flush()?;
         Ok(self.inner)
     }
@@ -575,23 +591,26 @@ impl<W: Write> GzipWriter<W> {
 
 impl<W: Write> Write for GzipWriter<W> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.deflater.write(data, &mut self.out);
-        self.crc.update(data);
-        self.size += data.len() as u64;
-        if self.out.len() >= WRITE_CHUNK {
-            self.inner.write_all(&self.out)?;
-            self.out.clear();
+        if data.is_empty() {
+            return Ok(0);
         }
-        Ok(data.len())
+        // An error here has consumed none of this call's input. Once a slice
+        // is accepted, leave its output pending for the next call or flush.
+        self.drain()?;
+        let taken = data.len().min(WRITE_CHUNK);
+        self.deflater.write(&data[..taken], &mut self.out);
+        self.crc.update(&data[..taken]);
+        self.size += taken as u64;
+        Ok(taken)
     }
 
-    /// Passes the compressed bytes produced so far to the inner writer and
-    /// flushes it. Input still inside the encoder's window stays there (this
-    /// is not a DEFLATE sync flush), so the flushed bytes never change what
-    /// [`Self::finish`] produces.
+    /// Make every accepted plaintext byte decodable by writing a DEFLATE sync
+    /// boundary, then flush the inner writer. Flush boundaries are part of the
+    /// deterministic encoded bytes.
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.write_all(&self.out)?;
-        self.out.clear();
+        self.drain()?;
+        self.deflater.sync_flush(&mut self.out);
+        self.drain()?;
         self.inner.flush()
     }
 }

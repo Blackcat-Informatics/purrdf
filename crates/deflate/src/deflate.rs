@@ -10,9 +10,9 @@
 //! whether starting a new block (with new codes) pays for its header, and each
 //! block is emitted as stored, fixed or dynamic, whichever is exactly smallest.
 //!
-//! The output depends on the input bytes and the level only — never on the
-//! clock, on randomness, on the kernel path, or on how the input was split
-//! across [`Deflater::write`] calls.
+//! The output depends on the input bytes, level, and explicit sync-flush
+//! boundaries — never on the clock, randomness, kernel path, or how ordinary
+//! input was split across [`Deflater::write`] calls.
 
 use crate::backend::{Backend, Kernels};
 use crate::huffman::{canonical_codes, code_lengths};
@@ -457,6 +457,20 @@ impl Deflater {
             self.writer.align();
             self.finished = true;
         }
+        out.append(&mut self.writer.out);
+    }
+
+    /// Finish every accepted input byte without ending the stream. The empty
+    /// stored block aligns the stream and makes it decodable through this
+    /// boundary. Match history remains available to later writes.
+    pub fn sync_flush(&mut self, out: &mut Vec<u8>) {
+        assert!(!self.finished, "flush after finish");
+        self.compress(true);
+        if let Some((len, dist)) = self.pending.take() {
+            self.emit_match(len, dist);
+        }
+        self.flush_block(self.tokens.len(), false);
+        self.write_stored(self.block_start, 0, false);
         out.append(&mut self.writer.out);
     }
 

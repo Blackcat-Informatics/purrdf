@@ -379,6 +379,171 @@ fn gzip_writer_header_is_deterministic() {
     assert_eq!(&bytes[bytes.len() - 4..], &5u32.to_le_bytes());
 }
 
+fn gzip_writer_limits_acceptance_and_recovers_sink_progress() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct State {
+        bytes: Vec<u8>,
+        calls: usize,
+        fail_next: bool,
+        fail_after_writes: Option<usize>,
+    }
+    struct Sink(Rc<RefCell<State>>);
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let mut state = self.0.borrow_mut();
+            state.calls += 1;
+            if let Some(remaining) = state.fail_after_writes.as_mut() {
+                if *remaining == 0 {
+                    state.fail_after_writes = None;
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+                *remaining -= 1;
+            }
+            if state.fail_next {
+                state.fail_next = false;
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            let taken = bytes.len().min(7);
+            state.bytes.extend_from_slice(&bytes[..taken]);
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = Rc::new(RefCell::new(State::default()));
+    let mut writer = GzipWriter::new(Sink(Rc::clone(&state)), Level::NONE);
+    let data = vec![0xA5; 2 * 1024 * 1024];
+    let first = writer.write(&data).expect("first bounded slice");
+    assert!(first > 0 && first < data.len());
+    state.borrow_mut().fail_after_writes = Some(2);
+    assert_eq!(
+        writer.flush().expect_err("partial sink progress").kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    let before = state.borrow().bytes.len();
+    assert!(before > 0);
+    state.borrow_mut().fail_next = true;
+    assert_eq!(
+        writer
+            .write(&data[first..])
+            .expect_err("sink failure")
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(state.borrow().bytes.len() >= before);
+    writer
+        .write_all(&data[first..])
+        .expect("retry without lost input");
+    writer.finish().expect("finish");
+    assert!(state.borrow().calls > 2);
+    assert_eq!(
+        gzip::decompress(&state.borrow().bytes).expect("decode"),
+        data
+    );
+}
+
+fn gzip_writer_flush_exposes_accepted_plaintext() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut writer = GzipWriter::new(Sink(Rc::clone(&seen)), Level::DEFAULT);
+    writer.write_all(b"first segment").expect("write");
+    writer.flush().expect("sync flush");
+    let partial = seen.borrow().clone();
+    // The member has no trailer yet, but its DEFLATE body must already
+    // contain all accepted plaintext for an independent streaming decoder.
+    let mut inflater = Inflater::new();
+    let mut output = [0; 64];
+    let progress = inflater
+        .feed(&partial[10..], &mut output)
+        .expect("decode flush boundary");
+    assert_eq!(&output[..progress.written], b"first segment");
+    writer.write_all(b" and second").expect("write after flush");
+    writer.finish().expect("finish");
+    assert_eq!(
+        gzip::decompress(&seen.borrow()).expect("whole member"),
+        b"first segment and second"
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn gzip_interoperates_with_python_zlib() {
+    use std::process::{Command, Stdio};
+
+    fn python(script: &str, input: &[u8]) -> Vec<u8> {
+        let mut child = Command::new("python3")
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("python3 test oracle");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(input)
+            .expect("feed oracle");
+        let result = child.wait_with_output().expect("oracle result");
+        assert!(result.status.success(), "python oracle failed");
+        result.stdout
+    }
+
+    let inputs = [
+        Vec::new(),
+        b"<s> <p> <o> .\n".repeat(1024),
+        (0..131_072).map(|i| (i * 17 % 251) as u8).collect(),
+    ];
+    for input in inputs {
+        for level in [Level::NONE, Level::FASTEST, Level::DEFAULT, Level::BEST] {
+            let framed = gzip::compress(&input, level);
+            assert_eq!(
+                python(
+                    "import gzip,sys; sys.stdout.buffer.write(gzip.decompress(sys.stdin.buffer.read()))",
+                    &framed
+                ),
+                input
+            );
+            let external = python(
+                "import gzip,sys; sys.stdout.buffer.write(gzip.compress(sys.stdin.buffer.read(), mtime=0))",
+                &input,
+            );
+            assert_eq!(gzip::decompress(&external).expect("external gzip"), input);
+            let mut writer = GzipWriter::new(Vec::new(), level);
+            let split = input.len() / 2;
+            writer.write_all(&input[..split]).expect("first segment");
+            writer.flush().expect("sync boundary");
+            writer.write_all(&input[split..]).expect("second segment");
+            let flushed = writer.finish().expect("finish sync stream");
+            assert_eq!(
+                python(
+                    "import gzip,sys; sys.stdout.buffer.write(gzip.decompress(sys.stdin.buffer.read()))",
+                    &flushed
+                ),
+                input
+            );
+        }
+    }
+}
+
 // --- Hand-built edge streams -------------------------------------------------
 
 fn empty_final_stored_block_decodes_to_nothing() {
@@ -1157,6 +1322,10 @@ purrdf_testkit::harness_main!(
     every_kernel_path_encodes_and_decodes_the_same_bytes,
     push_decoding_in_tiny_pieces_matches_one_shot,
     gzip_writer_header_is_deterministic,
+    gzip_writer_limits_acceptance_and_recovers_sink_progress,
+    gzip_writer_flush_exposes_accepted_plaintext,
+    #[cfg(not(target_arch = "wasm32"))]
+    gzip_interoperates_with_python_zlib,
     empty_final_stored_block_decodes_to_nothing,
     fifteen_bit_codes_decode,
     distance_32768_with_length_258_decodes,

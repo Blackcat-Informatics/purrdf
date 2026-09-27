@@ -21,9 +21,9 @@
 //!
 //! # Encoding
 //!
-//! Output depends only on the input bytes and the level: no clock, no
-//! randomness, and the same bytes on every processor, target and kernel path,
-//! however the input is split across writes. The gzip header carries
+//! Output depends only on the input bytes, level, and explicit sync-flush
+//! boundaries: no clock, no randomness, and the same bytes on every processor,
+//! target and kernel path, however ordinary writes are split. The gzip header carries
 //! `MTIME = 0`, `XFL = 0` and `OS = 255`. Byte identity with any other encoder
 //! is not a goal.
 //!
