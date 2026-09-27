@@ -268,8 +268,8 @@ pub use registry_id::RegistryId;
 // [`PropertyFunctionRegistry`] as ordinary relations, and should not have to name a module
 // path to build the values it registers.
 pub use path_relation::{
-    MAX_HOPS_CAP, PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep,
-    PathWitnessRelation, ShortestPathWitnessRelation,
+    PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep, PathWitnessRelation,
+    ShortestPathWitnessRelation,
 };
 pub use remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
