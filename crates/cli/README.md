@@ -226,7 +226,8 @@ covers closure materialization. The evaluator observes it at operator entry and 
 at logical charge points, and around a federated request; it is not a timeout on the
 process. `--max-remote-requests` is
 enforced and reported like any other ceiling, and this binary configures no
-federation source, so a `SERVICE` clause fails to evaluate before it can be charged.
+federation source, so a `SERVICE` clause, `SILENT` or not, fails to evaluate before it
+can be charged.
 
 **A tripped governor is not a failure.** The run did exactly what it was told, so it
 exits **3** rather than 1, and it writes three things:

@@ -2840,8 +2840,8 @@ impl NativeSparqlEngine {
     /// Like [`SparqlEngine::query`], but with a
     /// [`ServiceResolver`](crate::remote::ServiceResolver) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
-    /// [`SparqlEngine::query`] path has no source and a non-silent `SERVICE`
-    /// hard-fails. This is the public entry the conformance harness and
+    /// [`SparqlEngine::query`] path has no source and a `SERVICE` hard-fails,
+    /// `SILENT` or not. This is the public entry the conformance harness and
     /// federated callers use.
     ///
     /// # Options are a parameter, not an overload
@@ -3183,8 +3183,9 @@ pub struct QueryOptions<'a> {
     /// in an UPDATE's `WHERE` alike.
     ///
     /// `None` — the default — is the engine with no federation: a `SERVICE` fails
-    /// with "no remote query source configured" and `SERVICE SILENT` contributes the
-    /// join identity.
+    /// with "no remote query source configured" ([`crate::EvalError::ServiceUnconfigured`]),
+    /// and so does `SERVICE SILENT`, because no endpoint was contacted for `SILENT` to
+    /// tolerate.
     ///
     /// Carried per request rather than installed on the engine because a source is
     /// the caller's relationship with the outside world for this one evaluation — its
@@ -6223,7 +6224,7 @@ mod tests {
     #[test]
     fn update_is_atomic_on_a_later_op_failure() {
         // A two-operation request whose FIRST op would insert and whose SECOND op
-        // hard-fails (LOAD with no resolver, not SILENT). Branch-then-freeze atomicity
+        // hard-fails (LOAD with no resolver). Branch-then-freeze atomicity
         // requires the whole request to roll back: the dataset must be byte-identical
         // (same quad set) to before, with the first op's INSERT NOT leaked.
         let engine = NativeSparqlEngine::new();

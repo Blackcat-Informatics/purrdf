@@ -38,7 +38,8 @@
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
 //!   [`GraphResolver`] to fetch + parse the source into a frozen dataset — the
 //!   request's own ([`QueryOptions::load`]) when it names one, otherwise the engine's;
-//!   with no resolver, `LOAD` hard-fails unless `SILENT`.
+//!   with no resolver, `LOAD` hard-fails, `SILENT` or not: `SILENT` tolerates a source
+//!   that was fetched and failed, and none was.
 //!
 //! # Governors: what an UPDATE is charged for, and why a trip applies nothing
 //!
@@ -288,7 +289,7 @@ impl core::fmt::Debug for GraphResolveRequest<'_> {
 /// The evaluator core is **network-free** (it builds clean for wasm and pulls no
 /// HTTP/parse stack). A host that wants `LOAD` to dereference real documents injects
 /// a resolver: it is responsible for fetching the IRI and parsing the response into
-/// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails (unless `SILENT`).
+/// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails, `SILENT` or not.
 ///
 /// A resolver that refuses a source **by policy** — the host's catalog does not admit it —
 /// reports a diagnostic whose code is [`LOAD_DENIED`]. `LOAD SILENT` licenses the query

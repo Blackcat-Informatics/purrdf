@@ -212,19 +212,22 @@ read its answer: an endpoint that does not allow the page's origin surfaces as a
 network error, which the handler above reports as a transport failure. Write
 `SERVICE SILENT` where an endpoint may be unreachable and its rows are optional.
 
-A variable endpoint, `SERVICE ?e { … }`, asks `resolveService` once for each
-distinct IRI `?e` is bound to, and every row an endpoint answers carries that
-`?e`. `?e` must be bound in every solution that reaches the clause: by a pattern
-earlier in the same group (a triple pattern, `VALUES`, `BIND`, or
-`LATERAL { SERVICE ?e { … } }`), or by the left side of the `OPTIONAL`, `MINUS`
-or group join whose right side holds the clause —
+A variable endpoint, `SERVICE ?e { … }`, answers every row with the `?e` of the
+endpoint that produced it. `?e` must be bound in every solution that reaches the
+clause, and where it is bound decides how many requests the clause makes. Bound
+by a pattern earlier in the same group (a triple pattern, `VALUES`, `BIND`, or
+`LATERAL { SERVICE ?e { … } }`), the clause is evaluated once per solution with
+that solution's bindings substituted into the forwarded query: one request per
+solution, so two solutions that name the same IRI send it two requests, which
+differ in the bindings they carry. Bound by the left side of the `OPTIONAL`,
+`MINUS` or group join whose right side holds the clause —
 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`, and likewise with `MINUS` or
 `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` — or, since a join is commutative,
 by the other side of the group join holding it, as in
 `{ SERVICE ?e { … } ?g ex:endpoint ?e }` (not an `OPTIONAL` or `MINUS` right
-side, which need not bind it). There the right side is still
-evaluated on its own, and the left side supplies only the list of endpoints to
-ask. A left row whose endpoint answers nothing keeps its bindings under
+side, which need not bind it), the right side is still evaluated on its own, the
+left side supplies only the list of endpoints to ask, and each distinct IRI is
+asked once. A left row whose endpoint answers nothing keeps its bindings under
 `OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an endpoint
 that fails contributes one row binding only `?e`, so its own left rows survive
 unextended and no other endpoint's rows change. An `?e` bound to a literal or
@@ -346,7 +349,9 @@ export default {
 Workers limits how many subrequests one invocation may make, and
 `maxRemoteRequests` is the exact control for it: every `SERVICE` request and
 every `LOAD` is charged before it reaches the handler, so a request never makes
-more subrequests than the ceiling. The Cache API does nothing on `workers.dev`
+more subrequests than the ceiling. A `SERVICE ?e` bound by a pattern earlier in
+its group is charged once per solution that reaches it, not once per endpoint,
+so size the ceiling to those solutions. The Cache API does nothing on `workers.dev`
 hostnames, so caching is effectively off there; on a custom domain it works. A
 runtime started without a cache configured (a locally run workerd, for
 example) rejects `cache.match` and `cache.put` with "No Cache was configured",

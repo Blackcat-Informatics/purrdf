@@ -342,9 +342,9 @@ wasm, and the synchronous API works as before.
 
 ### Answering `SERVICE`: `resolveService`
 
-`resolveService(request, ctx)` is called once for each `SERVICE` request a job issues,
-and may return its answer or a Promise of it. `request` is the SPARQL 1.1 Protocol POST
-to send:
+`resolveService(request, ctx)` is called once for each distinct `SERVICE` request a job
+issues, and may return its answer or a Promise of it. `request` is the SPARQL 1.1
+Protocol POST to send:
 
 - `endpoint`: the service IRI;
 - `queryText`: the forwarded query;
@@ -441,19 +441,23 @@ network error, which the handler above reports as a transport failure. Write
 
 ### Variable endpoints: `SERVICE ?e`
 
-A `SERVICE ?e { … }` asks `resolveService` once for each distinct IRI `?e` is bound to,
-and every row an endpoint answers carries that `?e`. `?e` must be bound in every solution
-that reaches the clause, by one of:
+A `SERVICE ?e { … }` answers every row with the `?e` of the endpoint that produced it.
+`?e` must be bound in every solution that reaches the clause, and where it is bound
+decides how many requests the clause makes. It is bound by one of:
 
 - a pattern earlier in the same group — a triple pattern, `VALUES`, `BIND`, or an
-  explicit `LATERAL { SERVICE ?e { … } }`. Each solution's IRI is substituted into the
-  clause;
+  explicit `LATERAL { SERVICE ?e { … } }`. The clause is evaluated once per solution,
+  with that solution's bindings substituted into the forwarded query: one request per
+  solution, so two solutions that name the same IRI send it two requests, which differ
+  in the bindings they carry. (A job asks `resolveService` only once for a request it
+  repeats exactly; see [Concurrency](#concurrency).)
 - the left side of the `OPTIONAL`, `MINUS` or group join whose right side holds the
   clause: `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`,
   `?g ex:endpoint ?e MINUS { SERVICE ?e { … } }`,
   `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }`. The right side is still evaluated on its
   own, as SPARQL evaluates it; the left side supplies only the list of endpoints to ask,
-  and a row from any other endpoint could match no left row anyway. A left row whose
+  each distinct IRI is asked once, and a row from any other endpoint could match no left
+  row anyway. A left row whose
   endpoint answers nothing keeps its own bindings under `OPTIONAL` and is not removed
   under `MINUS`;
 - the other side of the group join that holds the clause: `{ SERVICE ?e { … } ?g
@@ -738,7 +742,10 @@ Workers limits how many subrequests one invocation may make. `maxRemoteRequests`
 exact control for that limit. Every `SERVICE` request and every `LOAD` is charged against
 it before it reaches the handler, including one the cache then answers, so a request
 never makes more subrequests than the ceiling. Set it to the subrequests you allow one
-query. The Cache API does nothing on `workers.dev` hostnames, so caching is effectively
+query. A `SERVICE ?e` bound by a pattern earlier in its group is charged once per
+solution that reaches it, not once per endpoint (see
+[Variable endpoints](#variable-endpoints-service-e)), so size the ceiling to those
+solutions. The Cache API does nothing on `workers.dev` hostnames, so caching is effectively
 off there; on a Worker served from a custom domain it works. A runtime started without a
 cache configured (a locally run workerd, for example) rejects `cache.match` and
 `cache.put` with "No Cache was configured", which is exactly the failure `onCacheError`

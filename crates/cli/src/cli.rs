@@ -415,8 +415,8 @@ pub(crate) enum Command {
         max_scratch_bytes: Option<u64>,
         /// Bound the requests issued to a remote or federated endpoint by a `SERVICE`
         /// clause. The ceiling is enforced and reported like any other; this binary
-        /// configures no federation source, so a `SERVICE` clause fails to evaluate
-        /// before it can be charged.
+        /// configures no federation source, so a `SERVICE` clause, `SILENT` or not,
+        /// fails to evaluate before it can be charged.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
         /// Print what the engine does with the query and what it costs — the charge

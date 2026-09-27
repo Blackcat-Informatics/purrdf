@@ -741,19 +741,32 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   under `SILENT` too, because `SILENT` tolerates an endpoint that fails, not a query
   that names none. Its message names the shapes that evaluate and the rewrite.
 
-- **BREAKING** **sparql-eval:** `SILENT` no longer hides the engine's own missing
-  endpoint. `SERVICE SILENT <iri>` evaluated with no remote query source configured,
-  and `SERVICE SILENT ?e` with `?e` bound to a literal or a blank node, answered the
-  join identity having asked nobody; `LOAD SILENT` with no `GraphResolver` succeeded
-  having fetched nothing. Each is now the error its non-`SILENT` form raises
-  (`no remote query source configured for SERVICE <…>`, `?e is bound to …, which is
-  not an IRI`, `native-sparql-load-no-resolver`), ending with why `SILENT` does not
-  apply: it tolerates an endpoint or document that fails, and none was reached.
+- **BREAKING** **sparql-eval, wasm, cli, python, capi:** `SILENT` no longer hides the
+  engine's own missing endpoint. `SERVICE SILENT <iri>` evaluated with no remote query
+  source configured, and `SERVICE SILENT ?e` with `?e` bound to a literal or a blank
+  node, answered the join identity having asked nobody; `LOAD SILENT` with no
+  `GraphResolver` succeeded having fetched nothing. Each is now the error its
+  non-`SILENT` form raises: `native-sparql-service-unconfigured` (`no remote query
+  source configured for SERVICE <…>`), `?e is bound to …, which is not an IRI`, and
+  `native-sparql-load-no-resolver`, each message ending with why `SILENT` does not
+  apply. The reason: `SILENT` tolerates a failure of an endpoint or source that was
+  actually contacted — a transport error, an HTTP error status, a redirect, an
+  undecodable body, a resolver's timeout — and here none was contacted, so the join
+  identity or a no-op `LOAD` would report an answer that looks complete and is not.
+  A host or catalog denial, an unbound `?e`, and the engine's own refusals were
+  already hard errors under `SILENT` and remain so.
+  **Every surface that installs no source breaks the same way**, where the last
+  release answered the join identity or a no-op: the wasm package's synchronous
+  methods, the `purrdf` CLI (`query`, `update`, and SHACL-SPARQL constraints under
+  `validate`), the Python binding, and the C ABI. A query that relied on
+  `SERVICE SILENT` or `LOAD SILENT` succeeding there must drop the clause, or run
+  through a surface that is given a source (a Rust `ServiceResolver` or
+  `GraphResolver`, or the wasm package's asynchronous twins with `resolveService` /
+  `resolveLoad`).
   `RemoteError::Unconfigured` lets a source say it has nothing that reaches an
   endpoint (the wasm package's job with local services and no `resolveService` does),
   and is not silenceable either. With a source whose endpoint fails, `SILENT` is still
-  the join identity and a no-op `LOAD`. On the wasm package's synchronous lane, which
-  installs no source, `SERVICE SILENT` and `LOAD SILENT` are refused. The conformance
+  the join identity and a no-op `LOAD`. The conformance
   harness now runs every case with an in-memory source that fails undeclared
   endpoints and an offline `LOAD` resolver, standing in for the network the W3C
   suites assume (`service7`, `load-silent`, `load-into-silent` still pass).

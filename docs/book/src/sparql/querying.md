@@ -490,7 +490,9 @@ that names none. When an enclosing pattern binds `?g` — a preceding triple
 pattern in the same group, or a `LATERAL` left-hand side's per-row correlation
 — the endpoint resolves to that IRI before the remote call is made (the same
 per-row substitution described under "Points of disagreement with Jena" above)
-and the query dispatches normally, the same as a `SERVICE` with a fixed IRI.
+and the query dispatches normally, the same as a `SERVICE` with a fixed IRI:
+one request per incoming solution, so two solutions that name the same IRI each
+send their own.
 When the left side of the `OPTIONAL`, `MINUS` or group join holding the clause
 binds `?g` in every solution, the right side is still evaluated on its own and
 the clause is sent once to each distinct IRI that left side binds `?g` to. A
@@ -563,7 +565,7 @@ exactly, and confines it to what it is a promise *about*:
 | Outcome | `SERVICE` | `SERVICE SILENT` |
 |---|---|---|
 | The endpoint is unreachable, or its response undecodable | query error | join identity |
-| A capability was denied | query error | query error |
+| A capability was denied, or the host refused the request | query error | query error |
 | No endpoint was reached: no source is configured, or the endpoint value is not an IRI | query error | query error |
 | This engine's own governor tripped | truncation | truncation |
 

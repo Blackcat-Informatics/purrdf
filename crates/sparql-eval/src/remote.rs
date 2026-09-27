@@ -34,18 +34,24 @@
 //! unchanged. With no source configured, both raise [`EvalError::ServiceUnconfigured`]:
 //! no endpoint was reached, so there is no endpoint failure for `SILENT` to tolerate.
 //!
-//! A variable endpoint (`SERVICE ?e`) is evaluated once per distinct IRI `?e` is bound
-//! to — by a pattern earlier in its group, by the left operand of the group join,
-//! `OPTIONAL` or `MINUS` it sits in, or by the other side of a group join. One that no solution
-//! binds is not an endpoint failure but this engine's refusal, so it is an
-//! [`EvalError::Unsupported`] that `SILENT` does not swallow: `SILENT` tolerates an
-//! endpoint that fails, not a query that names none.
+//! A variable endpoint (`SERVICE ?e`) takes one of two routes, and they issue different
+//! numbers of requests. Bound by a pattern earlier in its group, the clause is the right
+//! side of a `LATERAL` join and each left solution is substituted into it: one request
+//! per left solution, each forwarding that solution's bindings, so two solutions that
+//! name the same IRI send it two requests. Bound by the left operand of the group join,
+//! `OPTIONAL` or `MINUS` it sits in, or by the other side of a group join, the clause is
+//! evaluated apart from those solutions and sends one request to each distinct IRI `?e`
+//! takes there (see `service_endpoints`). One that no solution binds is not an endpoint
+//! failure but this engine's refusal, so it is an [`EvalError::Unsupported`] that
+//! `SILENT` does not swallow: `SILENT` tolerates an endpoint that fails, not a query that
+//! names none.
 //!
-//! A [`RemoteError::Denied`] is the exception, and belongs with the governors below
-//! rather than with the endpoint failures above: it is a refusal decided on *this* side
-//! of the seam, so `SILENT` never swallows it — at any nesting depth, which is why it
-//! travels as the structured [`EvalError::ServiceDenied`] rather than as message text.
-//! See [`crate::service`] for the full contract table.
+//! [`RemoteError::Denied`] and [`RemoteError::HostDenied`] are exceptions too, and belong
+//! with the governors below rather than with the endpoint failures above: each is a
+//! refusal decided on *this* side of the seam, so `SILENT` never swallows it — at any
+//! nesting depth, which is why each travels as a structured error
+//! ([`EvalError::ServiceDenied`], [`EvalError::ServiceHostDenied`]) rather than as
+//! message text. See [`crate::service`] for the full contract table.
 //!
 //! # `SILENT` is about the endpoint, never about this engine's budget
 //!
@@ -97,8 +103,10 @@ pub struct ResolvedBindings {
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
-/// swallowed is decided by `eval_service` from the `SILENT` flag, not here — with the one
-/// exception of [`Self::Governed`], which `SILENT` cannot swallow.
+/// swallowed is decided by `eval_service` from the `SILENT` flag, not here. `SILENT`
+/// swallows only an endpoint that was contacted and failed ([`Self::Transport`],
+/// [`Self::Decode`], [`Self::Disabled`]); every other variant is a refusal or a budget
+/// outcome on this side of the seam, and `SILENT` cannot swallow it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RemoteError {
@@ -1488,7 +1496,8 @@ mod tests {
 
     #[test]
     fn service_silent_unknown_endpoint_is_a_noop() {
-        // SILENT against an unconfigured endpoint → identity → all left rows kept.
+        // SILENT against an endpoint the configured source cannot reach (a transport
+        // failure, not a missing source) → identity → all left rows kept.
         let source = InProcessServiceResolver::new(); // no endpoints registered
         let result = run_with_source(
             &local(),
@@ -1586,8 +1595,8 @@ mod tests {
 
     #[test]
     fn non_silent_service_without_source_hard_fails() {
-        // The engine's default EvalCtx has no remote source: a non-silent SERVICE
-        // must raise EvalError::Remote rather than silently contributing nothing.
+        // The engine's default EvalCtx has no remote source: a SERVICE must raise
+        // EvalError::ServiceUnconfigured rather than silently contributing nothing.
         let engine = NativeSparqlEngine::new();
         let err = engine
             .query(

@@ -19,8 +19,9 @@
 //!   ([`purrdf_sparql_eval`]) binds to the wasm [`Dataset`] (see the `query` module),
 //!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. The
 //!   synchronous lane is offline: it installs no remote source, so `SERVICE` / `LOAD`
-//!   hard-fails there rather than silently returning a partial answer — except for the
-//!   `SILENT` forms, which SPARQL 1.1 requires to succeed with nothing fetched. The
+//!   hard-fails there rather than silently returning a partial answer — the `SILENT`
+//!   forms included, because `SILENT` tolerates an endpoint or source that was contacted
+//!   and failed, and none is contacted there. The
 //!   asynchronous lane (the `async_query` module) runs the same evaluator as a job that
 //!   suspends through JSPI on host-resolved `SERVICE` and `LOAD` effects and yields to
 //!   the event loop, so the host owns the I/O and its policy while PurRDF keeps the
