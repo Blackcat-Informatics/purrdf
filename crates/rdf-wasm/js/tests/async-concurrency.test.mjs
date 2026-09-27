@@ -614,7 +614,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
     settled: "rejected",
     name: "Error",
     message:
-      "error native-sparql-query-eval: SERVICE federation error: SERVICE <http://example.org/sparql>: " +
+      "error native-sparql-service-failed: SERVICE federation error: SERVICE <http://example.org/sparql>: " +
       "transport: the example.org endpoint is unreachable",
   });
   assert.deepEqual(report.updateBefore, { settled: "resolved" });

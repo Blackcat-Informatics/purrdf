@@ -276,27 +276,33 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 `handleSparqlRequest`, which answers one SPARQL 1.1 Protocol request with a
 `Response`: `200` with the negotiated document, `413` when the body exceeds
 `maxRequestBytes` (1 MiB by default — a query or update's text is a program,
-not a payload), `422` or `503` when a governor stopped it (never a `200` with
-a partial body), `application/problem+json` errors, `Server-Timing` from the
-job's evidence, and CORS when asked for. A request the engine refuses to
-evaluate as written — an unsupported construct, an unregistered function,
-nesting past the host-stack budget — is a `400` whose `code` is the engine's
-diagnostic code. A `500`'s `detail` is the engine's
-own words for the query's own failures (a parse, an evaluation, a tripped
-governor); a bug this endpoint cannot attribute to the query — a
+not a payload), `422` or `503` when a governor stopped it (never a `200`
+with a partial body), `application/problem+json` errors, `Server-Timing`
+from the job's evidence, and CORS when asked for. A request the engine
+refuses to evaluate as written — an unsupported construct, an unregistered
+function, nesting past the host-stack budget — is a `400` whose `code` is
+the engine's diagnostic code. A `SERVICE` endpoint or `LOAD` source the host
+refuses to contact — the catalog withholds a capability, or the resolver's
+own policy refuses — is a `403`, and one that was contacted and gave no
+usable answer is a `502`; each carries the engine's diagnostic code as its
+`code` and a fixed `detail`, never the engine's message, which would echo
+the catalog's policy or a resolver's or remote's own words. A `500`'s
+`detail` is the engine's own words for the query's own failures (a parse, an
+evaluation, a tripped governor); a fault this endpoint cannot attribute to
+the query — no resolver reaching a named endpoint, a
 `resolveService`/`resolveLoad` that throws, or any other exception the
 adapter did not otherwise classify — never reaches the response as its own
 message or stack: the client gets a fixed generic `detail` and a
 `correlationId`, and the real error goes to `onInternalError` (one
 `console.error` line by default) alone. A `Content-Length` over the bound is
-refused before anything is read; a missing or understated one is still caught
-by counting bytes as the body streams in, so a lying header never buys a
-larger body than an honest one would. Both resolvers fetch with
-`redirect: "manual"`: a `SERVICE` request never follows a redirect (a 3xx is a
-typed transport failure, so a catalogued endpoint's headers and credential can
-never reach a different origin), and a `LOAD` follows one only by
-re-authorizing the redirected IRI against the catalog before every hop, up to
-`maxRedirects` (5 by default). A complete Worker:
+refused before anything is read; a missing or understated one is still
+caught by counting bytes as the body streams in, so a lying header never
+buys a larger body than an honest one would. Both resolvers fetch with
+`redirect: "manual"`: a `SERVICE` request never follows a redirect (a 3xx is
+a typed transport failure, so a catalogued endpoint's headers and credential
+can never reach a different origin), and a `LOAD` follows one only by
+re-authorizing the redirected IRI against the catalog before every hop, up
+to `maxRedirects` (5 by default). A complete Worker:
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";

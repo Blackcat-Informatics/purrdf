@@ -647,14 +647,7 @@ pieces:
   (an opaque one withholds it), is a `{ kind: "transport" }` failure.
 - `handleSparqlRequest(request, options)` answers one protocol request (`GET ?query=`,
   or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
-  a `Response`. The statuses are `200` with the negotiated document, `204` for an
-  applied update, `400`/`405`/`415` for a malformed request, `400` for one the engine
-  refuses to evaluate as written (an unsupported construct such as a `SERVICE ?e` no
-  solution names an endpoint for, an unregistered function, nesting past the host-stack
-  budget), with the engine's diagnostic code as its `code`, `406` when no acceptable
-  format can carry the result, `413` when the body exceeds `maxRequestBytes`, `422` when
-  a deterministic ceiling stopped the request, `503` when the deadline or a cancellation
-  did, and `500` when evaluation failed. A partial answer is never sent with a `200`.
+  a `Response`, by the status table below. A partial answer is never sent with a `200`.
   Every error body is `application/problem+json` (RFC 9457) with a stable `code`, and
   every evaluated response carries `Server-Timing` from the job's evidence. The `cors`
   option answers preflights and adds `Access-Control-Allow-Origin`; without it no CORS
@@ -663,15 +656,40 @@ pieces:
   comfortably covers even a large one) bounds the request body — a `Content-Length`
   above it is refused before anything is read, and a missing or understated one is still
   caught by counting bytes as the body streams in, so a lying header never buys a larger
-  body than an honest one would. A `500`'s `detail` is the engine's own words only when
-  the failure is the query's — an evaluation, a tripped governor: a SPARQL
-  client is owed the reason its request failed. A bug this endpoint cannot attribute to
-  the query itself — `resolveService`/`resolveLoad` throwing or rejecting, or any other
-  exception this adapter did not otherwise classify — never puts its own message or stack
-  in the response: it gets a fixed generic `detail`, `code: "InternalError"` and a fresh
-  `correlationId`, while the real error goes to exactly one place, `onInternalError(error,
-  { correlationId, request })` (one `console.error(error, correlationId)` line by
-  default), so an operator can always join what the client saw to what actually broke.
+  body than an honest one would. An error's `detail` is the engine's own words only when
+  the failure is the query's — a refusal to evaluate it as written, its evaluation, a
+  tripped governor: a SPARQL client is owed the reason its request failed. A `403` or
+  `502` gets a fixed `detail` for its code instead, because the engine's message would
+  echo the catalog's policy or a resolver's or remote's own words. A fault of this
+  endpoint's own — no resolver reaching a named endpoint or source, a `resolveLoad`
+  answer that is not one, `resolveService`/`resolveLoad` throwing or rejecting, a
+  rejection no engine code classifies, any other exception this adapter did not
+  otherwise classify — never puts its own message or stack in the response: it gets a
+  fixed `detail` and a fresh `correlationId`, while the real error goes to exactly one
+  place, `onInternalError(error, { correlationId, request })` (one
+  `console.error(error, correlationId)` line by default), so an operator can always join
+  what the client saw to what actually broke.
+
+| Status | `code` | When |
+|---|---|---|
+| `200` | — | a query answered, with the negotiated document |
+| `204` | — | an update applied |
+| `400` | the protocol refusal's name | a malformed request or operation |
+| `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, nesting past the host-stack budget); `detail` is the engine's message |
+| `403` | `native-sparql-service-denied` | the catalog withholds a capability from a `SERVICE` endpoint the query names; no endpoint was contacted |
+| `403` | `native-sparql-service-host-denied` | `resolveService` refused the request by its own policy (`{ kind: "denied" }`); no endpoint was contacted |
+| `403` | `native-sparql-load-denied` | the catalog does not authorize a `LOAD` source; nothing was fetched |
+| `405` | the protocol refusal's name | a method the protocol does not bind |
+| `406` | `NotAcceptable` | no acceptable format can carry the result |
+| `413` | `ContentTooLarge` | the body exceeds `maxRequestBytes` |
+| `415` | the protocol refusal's name | a `Content-Type` the protocol does not define |
+| `422` | the governor's label | a deterministic ceiling stopped the request |
+| `500` | the engine's diagnostic code (`native-sparql-query-eval`, `native-sparql-evaluation-stack-exhausted`, …) | the query's evaluation failed; `detail` is the engine's message |
+| `500` | `native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`, `native-sparql-load-fault` | no resolver reaches a named endpoint or source, or `resolveLoad` answered with something that is not an answer; with a `correlationId` |
+| `500` | `InternalError` | a host-supplied resolver threw or rejected, a rejection no engine code classifies, or any other unexpected exception; with a `correlationId` |
+| `502` | `native-sparql-service-failed` | a `SERVICE` endpoint was contacted and gave no usable answer: a network error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body |
+| `502` | `native-sparql-load-failed` | a `LOAD` source could not be fetched or read |
+| `503` | the governor's label, or `cancelled` | the deadline or a cancellation stopped the request (no `Retry-After`: the same request would stop again) |
 
 A complete Worker:
 

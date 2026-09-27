@@ -1921,16 +1921,39 @@ test("a deadline or a cancelled request is a 503 without Retry-After, not a 422"
   assert.equal(answered.status, 200);
 });
 
-test("an evaluation failure is a 500 problem", async () => {
+// A SERVICE no resolver reaches is this endpoint's own configuration fault: a 500 carrying
+// the engine's code, a fixed detail and a correlation id, with the engine's words in the
+// log alone. The neighbour is the identical query with a resolver that reaches it.
+test("refusal pair: a SERVICE no resolver reaches is a 500 with its engine code and a correlation id; with a resolver it answers 200", async () => {
+  const { errors, onInternalError } = recordingInternalErrors();
   const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
     engine: new QueryEngine(),
     dataset: dataset(),
     governors: GOVERNORS,
+    onInternalError,
   });
   assert.equal(response.status, 500);
   const body = await problemOf(response);
   assert.equal(body.title, "Internal Server Error");
-  assert.match(body.detail, /no remote query source configured/);
+  assert.equal(body.code, "native-sparql-service-unconfigured");
+  assert.equal(body.detail, "this endpoint has no way to reach a SERVICE endpoint this operation names");
+  assert.equal(typeof body.correlationId, "string");
+  assert.equal(errors.length, 1, "the real error went to the log");
+  assert.equal(errors[0].correlationId, body.correlationId);
+  assert.match(errors[0].error.message, /no remote query source configured/);
+
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const answered = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    catalog,
+    resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() }),
+    onInternalError,
+  });
+  assert.equal(answered.status, 200);
+  assert.deepEqual(rowsOf(await answered.text()), [`s=${EX}a&x=x1`, `s=${EX}b&x=x2`]);
+  assert.equal(errors.length, 1, "the answered neighbour reports nothing");
 });
 
 // A request the engine refuses to evaluate as written is the client's to change: a 400
@@ -2222,12 +2245,251 @@ test("the catalog denies an unlisted endpoint before any fetch; a listed one is 
     resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch }),
   };
   const denied = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(OTHER)) }), options);
-  assert.equal(denied.status, 500);
-  assert.match((await problemOf(denied)).detail, /no profile is configured for this service/);
+  assert.equal(denied.status, 403);
+  assert.equal((await problemOf(denied)).code, "native-sparql-service-denied");
   assert.equal(calls.length, 0);
   const listed = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), options);
   assert.equal(listed.status, 200);
   assert.equal(calls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Each failure answers with its own status and the engine's own code. A 403 or 502 never
+// carries the engine's message — it would echo the catalog's policy or a resolver's or
+// remote's own words — and every refusal is paired with an endpoint the same catalog
+// allows, which answers 200, so the difference is the endpoint's and nothing else's.
+// ---------------------------------------------------------------------------
+
+const BROKEN = "https://broken.example.org/sparql";
+const WITHHELD = "https://withheld.example.org/sparql";
+
+/** A fetch double: `BROKEN` answers `broken()`, every other URL the remote's rows. */
+function routedFetch(broken) {
+  return recordingFetch((url) => (String(url) === BROKEN ? broken() : srjResponse()));
+}
+
+/** `handleSparqlRequest` options over a catalog that allows `REMOTE` and `BROKEN`. */
+function federatedEndpoint(fetch, onInternalError) {
+  const catalog = catalogFor(
+    [REMOTE, QUERY_NETWORK],
+    [BROKEN, QUERY_NETWORK],
+    [WITHHELD, { capabilities: ["query"], headers: [["X-Config-Secret", "catalog-secret-42"]] }],
+  );
+  return {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    catalog,
+    resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch }),
+    onInternalError,
+  };
+}
+
+/** Assert the allowed neighbour answers 200 with the remote's rows. */
+async function assertAllowedAnswers(options) {
+  const allowed = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(REMOTE)) }), options);
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(rowsOf(await allowed.text()), [`s=${EX}a&x=x1`, `s=${EX}b&x=x2`]);
+}
+
+test("refusal pair: a SERVICE the catalog denies is a 403 with its engine code and none of the catalog's configuration; an endpoint the same catalog allows answers 200", async () => {
+  const { errors, onInternalError } = recordingInternalErrors();
+  const { calls, fetch } = routedFetch(() => srjResponse());
+  const options = federatedEndpoint(fetch, onInternalError);
+  for (const endpoint of [WITHHELD, OTHER]) {
+    const denied = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(endpoint)) }), options);
+    assert.equal(denied.status, 403, endpoint);
+    const raw = await denied.clone().text();
+    assert.doesNotMatch(raw, /withholds|profile|fallback|network capability|X-Config-Secret|catalog-secret-42/);
+    const body = await problemOf(denied);
+    assert.equal(body.title, "Forbidden");
+    assert.equal(body.code, "native-sparql-service-denied");
+    assert.equal(
+      body.detail,
+      "the service catalog does not authorize a SERVICE request this operation makes; no endpoint was contacted",
+    );
+    assert.equal(body.correlationId, undefined);
+  }
+  assert.equal(calls.length, 0, "no endpoint was contacted");
+  assert.equal(errors.length, 0, "a client's refusal is not an internal error");
+
+  await assertAllowedAnswers(options);
+  assert.deepEqual(calls.map((call) => call.url), [REMOTE]);
+});
+
+test("refusal pair: a SERVICE the resolver's own policy denies is a 403 with its engine code and none of the resolver's words; a request it allows answers 200", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK], [BROKEN, QUERY_NETWORK]);
+  const options = {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    catalog,
+    resolveService: async (request) =>
+      request.endpoint === BROKEN
+        ? { kind: "denied", message: "rate limit bucket secret-bucket-7 is empty" }
+        : REMOTE_OX,
+  };
+  const denied = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(BROKEN)) }), options);
+  assert.equal(denied.status, 403);
+  assert.doesNotMatch(await denied.clone().text(), /secret-bucket-7|rate limit/);
+  const body = await problemOf(denied);
+  assert.equal(body.code, "native-sparql-service-host-denied");
+  assert.equal(
+    body.detail,
+    "this endpoint's host policy refused a SERVICE request this operation makes; no endpoint was contacted",
+  );
+  await assertAllowedAnswers(options);
+});
+
+test("refusal pair: a SERVICE endpoint that answers an HTTP error is a 502 with its engine code and none of its words; an allowed endpoint that answers is 200", async () => {
+  const { errors, onInternalError } = recordingInternalErrors();
+  const { calls, fetch } = routedFetch(
+    () => new Response("upstream-secret-body", { status: 500, statusText: "Upstream Secret Status" }),
+  );
+  const options = federatedEndpoint(fetch, onInternalError);
+  const failed = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(BROKEN)) }), options);
+  assert.equal(failed.status, 502);
+  assert.doesNotMatch(await failed.clone().text(), /upstream-secret|Upstream Secret|HTTP 500|transport/);
+  const body = await problemOf(failed);
+  assert.equal(body.title, "Bad Gateway");
+  assert.equal(body.code, "native-sparql-service-failed");
+  assert.equal(body.detail, "a SERVICE endpoint this operation names did not return a usable answer");
+  assert.deepEqual(calls.map((call) => call.url), [BROKEN], "the endpoint was contacted");
+  assert.equal(errors.length, 0, "an upstream failure is not this endpoint's internal error");
+
+  await assertAllowedAnswers(options);
+});
+
+test("refusal pair: a SERVICE whose transport throws is a 502 with its engine code and none of the exception's words; an allowed endpoint that answers is 200", async () => {
+  const { errors, onInternalError } = recordingInternalErrors();
+  const { fetch } = routedFetch(() => {
+    throw new TypeError("connect ECONNREFUSED secret-internal-host:8443");
+  });
+  const options = federatedEndpoint(fetch, onInternalError);
+  const failed = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(BROKEN)) }), options);
+  assert.equal(failed.status, 502);
+  assert.doesNotMatch(await failed.clone().text(), /ECONNREFUSED|secret-internal-host|TypeError/);
+  const body = await problemOf(failed);
+  assert.equal(body.code, "native-sparql-service-failed");
+  assert.equal(body.detail, "a SERVICE endpoint this operation names did not return a usable answer");
+  assert.equal(errors.length, 0);
+
+  // SILENT still swallows exactly this failure: the join identity, a 200.
+  const silent = await handleSparqlRequest(
+    httpRequest({ query: q(FEDERATED(BROKEN).replace("SERVICE <", "SERVICE SILENT <")) }),
+    options,
+  );
+  assert.equal(silent.status, 200);
+  await assertAllowedAnswers(options);
+});
+
+test("refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails a 502, each with its engine code and none of its words; an allowed, answering source is 204", async () => {
+  const catalog = catalogFor([DOC, { capabilities: ["network"] }], [BROKEN, { capabilities: ["network"] }]);
+  const { calls, fetch } = recordingFetch((url) =>
+    String(url) === BROKEN
+      ? new Response("upstream-secret-body", { status: 503 })
+      : new Response(TTL, { headers: { "Content-Type": "text/turtle" } }),
+  );
+  const options = () => ({
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveLoad: createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch }),
+  });
+  const update = (text) =>
+    httpRequest({ method: "POST", body: text, contentType: "application/sparql-update" });
+
+  const denied = await handleSparqlRequest(update(`LOAD <${OTHER}>`), options());
+  assert.equal(denied.status, 403);
+  assert.doesNotMatch(await denied.clone().text(), /withholds|profile|fallback/);
+  const deniedBody = await problemOf(denied);
+  assert.equal(deniedBody.code, "native-sparql-load-denied");
+  assert.equal(
+    deniedBody.detail,
+    "the service catalog does not authorize a LOAD source this update names; nothing was fetched",
+  );
+  assert.equal(calls.length, 0);
+
+  const failed = await handleSparqlRequest(update(`LOAD <${BROKEN}>`), options());
+  assert.equal(failed.status, 502);
+  assert.doesNotMatch(await failed.clone().text(), /upstream-secret|HTTP 503/);
+  const failedBody = await problemOf(failed);
+  assert.equal(failedBody.code, "native-sparql-load-failed");
+  assert.equal(failedBody.detail, "a LOAD source this update names could not be fetched or read");
+
+  const loaded = await handleSparqlRequest(update(`LOAD <${DOC}>`), options());
+  assert.equal(loaded.status, 204);
+  assert.deepEqual(calls.map((call) => call.url), [BROKEN, DOC]);
+});
+
+// A rejection no engine code classifies is not the query's failure, and its words are
+// never the client's: a 500 under the adapter's own stable name, never a JavaScript error
+// class name. Here the engine's twin refuses a catalog given with no resolveService; the
+// neighbour gives it one and answers.
+test("refusal pair: a rejection no engine code classifies is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const { errors, onInternalError } = recordingInternalErrors();
+  const unclassified = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    catalog,
+    onInternalError,
+  });
+  assert.equal(unclassified.status, 500);
+  const raw = await unclassified.clone().text();
+  assert.doesNotMatch(raw, /resolveService handler/);
+  const body = await problemOf(unclassified);
+  assert.equal(body.code, "InternalError");
+  assert.notEqual(body.code, "Error");
+  assert.equal(body.detail, `internal error; see the Worker log for correlation id ${body.correlationId}`);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].correlationId, body.correlationId);
+  assert.match(errors[0].error.message, /no resolveService handler was supplied/);
+
+  const answered = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    catalog,
+    resolveService: async () => REMOTE_OX,
+    onInternalError,
+  });
+  assert.equal(answered.status, 200);
+  assert.equal(errors.length, 1);
+});
+
+// The query's own evaluation failure keeps its 500, now with the engine's code as `code`
+// (never "Error") and the engine's words as `detail`: nothing in them is the host's. A
+// request nested past a small stack region is one; the shallow neighbour answers.
+test("refusal pair: an evaluation failure is a 500 with the engine's code and words; the shallow neighbour answers 200", async () => {
+  const chain = (() => {
+    const lines = [];
+    for (let index = 0; index < 200; index += 1) lines.push(`<${EX}n${index}> <${EX}p> <${EX}n${index + 1}> .`);
+    return `${lines.join("\n")}\n`;
+  })();
+  const nested = (depth) => {
+    let pattern = `?v${depth} <${EX}p> ?v${depth + 1}`;
+    for (let level = depth - 1; level >= 0; level -= 1) {
+      pattern = `?v${level} <${EX}p> ?v${level + 1} OPTIONAL { ${pattern} }`;
+    }
+    return `SELECT * WHERE { ${pattern} }`;
+  };
+  const options = {
+    engine: new QueryEngine(),
+    dataset: Dataset.parse(chain, "nquads"),
+    governors: GOVERNORS,
+    stackBytes: 524288,
+  };
+  const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(140)) }), options);
+  assert.equal(exhausted.status, 500);
+  const body = await problemOf(exhausted);
+  assert.equal(body.code, "native-sparql-evaluation-stack-exhausted");
+  assert.match(body.detail, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+  assert.equal(body.correlationId, undefined);
+
+  const shallow = await handleSparqlRequest(httpRequest({ query: q(nested(3)) }), options);
+  assert.equal(shallow.status, 200);
 });
 
 test("a federated query runs end to end through a service binding", async () => {

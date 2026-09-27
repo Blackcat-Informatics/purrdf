@@ -860,10 +860,10 @@ mod effect_free_gate_tests {
         );
     }
 
-    fn assert_remote_error(err: &EvalError) {
+    fn assert_service_unconfigured_error(err: &EvalError) {
         assert!(
-            matches!(err, EvalError::Remote(_)),
-            "expected EvalError::Remote, got {err:?}"
+            matches!(err, EvalError::ServiceUnconfigured(_)),
+            "expected EvalError::ServiceUnconfigured, got {err:?}"
         );
     }
 
@@ -1069,14 +1069,14 @@ mod effect_free_gate_tests {
         // No remote source is configured on this `EvalCtx`, so a non-SILENT
         // `SERVICE` hard-errors — the same failure mode a top-level (non-EXISTS)
         // query using this SERVICE call would raise.
-        assert_remote_error(
+        assert_service_unconfigured_error(
             &outside_result(&ds, &inner)
                 .expect_err("SERVICE must federation-error outside EXISTS too"),
         );
 
         let results = exists_results(&ds, &inner);
         assert_eq!(results.len(), 1);
-        assert_remote_error(
+        assert_service_unconfigured_error(
             results[0]
                 .as_ref()
                 .expect_err("Law 1 must not delete a B carrying a non-SILENT SERVICE call"),

@@ -151,6 +151,17 @@ pub enum EvalError {
     /// instead swallows the failure to the join identity.
     Remote(String),
 
+    /// A `SERVICE` had no source to send its request to: the engine was given no remote
+    /// query source at all, or its source answered that nothing it holds reaches the
+    /// endpoint ([`RemoteError::Unconfigured`](crate::RemoteError::Unconfigured)).
+    ///
+    /// Distinct from [`Self::Remote`] because the two are different facts with different
+    /// owners: [`Self::Remote`] is an endpoint that was asked and failed, this is a host
+    /// that was never given a way to ask — its own configuration, not the endpoint's
+    /// fault. `SERVICE SILENT` does not swallow it, for that reason. It renders exactly as
+    /// [`Self::Remote`] does; the two differ in [`Self::code`].
+    ServiceUnconfigured(String),
+
     /// A [`ServiceResolver`](crate::ServiceResolver)'s per-service policy withheld a
     /// capability, so the `SERVICE` step was refused before any endpoint was consulted.
     ///
@@ -382,6 +393,7 @@ impl EvalError {
             | Self::Dataset(_)
             | Self::Internal(_)
             | Self::Remote(_)
+            | Self::ServiceUnconfigured(_)
             | Self::ServiceDenied(_)
             | Self::ServiceHostDenied { .. }
             | Self::Data(_)
@@ -398,17 +410,46 @@ impl EvalError {
 
     /// The machine-readable code this error carries to the `SparqlEngine` boundary:
     /// [`Self::diagnostic_code`]; for [`Self::Dataset`], the dataset's own diagnostic
-    /// code; and for an unclassified [`Self::Unsupported`],
-    /// [`Self::UNSUPPORTED_CODE`], so a host can tell a request this engine refuses to
-    /// evaluate (the request's to change) from an evaluation that failed.
+    /// code; for an unclassified [`Self::Unsupported`], [`Self::UNSUPPORTED_CODE`], so a
+    /// host can tell a request this engine refuses to evaluate (the request's to change)
+    /// from an evaluation that failed; and for each `SERVICE` outcome its own code —
+    /// [`Self::SERVICE_DENIED_CODE`], [`Self::SERVICE_HOST_DENIED_CODE`],
+    /// [`Self::SERVICE_FAILED_CODE`], [`Self::SERVICE_UNCONFIGURED_CODE`] — so a host can
+    /// tell a refusal to ask an endpoint from an endpoint that failed, and both from a
+    /// host that had no way to ask, without reading message text.
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Dataset(diagnostic) => Some(&diagnostic.code),
             Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
+            Self::ServiceDenied(_) => Some(Self::SERVICE_DENIED_CODE),
+            Self::ServiceHostDenied { .. } => Some(Self::SERVICE_HOST_DENIED_CODE),
+            Self::Remote(_) => Some(Self::SERVICE_FAILED_CODE),
+            Self::ServiceUnconfigured(_) => Some(Self::SERVICE_UNCONFIGURED_CODE),
             other => other.diagnostic_code(),
         }
     }
+
+    /// The stable, machine-readable code [`Self::ServiceDenied`] carries to the
+    /// `SparqlEngine` boundary ([`Self::code`]): an installed service catalog withheld a
+    /// capability, so no endpoint was asked.
+    pub const SERVICE_DENIED_CODE: &'static str = "native-sparql-service-denied";
+
+    /// The stable, machine-readable code [`Self::ServiceHostDenied`] carries to the
+    /// `SparqlEngine` boundary ([`Self::code`]): the host's own resolver refused the
+    /// request by its own policy, with no catalog capability named, so no endpoint was
+    /// asked.
+    pub const SERVICE_HOST_DENIED_CODE: &'static str = "native-sparql-service-host-denied";
+
+    /// The stable, machine-readable code [`Self::Remote`] carries to the `SparqlEngine`
+    /// boundary ([`Self::code`]): the endpoint was asked and did not produce a decodable
+    /// answer — a transport failure, an HTTP error status, an undecodable body.
+    pub const SERVICE_FAILED_CODE: &'static str = "native-sparql-service-failed";
+
+    /// The stable, machine-readable code [`Self::ServiceUnconfigured`] carries to the
+    /// `SparqlEngine` boundary ([`Self::code`]): the engine had no source that reaches the
+    /// endpoint, so nothing was asked.
+    pub const SERVICE_UNCONFIGURED_CODE: &'static str = "native-sparql-service-unconfigured";
 
     /// The stable, machine-readable code an unclassified [`Self::Unsupported`] carries to
     /// the `SparqlEngine` boundary ([`Self::code`]): a well-formed request this engine
@@ -506,7 +547,9 @@ impl core::fmt::Display for EvalError {
                 diagnostic.message
             ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
-            Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
+            Self::Remote(msg) | Self::ServiceUnconfigured(msg) => {
+                write!(f, "SERVICE federation error: {msg}")
+            }
             Self::ServiceDenied(denial) => {
                 write!(f, "SERVICE federation denied: {denial}")
             }

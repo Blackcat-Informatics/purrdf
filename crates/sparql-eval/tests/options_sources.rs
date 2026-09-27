@@ -344,7 +344,7 @@ fn update_where_service_silent_without_a_source_is_a_hard_error_too() {
         QueryOptions::EMPTY,
     )
     .expect_err("SERVICE SILENT without a source is refused");
-    assert_eq!(err.code, "native-sparql-update-eval");
+    assert_eq!(err.code, "native-sparql-service-unconfigured");
     assert!(
         err.message.contains(&format!(
             "no remote query source configured for SERVICE <{ENDPOINT}>; SILENT does not apply"
@@ -382,7 +382,7 @@ fn update_where_service_without_a_source_is_a_hard_error() {
         QueryOptions::EMPTY,
     )
     .expect_err("a non-SILENT SERVICE with no source cannot be answered");
-    assert_eq!(err.code, "native-sparql-update-eval");
+    assert_eq!(err.code, "native-sparql-service-unconfigured");
     assert_eq!(
         err.message,
         format!(

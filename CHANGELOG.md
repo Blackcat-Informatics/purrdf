@@ -481,6 +481,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   sent with a 200. Errors are
   `application/problem+json` bodies with a stable `code`, `Server-Timing` reports
   the job's phases, and CORS headers are sent only when configured.
+  - Each failure answers with its own status and the engine's own diagnostic code as
+    `code`. A `SERVICE` endpoint the catalog or the resolver's own policy refuses to
+    contact is a 403 (`native-sparql-service-denied`,
+    `native-sparql-service-host-denied`), and so is a `LOAD` source the catalog does
+    not authorize (`native-sparql-load-denied`). A `SERVICE` endpoint or `LOAD`
+    source that was contacted and gave no usable answer, whether by a network error,
+    a timeout, an HTTP error status, a redirect or an undecodable body, is a 502
+    (`native-sparql-service-failed`, `native-sparql-load-failed`). A 403 or 502
+    carries a fixed `detail` for its code, never the engine's message, which would
+    echo the catalog's policy or a resolver's or remote's own words. A `SERVICE` or
+    `LOAD` no resolver reaches (`native-sparql-service-unconfigured`,
+    `native-sparql-load-no-resolver`), a `resolveLoad` answer that is not one
+    (`native-sparql-load-fault`), and a rejection no engine code classifies
+    (`InternalError`) are a 500 with a fixed `detail` and a `correlationId`, and the
+    real error goes to `onInternalError`. Every other evaluation failure is a 500
+    whose `code` is the engine's code, never a JavaScript error class name.
   `maxRemoteRequests` bounds the subrequests a request makes, because every
   `SERVICE` request and `LOAD` is charged before it reaches a handler.
 
@@ -2409,6 +2425,20 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   with a `400` whose `code` is that diagnostic code and whose `detail` is the refusal,
   where it answered `500 Internal Server Error`; a host fault is still the sanitized
   `500`.
+
+- **BREAKING** **sparql-eval:** each `SERVICE` outcome carries its own code at the
+  engine boundary, where every one used to carry `native-sparql-query-eval` or
+  `native-sparql-update-eval` like an evaluation that failed.
+  `EvalError::ServiceDenied` carries `native-sparql-service-denied`
+  (`EvalError::SERVICE_DENIED_CODE`), `EvalError::ServiceHostDenied`
+  `native-sparql-service-host-denied`, and `EvalError::Remote`, an endpoint that was
+  asked and gave no usable answer, `native-sparql-service-failed`. A `SERVICE` with
+  no source that reaches its endpoint is the new `EvalError::ServiceUnconfigured`,
+  where it was `EvalError::Remote`, and carries
+  `native-sparql-service-unconfigured`. Its message is unchanged, and
+  `SERVICE SILENT` still does not swallow it. A host can now tell a refusal to ask
+  an endpoint from an endpoint that failed, and both from a host that had no way to
+  ask, without reading message text.
 
 - **BREAKING** **sparql-eval:** `UnsupportedKind::GraphPatternDepthExceeded` and its
   code `native-sparql-graph-pattern-depth-exceeded` are removed (`UnsupportedKind::ALL`

@@ -170,9 +170,11 @@ export interface SparqlEndpointOptions {
   readonly maxRequestBytes?: number | null;
   /**
    * Reports an error this endpoint never describes to the client: a bug in
-   * `resolveService`/`resolveLoad`, or any other exception this adapter did not otherwise
-   * classify. Defaults to one `console.error(error, correlationId)` line; the response
-   * still gets a `500` with a fixed generic `detail` and the same `correlationId`.
+   * `resolveService`/`resolveLoad`, a `SERVICE` or `LOAD` no resolver reaches, a
+   * `resolveLoad` answer that is not one, a rejection no engine code classifies, or any
+   * other exception this adapter did not otherwise classify. Defaults to one
+   * `console.error(error, correlationId)` line; the response still gets a `500` with a
+   * fixed `detail` and the same `correlationId`.
    */
   readonly onInternalError?: InternalErrorReporter | null;
 }
@@ -181,17 +183,37 @@ export interface SparqlEndpointOptions {
  * The `application/problem+json` body of every error response (RFC 9457). `code` is the
  * refusal's stable name: a protocol error's name (`"MissingOperation"`, …), a tripped
  * governor's label (`"fuel-exhausted"`, `"deadline-exceeded"`, …), `"NotAcceptable"`,
- * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), `"InternalError"` (a host bug
- * or an unexpected exception; `detail` is generic and `correlationId` is the only lead,
- * shared with the matching `onInternalError` call), the engine's diagnostic code for a
- * request it refuses to evaluate as written (a `400`: `"native-sparql-unsupported"`,
- * `"native-sparql-custom-function"`, `"native-sparql-quoted-triple-term-variable"`,
- * `"native-sparql-host-stack-exhausted"`), or the evaluation error's own name.
+ * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), `"InternalError"` (a host bug,
+ * a rejection no engine code classifies, or an unexpected exception; `detail` is generic
+ * and `correlationId` is the only lead, shared with the matching `onInternalError` call),
+ * or the engine's own diagnostic code:
+ *
+ * - `400`, a request it refuses to evaluate as written (`detail` is the engine's
+ *   message): `"native-sparql-unsupported"`, `"native-sparql-custom-function"`,
+ *   `"native-sparql-quoted-triple-term-variable"`, `"native-sparql-host-stack-exhausted"`;
+ * - `403`, the host refused to contact a `SERVICE` endpoint or `LOAD` source the request
+ *   named: `"native-sparql-service-denied"` (the catalog withheld a capability),
+ *   `"native-sparql-service-host-denied"` (the resolver's own policy),
+ *   `"native-sparql-load-denied"`;
+ * - `502`, the endpoint or source was contacted and gave no usable answer (a network
+ *   error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body):
+ *   `"native-sparql-service-failed"`, `"native-sparql-load-failed"`;
+ * - `500` with a `correlationId`, this endpoint's own fault:
+ *   `"native-sparql-service-unconfigured"` and `"native-sparql-load-no-resolver"` (no
+ *   resolver reaches the named endpoint or source), `"native-sparql-load-fault"`
+ *   (`resolveLoad` answered with something that is not an answer);
+ * - `500`, the query's own evaluation failed (`detail` is the engine's message): any other
+ *   engine code, such as `"native-sparql-query-eval"` or
+ *   `"native-sparql-evaluation-stack-exhausted"`.
+ *
+ * A `403`, `502` or `500`-with-`correlationId` `detail` is a fixed description of its
+ * code, never the engine's message, which would echo the catalog's policy or a
+ * resolver's or remote's own words.
  */
 export interface SparqlProblem {
   readonly type: "about:blank";
   readonly title: string;
-  readonly status: 400 | 405 | 406 | 413 | 415 | 422 | 500 | 503;
+  readonly status: 400 | 403 | 405 | 406 | 413 | 415 | 422 | 500 | 502 | 503;
   readonly detail: string;
   readonly code: string;
   readonly parameter?: string;
@@ -201,7 +223,11 @@ export interface SparqlProblem {
   readonly estimate?: number;
   readonly cause?: string;
   readonly offered?: string[];
-  /** Only on `code: "InternalError"`: the id `onInternalError` was also handed. */
+  /**
+   * On a `500` this endpoint answers for its own fault (`code: "InternalError"`,
+   * `"native-sparql-service-unconfigured"`, `"native-sparql-load-no-resolver"`,
+   * `"native-sparql-load-fault"`): the id `onInternalError` was also handed.
+   */
   readonly correlationId?: string;
 }
 

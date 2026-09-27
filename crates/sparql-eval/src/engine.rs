@@ -2988,9 +2988,10 @@ where
 /// site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
-/// evaluation seam), preserved for every genuine gap: an `Internal`, `Remote`, `Data`,
+/// evaluation seam), preserved for every genuine gap: an `Internal`, `Data`,
 /// `Function`, or `Config`. An unclassified `Unsupported` carries
-/// [`crate::EvalError::UNSUPPORTED_CODE`]. The
+/// [`crate::EvalError::UNSUPPORTED_CODE`], and each `SERVICE` outcome its own
+/// `native-sparql-service-*` code. The
 /// single chokepoint every `EvalError -> RdfDiagnostic` reduction in this crate
 /// reads, so a caller further downstream (e.g. the golden-capture harness) can
 /// always recover the typed classification from `RdfDiagnostic::code` without
@@ -6362,7 +6363,7 @@ mod tests {
     #[test]
     fn update_is_atomic_on_a_where_eval_failure() {
         // A second atomicity proof through a different failure mode: a modify whose
-        // WHERE hits an unsupported construct (SERVICE → `native-sparql-update-eval`)
+        // WHERE hits a SERVICE with no source (`native-sparql-service-unconfigured`)
         // after a successful INSERT. The INSERT must not leak.
         let engine = NativeSparqlEngine::new();
         let mut ds = empty();
@@ -6380,7 +6381,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-update-eval");
+        assert_eq!(err.code, "native-sparql-service-unconfigured");
         assert_eq!(
             quad_set(&ds),
             before,
@@ -6410,8 +6411,8 @@ mod tests {
         // The mutating counterpart of the query-side admission refusal
         // (`crate::eval::tests`, or the query test just above): an UPDATE whose
         // prologue declares a `VERSION` this evaluator does not recognize must be
-        // refused through the SAME `native-sparql-update-eval` diagnostic code the
-        // WHERE-eval failure tests above use, and — the load-bearing half — must
+        // refused through the SAME `native-sparql-unsupported` diagnostic code the
+        // query-side refusal uses, and — the load-bearing half — must
         // leave the dataset byte-for-byte unchanged. `Arc::ptr_eq` proves the handle
         // was never even re-frozen to an equal value.
         let engine = NativeSparqlEngine::new();

@@ -61,12 +61,14 @@ const HANDLER_KEYS = [
 // Too Large"; this table follows the current RFC.
 const STATUS_TITLES = {
   400: "Bad Request",
+  403: "Forbidden",
   405: "Method Not Allowed",
   406: "Not Acceptable",
   413: "Content Too Large",
   415: "Unsupported Media Type",
   422: "Unprocessable Content",
   500: "Internal Server Error",
+  502: "Bad Gateway",
   503: "Service Unavailable",
 };
 
@@ -863,12 +865,12 @@ function protocolStep(step, headers, cors) {
  * parameters skips the recheck: its text was already parsed and validated by the splice
  * before the engine ever saw it, so a rejection there is never a syntax failure.
  */
-function reclassifiedFailure(operation, error, signal, headers, cors) {
+function reclassifiedFailure(operation, error, signal, headers, cors, internal) {
   if (!operation.hasDatasetParameters) {
     const recheck = protocolStep(() => operation.effectiveText(), headers, cors);
     if (recheck.response !== undefined) return recheck.response;
   }
-  return failure(error, signal, headers);
+  return failure(error, signal, headers, internal);
 }
 
 /**
@@ -886,14 +888,86 @@ const CLIENT_REFUSAL_CODES = new Set([
   "native-sparql-host-stack-exhausted",
 ]);
 
+/**
+ * The engine's diagnostic codes for a `SERVICE` or `LOAD` that did not answer, each with
+ * the status its meaning takes and the fixed `detail` that replaces the engine's message.
+ * That message is never the response's: it carries host configuration (the catalog
+ * policy that withheld a capability) or a host's or a remote's own words (a resolver's
+ * denial reason, a transport error, an upstream status line).
+ *
+ *   * `403` — the host refused to contact the endpoint or source the request named: a
+ *     catalog capability withheld, or the resolver's own policy. The request's to change.
+ *   * `502` — the endpoint or source was contacted and did not produce a usable answer:
+ *     a network error, a timeout of the resolver's own, an HTTP error status, a redirect
+ *     that is never followed, an undecodable body.
+ *   * `500` — this endpoint had no way to contact it (no resolver reaches it), or its own
+ *     resolver answered with something that is not an answer. The real message goes to
+ *     `onInternalError` under a fresh `correlationId`, exactly as a host bug's does.
+ */
+const ENGINE_CODE_PROBLEMS = new Map([
+  [
+    "native-sparql-service-denied",
+    {
+      status: 403,
+      detail: "the service catalog does not authorize a SERVICE request this operation makes; no endpoint was contacted",
+    },
+  ],
+  [
+    "native-sparql-service-host-denied",
+    {
+      status: 403,
+      detail: "this endpoint's host policy refused a SERVICE request this operation makes; no endpoint was contacted",
+    },
+  ],
+  [
+    "native-sparql-load-denied",
+    {
+      status: 403,
+      detail: "the service catalog does not authorize a LOAD source this update names; nothing was fetched",
+    },
+  ],
+  [
+    "native-sparql-service-failed",
+    { status: 502, detail: "a SERVICE endpoint this operation names did not return a usable answer" },
+  ],
+  [
+    "native-sparql-load-failed",
+    { status: 502, detail: "a LOAD source this update names could not be fetched or read" },
+  ],
+  [
+    "native-sparql-service-unconfigured",
+    {
+      status: 500,
+      detail: "this endpoint has no way to reach a SERVICE endpoint this operation names",
+      internal: true,
+    },
+  ],
+  [
+    "native-sparql-load-no-resolver",
+    { status: 500, detail: "this endpoint has no way to fetch a LOAD source", internal: true },
+  ],
+  [
+    "native-sparql-load-fault",
+    {
+      status: 500,
+      detail: "this endpoint's LOAD resolver answered with something that is not a LOAD answer",
+      internal: true,
+    },
+  ],
+]);
+
 /** The diagnostic code an engine error's message leads with (`error <code>: …`), if any. */
 function engineCode(error) {
   if (!(error instanceof Error)) return undefined;
   return /^error ([a-z0-9-]+): /.exec(error.message)?.[1];
 }
 
-/** The response for a twin that rejected. */
-function failure(error, signal, headers) {
+/**
+ * The response for a twin that rejected. `internal` is `{ onInternalError, request }`, for
+ * the failures whose real words go to the log alone (see `ENGINE_CODE_PROBLEMS`, and an
+ * error that carries no engine code at all).
+ */
+function failure(error, signal, headers, internal) {
   const timing = serverTiming(error?.evidence?.async);
   if (error?.name === "NotAcceptableError") {
     return problem(
@@ -907,15 +981,25 @@ function failure(error, signal, headers) {
     return problem(503, errorText(error), { code: "cancelled" }, [...timing, ...headers]);
   }
   const code = engineCode(error);
-  if (code !== undefined && CLIENT_REFUSAL_CODES.has(code)) {
+  if (code === undefined) {
+    // Nothing the engine classified — a rejection from outside it, or one no code names.
+    // Its words are not the query's, so they go to the log alone.
+    const correlationId = reportInternalError(error, internal.onInternalError, internal.request);
+    return internalErrorProblem(correlationId, [...timing, ...headers]);
+  }
+  if (CLIENT_REFUSAL_CODES.has(code)) {
     return problem(400, error.message, { code }, [...timing, ...headers]);
   }
-  return problem(
-    500,
-    error instanceof Error ? error.message : String(error),
-    { code: error instanceof Error ? error.name : "Error" },
-    [...timing, ...headers],
-  );
+  const mapped = ENGINE_CODE_PROBLEMS.get(code);
+  if (mapped !== undefined) {
+    let correlationId;
+    if (mapped.internal) {
+      correlationId = reportInternalError(error, internal.onInternalError, internal.request);
+    }
+    return problem(mapped.status, mapped.detail, { code, correlationId }, [...timing, ...headers]);
+  }
+  // The query's own evaluation failed: the engine's words are the reason it is owed.
+  return problem(500, error.message, { code }, [...timing, ...headers]);
 }
 
 /**
@@ -1048,24 +1132,37 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * malformed request or operation, or one the engine refuses to evaluate as written (its
  * diagnostic code — `native-sparql-unsupported`, `native-sparql-custom-function`,
  * `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` — is
- * the problem's `code`, and its message the `detail`) (`405` for a method the protocol does not bind, `415`
- * for a `Content-Type` it does not define); `406` when the `Accept` header allows no
- * format that can carry the result; `413` when the body exceeds `maxRequestBytes`; `422`
- * when a deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
- * requests) stopped it; `503` when the deadline or a cancellation did (with no
+ * the problem's `code`, and its message the `detail`) (`405` for a method the protocol
+ * does not bind, `415` for a `Content-Type` it does not define); `403` when the host
+ * refused to contact a `SERVICE` endpoint or `LOAD` source the request named
+ * (`native-sparql-service-denied`: the catalog withheld a capability;
+ * `native-sparql-service-host-denied`: the resolver's own policy refused it;
+ * `native-sparql-load-denied`); `406` when the `Accept` header allows no format that can
+ * carry the result; `413` when the body exceeds `maxRequestBytes`; `422` when a
+ * deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
+ * requests) stopped it; `502` when a `SERVICE` endpoint or `LOAD` source was contacted
+ * and gave no usable answer — a network error, the resolver's own timeout, an HTTP error
+ * status, a redirect, an undecodable body (`native-sparql-service-failed`,
+ * `native-sparql-load-failed`); `503` when the deadline or a cancellation did (with no
  * `Retry-After`: the same request would stop again); `500` when evaluation failed — with
- * the engine's own words in `detail`, exactly as a SPARQL client is owed the reason its
- * query failed — or, for an error this module cannot attribute to the query itself (a bug
- * in a host-supplied `resolveService`/`resolveLoad`, or an unexpected exception anywhere
- * in this adapter), a fixed generic `detail` and a `correlationId` instead: the real error
- * goes to `onInternalError(error, { correlationId, request })` (one `console.error` line
- * by default) and never into the response. An `onInternalError` that itself throws or
- * rejects changes none of that: the response is still the sanitized `500`, and the
- * reporter's failure goes to `console.error` together with the error it was handed.
- * Never a `200` with a partial body. Every error
- * is an RFC 9457 `application/problem+json` document (`type: "about:blank"`, `title`,
- * `status`, `detail`, and `code` — the refusal's stable name — plus `parameter`,
- * `dimension`, `limit`, `consumed`, `estimate`, `correlationId` where they apply). Every
+ * the engine's diagnostic code as `code` and its own words in `detail`, exactly as a
+ * SPARQL client is owed the reason its query failed. A `403` or `502` never carries the
+ * engine's message: it would echo the catalog's policy or a resolver's or remote's own
+ * words, so `detail` is a fixed description of the code. This endpoint's own faults are
+ * a `500` with a fixed `detail` and a `correlationId`, and their real error goes to
+ * `onInternalError(error, { correlationId, request })` (one `console.error` line by
+ * default) and never into the response: no resolver reaches a named endpoint
+ * (`native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`), the
+ * `resolveLoad` answered with something that is not an answer
+ * (`native-sparql-load-fault`), or — with `code: "InternalError"` — a bug in a
+ * host-supplied `resolveService`/`resolveLoad`, a rejection no engine code classifies, or
+ * an unexpected exception anywhere in this adapter. An `onInternalError` that itself
+ * throws or rejects changes none of that: the response is still the sanitized `500`, and
+ * the reporter's failure goes to `console.error` together with the error it was handed.
+ * Never a `200` with a partial body. Every error is an RFC 9457
+ * `application/problem+json` document (`type: "about:blank"`, `title`, `status`,
+ * `detail`, and `code` — the refusal's stable name — plus `parameter`, `dimension`,
+ * `limit`, `consumed`, `estimate`, `correlationId` where they apply). Every
  * evaluated response carries `Server-Timing` from the job's `evidence.async`.
  *
  * The operation text is parsed exactly once on the success path: without dataset
@@ -1144,6 +1241,7 @@ export async function handleSparqlRequest(request, options) {
       const resolveService = wrapHostHandler(o.host.resolveService, o.onInternalError, request);
       const resolveLoad = wrapHostHandler(o.host.resolveLoad, o.onInternalError, request);
       const hostFault = () => resolveService.sawFault() ?? resolveLoad.sawFault();
+      const internal = { onInternalError: o.onInternalError, request };
       const host = {
         ...o.host,
         resolveService: resolveService.handler,
@@ -1158,7 +1256,7 @@ export async function handleSparqlRequest(request, options) {
         } catch (error) {
           const fault = hostFault();
           if (fault !== undefined) return internalErrorProblem(fault.correlationId, headers);
-          return reclassifiedFailure(operation, error, request.signal, headers, o.cors);
+          return reclassifiedFailure(operation, error, request.signal, headers, o.cors, internal);
         }
         // Defensive: a fault always rejects (see `wrapHostHandler`), so `outcome` here
         // should never coexist with a recorded fault — but a `200`-adjacent response is
@@ -1195,7 +1293,14 @@ export async function handleSparqlRequest(request, options) {
         if (fault !== undefined) {
           return internalErrorProblem(fault.correlationId, [["Vary", "Accept"], ...headers]);
         }
-        return reclassifiedFailure(operation, error, request.signal, [["Vary", "Accept"], ...headers], o.cors);
+        return reclassifiedFailure(
+          operation,
+          error,
+          request.signal,
+          [["Vary", "Accept"], ...headers],
+          o.cors,
+          internal,
+        );
       }
       // Defensive: see the update branch above — `outcome` here should never coexist
       // with a recorded fault, since a fault always rejects.

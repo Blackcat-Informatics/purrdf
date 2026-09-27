@@ -52,7 +52,7 @@
 //! |---|---|---|
 //! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
 //! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
-//! | No source reaches the endpoint: none is configured, or the source answers [`RemoteError::Unconfigured`] | [`EvalError::Remote`](crate::EvalError) | [`EvalError::Remote`](crate::EvalError) |
+//! | No source reaches the endpoint: none is configured, or the source answers [`RemoteError::Unconfigured`] | [`EvalError::ServiceUnconfigured`](crate::EvalError) | [`EvalError::ServiceUnconfigured`](crate::EvalError) |
 //! | An in-process source ran out of stack parsing or evaluating the body ([`RemoteError::StackExhausted`]) | [`EvalError::StackExhausted`](crate::EvalError) | [`EvalError::StackExhausted`](crate::EvalError) |
 //! | On `wasm32`, the body nests past the JavaScript engine's call-stack budget ([`RemoteError::HostStackExhausted`]) | [`EvalError::HostStackExhausted`](crate::EvalError) | [`EvalError::HostStackExhausted`](crate::EvalError) |
 //! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |

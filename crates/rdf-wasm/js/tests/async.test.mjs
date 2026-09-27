@@ -408,7 +408,7 @@ test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is 
   const asyncNoSource = await rejection(engine.queryAsync(local(), noSource));
   assert.equal(
     asyncNoSource.message,
-    `error native-sparql-query-eval: SERVICE federation error: no remote query source configured for SERVICE <${EX}sparql>; ` +
+    `error native-sparql-service-unconfigured: SERVICE federation error: no remote query source configured for SERVICE <${EX}sparql>; ` +
       "SILENT does not apply: it tolerates an endpoint that fails, and no endpoint was reached — configure a remote query source for it",
   );
   assert.equal(syncThrow(() => engine.query(local(), noSource)).message, asyncNoSource.message);

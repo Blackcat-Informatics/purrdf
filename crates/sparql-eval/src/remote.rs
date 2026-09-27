@@ -28,10 +28,11 @@
 //!
 //! # Hard-fail vs SILENT
 //!
-//! With no source configured, a transport error, or an undecodable response: a
-//! **non-silent** `SERVICE` raises [`EvalError::Remote`] (the query aborts), while
-//! `SERVICE SILENT` swallows the failure to the join identity (one empty row) so the
-//! surrounding query proceeds unchanged.
+//! With a transport error or an undecodable response: a **non-silent** `SERVICE`
+//! raises [`EvalError::Remote`] (the query aborts), while `SERVICE SILENT` swallows the
+//! failure to the join identity (one empty row) so the surrounding query proceeds
+//! unchanged. With no source configured, both raise [`EvalError::ServiceUnconfigured`]:
+//! no endpoint was reached, so there is no endpoint failure for `SILENT` to tolerate.
 //!
 //! A variable endpoint (`SERVICE ?e`) is evaluated once per distinct IRI `?e` is bound
 //! to — by a pattern earlier in its group, by the left operand of the group join,
@@ -866,8 +867,9 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Remote`] for a non-silent failure (no source, transport/decode
-/// error, a variable endpoint bound to a non-IRI), and [`EvalError::Unsupported`] — under
+/// Returns [`EvalError::Remote`] for a non-silent endpoint failure (a transport or decode
+/// error), [`EvalError::ServiceUnconfigured`] — under `SILENT` too — when no source
+/// reaches the endpoint, and [`EvalError::Unsupported`] — under
 /// `SILENT` too — for a variable endpoint no solution binds (see
 /// [`crate::service_endpoints`]).
 ///
@@ -1157,16 +1159,17 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     })
 }
 
-/// The refusal for a `SERVICE` the engine has no source to send to: [`EvalError::Remote`]
-/// with `message`, which under `SILENT` also says why `SILENT` does not apply.
+/// The refusal for a `SERVICE` the engine has no source to send to:
+/// [`EvalError::ServiceUnconfigured`] with `message`, which under `SILENT` also says why
+/// `SILENT` does not apply.
 fn unconfigured(silent: bool, message: String) -> EvalError {
     if silent {
-        EvalError::remote(format!(
+        EvalError::ServiceUnconfigured(format!(
             "{message}; SILENT does not apply: it tolerates an endpoint that fails, and no \
              endpoint was reached — configure a remote query source for it"
         ))
     } else {
-        EvalError::remote(message)
+        EvalError::ServiceUnconfigured(message)
     }
 }
 
@@ -1597,7 +1600,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-query-eval");
+        assert_eq!(err.code, EvalError::SERVICE_UNCONFIGURED_CODE);
         assert!(err.message.contains("SERVICE"), "got: {}", err.message);
     }
 

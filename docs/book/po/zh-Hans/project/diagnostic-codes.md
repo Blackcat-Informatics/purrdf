@@ -147,9 +147,13 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-sparql-unsupported` | 请求本身格式正确，但使用了本引擎拒绝按原样求值的内容——例如没有任何解为其指明端点的 `SERVICE ?e`、绑定到字面量的 `?e`，或无法识别的 `VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 `400` 应答。 | 按消息所述改写请求。 |
 | `native-sparql-host-stack-exhausted` | 仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。PurRDF 为每个请求保留该栈中固定的一份预算（例如 637 层嵌套圆括号或 283 层嵌套图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相同，调大 `stackBytes` 也无法提高它。 | 减少请求的嵌套深度。 |
 | `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
+| `native-sparql-service-denied` | 已安装的 `ServiceCatalog` 未向请求指名的某个 `SERVICE` 端点授予所需的能力——该端点没有 profile，或其 profile 未授予 `query` 或 `network`——因此没有联系任何端点。即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `403` 应答。 | 在目录中为该端点授予该能力，或去掉 `SERVICE`。 |
+| `native-sparql-service-host-denied` | 宿主自己的服务解析器依据其自身策略拒绝了某个 `SERVICE` 请求，且没有指名任何目录能力——例如某个 JavaScript `resolveService` 应答了 `{ kind: "denied" }`——因此没有联系任何端点。即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中允许该请求，或去掉 `SERVICE`。 |
+| `native-sparql-service-failed` | 已联系某个 `SERVICE` 端点，但它没有给出可用的应答：传输失败、HTTP 错误状态、重定向、解析器自身的超时，或无法解码的响应体。`SERVICE SILENT` 会吞掉它。Cloudflare 适配器以 `502` 应答。 | 让该端点可达，或写作 `SERVICE SILENT`。 |
+| `native-sparql-service-unconfigured` | 没有任何远程查询来源能到达请求指名的某个 `SERVICE` 端点：要么没有配置来源，要么已配置的来源应答说它所持有的内容都到达不了该端点。没有联系任何端点，因此即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `500` 应答。 | 配置一个能到达该端点的来源，或去掉 `SERVICE`。 |
 | `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。 | 注入一个解析器，或去掉 `LOAD`。 |
-| `native-sparql-load-denied` | 某个 `GraphResolver` 依据宿主策略拒绝了该 `LOAD` 来源——例如某个 JavaScript `resolveLoad` 应答了 `{ kind: "denied" }`；当 Cloudflare 适配器的 `ServiceCatalog` 没有授予该来源 `network` 能力时，适配器的处理函数就会这样应答。即使在 `LOAD SILENT` 下它也会让请求失败，与被拒绝的 `SERVICE` 一致。 | 在宿主策略中授予该来源，或去掉 `LOAD`。 |
-| `native-sparql-load-failed` | wasm 包的异步 `resolveLoad` 应答了 `{ kind: "transport" }`：文档无法获取或读取。`LOAD SILENT` 会吞掉它。 | 让该来源可达，或写作 `LOAD SILENT`。 |
+| `native-sparql-load-denied` | 某个 `GraphResolver` 依据宿主策略拒绝了该 `LOAD` 来源——例如某个 JavaScript `resolveLoad` 应答了 `{ kind: "denied" }`；当 Cloudflare 适配器的 `ServiceCatalog` 没有授予该来源 `network` 能力时，适配器的处理函数就会这样应答。即使在 `LOAD SILENT` 下它也会让请求失败，与被拒绝的 `SERVICE` 一致。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中授予该来源，或去掉 `LOAD`。 |
+| `native-sparql-load-failed` | wasm 包的异步 `resolveLoad` 应答了 `{ kind: "transport" }`：文档无法获取或读取。`LOAD SILENT` 会吞掉它。Cloudflare 适配器以 `502` 应答。 | 让该来源可达，或写作 `LOAD SILENT`。 |
 | `native-sparql-load-stopped` | 在等待 `LOAD` 期间，异步作业的停止信号（取消或截止时间）被触发。请求报告的是 governor 触发，而不是这个代码。 | 放宽截止时间，或不要取消该作业。 |
 | `native-sparql-load-fault` | 异步 `resolveLoad` 什么也没有应答，或应答了不属于 `LOAD` 应答的内容。该故障即使在 `LOAD SILENT` 下也会让作业失败。 | 返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset` 或一个带类型的失败——绝不要抛出异常。 |
 | `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；目标必须是 `DEFAULT` 或单个命名 `GRAPH`。 | 指名单个目标图。 |
