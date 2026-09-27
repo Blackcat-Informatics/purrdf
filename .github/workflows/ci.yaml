@@ -582,7 +582,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
-          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
+          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
 
       - name: Install the i686 C library
         run: |
@@ -602,6 +602,10 @@ jobs:
             cargo check --locked --target "$target" \
               -p purrdf-core -p purrdf-sparql-eval -p purrdf-hnsw
           done
+
+      - name: Type-check gts and cli for Windows
+        run: |
+          cargo check --locked --target x86_64-pc-windows-gnu -p purrdf-gts -p purrdf-cli
 
       - name: Run the distance, kNN and HNSW suites on i686
         env:
