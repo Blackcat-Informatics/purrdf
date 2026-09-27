@@ -23,11 +23,11 @@ use wasmparser::{ExternalKind, Operator, Parser, Payload, WasmFeatures};
 
 use crate::error::LinkError;
 use crate::scan::{Scan, Sig};
-use crate::template::{self, Body, Gate, stack_pointer_global};
+use crate::template::{self, Body, Gate, GateVariant, stack_pointer_global};
 use crate::{
     ACTIVE_EXPORT, ADD_TO_STACK_POINTER_EXPORT, GateGlobals, IDLE_EXPORT, OUTBOUND_EXPORT,
     PARKED_EXPORT, POISONED_EXPORT, RESERVED_EXPORTS, RUN_EXPORT, Report, STACK_POINTER_EXPORT,
-    SUSPEND_NAME, validate,
+    SUSPEND_NAME, is_release_export, validate,
 };
 
 /// Link `bytes`: the rewritten module and what was found.
@@ -69,6 +69,8 @@ struct GateEntry {
     type_index: u32,
     /// The first export name that reaches this wrapper.
     name: String,
+    /// How the wrapper refuses, decided by the export name.
+    variant: GateVariant,
 }
 
 /// Every index the rewrite introduces, decided before a byte is emitted.
@@ -101,6 +103,8 @@ struct Plan {
     wrapper_of: BTreeMap<u32, u32>,
     /// Every function export name, in export order.
     wrapped_exports: Vec<String>,
+    /// The function export names whose gate is inert, in export order.
+    inert_exports: Vec<String>,
 }
 
 impl Plan {
@@ -146,13 +150,39 @@ impl Plan {
             gates: Vec::new(),
             wrapper_of: BTreeMap::new(),
             wrapped_exports: Vec::new(),
+            inert_exports: Vec::new(),
         };
         for export in &scan.exports {
             if export.kind != ExternalKind::Func {
                 continue;
             }
             plan.wrapped_exports.push(export.name.clone());
-            if plan.wrapper_of.contains_key(&export.index) {
+            let variant = if is_release_export(&export.name) {
+                plan.inert_exports.push(export.name.clone());
+                GateVariant::Inert
+            } else {
+                GateVariant::Trapping
+            };
+            if let Some(wrapper) = plan.wrapper_of.get(&export.index) {
+                // One function exported under several names shares one wrapper, so the
+                // names must agree on how it refuses.
+                let existing = plan
+                    .gates
+                    .iter()
+                    .find(|entry| entry.wrapper == *wrapper)
+                    .ok_or_else(|| {
+                        LinkError::Shape(format!(
+                            "export {:?} names a wrapper that was not planned",
+                            export.name
+                        ))
+                    })?;
+                if existing.variant != variant {
+                    return Err(LinkError::Shape(format!(
+                        "function {} is exported as {:?} ({:?} gate) and as {:?} ({variant:?} gate); one \
+                         function cannot refuse both ways",
+                        export.index, existing.name, existing.variant, export.name
+                    )));
+                }
                 continue;
             }
             let wrapper = run_wrapper + 1 + plan.gates.len() as u32;
@@ -171,6 +201,7 @@ impl Plan {
                 sig,
                 type_index,
                 name: export.name.clone(),
+                variant,
             });
             plan.wrapper_of.insert(export.index, wrapper);
         }
@@ -197,6 +228,7 @@ impl Plan {
             trampoline_references: rewriter.routed_sites,
             run_wrapper: self.run_wrapper,
             wrapped_exports: self.wrapped_exports.clone(),
+            inert_exports: self.inert_exports.clone(),
             gate_globals: GateGlobals {
                 idle: self.gate.idle,
                 poisoned: self.gate.poisoned,
@@ -392,7 +424,7 @@ fn emit<'p>(
     code.function(&template::run_wrapper(&plan.run_sig, plan.run_function, gate).encode());
     for entry in &plan.gates {
         functions.function(entry.type_index);
-        code.function(&template::gate(&entry.sig, entry.inner, gate).encode());
+        code.function(&template::gate(&entry.sig, entry.inner, gate, entry.variant).encode());
     }
     let counter = GlobalType {
         val_type: ValType::I32,
@@ -480,7 +512,11 @@ fn names(scan: &Scan<'_>, plan: &Plan) -> NameSection {
     }
     functions.append(plan.run_wrapper, "purrdf_run");
     for entry in &plan.gates {
-        functions.append(entry.wrapper, &format!("purrdf_gate:{}", entry.name));
+        let kind = match entry.variant {
+            GateVariant::Trapping => "purrdf_gate",
+            GateVariant::Inert => "purrdf_inert_gate",
+        };
+        functions.append(entry.wrapper, &format!("{kind}:{}", entry.name));
     }
     let mut globals = NameMap::new();
     let gate = plan.gate;

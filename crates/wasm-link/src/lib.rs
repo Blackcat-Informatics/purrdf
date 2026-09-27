@@ -74,10 +74,27 @@
 //! | [`OUTBOUND_EXPORT`] | trampoline calls waiting for their import to return |
 //! | [`IDLE_EXPORT`] | the stack pointer of the JavaScript context that runs while wasm is suspended or returned |
 //!
-//! Every exported function is replaced by a gate wrapper that, on entry, traps when
-//! `$poisoned` is non-zero; sets `$poisoned` and traps when
+//! Every exported function is replaced by a gate wrapper that, on entry, refuses when
+//! `$poisoned` is non-zero; sets `$poisoned` and refuses when
 //! `$active − $parked ≠ $outbound`; and otherwise increments `$active`, calls the
 //! original, decrements `$active` on the one exit and returns the result.
+//!
+//! A refusal has two variants, chosen by the export's name:
+//!
+//! * **Trapping** (every export unless named below): the refusal is `unreachable`, a
+//!   `RuntimeError` the JavaScript runtime maps to the poison error. This is what makes a
+//!   dead instance refuse every entry point at once.
+//! * **Inert** (exports named `__wbg_<type>_free`, wasm-bindgen's object release
+//!   functions — see [`is_release_export`]): the refusal is a plain return without
+//!   entering the guarded function, with zero results if the function has any. The glue
+//!   calls these from `free()`, from `[Symbol.dispose]()` and from a
+//!   `FinalizationRegistry` callback, and a finalizer has no caller to hand a trap to: a
+//!   trapping release would turn garbage collection on a poisoned instance into uncaught
+//!   errors. A dead instance therefore leaks its objects by design (their memory is
+//!   abandoned whole with the instance), and an explicit `free()` on one returns
+//!   normally. The inert variant still sets `$poisoned` on an imbalance exactly as the
+//!   trapping one does, so a release function observing a never-returned entry poisons
+//!   the instance for every other export.
 //!
 //! The invariant behind the second check: whenever JavaScript is running and no wasm
 //! frame has been unwound, every gated entry that has not returned is either parked in
@@ -100,7 +117,8 @@
 //!
 //! The check reads the exported globals, decodes every function body, and regenerates
 //! each injected body from the indices the module names: every exported function must
-//! be a gate around a defined function, the run export's gate must guard a run wrapper
+//! be a gate around a defined function, of the variant its name selects (inert for a
+//! release function, trapping otherwise), the run export's gate must guard a run wrapper
 //! around a function of the run's type, `__wbindgen_add_to_stack_pointer`'s guarded
 //! function must set the exported stack-pointer global, every import must be reached
 //! from exactly one function whose body is its trampoline (or `$suspend`), and no table
@@ -151,6 +169,23 @@ pub const RESERVED_EXPORTS: [&str; 6] = [
     OUTBOUND_EXPORT,
 ];
 
+/// Whether `name` is one of wasm-bindgen's object release exports, `__wbg_<type>_free`
+/// with a non-empty lower-case `type`: the exports whose gate is inert rather than
+/// trapping. `__wbindgen_free` is not one (wasm-bindgen exports its allocator intrinsics
+/// under anonymous `__wbindgen_export*` names, and the glue calls them from `finally`
+/// blocks, never from a finalizer), and neither is any name with an upper-case letter or
+/// with nothing between the prefix and the suffix.
+pub fn is_release_export(name: &str) -> bool {
+    name.strip_prefix("__wbg_")
+        .and_then(|rest| rest.strip_suffix("_free"))
+        .is_some_and(|middle| {
+            !middle.is_empty()
+                && middle
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+}
+
 /// The indices of the injected globals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GateGlobals {
@@ -187,6 +222,9 @@ pub struct Report {
     pub run_wrapper: u32,
     /// Every function export, in export order; each now stands behind a gate.
     pub wrapped_exports: Vec<String>,
+    /// The function exports whose gate is the inert variant (the release functions), in
+    /// export order; every other entry of `wrapped_exports` has the trapping variant.
+    pub inert_exports: Vec<String>,
     /// The injected globals.
     pub gate_globals: GateGlobals,
     /// The feature set the module was validated under.
@@ -207,8 +245,9 @@ impl Report {
             "stack pointer is global {} (exported as {STACK_POINTER_EXPORT}); {SUSPEND_NAME} is function {}, \
              called only from $suspend (function {}), which {} call site(s) reach; {} other import(s) behind \
              trampolines with {} reference(s) routed; {RUN_EXPORT} wrapped by function {} (region top appended \
-             as its last parameter); {} exported function(s) behind the poison gate (globals idle={idle}, \
-             poisoned={poisoned}, active={active}, parked={parked}, outbound={outbound}); validated under {}",
+             as its last parameter); {} exported function(s) behind the poison gate ({} trapping, {} inert \
+             release function(s); globals idle={idle}, poisoned={poisoned}, active={active}, parked={parked}, \
+             outbound={outbound}); validated under {}",
             self.stack_pointer_global,
             self.suspend_import,
             self.suspend_function,
@@ -217,6 +256,8 @@ impl Report {
             self.trampoline_references,
             self.run_wrapper,
             self.wrapped_exports.len(),
+            self.wrapped_exports.len() - self.inert_exports.len(),
+            self.inert_exports.len(),
             self.features
         )
     }

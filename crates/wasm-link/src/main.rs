@@ -23,7 +23,7 @@ module in place unless --out names another path.
 
   --check      verify an already-linked module instead of linking it
   --out PATH   write the linked module to PATH instead of over the input
-  --verbose    list every export the gate stands behind
+  --verbose    list every export behind each gate variant (trapping, inert)
   --help, -h   print this usage text and exit
 ";
 
@@ -104,8 +104,20 @@ fn run(args: &Args) -> Result<String, String> {
         report.describe()
     );
     if args.verbose {
-        text.push_str("\n  gated exports: ");
-        text.push_str(&report.wrapped_exports.join(", "));
+        let trapping: Vec<&str> = report
+            .wrapped_exports
+            .iter()
+            .filter(|name| !report.inert_exports.contains(name))
+            .map(String::as_str)
+            .collect();
+        text.push_str("\n  trapping gate (");
+        text.push_str(&trapping.len().to_string());
+        text.push_str("): ");
+        text.push_str(&trapping.join(", "));
+        text.push_str("\n  inert gate, release functions (");
+        text.push_str(&report.inert_exports.len().to_string());
+        text.push_str("): ");
+        text.push_str(&report.inert_exports.join(", "));
     }
     Ok(text)
 }

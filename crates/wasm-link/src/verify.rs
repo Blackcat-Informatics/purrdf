@@ -10,10 +10,11 @@ use wasmparser::ExternalKind;
 
 use crate::error::LinkError;
 use crate::scan::{Scan, Sig};
-use crate::template::{self, Body, Gate, callee_of, stack_pointer_global};
+use crate::template::{self, Body, Gate, GateVariant, callee_of, stack_pointer_global};
 use crate::{
     ACTIVE_EXPORT, ADD_TO_STACK_POINTER_EXPORT, GateGlobals, IDLE_EXPORT, OUTBOUND_EXPORT,
-    PARKED_EXPORT, POISONED_EXPORT, RUN_EXPORT, Report, STACK_POINTER_EXPORT, validate,
+    PARKED_EXPORT, POISONED_EXPORT, RUN_EXPORT, Report, STACK_POINTER_EXPORT, is_release_export,
+    validate,
 };
 
 /// Check `bytes`: what a linked module was found to contain.
@@ -39,9 +40,10 @@ pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
             .ok_or_else(|| LinkError::NotLinked(format!("function {func} does not exist")))
     };
 
-    // Every exported function is a gate wrapper; the run export's gate guards the run
-    // wrapper, which guards a function of the run's own type.
+    // Every exported function is a gate wrapper of the variant its name selects; the run
+    // export's gate guards the run wrapper, which guards a function of the run's own type.
     let mut wrapped_exports = Vec::new();
+    let mut inert_exports = Vec::new();
     let mut run_wrapper = None;
     let mut add_to_stack_pointer = None;
     for export in &scan.exports {
@@ -49,12 +51,18 @@ pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
             continue;
         }
         let sig = scan.sig_of(export.index)?;
+        let variant = if is_release_export(&export.name) {
+            inert_exports.push(export.name.clone());
+            GateVariant::Inert
+        } else {
+            GateVariant::Trapping
+        };
         let inner = callee_of(body_of(export.index)?, |inner| {
-            template::gate(sig, inner, gate)
+            template::gate(sig, inner, gate, variant)
         })
         .ok_or_else(|| {
             LinkError::NotLinked(format!(
-                "export {:?} (function {}) is not behind the poison gate",
+                "export {:?} (function {}) is not behind the {variant:?} variant of the poison gate its name selects",
                 export.name, export.index
             ))
         })?;
@@ -172,6 +180,7 @@ pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
         trampoline_references: references_to(&trampolines),
         run_wrapper,
         wrapped_exports,
+        inert_exports,
         gate_globals: GateGlobals {
             idle: gate.idle,
             poisoned: gate.poisoned,

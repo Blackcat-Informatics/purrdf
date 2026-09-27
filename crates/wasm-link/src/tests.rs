@@ -17,9 +17,10 @@ use wasm_encoder::{
 use wasmparser::{ExportSectionReader, ExternalKind, Parser};
 
 use crate::scan::{Scan, Sig};
+use crate::template::{self, Body, Gate, GateVariant, Op};
 use crate::{
     ADD_TO_STACK_POINTER_EXPORT, LinkError, RESERVED_EXPORTS, RUN_EXPORT, SUSPEND_MODULE,
-    SUSPEND_NAME, check, link,
+    SUSPEND_NAME, check, is_release_export, link,
 };
 
 /// The body of the fixture's `__wbindgen_add_to_stack_pointer`.
@@ -51,6 +52,8 @@ struct Fixture {
     run_export: &'static str,
     /// A `target_features` custom section's `+` entries.
     target_features: Option<&'static [&'static str]>,
+    /// A second export name for the release function `__wbg_thing_free`.
+    release_alias: Option<&'static str>,
 }
 
 impl Default for Fixture {
@@ -63,17 +66,24 @@ impl Default for Fixture {
             suspend_name: SUSPEND_NAME,
             run_export: RUN_EXPORT,
             target_features: None,
+            release_alias: None,
         }
     }
 }
 
-// Function indices of the fixture: two imports, then four defined functions.
+// Function indices of the fixture: two imports, then six defined functions.
 const SUSPEND: u32 = 0;
 const DROP_REF: u32 = 1;
 const ADD_TO_SP: u32 = 2;
 const RUN: u32 = 3;
 const NOOP: u32 = 4;
 const HELPER: u32 = 5;
+/// Exported as `__wbg_thing_free`, a wasm-bindgen object release function.
+const RELEASE: u32 = 6;
+/// Exported as `pair`: the release function's type under a plain name.
+const PAIR: u32 = 7;
+/// The first injected function: `$suspend`, then the trampoline, then the run wrapper.
+const FIRST_INJECTED: u32 = 8;
 /// The stack-pointer global (global 0 is an immutable data-end marker).
 const SP: u32 = 1;
 
@@ -107,6 +117,7 @@ fn build(fixture: &Fixture) -> Vec<u8> {
         .function([ValType::I32, ValType::I32, ValType::I32], [ValType::I32]); // 1: suspend
     types.ty().function([], []); // 2: noop, helper
     types.ty().function([ValType::I32], []); // 3: drop_ref
+    types.ty().function([ValType::I32, ValType::I32], []); // 4: release, pair
 
     let mut imports = ImportSection::new();
     imports.import(
@@ -121,7 +132,7 @@ fn build(fixture: &Fixture) -> Vec<u8> {
     );
 
     let mut functions = FunctionSection::new();
-    for ty in [0, 0, 2, 2] {
+    for ty in [0, 0, 2, 2, 4, 4] {
         functions.function(ty);
     }
 
@@ -167,6 +178,11 @@ fn build(fixture: &Fixture) -> Vec<u8> {
     exports.export(fixture.run_export, ExportKind::Func, RUN);
     exports.export("noop", ExportKind::Func, NOOP);
     exports.export("helper", ExportKind::Func, HELPER);
+    exports.export("__wbg_thing_free", ExportKind::Func, RELEASE);
+    exports.export("pair", ExportKind::Func, PAIR);
+    if let Some(alias) = fixture.release_alias {
+        exports.export(alias, ExportKind::Func, RELEASE);
+    }
     exports.export("__data_end", ExportKind::Global, 0);
 
     let mut elements = ElementSection::new();
@@ -238,6 +254,10 @@ fn build(fixture: &Fixture) -> Vec<u8> {
         Instruction::Call(DROP_REF),
         Instruction::End,
     ]));
+    // The release function and its plain-named twin: both take (ptr, dealloc) and return
+    // nothing, as wasm-bindgen's `__wbg_<type>_free` does.
+    code.function(&body(&[Instruction::End]));
+    code.function(&body(&[Instruction::End]));
 
     let mut module = Module::new();
     module.section(&types);
@@ -287,7 +307,7 @@ fn links_the_fixture_reports_what_it_found_and_the_output_checks() {
     assert_eq!(report.stack_pointer_global, SP);
     assert_eq!(report.suspend_import, SUSPEND);
     assert_eq!(
-        report.suspend_function, 6,
+        report.suspend_function, FIRST_INJECTED,
         "the first injected function is import 0's $suspend"
     );
     assert_eq!(
@@ -299,16 +319,23 @@ fn links_the_fixture_reports_what_it_found_and_the_output_checks() {
         report.trampoline_references, 1,
         "helper's one call of the other import is routed"
     );
-    assert_eq!(report.run_wrapper, 8, "after the two trampolines");
+    assert_eq!(
+        report.run_wrapper,
+        FIRST_INJECTED + 2,
+        "after the two trampolines"
+    );
     assert_eq!(
         report.wrapped_exports,
         vec![
             ADD_TO_STACK_POINTER_EXPORT.to_owned(),
             RUN_EXPORT.to_owned(),
             "noop".to_owned(),
-            "helper".to_owned()
+            "helper".to_owned(),
+            "__wbg_thing_free".to_owned(),
+            "pair".to_owned(),
         ]
     );
+    assert_eq!(report.inert_exports, vec!["__wbg_thing_free".to_owned()]);
     assert_eq!(
         (
             report.gate_globals.idle,
@@ -353,6 +380,13 @@ fn links_the_fixture_reports_what_it_found_and_the_output_checks() {
     let checked = check(&linked).expect("the linked module checks");
     assert_eq!(checked, report);
     assert!(report.describe().contains("1 call site(s)"));
+    assert!(
+        report
+            .describe()
+            .contains("6 exported function(s) behind the poison gate (5 trapping, 1 inert"),
+        "{}",
+        report.describe()
+    );
 }
 
 #[test]
@@ -464,13 +498,10 @@ fn check_refuses_an_unlinked_module() {
     );
 }
 
-/// Re-encodes a linked module with one export pointed back at the function it guarded.
-struct Bypass {
-    export: &'static str,
-    target: u32,
-}
+/// Re-encodes a linked module with named exports pointed at other functions.
+struct Retarget(Vec<(&'static str, u32)>);
 
-impl Reencode for Bypass {
+impl Reencode for Retarget {
     type Error = Infallible;
 
     fn parse_export_section(
@@ -480,34 +511,155 @@ impl Reencode for Bypass {
     ) -> Result<(), ReencodeError<Infallible>> {
         for export in section {
             let export = export?;
-            let index = if export.name == self.export {
-                self.target
-            } else {
-                export.index
-            };
+            let index = self
+                .0
+                .iter()
+                .find(|(name, _)| *name == export.name)
+                .map_or(export.index, |(_, target)| *target);
             exports.export(export.name, self.export_kind(export.kind)?, index);
         }
         Ok(())
     }
 }
 
+fn retargeted(linked: &[u8], retargets: Vec<(&'static str, u32)>) -> Vec<u8> {
+    let mut tampered = Module::new();
+    Retarget(retargets)
+        .parse_core_module(&mut tampered, Parser::new(0), linked)
+        .expect("the linked module re-encodes");
+    tampered.finish()
+}
+
 #[test]
 fn check_refuses_a_linked_module_whose_export_bypasses_the_gate() {
     let input = build(&Fixture::default());
     let (linked, _) = link(&input).expect("the fixture links");
-    let mut tampered = Module::new();
-    Bypass {
-        export: "noop",
-        target: NOOP,
-    }
-    .parse_core_module(&mut tampered, Parser::new(0), &linked)
-    .expect("the linked module re-encodes");
-    let tampered = tampered.finish();
+    let tampered = retargeted(&linked, vec![("noop", NOOP)]);
     let error = check(&tampered).expect_err("noop no longer stands behind a gate");
     assert!(
-        matches!(&error, LinkError::NotLinked(message) if message.contains("\"noop\"") && message.contains("poison gate")),
+        matches!(&error, LinkError::NotLinked(message) if message.contains("\"noop\"") && message.contains("Trapping variant of the poison gate")),
         "{error}"
     );
+}
+
+#[test]
+fn a_release_export_gets_the_inert_gate_and_every_other_export_the_trapping_one() {
+    let input = build(&Fixture::default());
+    let (linked, report) = link(&input).expect("the fixture links");
+    let scan = Scan::read(&linked).expect("the output scans");
+    let gate = Gate {
+        sp: SP,
+        idle: report.gate_globals.idle,
+        poisoned: report.gate_globals.poisoned,
+        active: report.gate_globals.active,
+        parked: report.gate_globals.parked,
+        outbound: report.gate_globals.outbound,
+    };
+    let sig = Sig {
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![],
+    };
+    let release_gate = Body::decode(
+        scan.body_of(export_index(&linked, "__wbg_thing_free"))
+            .expect("the release gate's body"),
+    )
+    .expect("decodes");
+    assert_eq!(
+        release_gate,
+        template::gate(&sig, RELEASE, gate, GateVariant::Inert),
+        "the release function stands behind the inert gate"
+    );
+    let pair_gate = Body::decode(
+        scan.body_of(export_index(&linked, "pair"))
+            .expect("pair's gate body"),
+    )
+    .expect("decodes");
+    assert_eq!(
+        pair_gate,
+        template::gate(&sig, PAIR, gate, GateVariant::Trapping),
+        "the same type under a plain name stands behind the trapping gate"
+    );
+    assert!(release_gate.ops.contains(&Op::Return) && !release_gate.ops.contains(&Op::Unreachable));
+    assert!(pair_gate.ops.contains(&Op::Unreachable) && !pair_gate.ops.contains(&Op::Return));
+}
+
+#[test]
+fn check_refuses_a_gate_of_the_variant_the_export_name_does_not_select() {
+    let input = build(&Fixture::default());
+    let (linked, _) = link(&input).expect("the fixture links");
+    let release_gate = export_index(&linked, "__wbg_thing_free");
+    let pair_gate = export_index(&linked, "pair");
+    // Both gates have the same type, so swapping them still validates; the check must
+    // see the release name in front of a trapping gate.
+    let tampered = retargeted(&linked, vec![("__wbg_thing_free", pair_gate)]);
+    let error = check(&tampered).expect_err("a release export behind a trapping gate");
+    assert!(
+        matches!(&error, LinkError::NotLinked(message) if message.contains("\"__wbg_thing_free\"") && message.contains("Inert variant")),
+        "{error}"
+    );
+    let tampered = retargeted(&linked, vec![("pair", release_gate)]);
+    let error = check(&tampered).expect_err("a plain export behind an inert gate");
+    assert!(
+        matches!(&error, LinkError::NotLinked(message) if message.contains("\"pair\"") && message.contains("Trapping variant")),
+        "{error}"
+    );
+    // The neighbour: swapping both names onto each other's gate is refused for the same
+    // reason, and the untouched module still checks.
+    check(&linked).expect("the untampered module checks");
+}
+
+#[test]
+fn a_function_exported_under_two_names_of_one_variant_shares_a_gate_and_of_two_is_refused() {
+    let (linked, report) = link(&build(&Fixture {
+        release_alias: Some("__wbg_other_free"),
+        ..Fixture::default()
+    }))
+    .expect("two release names for one function link");
+    assert_eq!(
+        report.inert_exports,
+        vec!["__wbg_thing_free".to_owned(), "__wbg_other_free".to_owned()]
+    );
+    assert_eq!(
+        export_index(&linked, "__wbg_thing_free"),
+        export_index(&linked, "__wbg_other_free"),
+        "one function, one gate"
+    );
+    check(&linked).expect("the aliased module checks");
+
+    let error = link(&build(&Fixture {
+        release_alias: Some("releaseAlias"),
+        ..Fixture::default()
+    }))
+    .expect_err("one function cannot refuse both ways");
+    assert!(
+        matches!(&error, LinkError::Shape(message) if message.contains("\"__wbg_thing_free\"") && message.contains("\"releaseAlias\"")),
+        "{error}"
+    );
+}
+
+#[test]
+fn only_wasm_bindgen_release_names_select_the_inert_gate() {
+    for name in [
+        "__wbg_dataset_free",
+        "__wbg_thing_free",
+        "__wbg_a1_b2_free",
+        "__wbg___free",
+    ] {
+        assert!(is_release_export(name), "{name}");
+    }
+    for name in [
+        "__wbg_free",
+        "__wbindgen_free",
+        "__wbg_Dataset_free",
+        "__wbg_dataset_free_",
+        "asyncevidence_freezeMs",
+        "wbg_dataset_free",
+        "__wbg_dataset_freed",
+        "__wbindgen_export4",
+        "free",
+    ] {
+        assert!(!is_release_export(name), "{name}");
+    }
 }
 
 #[test]

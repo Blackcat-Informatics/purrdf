@@ -47,6 +47,8 @@ pub(crate) enum Op {
     RefFunc(u32),
     /// `drop`.
     Drop,
+    /// `return`.
+    Return,
     /// Any operator outside this vocabulary.
     Other,
 }
@@ -72,6 +74,7 @@ impl Op {
             Operator::ReturnCall { function_index } => Self::ReturnCall(*function_index),
             Operator::RefFunc { function_index } => Self::RefFunc(*function_index),
             Operator::Drop => Self::Drop,
+            Operator::Return => Self::Return,
             _ => Self::Other,
         }
     }
@@ -94,6 +97,7 @@ impl Op {
             Self::ReturnCall(index) => Instruction::ReturnCall(index),
             Self::RefFunc(index) => Instruction::RefFunc(index),
             Self::Drop => Instruction::Drop,
+            Self::Return => Instruction::Return,
             Self::Other => {
                 unreachable!("a template never contains an operator outside its vocabulary")
             }
@@ -350,14 +354,38 @@ pub(crate) fn run_wrapper(run: &Sig, inner: u32, gate: Gate) -> Body {
     .body()
 }
 
-/// The poison gate around one exported function. On entry it traps when the instance
-/// is poisoned, poisons and traps when an earlier entry never returned, and counts
-/// itself active; on the one exit it counts itself back out.
-pub(crate) fn gate(sig: &Sig, inner: u32, gate: Gate) -> Body {
-    let before = [
-        Op::GlobalGet(gate.poisoned),
-        Op::If,
-        Op::Unreachable,
+/// How a gate answers a call it must not admit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateVariant {
+    /// Trap: the call fails with a `RuntimeError` the JavaScript runtime maps to the
+    /// poison error. Every export takes this variant unless its name is one of
+    /// wasm-bindgen's object release functions.
+    Trapping,
+    /// Return without entering the guarded function, with zero results if it has any.
+    /// The variant of `__wbg_<type>_free`: the glue calls those from `free()`,
+    /// `[Symbol.dispose]()` and a `FinalizationRegistry` callback, and a finalizer has no
+    /// caller to report a trap to, so a dead instance's objects are left unreleased
+    /// (the instance's whole memory is abandoned with it) rather than turning garbage
+    /// collection into uncaught errors.
+    Inert,
+}
+
+/// The poison gate around one exported function. On entry it refuses when the instance
+/// is poisoned, poisons and refuses when an earlier entry never returned, and otherwise
+/// counts itself active; on the one exit it counts itself back out. `variant` decides
+/// what a refusal is: a trap, or a return with zero results.
+pub(crate) fn gate(sig: &Sig, inner: u32, gate: Gate, variant: GateVariant) -> Body {
+    let first_result_local = sig.params.len() as u32;
+    let refuse: Vec<Op> = match variant {
+        GateVariant::Trapping => vec![Op::Unreachable],
+        GateVariant::Inert => (0..sig.results.len() as u32)
+            .map(|i| Op::LocalGet(first_result_local + i))
+            .chain(std::iter::once(Op::Return))
+            .collect(),
+    };
+    let mut before = vec![Op::GlobalGet(gate.poisoned), Op::If];
+    before.extend_from_slice(&refuse);
+    before.extend([
         Op::End,
         Op::GlobalGet(gate.active),
         Op::GlobalGet(gate.parked),
@@ -367,13 +395,15 @@ pub(crate) fn gate(sig: &Sig, inner: u32, gate: Gate) -> Body {
         Op::If,
         Op::I32Const(1),
         Op::GlobalSet(gate.poisoned),
-        Op::Unreachable,
+    ]);
+    before.extend_from_slice(&refuse);
+    before.extend([
         Op::End,
         Op::GlobalGet(gate.active),
         Op::I32Const(1),
         Op::I32Add,
         Op::GlobalSet(gate.active),
-    ];
+    ]);
     let after = [
         Op::GlobalGet(gate.active),
         Op::I32Const(1),
@@ -461,6 +491,60 @@ mod tests {
             Op::LocalGet(0),
             Op::Call(4),
             Op::LocalSet(2),
+        ]));
+    }
+
+    #[test]
+    fn the_two_gate_variants_differ_only_in_how_they_refuse() {
+        let sig = Sig {
+            params: vec![ValType::I32, ValType::I32],
+            results: vec![],
+        };
+        let trapping = gate(&sig, 9, gate_globals(), GateVariant::Trapping);
+        let inert = gate(&sig, 9, gate_globals(), GateVariant::Inert);
+        assert_eq!(trapping.ops.len(), inert.ops.len());
+        let differences: Vec<(Op, Op)> = trapping
+            .ops
+            .iter()
+            .zip(&inert.ops)
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| (*a, *b))
+            .collect();
+        assert_eq!(
+            differences,
+            vec![(Op::Unreachable, Op::Return), (Op::Unreachable, Op::Return)]
+        );
+        assert_eq!(
+            callee_of(&inert, |callee| gate(
+                &sig,
+                callee,
+                gate_globals(),
+                GateVariant::Inert
+            )),
+            Some(9)
+        );
+        assert_eq!(
+            callee_of(&inert, |callee| gate(
+                &sig,
+                callee,
+                gate_globals(),
+                GateVariant::Trapping
+            )),
+            None,
+            "a body of one variant is not accepted as the other"
+        );
+        // With results, the inert refusal returns the zero-initialized result locals.
+        let with_result = Sig {
+            params: vec![ValType::I32],
+            results: vec![ValType::I32],
+        };
+        let inert = gate(&with_result, 9, gate_globals(), GateVariant::Inert);
+        assert!(inert.ops.starts_with(&[
+            Op::GlobalGet(4),
+            Op::If,
+            Op::LocalGet(1),
+            Op::Return,
+            Op::End,
         ]));
     }
 
