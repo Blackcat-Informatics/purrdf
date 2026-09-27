@@ -229,10 +229,13 @@ asserted against the graph Cargo actually resolves, not against the manifest:
 Reading effective values is deliberate — it catches a `[profile.*]` table in
 `$CARGO_HOME/config.toml` or anywhere on the walk up from the workspace (your
 home directory is on that walk), a `CARGO_PROFILE_*` variable, or a `--config`
-override, none of which the manifest can see. Do not add a `[profile.test]`
-block (`test` inherits `dev`), and do not set `lto` or `codegen-units = 1` there:
-both serialize codegen and inflate link memory, which is what a
-constantly-rebuilt, cold-in-CI gate wants least.
+override, none of which the manifest can see. The `[profile.test]` block
+exists and sets only `debug = 0` (test binaries carry no debug info). It must
+not set `opt-level`, `debug-assertions` or `overflow-checks` — `test` inherits
+those from `dev`, and `scripts/check-build-profiles.py` asserts the inherited
+values — and neither it nor `[profile.dev]` may set `lto` or
+`codegen-units = 1`: both serialize codegen and inflate link memory, which is
+what a constantly-rebuilt, cold-in-CI gate wants least.
 
 ## 5. Brand & naming
 

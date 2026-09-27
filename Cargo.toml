@@ -296,10 +296,13 @@ strip = "none"
 # `make check` runs the whole test surface and `make conformance` runs every W3C
 # suite through it, so both gates are bounded by how well the engines under them
 # were compiled. `cargo test` builds with the `test` profile, which inherits
-# every value in this block — including the `package` table below. There is
-# deliberately no `[profile.test]` section: it would be a second place to change
-# one thing, and `scripts/check-build-profiles.py` reads the resolved `test`
-# graph, so the inheritance is proven rather than assumed.
+# every value in this block — including the `package` table below. The
+# `[profile.test]` section further down sets exactly one thing, `debug = 0`, and
+# must never set `opt-level`, `debug-assertions` or `overflow-checks`: those are
+# stated once, here, and a second place to change them is how the gate would
+# drift from what this block claims. `scripts/check-build-profiles.py` reads the
+# resolved `test` graph, so the inheritance of those three is proven rather
+# than assumed.
 #
 # This block replaced four hand-written per-crate `opt-level = 2` tables. They
 # were right about the mechanism and wrong about its reach: the `"*"` glob below
