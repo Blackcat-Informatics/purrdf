@@ -64,6 +64,10 @@ const TEMPLATE_TERMS: [&str; 3] = [sh::PARAMETER_PROPERTY, sh::CONSTRUCT, sh::PR
 
 /// The pre-bound variable names a template parameter may not take: `$this` and the
 /// shape context a shape rule pre-binds.
+/// `sh:JSRule`, the SHACL JavaScript Extensions rule type. Not a SHACL 1.2 term, so it
+/// has no `model::sh` constant.
+const JS_RULE: &str = "http://www.w3.org/ns/shacl#JSRule";
+
 const RESERVED_VARIABLES: [&str; 3] = ["this", "shapesGraph", "currentShape"];
 
 /// The one rule type a rule node executes as.
@@ -354,6 +358,19 @@ impl Parser<'_> {
         }
         match kinds.len() {
             1 => Ok(kinds.pop().expect("one kind")),
+            // A `sh:JSRule` a shape names is a rule this engine cannot execute
+            // because it has no JavaScript engine: the same failure SHACL requires, typed
+            // and naming the extension. One nothing names is inert vocabulary.
+            0 if is(&mut instances, JS_RULE) => Err(self.refuse_shacl_js(
+                rule_node,
+                JS_RULE,
+                format!(
+                    "rule {rule_node} is a sh:JSRule: {}; SHACL 1.2 Inference Rules: \"If a \
+                     rules engine is not able to execute a given rule because it does not \
+                     support any of the rule types of the rule, then it reports a failure\"",
+                    census::JS
+                ),
+            )),
             0 => Err(format!(
                 "rule {rule_node} is not a recognised SHACL rule: it is an instance of none of \
                  the rule types this engine executes (sh:TripleRule, sh:SPARQLRule, or a \

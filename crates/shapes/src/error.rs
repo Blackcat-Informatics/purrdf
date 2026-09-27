@@ -11,8 +11,10 @@
 //! carrying the typed [`ShapesImportError`], and a caller branches on the variant rather
 //! than on message text. A shapes graph that uses the SHACL JavaScript Extensions is the
 //! other: SHACL-JS is a 2017 Working Group Note, not SHACL 1.2, and this engine has no
-//! JavaScript engine, so the refusal is typed ([`ShapesError::ShaclJs`]) and names the
-//! extension, the node and the term, rather than reading like a malformed graph.
+//! JavaScript engine, so a shape that reaches SHACL-JS is refused typed
+//! ([`ShapesError::ShaclJs`]), naming the extension, the node and the term, rather than
+//! reading like a malformed graph. SHACL-JS that no shape reaches is declared vocabulary
+//! and loads.
 
 use std::fmt;
 
@@ -24,8 +26,8 @@ pub enum ShapesError {
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table the
     /// caller supplied cannot be used. See [`crate::imports`].
     Imports(ShapesImportError),
-    /// The shapes graph uses a term of the SHACL JavaScript Extensions (SHACL-JS) where
-    /// the engine reads it. See [`ShaclJsRefusal`].
+    /// A shape of the shapes graph reaches a construct of the SHACL JavaScript
+    /// Extensions (SHACL-JS). See [`ShaclJsRefusal`].
     ShaclJs(ShaclJsRefusal),
     /// Anything else: a document that does not parse, an unsupported or malformed SHACL
     /// construct, a failure during evaluation. The engine's own diagnostic.
@@ -79,6 +81,15 @@ impl std::error::Error for ShapesError {
 /// engine has no JavaScript engine to evaluate it. A constraint it cannot evaluate is
 /// refused rather than validated as if it were absent. The equivalent SHACL-SPARQL
 /// constraint (`sh:sparql` with a `sh:select` query) loads.
+///
+/// Only a construct a shape REACHES is refused: SHACL-JS on the shape itself (`sh:js`, a
+/// SHACL-JS type), a `sh:JSTarget` or a target whose type is a `sh:JSTargetType`, a
+/// `sh:JSRule` among its rules, a use of a constraint component whose selected
+/// validator is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
+/// `sh:JSFunction` from a node expression or from reachable SPARQL. A library that only
+/// DECLARES SHACL-JS — `sh:JSLibrary`s, `sh:JSFunction`s, `sh:JSValidator`s of
+/// components no shape uses, SHACL-JS alternatives on built-in components — loads, and
+/// those declarations are inert.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShaclJsRefusal {
     node: String,

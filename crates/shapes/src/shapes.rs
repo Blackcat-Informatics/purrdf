@@ -1009,8 +1009,7 @@ impl LinkedDeclarations {
 #[doc(hidden)]
 pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
     let parser = Parser::new(dataset.as_ref(), None, &[], None, Arc::clone(dataset), None);
-    let registry =
-        ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver, &parser.shacl_js)?;
+    let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?;
     let linked = parser.discover_custom_functions()?;
     let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
     registered_components.sort();
@@ -1046,10 +1045,7 @@ pub(crate) fn alternative_validators(
         Arc::clone(dataset),
         None,
     );
-    Ok(
-        ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver, &parser.shacl_js)?
-            .alternatives,
-    )
+    Ok(ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?.alternatives)
 }
 
 /// Parse shapes from a dataset, with the shapes document's `@prefix` declarations
@@ -1401,6 +1397,14 @@ fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     .collect()
 }
 
+/// `sh:JSTarget`, a SHACL JavaScript Extensions target. Not a SHACL 1.2 term, so it
+/// has no `model::sh` constant.
+const SH_JS_TARGET: &str = "http://www.w3.org/ns/shacl#JSTarget";
+/// `sh:JSTargetType`, the SHACL JavaScript Extensions class of target types.
+const SH_JS_TARGET_TYPE: &str = "http://www.w3.org/ns/shacl#JSTargetType";
+/// `sh:JSFunction`, the SHACL JavaScript Extensions class of functions.
+pub(crate) const SH_JS_FUNCTION: &str = "http://www.w3.org/ns/shacl#JSFunction";
+
 /// Record a SHACL-JS refusal in `slot` unless one is already recorded.
 pub(crate) fn record_shacl_js(
     slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
@@ -1621,8 +1625,7 @@ impl<'s> Parser<'s> {
 
         // Custom SHACL-SPARQL constraint components are parsed up-front; any
         // malformed component, parameter, or validator query is a hard failure.
-        self.component_registry =
-            ComponentRegistry::parse(self.data, &self.prefix_resolver, &self.shacl_js)?;
+        self.component_registry = ComponentRegistry::parse(self.data, &self.prefix_resolver)?;
 
         // Every shape of the shapes graph, checked against the census before any
         // is parsed: an unknown or refused term, or an ill-typed parameter
@@ -1723,7 +1726,41 @@ impl<'s> Parser<'s> {
                 self.shapes_graph.clone(),
             ),
         };
+        self.refuse_javascript_calls(&shapes)?;
         Ok((shapes, expressions))
+    }
+
+    /// Refuse a shapes graph in which a SPARQL text a shape reaches calls a function
+    /// the shapes graph declares as a SHACL-JS `sh:JSFunction` — directly, or through a
+    /// `sh:SPARQLFunction` it calls. This engine has no JavaScript engine, so the call
+    /// could only fail at evaluation. A `sh:JSFunction` nothing reachable calls is
+    /// inert vocabulary. A node-expression call to one is refused where the call is
+    /// parsed.
+    fn refuse_javascript_calls(&self, shapes: &Shapes) -> Result<(), String> {
+        let javascript: std::collections::BTreeSet<String> = self
+            .quads_with(None, Some(rdf::TYPE), Some(SH_JS_FUNCTION))
+            .into_iter()
+            .filter_map(|(subject, _, _)| match subject {
+                Term::NamedNode(iri) => Some(iri.as_str().to_owned()),
+                _ => None,
+            })
+            .collect();
+        if javascript.is_empty() {
+            return Ok(());
+        }
+        let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &javascript)
+        else {
+            return Ok(());
+        };
+        Err(self.refuse_shacl_js(
+            &Term::NamedNode(NamedNode::from(function.as_str())),
+            SH_JS_FUNCTION,
+            format!(
+                "the SPARQL of {site} calls <{function}>, a sh:JSFunction: {}; the shapes \
+                 graph is refused rather than failing when the call is evaluated",
+                crate::spec::census::JS
+            ),
+        ))
     }
 
     /// Resolve NOW every shape IRI a `sh:nodeByExpression` already names, against
@@ -2219,6 +2256,32 @@ impl<'s> Parser<'s> {
                     matched = Some((n.clone(), target_type.clone()));
                     break;
                 }
+            }
+            // A SHACL-JS target — a `sh:JSTarget`, or an instance of a declared
+            // `sh:JSTargetType` — is a target this engine cannot compute: its focus
+            // nodes are the output of JavaScript. Declared and unused, both are inert.
+            let javascript_target = if self.has_type(&t_node, SH_JS_TARGET) {
+                Some(SH_JS_TARGET)
+            } else if self
+                .objects_of(&t_node, rdf::TYPE)
+                .iter()
+                .any(|class| self.has_type(class, SH_JS_TARGET_TYPE))
+            {
+                Some(SH_JS_TARGET_TYPE)
+            } else {
+                None
+            };
+            if let Some(term) = javascript_target {
+                return Err(self.refuse_shacl_js(
+                    &t_node,
+                    term,
+                    format!(
+                        "shape {id} has the sh:target {t_node}, a SHACL-JS target (<{term}>): \
+                         {why}; the shape is refused rather than validated against no focus \
+                         nodes",
+                        why = crate::spec::census::JS,
+                    ),
+                ));
             }
             let Some((type_iri, target_type)) = matched else {
                 return Err(format!(

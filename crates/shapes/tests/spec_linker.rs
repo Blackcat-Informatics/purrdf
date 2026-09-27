@@ -645,25 +645,15 @@ fn a_semantic_statement_on_a_builtin_declaration_is_refused() {
     );
 }
 
-/// An alternative must still be a well-formed validator of its attachment. A SHACL-JS
-/// validator is not ("The values of sh:validator must be ASK-based validators"), nor
-/// is an ASK validator under `sh:propertyValidator` ("The values of
-/// sh:propertyValidator must be SELECT-based validators"), nor an ASK validator whose
-/// query does not parse; each is refused. The neighbours — the SPARQL validator of the
-/// right form, with a parsable query calling an unknown function — load (see
-/// `a_builtin_component_given_validators_binds_natively`).
+/// A SPARQL alternative must still be a well-formed validator of its attachment. An ASK
+/// validator under `sh:propertyValidator` is not ("The values of sh:propertyValidator
+/// must be SELECT-based validators"), nor is an ASK validator whose query does not
+/// parse; each is refused. The neighbours — the SPARQL validator of the right form, with
+/// a parsable query calling an unknown function — load (see
+/// `a_builtin_component_given_validators_binds_natively`), and so does a SHACL-JS
+/// alternative (see `a_javascript_alternative_on_a_builtin_is_inert_and_listed`).
 #[test]
 fn an_ill_formed_alternative_on_a_builtin_is_refused() {
-    let js = load_error(&format!(
-        "{MIN_COUNT_DECLARATION}
-         sh:MinCountConstraintComponent sh:validator [
-           a sh:JSValidator ; sh:jsFunctionName \"validateMinCount\" ] .
-         {MIN_COUNT_SHAPE}"
-    ));
-    assert!(
-        js.contains("sh:JSValidator") && js.contains("SHACL JavaScript Extensions"),
-        "{js}"
-    );
     let wrong_form = load_error(&format!(
         "{MIN_COUNT_DECLARATION}
          sh:MinCountConstraintComponent sh:propertyValidator [
@@ -683,31 +673,92 @@ fn an_ill_formed_alternative_on_a_builtin_is_refused() {
     assert!(unparsable.contains("unparsable query"), "{unparsable}");
 }
 
-/// A CUSTOM component with a SHACL-JS validator is refused even when no shape uses
-/// it: the node is ill-formed whatever uses it. The neighbour — the same component
-/// with only its SPARQL validator — loads and runs that validator.
+/// A SHACL-JS `sh:JSValidator` declared for a built-in is an alternative the native
+/// implementation supersedes, like a SPARQL one: never parsed, never run, and listed
+/// with the `javascript` label. The native semantics are observed — `ex:b` (no `ex:p`)
+/// violates and `ex:a` conforms — and the report equals the report without the
+/// declaration, so the alternative neither replaced nor suppressed the constraint.
 #[test]
-fn a_custom_component_with_a_javascript_validator_is_refused() {
+fn a_javascript_alternative_on_a_builtin_is_inert_and_listed() {
+    const JS_ALTERNATIVE: &str = r#"
+sh:MinCountConstraintComponent sh:validator ex:jsAlternative .
+ex:jsAlternative a sh:JSValidator ; sh:jsFunctionName "validateMinCount" ;
+  sh:jsLibrary [ sh:jsLibraryURL "https://example.org/minCount.js"^^xsd:anyURI ] .
+"#;
+    let data = "ex:a ex:p 1 .";
+    let with = validate(
+        &format!("{MIN_COUNT_DECLARATION}{JS_ALTERNATIVE}{MIN_COUNT_SHAPE}"),
+        data,
+    );
+    let without = validate(&format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"), data);
+    assert_eq!(
+        focus_nodes(&with),
+        vec!["<http://example.org/ns#b>".to_owned()]
+    );
+    assert_eq!(summary(&with), summary(&without));
+    let linked = linked(&format!("{MIN_COUNT_DECLARATION}{JS_ALTERNATIVE}"));
+    assert_eq!(linked.registered_components, Vec::<String>::new());
+    let alternatives: Vec<(String, String, String, &str)> = linked
+        .alternative_validators
+        .iter()
+        .map(|a| {
+            (
+                a.component.clone(),
+                a.attachment.clone(),
+                a.validator.to_string(),
+                a.language.label(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        alternatives,
+        vec![(
+            "http://www.w3.org/ns/shacl#MinCountConstraintComponent".to_owned(),
+            "http://www.w3.org/ns/shacl#validator".to_owned(),
+            "<http://example.org/ns#jsAlternative>".to_owned(),
+            "javascript",
+        )]
+    );
+}
+
+/// A CUSTOM component's SHACL-JS validator is inert vocabulary where SHACL selects a
+/// SPARQL validator instead. Declared beside the component's ASK validator it loads,
+/// with no shape using it and with one: the use runs the ASK validator, observed
+/// flagging `2` and passing `1`. The neighbour whose only validator is the SHACL-JS one
+/// is refused, typed, where the shape uses it — and loads where no shape does.
+#[test]
+fn a_custom_components_javascript_validator_is_inert_beside_its_sparql_one() {
     const COMPONENT: &str = r#"
 ex:EqualsOne a sh:ConstraintComponent ;
   sh:parameter [ sh:path ex:one ] ;
-  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value = 1) }" ] .
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value = 1) }" ] ;
+  sh:validator [ a sh:JSValidator ; sh:jsFunctionName "equalsOne" ] .
 "#;
-    let error = load_error(&format!(
-        "{COMPONENT}
-         ex:EqualsOne sh:validator [ a sh:JSValidator ; sh:jsFunctionName \"equalsOne\" ] ."
-    ));
-    assert!(error.contains("sh:JSValidator"), "{error}");
-    let report = validate(
-        &format!(
-            "{COMPONENT}
-             ex:S a sh:NodeShape ; sh:targetNode 1, 2 ; ex:one true ."
-        ),
-        "",
-    );
+    const USE: &str = "ex:S a sh:NodeShape ; sh:targetNode 1, 2 ; ex:one true .";
+    load(COMPONENT).expect("an unused component with a SHACL-JS validator loads");
+    let report = validate(&format!("{COMPONENT}{USE}"), "");
     assert_eq!(
         focus_nodes(&report),
         vec!["\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()]
+    );
+
+    const JS_ONLY: &str = r#"
+ex:EqualsOne a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:one ] ;
+  sh:validator ex:jsEqualsOne .
+ex:jsEqualsOne a sh:JSValidator ; sh:jsFunctionName "equalsOne" .
+"#;
+    load(JS_ONLY).expect("an unused SHACL-JS-only component loads");
+    let error = parse_shapes(&format!("{PREFIXES}{JS_ONLY}{USE}"), None)
+        .expect_err("a shape that would run a SHACL-JS validator is refused");
+    let Some(refusal) = error.as_shacl_js() else {
+        panic!("the refusal is typed ShapesError::ShaclJs: {error:?}");
+    };
+    assert_eq!(refusal.node(), "<http://example.org/ns#jsEqualsOne>");
+    assert_eq!(refusal.term(), "http://www.w3.org/ns/shacl#JSValidator");
+    assert!(
+        refusal.message().contains("SHACL JavaScript Extensions"),
+        "{error}"
     );
 }
 

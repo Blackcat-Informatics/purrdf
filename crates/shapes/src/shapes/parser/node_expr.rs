@@ -700,6 +700,30 @@ impl Parser<'_> {
                 continue;
             }
 
+            // A use whose selected validators are all SHACL-JS is a constraint this
+            // engine cannot evaluate: refused, never skipped. A component that only
+            // DECLARES a `sh:JSValidator` beside a SPARQL one, or that no shape uses,
+            // loads with the JavaScript validator inert.
+            if let Some((attachment, validator)) = component.javascript_only(is_property_shape) {
+                return Err(self.refuse_shacl_js(
+                    validator,
+                    crate::components::JS_VALIDATOR,
+                    format!(
+                        "shape {id} uses constraint component <{component_id}>, and the \
+                         validator SHACL selects for it on a {kind} shape is <{attachment}> \
+                         {validator}, a sh:JSValidator: {why}; the shape is refused rather \
+                         than validated as if the constraint were absent",
+                        component_id = component.id.as_str(),
+                        kind = if is_property_shape {
+                            "property"
+                        } else {
+                            "node"
+                        },
+                        why = crate::spec::census::JS,
+                    ),
+                ));
+            }
+
             // Scope-specific validators take precedence over the generic ASK
             // fallback (SHACL-SPARQL §4.2.3).
             let scoped = if is_property_shape {
@@ -2069,9 +2093,23 @@ impl Parser<'_> {
                 args,
             }));
         }
+        // A call to a SHACL-JS `sh:JSFunction` the shapes graph declares is a call
+        // this engine cannot evaluate: refused, never resolved as a host function.
+        // The declaration alone, uncalled, is inert.
+        let iri_term = Term::NamedNode(fn_iri.clone());
+        if self.has_type(&iri_term, crate::shapes::SH_JS_FUNCTION) {
+            return Err(self.refuse_shacl_js(
+                &iri_term,
+                crate::shapes::SH_JS_FUNCTION,
+                format!(
+                    "node expression on {node} calls <{}>, a sh:JSFunction: {}",
+                    fn_iri.as_str(),
+                    crate::spec::census::JS
+                ),
+            ));
+        }
         // A user-defined function is typed `sh:SPARQLFunction` (or `sh:Function`)
         // in the shapes graph; anything else is treated as a builtin.
-        let iri_term = Term::NamedNode(fn_iri.clone());
         let user_defined =
             self.has_type(&iri_term, sh::SPARQL_FUNCTION) || self.has_type(&iri_term, sh::FUNCTION);
         let call = if user_defined {

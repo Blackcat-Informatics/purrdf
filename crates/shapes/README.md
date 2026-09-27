@@ -93,12 +93,15 @@ node-expression function bound natively, to a custom body, to a SPARQL
 registration or to a host extension.
 
 **SHACL-JS.** SHACL JavaScript Extensions are not part of SHACL 1.2 and the
-engine has no JavaScript engine. A `sh:JSValidator` is refused wherever a
-validator is declared, on a built-in or a custom component, because "The values
-of sh:validator must be ASK-based validators" and those of `sh:nodeValidator`
-and `sh:propertyValidator` SELECT-based ones (SHACL 1.2 SPARQL Extensions), and
-SHACL 1.2 Core says a processor "SHOULD produce a failure" for an ill-formed
-shapes graph.
+engine has no JavaScript engine. A shape that reaches SHACL-JS is refused with
+`ShapesError::ShaclJs`: `sh:js` or a SHACL-JS type on the shape, a `sh:JSTarget`
+or an instance of a `sh:JSTargetType` as its target, a `sh:JSRule` among its
+rules, a constraint component whose selected validator is a `sh:JSValidator`
+with no SPARQL validator beside it ("The values of sh:validator must be
+ASK-based validators", SHACL 1.2 SPARQL Extensions), and a call to a
+`sh:JSFunction` from a node expression or from SPARQL the shape runs. SHACL-JS
+that no shape reaches is declared vocabulary and loads inert, so a library such
+as DASH, which declares `sh:JSValidator`s beside SPARQL ones, can be imported.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL

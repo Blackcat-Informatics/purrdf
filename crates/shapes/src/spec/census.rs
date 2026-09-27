@@ -80,8 +80,10 @@ pub enum TermClass {
     /// Rule vocabulary (SHACL Advanced Features / SHACL 1.2 Rules).
     Rule,
     /// A term the engine deliberately refuses to evaluate (the SHACL JavaScript
-    /// Extensions). Using it where the loader looks is a load error carrying
-    /// this reason, never a silent no-op.
+    /// Extensions). Using it where the loader looks — on a shape, a node expression, a
+    /// SPARQL-based constraint or a rule a shape names — is a load error carrying this
+    /// reason, never a silent no-op. On a declaration no shape reaches (a
+    /// `sh:JSLibrary`, a `sh:JSFunction`, a `sh:JSValidator`) it is inert vocabulary.
     Refused(&'static str),
 }
 

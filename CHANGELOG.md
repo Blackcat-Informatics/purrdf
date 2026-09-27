@@ -38,14 +38,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   10,000-step countdown takes well under a second instead of hitting the
   fixed join-step ceiling. `--explain` lists the premises of such a rule's
   inferences.
-- **shapes:** a shapes graph that uses the SHACL JavaScript Extensions
-  (`sh:js`, `sh:JSConstraint`, `sh:JSValidator`, `sh:JSRule`, …) is refused
-  with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`, which names the node
-  and the SHACL-JS term, instead of `ShapesError::Invalid`. SHACL-JS is a 2017
-  Working Group Note, not SHACL 1.2. `ShapesError` gains the variant, so an
-  exhaustive match on it must name it; `purrdf-validate` re-exports
-  `ShaclJsRefusal`. The Python, WebAssembly, C and command-line hosts report it
-  with the same message as before.
+- **shapes:** a shapes graph in which a shape reaches the SHACL JavaScript
+  Extensions is refused with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`,
+  which names the node and the SHACL-JS term, instead of `ShapesError::Invalid`.
+  A shape reaches SHACL-JS through `sh:js` or a SHACL-JS type on the shape, a
+  `sh:JSTarget` or an instance of a `sh:JSTargetType` as its `sh:target`, a
+  `sh:JSRule` among its rules, a constraint component whose selected validator
+  is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
+  `sh:JSFunction` from a node expression or from SPARQL the shape runs,
+  directly or through a `sh:SPARQLFunction`. SHACL-JS is a 2017 Working Group
+  Note, not SHACL 1.2. A shapes graph that only declares SHACL-JS, as the DASH
+  library does, now loads with those declarations inert: `sh:JSLibrary`s,
+  `sh:JSFunction`s nothing calls, `sh:JSValidator`s of components no shape
+  uses or beside a SPARQL validator SHACL selects instead, and `sh:JSValidator`
+  alternatives on built-in components, which the lint report lists with the
+  `javascript` language. `ShapesError` gains the variant, so an exhaustive
+  match on it must name it; `purrdf-validate` re-exports `ShaclJsRefusal`, and
+  `ValidatorLanguage` gains `JavaScript`. The Python, WebAssembly, C and
+  command-line hosts report it with the same message as before.
+- **sparql-algebra:** `Query::custom_function_calls` lists the IRI of every
+  extension function a query calls, anywhere in its algebra.
 - **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
   onto a list value's `@list` array: `sh:minListLength` as `minItems`,
   `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,
@@ -2592,14 +2604,15 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   a declaration used to be refused as a duplicate definition. A body, an `sh:ask` or
   an `sh:select` stated on the component itself is still a duplicate definition, a
   contradicting signature is still a mismatch, and a validator that is not a
-  well-formed SPARQL validator of its attachment — a SHACL-JS `sh:JSValidator`, an
-  untyped node, an ASK validator under `sh:nodeValidator` or `sh:propertyValidator`,
-  a SELECT validator under `sh:validator`, an unparsable query — is refused. Newly
-  refused: an `sh:` statement on a built-in's declaration other than its signature,
-  its validators, `sh:message`, `sh:labelTemplate` or a non-validating
-  characteristic (`sh:severity` on `sh:MinCountConstraintComponent`, for one), which
-  the native implementation would not honour. A `sh:JSValidator` of a custom
-  component is refused with the SHACL-JS reason.
+  well-formed SPARQL validator of its attachment — an untyped node, an ASK validator
+  under `sh:nodeValidator` or `sh:propertyValidator`, a SELECT validator under
+  `sh:validator`, an unparsable query — is refused. A SHACL-JS `sh:JSValidator` is
+  an inert alternative, never parsed and never run. Newly refused: an `sh:`
+  statement on a built-in's declaration other than its signature, its validators,
+  `sh:message`, `sh:labelTemplate` or a non-validating characteristic (`sh:severity`
+  on `sh:MinCountConstraintComponent`, for one), which the native implementation
+  would not honour. A `sh:JSValidator` of a custom component is refused with the
+  SHACL-JS reason only where a shape uses the component and SHACL selects it.
 
 - **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report gains a
   fourth section, `validators N` (`validators unavailable` over a refused graph), with

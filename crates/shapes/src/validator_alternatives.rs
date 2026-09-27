@@ -27,15 +27,25 @@
 //!
 //! # What is not an alternative
 //!
-//! An alternative must still be a well-formed validator of its attachment: "The values
-//! of sh:nodeValidator must be SELECT-based validators. The values of
+//! A SPARQL alternative must still be a well-formed validator of its attachment: "The
+//! values of sh:nodeValidator must be SELECT-based validators. The values of
 //! sh:propertyValidator must be SELECT-based validators" and "The values of
 //! sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL Extensions,
-//! "SELECT-based Validators" and "ASK-based Validators"). A SHACL-JS `sh:JSValidator`, an
-//! untyped node, or a SPARQL validator of the other query form violates those rules, and
-//! SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs", says "A SHACL processor
-//! SHOULD produce a failure in this case" — so each is a load error, on a built-in as on
-//! a custom component.
+//! "SELECT-based Validators" and "ASK-based Validators"). An untyped node, or a SPARQL
+//! validator of the other query form, violates those rules, and SHACL 1.2 Core,
+//! "Handling of Ill-formed Shapes Graphs", says "A SHACL processor SHOULD produce a
+//! failure in this case" — so each is a load error, on a built-in as on a custom
+//! component.
+//!
+//! # A SHACL-JS validator is inert vocabulary
+//!
+//! A SHACL JavaScript Extensions `sh:JSValidator` is declared vocabulary, not a load
+//! error: libraries such as DASH declare them beside SPARQL validators, and this engine
+//! never runs one. On a built-in it is listed here as a
+//! [`ValidatorLanguage::JavaScript`] alternative, never parsed and never run. On a
+//! custom component it is refused only where a shape uses the component and the
+//! validator SHACL selects for that shape is JavaScript-only; a use with a SPARQL
+//! validator to select runs that one.
 
 use crate::term::Term;
 
@@ -46,15 +56,20 @@ pub enum ValidatorLanguage {
     SparqlAsk,
     /// A SHACL instance of `sh:SPARQLSelectValidator`.
     SparqlSelect,
+    /// A SHACL JavaScript Extensions `sh:JSValidator`: declared vocabulary this engine
+    /// neither parses nor runs.
+    JavaScript,
 }
 
 impl ValidatorLanguage {
-    /// The stable kebab-case label every host prints: `sparql-ask` or `sparql-select`.
+    /// The stable kebab-case label every host prints: `sparql-ask`, `sparql-select` or
+    /// `javascript`.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::SparqlAsk => "sparql-ask",
             Self::SparqlSelect => "sparql-select",
+            Self::JavaScript => "javascript",
         }
     }
 }

@@ -180,6 +180,115 @@ fn parse(text: &str, env: &ExtensionEnv) -> Result<Query, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Where a walk over a shapes graph's SPARQL texts delivers each one.
+///
+/// The walk is one piece of code, so every question asked of "the SPARQL a shapes graph
+/// carries" — what an extension environment makes of it, which extension functions it
+/// calls — reads the same set of sites and cannot drift apart.
+pub(crate) trait SparqlSink {
+    /// One SPARQL text, under the label of the site that carries it.
+    fn record(&mut self, site: String, text: &str);
+    /// A node-expression call to the declared function `iri` (`FnCall::UserDefined`),
+    /// whose body is not a text this walk reads.
+    fn user_function_called(&mut self, _iri: &str) {}
+}
+
+/// The [`SparqlSink`] of [`Shapes::extension_usage`].
+struct UsageSink<'e> {
+    usage: ExtensionUsage,
+    env: &'e ExtensionEnv,
+}
+
+impl SparqlSink for UsageSink<'_> {
+    fn record(&mut self, site: String, text: &str) {
+        self.usage.record(site, text, self.env);
+    }
+}
+
+/// Deliver every SPARQL text a shape of `shapes` REACHES to `sink`: the shapes' own
+/// targets, constraints, rules and node expressions, at any depth, and the global rules.
+/// Declarations nothing reaches — a `sh:SPARQLFunction` body, a `sh:SPARQLTargetType`
+/// declaration — are not walked here.
+pub(crate) fn walk_reachable(shapes: &Shapes, sink: &mut dyn SparqlSink) {
+    let mut flight = InFlight::default();
+    for shape in &shapes.node_shapes {
+        walk_shape(shape, sink, &mut flight);
+    }
+    for rule in &shapes.rules.global_rules {
+        if let RuleBody::Sparql { construct, .. } = &rule.body {
+            sink.record(format!("global rule {}", rule.id), construct);
+        }
+        for condition in &rule.conditions {
+            walk_shape(condition, sink, &mut flight);
+        }
+    }
+}
+
+/// The first call, in `(site, function)` order, that a SPARQL text a shape reaches
+/// makes to a function in `javascript` — directly, or through the body of a
+/// `sh:SPARQLFunction` it calls, at any depth. `None` when no reachable text calls one.
+///
+/// A `sh:SPARQLFunction` body is followed only from a call, so a declared function
+/// nothing calls is never read here.
+pub(crate) fn reachable_call_to(
+    shapes: &Shapes,
+    javascript: &std::collections::BTreeSet<String>,
+) -> Option<(String, String)> {
+    /// Every extension-function call of every text, by site.
+    #[derive(Default)]
+    struct Calls {
+        calls: std::collections::BTreeSet<(String, String)>,
+    }
+    impl Calls {
+        fn read(&mut self, site: &str, text: &str) {
+            // Every text reached here was parsed when the shapes graph loaded, so it
+            // parses again; a text that did not would have refused the load.
+            if let Ok(query) = SparqlParser::new().parse_query(text)
+                && let Ok(called) = query.custom_function_calls()
+            {
+                for iri in called {
+                    self.calls.insert((site.to_owned(), iri));
+                }
+            }
+        }
+    }
+    impl SparqlSink for Calls {
+        fn record(&mut self, site: String, text: &str) {
+            self.read(&site, text);
+        }
+        fn user_function_called(&mut self, iri: &str) {
+            self.calls
+                .insert(("a node expression".to_owned(), iri.to_owned()));
+        }
+    }
+
+    let mut sink = Calls::default();
+    walk_reachable(shapes, &mut sink);
+    let bodies: BTreeMap<String, std::sync::Arc<str>> =
+        shapes.functions.sparql_bodied_texts().into_iter().collect();
+    let mut followed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    loop {
+        let next: Vec<String> = sink
+            .calls
+            .iter()
+            .map(|(_, iri)| iri.clone())
+            .filter(|iri| bodies.contains_key(iri) && !followed.contains(iri))
+            .collect();
+        if next.is_empty() {
+            break;
+        }
+        for iri in next {
+            if let Some(body) = bodies.get(&iri) {
+                sink.read(&format!("sh:SPARQLFunction <{iri}>"), body);
+            }
+            followed.insert(iri);
+        }
+    }
+    sink.calls
+        .into_iter()
+        .find(|(_, iri)| javascript.contains(iri))
+}
+
 impl Shapes {
     /// What `env` makes of every SPARQL text this shapes graph carries.
     ///
@@ -187,37 +296,25 @@ impl Shapes {
     /// direction of "will my relations be reached?".
     #[must_use]
     pub fn extension_usage(&self, env: &ExtensionEnv) -> ExtensionUsage {
-        let mut usage = ExtensionUsage::default();
+        let mut sink = UsageSink {
+            usage: ExtensionUsage::default(),
+            env,
+        };
 
         // `sh:SPARQLFunction` bodies — the construct whose blindness occasioned all
         // of this. Their text is the declaration's own, prefix header included.
         for (iri, body) in self.functions.sparql_bodied_texts() {
-            usage.record(format!("sh:SPARQLFunction <{iri}>"), &body, env);
+            sink.record(format!("sh:SPARQLFunction <{iri}>"), &body);
         }
 
         // `sh:SPARQLTargetType` declarations. The header is injected per instance, so
         // the declaration's own text is what is on record here.
         for (iri, declaration) in &self.target_types {
-            usage.record(
-                format!("sh:SPARQLTargetType <{iri}>"),
-                &declaration.select,
-                env,
-            );
+            sink.record(format!("sh:SPARQLTargetType <{iri}>"), &declaration.select);
         }
 
-        let mut flight = InFlight::default();
-        for shape in &self.node_shapes {
-            walk_shape(shape, &mut usage, env, &mut flight);
-        }
-        for rule in &self.rules.global_rules {
-            if let RuleBody::Sparql { construct, .. } = &rule.body {
-                usage.record(format!("global rule {}", rule.id), construct, env);
-            }
-            for condition in &rule.conditions {
-                walk_shape(condition, &mut usage, env, &mut flight);
-            }
-        }
-        usage
+        walk_reachable(self, &mut sink);
+        sink.usage
     }
 }
 
@@ -269,12 +366,7 @@ struct InFlight {
 }
 
 /// Record every SPARQL text one node shape and its descendants carry.
-fn walk_shape(
-    shape: &Shape,
-    usage: &mut ExtensionUsage,
-    env: &ExtensionEnv,
-    flight: &mut InFlight,
-) {
+fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     let id = shape.id.to_string();
     if !flight.shapes.insert(id.clone()) {
         // Already walked. Its constraints are recorded under its own id, so a second
@@ -284,45 +376,34 @@ fn walk_shape(
         return;
     }
 
-    walk_targets(&shape.targets, &id, usage, env, flight);
+    walk_targets(&shape.targets, &id, sink, flight);
     for rule in &shape.rules {
         if let RuleBody::Sparql { construct, .. } = &rule.body {
-            usage.record(format!("sh:rule on {id}"), construct, env);
+            sink.record(format!("sh:rule on {id}"), construct);
         }
     }
-    walk_constraints(&shape.constraints, &id, usage, env, flight);
+    walk_constraints(&shape.constraints, &id, sink, flight);
 
     for property in &shape.property_shapes {
-        walk_property(property, usage, env, flight);
+        walk_property(property, sink, flight);
     }
 }
 
 /// Record every SPARQL text one property shape and its descendants carry.
-fn walk_property(
-    property: &PropertyShape,
-    usage: &mut ExtensionUsage,
-    env: &ExtensionEnv,
-    flight: &mut InFlight,
-) {
+fn walk_property(property: &PropertyShape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     let id = property.id.to_string();
     if let Some(expr) = &property.values {
-        walk_node_expr(expr, &format!("sh:values on {id}"), usage, env, flight);
+        walk_node_expr(expr, &format!("sh:values on {id}"), sink, flight);
     }
     if let Some(expr) = &property.default_value {
-        walk_node_expr(
-            expr,
-            &format!("sh:defaultValue on {id}"),
-            usage,
-            env,
-            flight,
-        );
+        walk_node_expr(expr, &format!("sh:defaultValue on {id}"), sink, flight);
     }
-    walk_constraints(&property.constraints, &id, usage, env, flight);
+    walk_constraints(&property.constraints, &id, sink, flight);
     for nested in &property.property_shapes {
-        walk_property(nested, usage, env, flight);
+        walk_property(nested, sink, flight);
     }
     for reifier in &property.reifier_shapes {
-        walk_shape(reifier, usage, env, flight);
+        walk_shape(reifier, sink, flight);
     }
 }
 
@@ -330,28 +411,16 @@ fn walk_property(
 /// `sh:target`'s query, the `sh:select` inside a node-expression `sh:targetNode`,
 /// and whatever the `sh:targetWhere` shape carries. Wildcard-free, so a target
 /// kind added later is a compile error here rather than a silent gap.
-fn walk_targets(
-    targets: &[Target],
-    owner: &str,
-    usage: &mut ExtensionUsage,
-    env: &ExtensionEnv,
-    flight: &mut InFlight,
-) {
+fn walk_targets(targets: &[Target], owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     for target in targets {
         match target {
             Target::Sparql { select, .. } => {
-                usage.record(format!("sh:target on {owner}"), select, env);
+                sink.record(format!("sh:target on {owner}"), select);
             }
             Target::NodeExpression(expr) => {
-                walk_node_expr(
-                    expr,
-                    &format!("sh:targetNode on {owner}"),
-                    usage,
-                    env,
-                    flight,
-                );
+                walk_node_expr(expr, &format!("sh:targetNode on {owner}"), sink, flight);
             }
-            Target::Where(shape) => walk_shape(shape, usage, env, flight),
+            Target::Where(shape) => walk_shape(shape, sink, flight),
             Target::Class(_)
             | Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
@@ -370,37 +439,36 @@ fn walk_targets(
 fn walk_constraints(
     constraints: &[Constraint],
     owner: &str,
-    usage: &mut ExtensionUsage,
-    env: &ExtensionEnv,
+    sink: &mut dyn SparqlSink,
     flight: &mut InFlight,
 ) {
     for constraint in constraints {
         match constraint {
             Constraint::Sparql { select, .. } => {
-                usage.record(format!("sh:sparql on {owner}"), select, env);
+                sink.record(format!("sh:sparql on {owner}"), select);
             }
             Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
-                walk_node_expr(expr, owner, usage, env, flight);
+                walk_node_expr(expr, owner, sink, flight);
             }
             Constraint::Not(shape)
             | Constraint::Node(shape)
             | Constraint::MemberShape(shape)
-            | Constraint::SomeValue(shape) => walk_shape(shape, usage, env, flight),
+            | Constraint::SomeValue(shape) => walk_shape(shape, sink, flight),
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                 for shape in shapes {
-                    walk_shape(shape, usage, env, flight);
+                    walk_shape(shape, sink, flight);
                 }
             }
             Constraint::QualifiedValueShape {
                 shape, siblings, ..
             } => {
-                walk_shape(shape, usage, env, flight);
+                walk_shape(shape, sink, flight);
                 for sibling in siblings {
-                    walk_shape(sibling, usage, env, flight);
+                    walk_shape(sibling, sink, flight);
                 }
             }
             Constraint::UniqueValuesFor { targets, .. } => {
-                walk_targets(targets, owner, usage, env, flight);
+                walk_targets(targets, owner, sink, flight);
             }
             // A custom constraint component's validator is query text this shapes
             // graph carries and every validation of the shape executes.
@@ -413,10 +481,9 @@ fn walk_constraints(
                     crate::shapes::ComponentValidator::Ask { ask } => ("sh:ask", ask),
                     crate::shapes::ComponentValidator::Select { select } => ("sh:select", select),
                 };
-                usage.record(
+                sink.record(
                     format!("{form} validator of <{}> on {owner}", component.as_str()),
                     text,
-                    env,
                 );
             }
             Constraint::Class(_)
@@ -454,16 +521,10 @@ fn walk_constraints(
 ///
 /// `flight` is the ONE guard for the whole walk; see [`InFlight`] for why it cannot
 /// be scoped to this call.
-fn walk_node_expr(
-    expr: &NodeExpr,
-    owner: &str,
-    usage: &mut ExtensionUsage,
-    env: &ExtensionEnv,
-    flight: &mut InFlight,
-) {
+fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     match expr {
         NodeExpr::Select { query, key, .. } => {
-            usage.record(format!("{key} node expression on {owner}"), query, env);
+            sink.record(format!("{key} node expression on {owner}"), query);
         }
         // Every call kind carries its arguments as node expressions, and a `sh:select`
         // can sit inside any of them. The three arms are spelled out rather than
@@ -474,8 +535,11 @@ fn walk_node_expr(
             | crate::expression::FnCall::UserDefined { args, .. }
             | crate::expression::FnCall::Sparql { args, .. },
         ) => {
+            if let NodeExpr::Call(crate::expression::FnCall::UserDefined { iri, .. }) = expr {
+                sink.user_function_called(iri.as_str());
+            }
             for arg in args {
-                walk_node_expr(arg, owner, usage, env, flight);
+                walk_node_expr(arg, owner, sink, flight);
             }
         }
         // Every remaining OPERAND-bearing variant, because a `sh:select` can sit
@@ -485,13 +549,13 @@ fn walk_node_expr(
         // had not finished reading.
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             for item in items {
-                walk_node_expr(item, owner, usage, env, flight);
+                walk_node_expr(item, owner, sink, flight);
             }
         }
         NodeExpr::If { cond, then, els } => {
-            walk_node_expr(cond, owner, usage, env, flight);
-            walk_node_expr(then, owner, usage, env, flight);
-            walk_node_expr(els, owner, usage, env, flight);
+            walk_node_expr(cond, owner, sink, flight);
+            walk_node_expr(then, owner, sink, flight);
+            walk_node_expr(els, owner, sink, flight);
         }
         NodeExpr::Count { of, .. }
         | NodeExpr::Distinct(of)
@@ -501,43 +565,43 @@ fn walk_node_expr(
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
         | NodeExpr::InstancesOf(of)
-        | NodeExpr::Exists(of) => walk_node_expr(of, owner, usage, env, flight),
+        | NodeExpr::Exists(of) => walk_node_expr(of, owner, sink, flight),
         NodeExpr::OrderBy { of, key, .. } => {
-            walk_node_expr(of, owner, usage, env, flight);
-            walk_node_expr(key, owner, usage, env, flight);
+            walk_node_expr(of, owner, sink, flight);
+            walk_node_expr(key, owner, sink, flight);
         }
         NodeExpr::Filter { nodes, shape }
         | NodeExpr::FindFirst { nodes, shape }
         | NodeExpr::MatchAll { nodes, shape } => {
-            walk_node_expr(nodes, owner, usage, env, flight);
-            walk_shape(shape, usage, env, flight);
+            walk_node_expr(nodes, owner, sink, flight);
+            walk_shape(shape, sink, flight);
         }
         NodeExpr::Remove { nodes, remove } => {
-            walk_node_expr(nodes, owner, usage, env, flight);
-            walk_node_expr(remove, owner, usage, env, flight);
+            walk_node_expr(nodes, owner, sink, flight);
+            walk_node_expr(remove, owner, sink, flight);
         }
         NodeExpr::FlatMap { nodes, map } => {
-            walk_node_expr(nodes, owner, usage, env, flight);
-            walk_node_expr(map, owner, usage, env, flight);
+            walk_node_expr(nodes, owner, sink, flight);
+            walk_node_expr(map, owner, sink, flight);
         }
         NodeExpr::PathValues { focus, .. } => {
-            walk_node_expr(focus, owner, usage, env, flight);
+            walk_node_expr(focus, owner, sink, flight);
         }
         NodeExpr::ConformsToShape { node, shape } => {
-            walk_node_expr(node, owner, usage, env, flight);
+            walk_node_expr(node, owner, sink, flight);
             match shape {
-                crate::expression::ShapeArg::Named(shape) => walk_shape(shape, usage, env, flight),
+                crate::expression::ShapeArg::Named(shape) => walk_shape(shape, sink, flight),
                 // The shape IRI is COMPUTED per evaluation, so which shape this
                 // reaches is not a fact about the graph; the expression that
                 // computes it is, and it is walked.
                 crate::expression::ShapeArg::Computed { expr, .. } => {
-                    walk_node_expr(expr, owner, usage, env, flight);
+                    walk_node_expr(expr, owner, sink, flight);
                 }
             }
         }
         NodeExpr::CustomCall { func, args } => {
             for (_, arg) in args {
-                walk_node_expr(arg, owner, usage, env, flight);
+                walk_node_expr(arg, owner, sink, flight);
             }
             // The function's own `sh:bodyExpression`. A `sh:select` inside it is
             // SPARQL this shapes graph carries and this environment will read, so
@@ -548,7 +612,7 @@ fn walk_node_expr(
             let iri = func.iri.as_str().to_owned();
             if flight.fns.insert(iri.clone()) {
                 if let Some(body) = func.body.get() {
-                    walk_node_expr(body, &format!("{owner} via <{iri}>"), usage, env, flight);
+                    walk_node_expr(body, &format!("{owner} via <{iri}>"), sink, flight);
                 }
                 // Removed whether or not a body was there. Leaving it in on the
                 // `None` arm would quietly turn this stack into a visited set for
@@ -579,6 +643,6 @@ fn walk_node_expr(
         | NodeExpr::Var(_)
         | NodeExpr::Arg(_)
         | NodeExpr::List(_) => {}
-        NodeExpr::NodesMatching(shape) => walk_shape(shape, usage, env, flight),
+        NodeExpr::NodesMatching(shape) => walk_shape(shape, sink, flight),
     }
 }

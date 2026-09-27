@@ -201,6 +201,192 @@ fn a_shacl_js_validator_is_a_typed_refusal_and_its_ask_equivalent_validates() {
     );
 }
 
+/// SHACL-JS declarations a library ships — a `sh:JSLibrary`, a `sh:JSFunction` and a
+/// `sh:SPARQLFunction` whose body calls it, a `sh:JSTargetType`, a `sh:JSRule` no shape
+/// names, a constraint component whose only
+/// validator is a `sh:JSValidator`, a `sh:JSValidator` alternative on a built-in, and a
+/// component with both a SPARQL and a SHACL-JS validator — the way DASH declares
+/// them. Each is only vocabulary until a shape reaches it.
+const SHACL_JS_LIBRARY: &str = r#"
+ex:lib a sh:JSLibrary ; sh:jsLibraryURL "https://example.org/lib.js"^^xsd:anyURI .
+ex:jsFn a sh:JSFunction ; sh:jsFunctionName "jsFn" ; sh:jsLibrary ex:lib ;
+  sh:parameter [ sh:path ex:arg ] ; sh:returnType xsd:boolean .
+ex:JsTargetType a sh:JSTargetType ; sh:jsFunctionName "targets" ; sh:jsLibrary ex:lib ;
+  sh:parameter [ sh:path ex:seed ] .
+ex:unnamedRule a sh:JSRule ; sh:jsFunctionName "infer" ; sh:jsLibrary ex:lib .
+ex:viaSparql a sh:SPARQLFunction ; sh:parameter [ sh:path ex:x ] ; sh:returnType xsd:boolean ;
+  sh:select "SELECT (<http://example.org/ns#jsFn>($x) AS ?result) WHERE { }" .
+ex:JsOnlyComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:jsOnly ] ;
+  sh:validator ex:jsOnlyValidator .
+ex:jsOnlyValidator a sh:JSValidator ; sh:jsFunctionName "jsOnly" ; sh:jsLibrary ex:lib .
+sh:MinLengthConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path sh:minLength ; sh:datatype xsd:integer ] ;
+  sh:validator [ a sh:JSValidator ; sh:jsFunctionName "minLength" ; sh:jsLibrary ex:lib ] .
+ex:NonEmptyComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:nonEmpty ] ;
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR($value)) > 0) }" ] ;
+  sh:validator [ a sh:JSValidator ; sh:jsFunctionName "nonEmpty" ; sh:jsLibrary ex:lib ] .
+"#;
+
+/// The shape every SHACL-JS neighbour validates with: `sh:minCount` and `sh:minLength`
+/// on `ex:p`, and the mixed component's `ex:nonEmpty`, over `ex:a` and `ex:b`.
+const ORDINARY_SHAPE: &str = r"
+ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+  sh:property [ sh:path ex:p ; sh:minCount 1 ; sh:minLength 2 ; ex:nonEmpty true ] .
+";
+
+/// A shapes graph that DECLARES SHACL-JS no shape reaches loads, with the
+/// declarations inert, and its ordinary constraints are honoured. The oracle observes
+/// all three: `ex:a` lacks `ex:p` (`sh:minCount`), `ex:b`'s `"x"` is too short
+/// (`sh:minLength`, whose SHACL-JS alternative did not replace it) and its `""` is empty
+/// (`ex:nonEmpty`, whose SPARQL validator ran beside the inert SHACL-JS one), while
+/// `ex:b`'s `"long"` passes all three. Without the library the report is the same, so
+/// the declarations neither added nor suppressed a result.
+#[test]
+fn declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire() {
+    let data = r#"ex:b ex:p "x", "", "long" ."#;
+    let with = validate(&format!("{SHACL_JS_LIBRARY}{ORDINARY_SHAPE}"), data);
+    let mut observed: Vec<(String, String, String)> = with
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.focus_node.to_string(),
+                r.value
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string),
+                r.source_constraint_component.to_string(),
+            )
+        })
+        .collect();
+    observed.sort();
+    let row = |focus: &str, value: &str, component: &str| {
+        (
+            format!("<http://example.org/ns#{focus}>"),
+            value.to_owned(),
+            component.to_owned(),
+        )
+    };
+    assert_eq!(
+        observed,
+        vec![
+            row(
+                "a",
+                "",
+                "<http://www.w3.org/ns/shacl#MinCountConstraintComponent>"
+            ),
+            row("b", "\"\"", "<http://example.org/ns#NonEmptyComponent>"),
+            row(
+                "b",
+                "\"\"",
+                "<http://www.w3.org/ns/shacl#MinLengthConstraintComponent>"
+            ),
+            row(
+                "b",
+                "\"x\"",
+                "<http://www.w3.org/ns/shacl#MinLengthConstraintComponent>"
+            ),
+        ]
+    );
+    let without = validate(
+        &format!(
+            "ex:NonEmptyComponent a sh:ConstraintComponent ;
+               sh:parameter [ sh:path ex:nonEmpty ] ;
+               sh:validator [ a sh:SPARQLAskValidator ;
+                              sh:ask \"ASK {{ FILTER (STRLEN(STR($value)) > 0) }}\" ] .
+             {ORDINARY_SHAPE}"
+        ),
+        data,
+    );
+    assert_eq!(results(&with), results(&without));
+}
+
+/// Every place a shape REACHES a SHACL-JS construct is refused with the typed
+/// `ShapesError::ShaclJs` naming the extension, beside the same library that loads
+/// while nothing reaches it (see
+/// `declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire`): a
+/// shape using the component whose only validator is a `sh:JSValidator`, a property
+/// shape using a component whose `sh:propertyValidator` is SHACL-JS (SHACL selects the
+/// scoped attachment when present, so the generic SPARQL validator is not a fallback),
+/// a `sh:JSTarget`, a target of a `sh:JSTargetType`, a `sh:JSRule` on the shape, a
+/// node expression calling the `sh:JSFunction`, a SPARQL constraint calling it, and a
+/// SPARQL constraint calling the `sh:SPARQLFunction` whose body calls it.
+#[test]
+fn every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal() {
+    let cases: [(&str, &str, &str); 8] = [
+        (
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:jsOnly true .",
+            "<http://example.org/ns#jsOnlyValidator>",
+            "http://www.w3.org/ns/shacl#JSValidator",
+        ),
+        (
+            "ex:Scoped a sh:ConstraintComponent ; sh:parameter [ sh:path ex:scoped ] ;
+               sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK { }\" ] ;
+               sh:propertyValidator ex:scopedJs .
+             ex:scopedJs a sh:JSValidator ; sh:jsFunctionName \"scoped\" ; sh:jsLibrary ex:lib .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:p ; ex:scoped true ] .",
+            "<http://example.org/ns#scopedJs>",
+            "http://www.w3.org/ns/shacl#JSValidator",
+        ),
+        (
+            "ex:S a sh:NodeShape ;
+               sh:target [ a sh:JSTarget ; sh:jsFunctionName \"t\" ; sh:jsLibrary ex:lib ] ;
+               sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+            "",
+            "",
+        ),
+        (
+            "ex:S a sh:NodeShape ; sh:target [ a ex:JsTargetType ; ex:seed 1 ] ;
+               sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+            "",
+            "",
+        ),
+        (
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:rule [ a sh:JSRule ; sh:jsFunctionName \"r\" ; sh:jsLibrary ex:lib ] .",
+            "",
+            "",
+        ),
+        (
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:q ; sh:values [ ex:jsFn ( sh:this ) ] ; sh:minCount 1 ] .",
+            "",
+            "",
+        ),
+        (
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:sparql [ a sh:SPARQLConstraint ;
+                 sh:select \"SELECT $this WHERE { FILTER (!<http://example.org/ns#jsFn>($this)) }\" ] .",
+            "<http://example.org/ns#jsFn>",
+            "http://www.w3.org/ns/shacl#JSFunction",
+        ),
+        (
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:sparql [ a sh:SPARQLConstraint ;
+                 sh:select \"SELECT $this WHERE { FILTER (!<http://example.org/ns#viaSparql>($this)) }\" ] .",
+            "<http://example.org/ns#jsFn>",
+            "http://www.w3.org/ns/shacl#JSFunction",
+        ),
+    ];
+    for (shape, node, term) in cases {
+        let error = parse_shapes(&format!("{PREFIXES}{SHACL_JS_LIBRARY}{shape}"), None)
+            .expect_err(&format!("a shape reaching SHACL-JS is refused: {shape}"));
+        let Some(refusal) = error.as_shacl_js() else {
+            panic!("the refusal is typed ShapesError::ShaclJs for {shape}: {error:?}");
+        };
+        assert!(
+            refusal.message().contains("SHACL JavaScript Extensions"),
+            "{error}"
+        );
+        if !node.is_empty() {
+            assert_eq!(refusal.node(), node, "{shape}");
+            assert_eq!(refusal.term(), term, "{shape}");
+        }
+    }
+}
+
 /// SHACL Advanced Features 1.1's minus expression — "exactly one value for the
 /// property sh:minus … and exactly one value for the property sh:nodes", "the input
 /// nodes except those that are in another 'minus' list" — is SHACL 1.2's

@@ -75,7 +75,14 @@ The terms the SHACL vocabularies define and the engine refuses by name are:
 
 - the SHACL JavaScript Extensions (`sh:js`, `sh:JSConstraint` and the rest),
   which are not part of SHACL 1.2; this engine has no JavaScript engine to
-  evaluate them;
+  evaluate them. The refusal is `ShapesError::ShaclJs`, and it applies where a
+  shape reaches SHACL-JS: `sh:js` or a SHACL-JS type on the shape, a
+  `sh:JSTarget` or an instance of a `sh:JSTargetType` as its target, a
+  `sh:JSRule` among its rules, a constraint component whose selected validator
+  is a `sh:JSValidator` with no SPARQL validator beside it, and a call to a
+  `sh:JSFunction` from a node expression or from SPARQL the shape runs. A
+  library that only declares SHACL-JS, as DASH does, loads, and those
+  declarations are inert;
 - `sh:describe` and `sh:update` on a shape, a node expression, a SPARQL-based
   constraint, a validator or a rule. The SHACL 1.2 vocabulary declares them as
   the queries of `sh:SPARQLDescribeExecutable` and `sh:SPARQLUpdateExecutable`,
@@ -299,11 +306,11 @@ resolves each declaration against the engine's table of what it implements:
   implementation supersedes. SHACL 1.2 SPARQL Extensions selects "one of the
   values" of a component's validators, so each is an implementation of the same
   component, and the engine's own is the one that runs. Vocabularies such as
-  DASH declare them for SHACL Core components. An alternative must be a
-  well-formed SPARQL validator of its attachment: a SHACL-JS `sh:JSValidator`,
-  an ASK validator under `sh:propertyValidator` or an unparsable query fails the
-  load. It is never executed, so its query may call a function the engine does
-  not have;
+  DASH declare them for SHACL Core components. A SPARQL alternative must be a
+  well-formed SPARQL validator of its attachment: an ASK validator under
+  `sh:propertyValidator` or an unparsable query fails the load. It is never
+  executed, so its query may call a function the engine does not have. A
+  SHACL-JS `sh:JSValidator` alternative is inert: never parsed and never run;
 - any other `sh:` statement on a built-in's declaration fails the load, except
   `sh:message`, `sh:labelTemplate` and the non-validating characteristics
   (`sh:name`, `sh:description`, …): `sh:severity` on

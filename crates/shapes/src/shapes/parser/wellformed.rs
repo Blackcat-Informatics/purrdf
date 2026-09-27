@@ -137,6 +137,12 @@ impl Parser<'_> {
         }
         for attachment in [sh::VALIDATOR, sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR] {
             for (_, _, node) in self.quads_with(None, Some(attachment), None) {
+                // A SHACL-JS validator is not a SPARQL executable: its `sh:js…`
+                // vocabulary is inert where it is declared, and a shape that would
+                // run it is refused where the shape's constraint is read.
+                if crate::components::is_javascript_validator(self.data, &node) {
+                    continue;
+                }
                 executables.push((node, "SPARQL validator", &SPARQL_VALIDATOR_TERMS));
             }
         }
