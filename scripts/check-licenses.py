@@ -393,7 +393,10 @@ def self_test() -> int:
     #    diff, or published. In the change whose entire subject is not misrepresenting the
     #    offer. Every function here already takes `root` as a parameter, so no mutation was
     #    ever needed.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-", dir=_scratch_root()) as raw:
+    # This fixture is itself a Git repository. A CI checkout's target directory
+    # is inside the checkout (unlike some local symlinked targets), so it must
+    # use the system temporary directory rather than the build scratch tree.
+    with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-") as raw:
         fixture = Path(raw)
         (fixture / "scripts").mkdir()
         (fixture / "scripts" / "probe.py").write_text(
@@ -412,6 +415,20 @@ def self_test() -> int:
         if any("fine.py" in problem for problem in found):
             print("SELF-TEST FAIL: a file AT the offer was refused alongside it")
             ok = False
+
+    # The guard must still reject a future caller that tries to initialise a
+    # fixture repository below an ordinary, non-symlinked checkout path.
+    try:
+        _assert_outside_repo(root / "plain-target-guard-fixture" / "gate-scratch" / "fixture")
+    except SystemExit as error:
+        if "refusing to build a fixture repository" in str(error):
+            print("OK: self-test — a fixture repository inside the checkout is refused")
+        else:
+            print(f"SELF-TEST FAIL: the fixture guard gave the wrong error: {error}")
+            ok = False
+    else:
+        print("SELF-TEST FAIL: a fixture repository inside the checkout was accepted")
+        ok = False
 
     # 3. A STALE REGISTRATION is caught. The register may only shrink, so an entry whose
     #    file has come back into line must be reported rather than silently honoured.
