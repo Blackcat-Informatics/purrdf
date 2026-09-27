@@ -9,14 +9,14 @@
 //! The synchronous surface in [`crate::query`] is the offline lane: it installs no
 //! `SERVICE` or `LOAD` source and runs to completion inside one wasm call. This module is
 //! the second lane. A JavaScript host starts a *job* ([`QueryEngine::begin_async`]), and
-//! the job runs the very same synchronous evaluator — no async Rust anywhere — on a
-//! private shadow-stack region. The evaluator already performs every effect through three
-//! seams it has always had:
+//! the job runs the very same operation — [`OperationInput::execute`], no async Rust
+//! anywhere — on a private shadow-stack region. The evaluator already performs every
+//! effect through three seams it has always had:
 //!
-//! | Seam | Effect ([`AsyncEffectKind`]) | What the host does |
+//! | Seam | Effect ([`EffectKind`]) | What the host does |
 //! |---|---|---|
-//! | `ServiceResolver::resolve` (a `SERVICE` clause) | `Service` = 1 | answers the forwarded `SELECT` with SPARQL Results JSON, or a typed failure |
-//! | `GraphResolver::resolve` (a `LOAD`) | `Load` = 2 | answers the IRI with a document and its media type, or a typed failure |
+//! | `ServiceResolver::resolve` (a `SERVICE` clause) | `Service` = 1, or `AwaitExchange` = 5 when another job already asks the same question | answers the forwarded `SELECT` with SPARQL Results JSON, or a typed failure, to the request's shared exchange |
+//! | `GraphResolver::resolve` (a `LOAD`) | `Load` = 2 | answers the IRI with a document and its media type, a redirect, or a typed failure |
 //! | `StopSignal::poll` (every governor charge point) | `Yield` = 3 | turns the event loop once, then resumes |
 //!
 //! Kind 4 is reserved for page faults of a paged dataset. The runner itself knows nothing
@@ -31,7 +31,8 @@
 //! from `./purrdf_jspi.mjs`. On a JSPI host that import is a `WebAssembly.Suspending`
 //! function: the wasm stack is captured as a one-shot continuation, the host takes the
 //! ticket ([`AsyncJob::take_effect`]), awaits whatever it likes, delivers an answer
-//! ([`AsyncJob::deliver_bindings`] and siblings) and resumes the continuation. The job's
+//! ([`AsyncJob::deliver_graph`], [`AsyncJob::deliver_exchange_bindings`] and siblings)
+//! and resumes the continuation. The job's
 //! entry point is the raw export `purrdf_jspi_run(job)`, driven by
 //! `WebAssembly.promising`. On a host without JSPI the synchronous API is untouched and
 //! the package root refuses the asynchronous methods before touching wasm.
@@ -114,21 +115,20 @@
 //! instance — synchronous ones and objects created before the trap included — for the
 //! rest of the JavaScript realm's life.
 //!
-//! Statuses returned by `purrdf_jspi_suspend`: 0 the effect was answered, 1 the host
-//! abandoned it on the job's stop signal, 2 a fault was latched. Statuses of the delivery
-//! methods (and of `fault`, `tripDeadline` and `cancel`): 0 accepted; 1 stale — the
-//! effect named was already answered or abandoned, typically a host promise settling
-//! after the job's signal won the race, and not a fault; 2 malformed, with the job's
-//! fault latched; 3 the job has already finished and nothing changed. Statuses of
-//! `purrdf_jspi_run`: 0 an outcome is stored, 1 an error is stored, 2 no such job, 3 the
-//! job had already been started, 4 the job overran its region's overrun zone (an error is
-//! stored and the host poisons the instance).
+//! The statuses are exported enums the host reads by name: [`SuspendStatus`] is what
+//! `purrdf_jspi_suspend` returns, [`DeliveryStatus`] what every delivery (and `fault` and
+//! `cancel`) returns, and [`RunStatus`] what `purrdf_jspi_run` returns.
+//!
+//! A failure is never flattened into its words: the job keeps the diagnostic
+//! ([`crate::operation::JobError`]), and the host reads its code
+//! ([`AsyncJob::error_code`]) beside its message.
 //!
 //! # The failure taxonomy, and the inherited `SILENT` table
 //!
-//! A host answers a `SERVICE` effect with bindings, `{kind: "transport"}` or
-//! `{kind: "denied"}`, or abandons it on the job's signal. After resuming, the transport
-//! observes the job's stop signal **first**:
+//! A host answers a `SERVICE` effect's exchange with bindings, `{kind: "transport"}` or
+//! `{kind: "denied"}`, or abandons the effect on the job's signal or at its abandonment
+//! instant ([`AsyncJob::expire_effect`]). After resuming, the transport observes the job's
+//! stop signal **first**:
 //!
 //! | After resuming | Returned to the evaluator |
 //! |---|---|
@@ -146,14 +146,37 @@
 //! because a fault is not an answer at all. `silent` is handed to the host for
 //! information only; an empty answer is not the host's to invent.
 //!
-//! A `LOAD` effect answered with a transport failure becomes the evaluator's
-//! [`LoadError::Transport`] (`native-sparql-load-failed`), and a denial
-//! [`LoadError::HostDenied`] (`native-sparql-load-denied`), whose message reads "the host
-//! denied the request: …" (there is no native catalog gate for `LOAD` the way there is
-//! for `SERVICE`, so every `LOAD` denial is, from this evaluator's point of view, the
-//! host's own decision — see [`load_answer`]). Either fails the request, and `LOAD SILENT`
-//! succeeds over either with nothing loaded, recorded on [`AsyncEvidence::silenced`]. A
-//! host fault is latched and fails the job, `SILENT` or not.
+//! A `LOAD` source is authorized against the job's catalog before any effect is issued
+//! (see [`JspiGraphResolver`]): a refusal is the catalog's [`LoadError::Denied`]
+//! (`native-sparql-load-denied`). A `LOAD` effect answered with a transport failure
+//! becomes [`LoadError::Transport`] (`native-sparql-load-failed`), a document that does
+//! not parse [`LoadError::Decode`] (`native-sparql-load-decode`), and a denial the host
+//! delivers [`LoadError::HostDenied`] (`native-sparql-load-host-denied`), whose message
+//! reads "the host denied the request: …". A redirect is followed here: its location is
+//! re-authorized and fetched as a fresh effect, up to [`MAX_LOAD_REDIRECTS`] hops. Each
+//! failure fails the request, and `LOAD SILENT` succeeds over it with nothing loaded,
+//! recorded on [`AsyncEvidence::silenced`]. A host fault is latched and fails the job,
+//! `SILENT` or not.
+//!
+//! # Shared `SERVICE` exchanges and the per-job memo
+//!
+//! A job asks the host at most once for a request it repeats: a successful answer is kept
+//! in the job's memo, keyed by the whole request ([`ExchangeKey`]), and a repeat is
+//! answered from it with no effect. A failure is never kept. Concurrent jobs share one
+//! host call: a job whose request matches an open exchange with a deadline at or after its
+//! own waits on it (an `AwaitExchange` effect) rather than asking again; the answer is
+//! delivered to the exchange and reaches every job still waiting; a job stopped while it
+//! waits leaves, and when the last one leaves the exchange closes and the host aborts its
+//! call ([`AsyncJob::exchange_is_open`]).
+//!
+//! # Abandonment instants
+//!
+//! Every `SERVICE` and `LOAD` effect carries [`AsyncEffect::abandon_after_ms`]: the
+//! request's own timeout (its catalog profile's, or the default) or the job's remaining
+//! deadline, whichever falls first. The host abandons an effect still unanswered then
+//! ([`AsyncJob::expire_effect`]): at the deadline the effect is abandoned as the
+//! deadline's trip; at the timeout it fails as a transport failure `SILENT` absorbs. The
+//! deadline instant itself is the job's, read off the clock in Rust.
 //!
 //! # Yielding: poll-count slicing, and where it happens
 //!
@@ -164,8 +187,8 @@
 //! Workers `Date.now()` does not advance during CPU-bound execution** (it advances after
 //! I/O): a wall-clock slice would never fire there, and for the same reason a synchronous
 //! `deadlineMs` cannot trip mid-evaluation on Workers. The asynchronous lane observes the
-//! deadline at every yield and every effect, and the host's own deadline timer latches it
-//! through [`AsyncJob::trip_deadline`].
+//! deadline at every yield and every effect, and an effect still awaited when the
+//! deadline falls is abandoned by the host at that instant ([`AsyncJob::expire_effect`]).
 //!
 //! Yielding happens during *evaluation* only — including an entailment closure, whose
 //! reasoner polls the same signal. Freezing the dataset before the job and serializing
@@ -197,7 +220,7 @@
 //! | SHACL's ambient scopes (`purrdf-shapes`'s `CURRENT_GOVERNORS`, `CURRENT_SOURCES`, `CURRENT_FUNCTIONS`, `CURRENT_PROPERTY_FUNCTIONS`, `CURRENT_AGGREGATES`, `CURRENT_PARSER_OPTIONS`, `CURRENT_CALL_DEPTH`) and the extension environment memoized from them (`CACHED_ENV`) | Yes — a SHACL job installs its governors and sources with `enter_execution_scope`, and the engine its registries, through guards that stay open across every query and every poll between focus nodes, so a job yields inside them. Swapped: the lot is one [`purrdf_shapes::sparql::AmbientContext`], taken off the thread and put back beside the stack context at every suspension and resumption, and a job starts with none installed. A context that runs while the job waits sees its own scopes — a synchronous validation stays ungoverned, polls no suspended job's signal and has no `SERVICE` source — and each job's guards restore values it installed, in whatever order the jobs finish. Without the swap a synchronous validation run during a suspension polled the suspended job's signal and was stopped by it. |
 //! | SHACL's per-thread engine (`purrdf-shapes`'s `SPARQL_ENGINE`, a `NativeSparqlEngine` whose plan cache is a `RefCell`) | No, for the reason the evaluator's own plan cache is not: every borrow is a temporary inside one planning statement that polls nothing and calls no resolver. |
 //! | SHACL's prepared handles (`purrdf-shapes`'s `PREPARED_EXECUTIONS`, a `RefCell` map of cached `PreparedExecution`s) | No. The map is borrowed only to take a handle out or put one back, never across a run; a running validation holds its handle checked OUT, so a caller that runs while it waits finds no handle for that query and prepares its own, and nothing it does to the map reaches the suspended one. A handle put back by either is re-prepared at the next checkout if its environment is not the one then in force, so a handle prepared under another context's registries is never run. |
-//! | This module's own [`JobSlots`] mutexes and the job registry (thread-local `JOBS` and `LAST_JOB_ID`) | No. Each is locked or borrowed inside one helper that returns owned values, and none is held when [`suspend`] is called. |
+//! | This module's own [`JobSlots`] mutexes, the job registry (thread-local `JOBS` and `LAST_JOB_ID`) and the shared-exchange registry (thread-local `EXCHANGES` and `LAST_EXCHANGE_ID`) | No. Each is locked or borrowed inside one helper that returns owned values, and none is held when [`suspend`] is called or while an exchange's answer is delivered. |
 //! | `purrdf-sparql-eval`'s memo-verification switch (`MEMO_VERIFICATION_ENABLED`) | Absent from release builds (it exists only under `debug_assertions`), and never written during an evaluation: only a test harness sets it. |
 //! | Test instrumentation thread-locals — `purrdf-sparql-eval`'s counters and strategy overrides (`LEVEL_ADVANCES`, `POWER_EXPANSIONS`, `NUMERIC_FOLD_TRACE`, `FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`, `MERGE_COUNT`, `INDEX_OF_CALLS`, `FORCE_EXISTS_STRATEGY`, `SUPPRESS_FIRST_WITNESS_WRAP`, `PREPARED_EXISTS_BUILD_COUNT`), `purrdf-core`'s distance-kernel hooks (`BYPASSED`, `HIDDEN`), `purrdf-hnsw`'s `LACKING`, `purrdf-shapes`'s scheduler overrides (`FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`) and class-index counter (`THREAD_INDEX_BUILDS`) | Not compiled into this package: every one is `#[cfg(test)]`. |
 //!
@@ -207,43 +230,43 @@
 //! and sequentially (see `purrdf-sparql-eval`'s manifest), so the flag cannot change the
 //! evaluation order there in any case.
 
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use purrdf::{
-    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, RdfDataset,
-    parse_dataset, query_with_entailment_governed,
-};
+use purrdf::{JsonLdSerializeOptions, RdfDataset, parse_dataset};
 use purrdf_core::SparqlResult;
-use purrdf_sparql_eval::protocol::negotiate;
+use purrdf_sparql_eval::protocol::FailureCode;
+use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorState, GraphResolveRequest,
-    GraphResolver, HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
-    LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ResolvedBindings,
-    ServiceCapabilities, ServiceCapability, ServiceCatalog as NativeServiceCatalog,
-    ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver, StopCause, StopSignal,
-    TrippedGovernor, WallDeadline,
+    CancellationFlag, GovernorState, GraphResolveRequest, GraphResolver, HttpRemoteQuerySource,
+    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, NativeSparqlEngine,
+    QueryGovernors, RemoteError, ResolvedBindings, ServiceCapabilities, ServiceCapability,
+    ServiceCatalog as NativeServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest,
+    ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
 use serde::Deserialize;
+use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
-use crate::dataset::{Dataset, diag_to_err};
+use crate::dataset::{Dataset, UpdateClaim};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
-use crate::protocol::not_acceptable_message;
+use crate::operation::{
+    JobError, JobOutcome, JobRun, Lane, OPTIONS_CODE, OperationInput, SHACL_CODE,
+    SHACL_REFUSAL_CODE, USAGE_CODE, coded_error, coded_type_error,
+};
 use crate::query::{
-    EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, NegotiatedValue, QueryEngine,
-    QueryOutcome, QueryResult, UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, aggregate_env_message,
-    build_aggregates, build_provenance_namespace, entailment_query_outcome_from_native,
-    kind_mismatch, negotiable_result_kind, negotiated_outcome_from_value,
-    query_outcome_from_governed, query_result_from_sparql, serialize_configured_graph,
-    serialize_query_result, sparql_request, update_outcome_from_governed,
+    EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
+    QueryResult, UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, entailment_query_outcome_from_native,
+    kind_mismatch, negotiated_outcome_from_value, query_outcome_from_governed,
+    query_result_from_sparql, update_outcome_from_governed,
 };
 use crate::shacl::{
     ShaclChangeValidation, ShaclProductRefusal, entail_to_ntriples_impl,
@@ -320,36 +343,63 @@ const CLOCK_EVERY_POLLS: u64 = 1_024;
 /// suspension. ASCII `PurD`, little-endian.
 const STACK_CANARY: u32 = 0x4472_7550;
 
-/// A delivery was accepted: it answers the outstanding effect.
-const DELIVERY_ACCEPTED: u32 = 0;
-/// A delivery named an effect that was already answered or abandoned — typically a host
-/// promise settling after the job's signal won the race. Ignored; not a fault.
-const DELIVERY_STALE: u32 = 1;
-/// A delivery was malformed (a sequence number never issued, a payload the outstanding
-/// effect cannot take, an unknown failure kind). The job's fault is latched.
-const DELIVERY_FAULT: u32 = 2;
-/// The job has already finished; the delivery changes nothing.
-const DELIVERY_FINISHED: u32 = 3;
+/// The most redirect hops one `LOAD` follows: generous enough for a real document
+/// mirror, small enough that a redirect loop fails fast. A redirect past it fails the
+/// `LOAD` as a transport failure.
+pub(crate) const MAX_LOAD_REDIRECTS: u32 = 5;
 
-/// `purrdf_jspi_run`: the job's outcome is stored.
-const RUN_OUTCOME: u32 = 0;
-/// `purrdf_jspi_run`: the job's error is stored.
-const RUN_ERROR: u32 = 1;
-/// `purrdf_jspi_run`: no job has this id.
-const RUN_UNKNOWN_JOB: u32 = 2;
-/// `purrdf_jspi_run`: the job had already been started.
-const RUN_ALREADY_STARTED: u32 = 3;
-/// `purrdf_jspi_run`: the job's frames ran past its region's overrun zone. Memory outside
-/// the job's allocation may have been overwritten, so the host must poison the instance;
-/// the job's error names what happened.
-const RUN_OVERRAN: u32 = 4;
+// ---------------------------------------------------------------------------
+// The protocol's statuses
+// ---------------------------------------------------------------------------
 
-/// `purrdf_jspi_suspend`: the effect was answered.
-const SUSPEND_ANSWERED: u32 = 0;
-/// `purrdf_jspi_suspend`: the host abandoned the effect on the job's stop signal.
-const SUSPEND_ABANDONED: u32 = 1;
-/// `purrdf_jspi_suspend`: a fault was latched on the job.
-const SUSPEND_FAULT: u32 = 2;
+/// What `purrdf_jspi_run` reports.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStatus {
+    /// The job's outcome is stored.
+    Outcome = 0,
+    /// The job's error is stored.
+    Error = 1,
+    /// No job has this id.
+    UnknownJob = 2,
+    /// The job had already been started.
+    AlreadyStarted = 3,
+    /// The job's frames ran past its region's overrun zone. Memory outside the job's
+    /// allocation may have been overwritten, so the host must poison the instance; the
+    /// job's error names what happened.
+    Overran = 4,
+}
+
+/// What `purrdf_jspi_suspend` reports when the host resumes the job.
+#[wasm_bindgen]
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuspendStatus {
+    /// The effect was answered.
+    Answered = 0,
+    /// The host abandoned the effect on the job's stop signal.
+    Abandoned = 1,
+    /// A fault is latched on the job.
+    Fault = 2,
+}
+
+/// What a delivery (and `fault`, `cancel`) reports.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryStatus {
+    /// The delivery answers the outstanding effect.
+    Accepted = 0,
+    /// The delivery named an effect that was already answered or abandoned — typically a
+    /// host promise settling after the job's signal won the race. Ignored; not a fault.
+    Stale = 1,
+    /// The delivery was malformed (a sequence number never issued, a payload the
+    /// outstanding effect cannot take, an unknown failure kind). The job's fault is
+    /// latched.
+    Fault = 2,
+    /// The job (or the shared exchange) has already finished; the delivery changes
+    /// nothing.
+    Finished = 3,
+}
 
 // ---------------------------------------------------------------------------
 // The raw JSPI import and the one frame function
@@ -358,9 +408,8 @@ const SUSPEND_FAULT: u32 = 2;
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "./purrdf_jspi.mjs")]
 unsafe extern "C" {
-    /// Suspending on JSPI hosts. Returns a status: 0 delivered, 1 governed (the host
-    /// aborted the effect on the job's stop signal), 2 fault latched on the job. The host
-    /// writes `0` to `out[0]` before returning.
+    /// Suspending on JSPI hosts. Returns a [`SuspendStatus`]. The host writes `0` to
+    /// `out[0]` before returning.
     fn purrdf_jspi_suspend(job: u32, ticket: u32, out: *mut u32) -> u32;
 }
 
@@ -393,14 +442,11 @@ fn suspend(_job: u32, _ticket: u32) -> u32 {
 
 /// Run job `job` on the stack region the host has just switched to.
 ///
-/// The raw export `WebAssembly.promising` drives. Returns 0 when an outcome is stored, 1
-/// when an error is stored, 2 when no job has this id, 3 when the job had already been
-/// started, and 4 when the job's frames ran past its region's overrun zone (an error is
-/// stored, and the host must poison the instance).
+/// The raw export `WebAssembly.promising` drives. Returns a [`RunStatus`].
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn purrdf_jspi_run(job: u32) -> u32 {
-    run_job(job)
+    run_job(job) as u32
 }
 
 /// The target-independent body of `purrdf_jspi_run`.
@@ -414,11 +460,11 @@ pub extern "C" fn purrdf_jspi_run(job: u32) -> u32 {
         reason = "the JSPI runner is entered only through the wasm32 export"
     )
 )]
-fn run_job(id: u32) -> u32 {
+fn run_job(id: u32) -> RunStatus {
     // The registry's own `Rc` keeps the job (and so the region this call is running on)
     // alive for the whole run; `finish` refuses to drop it while the job is running.
     let Some(job) = lookup_job(id) else {
-        return RUN_UNKNOWN_JOB;
+        return RunStatus::UnknownJob;
     };
     job.run()
 }
@@ -430,24 +476,25 @@ fn run_job(id: u32) -> u32 {
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
 /// remaining budget are read from.
 #[cfg(not(target_arch = "wasm32"))]
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |elapsed| elapsed.as_secs_f64() * 1000.0)
 }
 
-/// Lock `mutex`, taking the value even if a previous holder panicked. On `wasm32` a
-/// panic aborts the instance, so poisoning cannot be observed there; on the native build
-/// a poisoned slot is still the best information there is.
+/// Lock `mutex`. A poisoned lock means a holder panicked with the job's state half
+/// changed; nothing here can reason about that state, so it is a panic too.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex
+        .lock()
+        .expect("an asynchronous job's state lock is poisoned: a holder panicked mid-update")
 }
 
 // ---------------------------------------------------------------------------
@@ -458,13 +505,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// for paged datasets.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AsyncEffectKind {
-    /// Answer a forwarded `SERVICE` query.
+pub enum EffectKind {
+    /// Answer a forwarded `SERVICE` query: the host calls its `resolveService` once and
+    /// delivers the answer to the effect's shared exchange ([`AsyncJob::deliver_exchange_bindings`]
+    /// and siblings), which every job waiting on it receives.
     Service = 1,
     /// Fetch a `LOAD` document.
     Load = 2,
     /// Turn the event loop once and resume.
     Yield = 3,
+    /// Wait for a `SERVICE` exchange another job opened, whose answer this job receives
+    /// when that exchange is delivered.
+    AwaitExchange = 5,
+}
+
+/// Why an outstanding effect's abandonment instant falls when it does: the job's deadline,
+/// or the request's own timeout. See [`AsyncJob::expire_effect`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Abandon {
+    /// The job's deadline falls first: abandoning the effect is the deadline's trip.
+    Deadline,
+    /// The request's own timeout of this many milliseconds falls first: abandoning the
+    /// effect is the request's transport failure.
+    Timeout(f64),
 }
 
 /// A `SERVICE` effect's request, as the SPARQL Protocol POST the host should issue.
@@ -481,6 +544,9 @@ struct ServiceEffect {
     silent: bool,
     max_intermediate_cells: Option<u64>,
     remaining_deadline_ms: Option<f64>,
+    /// Whether a shared cache may answer or keep this request's answer: `false` when it
+    /// carries a credential.
+    cacheable: bool,
 }
 
 // Hand-written so a header value — possibly a credential — never reaches a log.
@@ -496,6 +562,33 @@ impl fmt::Debug for ServiceEffect {
             .field("silent", &self.silent)
             .field("max_intermediate_cells", &self.max_intermediate_cells)
             .field("remaining_deadline_ms", &self.remaining_deadline_ms)
+            .field("cacheable", &self.cacheable)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `LOAD` effect's request, as the `GET` the host should issue — one hop: a redirect
+/// is delivered back ([`AsyncJob::deliver_redirect`]) and becomes a fresh effect.
+#[derive(Clone)]
+struct LoadEffect {
+    iri: String,
+    accept: String,
+    user_agent: Option<String>,
+    /// The catalog profile's headers then its credential header, in order. May carry a
+    /// secret.
+    headers: Vec<(String, String)>,
+    timeout_ms: f64,
+}
+
+// Hand-written so a header value — possibly a credential — never reaches a log.
+impl fmt::Debug for LoadEffect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let header_names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("LoadEffect")
+            .field("iri", &self.iri)
+            .field("user_agent", &self.user_agent)
+            .field("headers", &header_names)
+            .field("timeout_ms", &self.timeout_ms)
             .finish_non_exhaustive()
     }
 }
@@ -503,31 +596,44 @@ impl fmt::Debug for ServiceEffect {
 /// An effect's payload.
 #[derive(Debug, Clone)]
 enum EffectPayload {
-    Service(Box<ServiceEffect>),
-    Load { iri: String },
+    /// A `SERVICE` request that opens exchange `exchange`.
+    Service {
+        effect: Box<ServiceEffect>,
+        exchange: u64,
+    },
+    Load(Box<LoadEffect>),
     Yield,
+    /// A wait on the open exchange `exchange`.
+    AwaitExchange {
+        exchange: u64,
+    },
 }
 
 impl EffectPayload {
-    const fn kind(&self) -> AsyncEffectKind {
+    const fn kind(&self) -> EffectKind {
         match self {
-            Self::Service(_) => AsyncEffectKind::Service,
-            Self::Load { .. } => AsyncEffectKind::Load,
-            Self::Yield => AsyncEffectKind::Yield,
+            Self::Service { .. } => EffectKind::Service,
+            Self::Load(_) => EffectKind::Load,
+            Self::Yield => EffectKind::Yield,
+            Self::AwaitExchange { .. } => EffectKind::AwaitExchange,
         }
     }
 }
 
-/// How a host failed an effect.
+/// How an effect failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailureKind {
     /// The endpoint or document could not be reached or read.
     Transport,
     /// The host's policy refused the request.
     Denied,
+    /// The `LOAD` document arrived and could not be parsed. Decided here, never
+    /// delivered by name.
+    Decode,
 }
 
 impl FailureKind {
+    /// The failure kind a host names: `"transport"` or `"denied"`.
     fn parse(kind: &str) -> Option<Self> {
         match kind {
             "transport" => Some(Self::Transport),
@@ -538,13 +644,15 @@ impl FailureKind {
 }
 
 /// What the host delivered for an effect.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Delivered {
-    /// SPARQL Results JSON bytes for a `SERVICE` effect.
-    Bindings(Vec<u8>),
+    /// SPARQL Results JSON bytes for a `SERVICE` effect (or a wait on its exchange).
+    Bindings(Arc<[u8]>),
     /// A parsed document for a `LOAD` effect.
     Graph(Arc<RdfDataset>),
-    /// A typed failure for either.
+    /// A redirect for a `LOAD` effect: the `Location` the host was told to go to.
+    Redirect(String),
+    /// A typed failure.
     Failure { kind: FailureKind, message: String },
     /// The host abandoned the effect on the job's stop signal.
     Governed,
@@ -552,14 +660,16 @@ enum Delivered {
 
 impl Delivered {
     /// Whether an outstanding effect of `kind` can take this delivery.
-    const fn answers(&self, kind: AsyncEffectKind) -> bool {
+    const fn answers(&self, kind: EffectKind) -> bool {
         matches!(
             (self, kind),
-            (Self::Bindings(_), AsyncEffectKind::Service)
-                | (Self::Graph(_), AsyncEffectKind::Load)
+            (
+                Self::Bindings(_),
+                EffectKind::Service | EffectKind::AwaitExchange
+            ) | (Self::Graph(_) | Self::Redirect(_), EffectKind::Load)
                 | (
                     Self::Failure { .. } | Self::Governed,
-                    AsyncEffectKind::Service | AsyncEffectKind::Load
+                    EffectKind::Service | EffectKind::Load | EffectKind::AwaitExchange
                 )
         )
     }
@@ -568,6 +678,7 @@ impl Delivered {
         match self {
             Self::Bindings(_) => "bindings",
             Self::Graph(_) => "a graph",
+            Self::Redirect(_) => "a redirect",
             Self::Failure { .. } => "a failure",
             Self::Governed => "an abandonment",
         }
@@ -579,6 +690,7 @@ impl Delivered {
 pub struct AsyncEffect {
     seq: u32,
     payload: EffectPayload,
+    abandon_after_ms: Option<f64>,
 }
 
 // The payload's own `Debug` already redacts header values.
@@ -587,6 +699,7 @@ impl fmt::Debug for AsyncEffect {
         f.debug_struct("AsyncEffect")
             .field("seq", &self.seq)
             .field("payload", &self.payload)
+            .field("abandon_after_ms", &self.abandon_after_ms)
             .finish()
     }
 }
@@ -594,10 +707,25 @@ impl fmt::Debug for AsyncEffect {
 impl AsyncEffect {
     const fn service(&self) -> Option<&ServiceEffect> {
         match &self.payload {
-            EffectPayload::Service(effect) => Some(effect),
+            EffectPayload::Service { effect, .. } => Some(effect),
             _ => None,
         }
     }
+
+    const fn load(&self) -> Option<&LoadEffect> {
+        match &self.payload {
+            EffectPayload::Load(effect) => Some(effect),
+            _ => None,
+        }
+    }
+}
+
+/// Flatten `(name, value)` pairs into `[name, value, name, value, …]`.
+fn flatten_headers(headers: &[(String, String)]) -> Vec<String> {
+    headers
+        .iter()
+        .flat_map(|(name, value)| [name.clone(), value.clone()])
+        .collect()
 }
 
 #[wasm_bindgen]
@@ -610,8 +738,29 @@ impl AsyncEffect {
 
     /// What the effect asks for.
     #[wasm_bindgen(getter)]
-    pub fn kind(&self) -> AsyncEffectKind {
+    pub fn kind(&self) -> EffectKind {
         self.payload.kind()
+    }
+
+    /// When the host abandons the effect if it is still unanswered, in milliseconds from
+    /// now: the request's own timeout or the job's remaining deadline, whichever is
+    /// sooner. The host calls [`AsyncJob::expire_effect`] when it passes. `undefined` for
+    /// a yield.
+    #[wasm_bindgen(getter, js_name = abandonAfterMs)]
+    pub fn abandon_after_ms(&self) -> Option<f64> {
+        self.abandon_after_ms
+    }
+
+    /// `SERVICE` and a wait on an exchange: the shared exchange the answer is delivered
+    /// to.
+    #[wasm_bindgen(getter, js_name = exchangeId)]
+    pub fn exchange_id(&self) -> Option<f64> {
+        match &self.payload {
+            EffectPayload::Service { exchange, .. } | EffectPayload::AwaitExchange { exchange } => {
+                Some(*exchange as f64)
+            }
+            _ => None,
+        }
     }
 
     /// `SERVICE`: the endpoint IRI exactly as the query wrote it.
@@ -633,10 +782,21 @@ impl AsyncEffect {
         self.service().is_some_and(|effect| effect.silent)
     }
 
-    /// `SERVICE`: the `Accept` header value (`application/sparql-results+json`).
+    /// `SERVICE`: whether a shared cache may answer the request or keep its answer —
+    /// `false` when it carries a credential, whose answer belongs to the credential's
+    /// holder.
+    #[wasm_bindgen(getter)]
+    pub fn cacheable(&self) -> bool {
+        self.service().is_some_and(|effect| effect.cacheable)
+    }
+
+    /// `SERVICE`: the `Accept` header value (`application/sparql-results+json`); `LOAD`:
+    /// the media type of every RDF syntax a `LOAD` parses.
     #[wasm_bindgen(getter)]
     pub fn accept(&self) -> Option<String> {
-        self.service().map(|effect| effect.accept.clone())
+        self.service()
+            .map(|effect| effect.accept.clone())
+            .or_else(|| self.load().map(|effect| effect.accept.clone()))
     }
 
     /// `SERVICE`: the `Content-Type` header value (`application/sparql-query`).
@@ -645,31 +805,34 @@ impl AsyncEffect {
         self.service().map(|effect| effect.content_type.clone())
     }
 
-    /// `SERVICE`: the `User-Agent` the service's profile names, or the engine default.
+    /// `SERVICE`: the `User-Agent` the service's profile names, or the engine default;
+    /// `LOAD`: the one the source's catalog profile names, if it names one.
     #[wasm_bindgen(getter, js_name = userAgent)]
     pub fn user_agent(&self) -> Option<String> {
-        self.service().map(|effect| effect.user_agent.clone())
+        self.service()
+            .map(|effect| effect.user_agent.clone())
+            .or_else(|| self.load().and_then(|effect| effect.user_agent.clone()))
     }
 
-    /// `SERVICE`: the per-request timeout the service's profile names, or the default,
-    /// in milliseconds.
+    /// `SERVICE` and `LOAD`: the per-request timeout the catalog profile names, or the
+    /// default, in milliseconds.
     #[wasm_bindgen(getter, js_name = timeoutMs)]
     pub fn timeout_ms(&self) -> Option<f64> {
-        self.service().map(|effect| effect.timeout_ms)
+        self.service()
+            .map(|effect| effect.timeout_ms)
+            .or_else(|| self.load().map(|effect| effect.timeout_ms))
     }
 
-    /// `SERVICE`: the extra request headers as flattened `[name, value, name, value, …]`
-    /// pairs — the service profile's headers, then its credential header — in the order
-    /// they must be sent. Append each pair; a repeated name is legal and must not be
-    /// merged. Empty when no catalog is configured.
+    /// `SERVICE` and `LOAD`: the extra request headers as flattened `[name, value, name,
+    /// value, …]` pairs — the catalog profile's headers, then its credential header — in
+    /// the order they must be sent. Append each pair; a repeated name is legal and must
+    /// not be merged. Empty when no catalog is configured.
     pub fn headers(&self) -> Vec<String> {
-        self.service().map_or_else(Vec::new, |effect| {
-            effect
-                .headers
-                .iter()
-                .flat_map(|(name, value)| [name.clone(), value.clone()])
-                .collect()
-        })
+        match &self.payload {
+            EffectPayload::Service { effect, .. } => flatten_headers(&effect.headers),
+            EffectPayload::Load(effect) => flatten_headers(&effect.headers),
+            EffectPayload::Yield | EffectPayload::AwaitExchange { .. } => Vec::new(),
+        }
     }
 
     /// `SERVICE`: the query's inclusive intermediate-cell ceiling, when the caller
@@ -689,13 +852,10 @@ impl AsyncEffect {
             .and_then(|effect| effect.remaining_deadline_ms)
     }
 
-    /// `LOAD`: the source IRI.
+    /// `LOAD`: the IRI of this hop — the source, or the location a redirect named.
     #[wasm_bindgen(getter)]
     pub fn iri(&self) -> Option<String> {
-        match &self.payload {
-            EffectPayload::Load { iri } => Some(iri.clone()),
-            _ => None,
-        }
+        self.load().map(|effect| effect.iri.clone())
     }
 }
 
@@ -704,7 +864,7 @@ impl AsyncEffect {
 // ---------------------------------------------------------------------------
 
 /// Add `ms` to an `f64` accumulated in an atomic's bits.
-fn add_ms(cell: &AtomicU64, ms: f64) {
+pub(crate) fn add_ms(cell: &AtomicU64, ms: f64) {
     let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
     // A single-threaded instance never contends; the loop is the plain CAS shape.
     let _ = cell.try_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
@@ -718,7 +878,7 @@ fn read_ms(cell: &AtomicU64) -> f64 {
 
 /// A job's evidence counters, written as it runs.
 #[derive(Debug)]
-struct AsyncCounters {
+pub(crate) struct AsyncCounters {
     polls: AtomicU64,
     yields: AtomicU64,
     service_effects: AtomicU64,
@@ -729,8 +889,8 @@ struct AsyncCounters {
     load_wait_ms: AtomicU64,
     yield_wait_ms: AtomicU64,
     freeze_ms: AtomicU64,
-    evaluate_ms: AtomicU64,
-    serialize_ms: AtomicU64,
+    pub(crate) evaluate_ms: AtomicU64,
+    pub(crate) serialize_ms: AtomicU64,
     /// Every invocation a `SILENT` clause absorbed, across the job's evaluations.
     silenced: Mutex<Vec<purrdf_core::SilencedInvocation>>,
 }
@@ -756,11 +916,13 @@ impl Default for AsyncCounters {
 
 impl AsyncCounters {
     /// Count one completed suspension of `kind` that waited `waited_ms`.
-    fn record_suspension(&self, kind: AsyncEffectKind, waited_ms: f64) {
+    fn record_suspension(&self, kind: EffectKind, waited_ms: f64) {
         let (count, wait) = match kind {
-            AsyncEffectKind::Service => (&self.service_effects, &self.service_wait_ms),
-            AsyncEffectKind::Load => (&self.load_effects, &self.load_wait_ms),
-            AsyncEffectKind::Yield => (&self.yields, &self.yield_wait_ms),
+            EffectKind::Service | EffectKind::AwaitExchange => {
+                (&self.service_effects, &self.service_wait_ms)
+            }
+            EffectKind::Load => (&self.load_effects, &self.load_wait_ms),
+            EffectKind::Yield => (&self.yields, &self.yield_wait_ms),
         };
         count.fetch_add(1, Ordering::Relaxed);
         add_ms(wait, waited_ms);
@@ -785,21 +947,16 @@ impl AsyncCounters {
             freeze_ms: read_ms(&self.freeze_ms),
             evaluate_ms: read_ms(&self.evaluate_ms),
             serialize_ms: read_ms(&self.serialize_ms),
-            silenced: crate::query::silenced_records(
-                &self.silenced.lock().unwrap_or_else(PoisonError::into_inner),
-            ),
+            silenced: crate::query::silenced_records(&lock(&self.silenced)),
         }
     }
 
     /// Keep the silenced invocations one evaluation's `evidence` recorded.
-    fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+    pub(crate) fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
         if evidence.silenced().is_empty() {
             return;
         }
-        self.silenced
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(evidence.silenced());
+        lock(&self.silenced).extend_from_slice(evidence.silenced());
     }
 }
 
@@ -839,7 +996,9 @@ impl AsyncEvidence {
         self.yields
     }
 
-    /// `SERVICE` effects the host answered or abandoned.
+    /// `SERVICE` effects — requests the job issued, and waits on another job's
+    /// identical request — the host answered or abandoned. A request the job repeats is
+    /// answered from its own memo and issues no effect.
     #[wasm_bindgen(getter, js_name = serviceEffects)]
     pub fn service_effects(&self) -> f64 {
         self.service_effects
@@ -906,15 +1065,24 @@ impl AsyncEvidence {
 // Job slots: the state a host and a suspended job share
 // ---------------------------------------------------------------------------
 
+/// The effect a job is suspended on, as the host must answer it.
+#[derive(Debug, Clone, Copy)]
+struct Outstanding {
+    seq: u32,
+    kind: EffectKind,
+    /// Why the host's abandonment instant falls when it does; `None` for a yield.
+    abandon: Option<Abandon>,
+}
+
 /// The ticket exchange between a job and its host.
 #[derive(Debug, Default)]
-struct Exchange {
+struct Tickets {
     /// The last sequence number issued; `0` before the first.
     last_issued: u32,
     /// The effect the host has not taken yet.
-    posted: Option<(u32, EffectPayload)>,
-    /// The effect awaiting an answer, and its kind.
-    outstanding: Option<(u32, AsyncEffectKind)>,
+    posted: Option<AsyncEffect>,
+    /// The effect awaiting an answer.
+    outstanding: Option<Outstanding>,
     /// The answer, once delivered.
     delivered: Option<(u32, Delivered)>,
 }
@@ -971,11 +1139,15 @@ impl StackBounds {
 #[derive(Debug)]
 struct JobSlots {
     job: u32,
-    exchange: Mutex<Exchange>,
+    tickets: Mutex<Tickets>,
     service_context: Mutex<Option<ServiceContext>>,
+    /// The shared `SERVICE` exchange the outstanding effect waits on, until the job
+    /// leaves it.
+    waiting_on: Mutex<Option<u64>>,
     /// The fatal job condition, first writer wins.
     fault: OnceLock<String>,
-    /// The host's deadline timer fired ([`AsyncJob::trip_deadline`]).
+    /// The job's deadline expired while an effect was outstanding
+    /// ([`AsyncJob::expire_effect`]).
     deadline_tripped: AtomicBool,
     /// The run has returned; deliveries are refused.
     finished: AtomicBool,
@@ -1002,8 +1174,9 @@ impl JobSlots {
     fn new(job: u32, bounds: StackBounds) -> Self {
         Self {
             job,
-            exchange: Mutex::new(Exchange::default()),
+            tickets: Mutex::new(Tickets::default()),
             service_context: Mutex::new(None),
+            waiting_on: Mutex::new(None),
             fault: OnceLock::new(),
             deadline_tripped: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -1025,85 +1198,134 @@ impl JobSlots {
         self.fault.get().map(String::as_str)
     }
 
-    /// Post an effect for the host and make it the outstanding one. `None` (with a fault
-    /// latched) when another effect is still outstanding, which only a bridge that
-    /// resumed a job without answering it could cause.
-    fn issue(&self, payload: EffectPayload) -> Option<u32> {
+    /// Post an effect for the host and make it the outstanding one, to be abandoned per
+    /// `abandon` (`(milliseconds from now, why)`). `None` (with a fault latched) when
+    /// another effect is still outstanding — which only a bridge that resumed a job
+    /// without answering it could cause — or when the job has issued every sequence
+    /// number there is.
+    fn issue(&self, payload: EffectPayload, abandon: Option<(f64, Abandon)>) -> Option<u32> {
         let kind = payload.kind();
-        let mut exchange = lock(&self.exchange);
-        if let Some((outstanding, _)) = exchange.outstanding {
-            drop(exchange);
+        let mut tickets = lock(&self.tickets);
+        if let Some(outstanding) = tickets.outstanding {
+            drop(tickets);
             self.latch_fault(format!(
-                "an effect was issued while effect {outstanding} was still outstanding"
+                "an effect was issued while effect {} was still outstanding",
+                outstanding.seq
             ));
             return None;
         }
-        let seq = exchange.last_issued.wrapping_add(1).max(1);
-        exchange.last_issued = seq;
-        exchange.posted = Some((seq, payload));
-        exchange.outstanding = Some((seq, kind));
-        exchange.delivered = None;
-        drop(exchange);
+        let Some(seq) = tickets.last_issued.checked_add(1) else {
+            drop(tickets);
+            self.latch_fault(format!(
+                "the job issued every effect sequence number there is ({})",
+                u32::MAX
+            ));
+            return None;
+        };
+        tickets.last_issued = seq;
+        tickets.posted = Some(AsyncEffect {
+            seq,
+            payload,
+            abandon_after_ms: abandon.map(|(ms, _)| ms),
+        });
+        tickets.outstanding = Some(Outstanding {
+            seq,
+            kind,
+            abandon: abandon.map(|(_, why)| why),
+        });
+        tickets.delivered = None;
+        drop(tickets);
         Some(seq)
     }
 
     /// Hand the posted effect to the host, once.
     fn take_effect(&self) -> Option<AsyncEffect> {
-        let posted = lock(&self.exchange).posted.take();
-        posted.map(|(seq, payload)| AsyncEffect { seq, payload })
+        lock(&self.tickets).posted.take()
+    }
+
+    /// The outstanding effect, when it is `seq`.
+    fn outstanding(&self, seq: u32) -> Option<Outstanding> {
+        lock(&self.tickets)
+            .outstanding
+            .filter(|outstanding| outstanding.seq == seq)
     }
 
     /// Accept `value` for effect `seq`, or say why not.
-    fn deliver(&self, seq: u32, value: Delivered) -> u32 {
+    fn deliver(&self, seq: u32, value: Delivered) -> DeliveryStatus {
         if self.finished.load(Ordering::Relaxed) {
-            return DELIVERY_FINISHED;
+            return DeliveryStatus::Finished;
         }
-        let mut exchange = lock(&self.exchange);
-        let fault = match exchange.outstanding {
-            Some((outstanding, kind)) if outstanding == seq => {
-                if value.answers(kind) {
-                    exchange.outstanding = None;
-                    exchange.posted = None;
-                    exchange.delivered = Some((seq, value));
-                    return DELIVERY_ACCEPTED;
+        let mut tickets = lock(&self.tickets);
+        let fault = match tickets.outstanding {
+            Some(outstanding) if outstanding.seq == seq => {
+                if value.answers(outstanding.kind) {
+                    tickets.outstanding = None;
+                    tickets.posted = None;
+                    tickets.delivered = Some((seq, value));
+                    return DeliveryStatus::Accepted;
                 }
                 format!(
-                    "{} was delivered to effect {seq}, which is a {kind:?} effect",
-                    value.label()
+                    "{} was delivered to effect {seq}, which is a {:?} effect",
+                    value.label(),
+                    outstanding.kind
                 )
             }
-            _ if seq != 0 && seq <= exchange.last_issued => return DELIVERY_STALE,
-            Some((outstanding, _)) => format!(
-                "a delivery named effect {seq}, but the outstanding effect is {outstanding}"
+            _ if seq != 0 && seq <= tickets.last_issued => return DeliveryStatus::Stale,
+            Some(outstanding) => format!(
+                "a delivery named effect {seq}, but the outstanding effect is {}",
+                outstanding.seq
             ),
             None => format!(
                 "a delivery named effect {seq}, but no effect is outstanding (the last issued \
                  was {})",
-                exchange.last_issued
+                tickets.last_issued
             ),
         };
-        drop(exchange);
+        drop(tickets);
         self.latch_fault(fault);
-        DELIVERY_FAULT
+        DeliveryStatus::Fault
     }
 
-    /// After resuming from effect `seq`: take its answer, and close it whether or not
-    /// one arrived.
+    /// After resuming from effect `seq`: take its answer, and close it — and leave any
+    /// shared exchange it waited on — whether or not one arrived.
     fn resume(&self, seq: u32) -> Option<Delivered> {
-        let mut exchange = lock(&self.exchange);
-        if exchange
+        self.leave_exchange();
+        let mut tickets = lock(&self.tickets);
+        if tickets
             .outstanding
-            .is_some_and(|(outstanding, _)| outstanding == seq)
+            .is_some_and(|outstanding| outstanding.seq == seq)
         {
-            exchange.outstanding = None;
+            tickets.outstanding = None;
         }
-        exchange.posted = None;
-        match exchange.delivered.take() {
+        tickets.posted = None;
+        match tickets.delivered.take() {
             Some((delivered_seq, value)) if delivered_seq == seq => Some(value),
             other => {
-                exchange.delivered = other;
+                tickets.delivered = other;
                 None
             }
+        }
+    }
+
+    /// Whether an answer for effect `seq` is waiting to be resumed with.
+    fn has_delivery(&self, seq: u32) -> bool {
+        lock(&self.tickets)
+            .delivered
+            .as_ref()
+            .is_some_and(|(delivered, _)| *delivered == seq)
+    }
+
+    /// Record that the outstanding effect waits on shared exchange `exchange`.
+    fn wait_on(&self, exchange: u64) {
+        *lock(&self.waiting_on) = Some(exchange);
+    }
+
+    /// Stop waiting on the shared exchange the outstanding effect waited on, if any: the
+    /// exchange closes when no job is left waiting on it.
+    fn leave_exchange(&self) {
+        let exchange = lock(&self.waiting_on).take();
+        if let Some(exchange) = exchange {
+            leave_exchange(exchange, self.job);
         }
     }
 
@@ -1127,16 +1349,16 @@ struct RegionContext {
     ambient: purrdf_shapes::sparql::AmbientContext,
 }
 
-/// The job's [`StopSignal`]: cancellation, the wall deadline, the host's deadline latch,
-/// the fault latch, the stack guard — and the poll counter that slices evaluation into
-/// yields.
+/// The job's [`StopSignal`]: cancellation, the wall deadline (read off the clock, and
+/// latched when an effect outlives it), the fault latch, the stack guard — and the poll
+/// counter that slices evaluation into yields.
 #[derive(Debug)]
 struct JspiStopWatch {
     slots: Arc<JobSlots>,
     cancel: CancellationFlag,
     deadline: Option<WallDeadline>,
-    /// When the deadline falls, on [`now_ms`]'s clock, for the remaining budget handed
-    /// to the host.
+    /// When the deadline falls, on [`now_ms`]'s clock: the instant every effect's
+    /// abandonment is bounded by and a shared exchange's deadline is compared against.
     deadline_at_ms: Option<f64>,
     /// Work per yield, counted in polls; `0` yields at every poll.
     quantum: u32,
@@ -1225,7 +1447,7 @@ impl JspiStopWatch {
 
     /// Suspend on the already-issued effect `seq`, count it, and return the host's
     /// status (an unknown status is latched as a fault and reported as one).
-    fn suspend_on(&self, seq: u32, kind: AsyncEffectKind) -> u32 {
+    fn suspend_on(&self, seq: u32, kind: EffectKind) -> SuspendStatus {
         let started = now_ms();
         // Leaving the region: whatever runs while the job is suspended runs on the
         // context's own stack, so it gets that stack's context back — its floor, and its
@@ -1242,12 +1464,14 @@ impl JspiStopWatch {
         // Any suspension gave the event loop back, so the slice starts again.
         self.work_since_yield.store(0, Ordering::Relaxed);
         match status {
-            SUSPEND_ANSWERED | SUSPEND_ABANDONED | SUSPEND_FAULT => status,
+            0 => SuspendStatus::Answered,
+            1 => SuspendStatus::Abandoned,
+            2 => SuspendStatus::Fault,
             other => {
                 self.slots.latch_fault(format!(
                     "the host bridge returned status {other} for effect {seq}"
                 ));
-                SUSPEND_FAULT
+                SuspendStatus::Fault
             }
         }
     }
@@ -1284,16 +1508,39 @@ impl JspiStopWatch {
 
     /// Give the event loop back once.
     fn yield_now(&self) {
-        let Some(seq) = self.slots.issue(EffectPayload::Yield) else {
+        let Some(seq) = self.slots.issue(EffectPayload::Yield, None) else {
             return;
         };
-        let _ = self.suspend_on(seq, AsyncEffectKind::Yield);
-        let _ = self.slots.resume(seq);
+        match self.suspend_on(seq, EffectKind::Yield) {
+            SuspendStatus::Answered | SuspendStatus::Fault => {}
+            // A yield has nothing to abandon: a host that reports one broke the protocol.
+            SuspendStatus::Abandoned => self
+                .slots
+                .latch_fault(format!("the host abandoned yield effect {seq}")),
+        }
+        // A yield is answered by resuming; nothing is delivered for it.
+        if let Some(delivered) = self.slots.resume(seq) {
+            self.slots.latch_fault(format!(
+                "{} was delivered for yield effect {seq}",
+                delivered.label()
+            ));
+        }
     }
 
     /// Milliseconds left before the deadline, when one is set.
     fn remaining_deadline_ms(&self) -> Option<f64> {
         self.deadline_at_ms.map(|at| (at - now_ms()).max(0.0))
+    }
+
+    /// When a request with its own timeout of `timeout_ms` is abandoned if unanswered:
+    /// after the timeout, or at the deadline when that falls first. A whole number of
+    /// milliseconds, rounded up — a JavaScript timer takes nothing else — so the instant
+    /// is never before the one it stands for.
+    fn abandonment(&self, timeout_ms: f64) -> (f64, Abandon) {
+        match self.remaining_deadline_ms() {
+            Some(remaining) if remaining <= timeout_ms => (remaining.ceil(), Abandon::Deadline),
+            _ => (timeout_ms.ceil(), Abandon::Timeout(timeout_ms)),
+        }
     }
 }
 
@@ -1339,14 +1586,15 @@ impl StopSignal for JspiStopWatch {
 // ---------------------------------------------------------------------------
 
 /// Map what a host delivered for a `SERVICE` effect onto the evaluator's seam, given
-/// whether the job's stop signal had fired by the time it resumed. See the module
-/// documentation's taxonomy table.
+/// the host's status and whether the job's stop signal had fired by the time it
+/// resumed. See the module documentation's taxonomy table.
 fn service_answer(
     endpoint: &str,
+    status: SuspendStatus,
     fired: Option<StopCause>,
     delivered: Option<Delivered>,
     slots: &JobSlots,
-) -> Result<Vec<u8>, RemoteError> {
+) -> Result<Arc<[u8]>, RemoteError> {
     if let Some(cause) = fired {
         let trip = TrippedGovernor::Stopped { cause };
         return Err(match delivered {
@@ -1354,99 +1602,176 @@ fn service_answer(
             _ => RemoteError::Governed(trip),
         });
     }
-    let cancelled = TrippedGovernor::Stopped {
+    let cancelled = RemoteError::Governed(TrippedGovernor::Stopped {
         cause: StopCause::Cancelled,
-    };
-    match delivered {
-        Some(Delivered::Bindings(bytes)) => Ok(bytes),
-        Some(Delivered::Failure {
-            kind: FailureKind::Transport,
-            message,
-        }) => Err(RemoteError::Transport(message)),
-        // A host resolver's own policy refusal, reached only when no NATIVE catalog
+    });
+    match (status, delivered) {
+        // The fault already latched is the job's error; the stop it fires ends the job.
+        (SuspendStatus::Fault, _) => Err(cancelled),
+        (SuspendStatus::Answered, Some(Delivered::Bindings(bytes))) => Ok(bytes),
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Transport | FailureKind::Decode,
+                message,
+            }),
+        ) => Err(RemoteError::Transport(message)),
+        // A host resolver's own policy refusal, reached only when no native catalog
         // already denied the request — see `HttpRemoteQuerySource::resolve`, which
         // applies an installed `ServiceCatalog` (and returns `RemoteError::Denied`, a real
-        // withheld capability) BEFORE this transport is ever reached. Whatever the host
+        // withheld capability) before this transport is ever reached. Whatever the host
         // reports here is therefore its own decision, not a capability this engine's
-        // catalog withheld, so it must not be reported as one — see `RemoteError::HostDenied`.
-        Some(Delivered::Failure {
-            kind: FailureKind::Denied,
-            message,
-        }) => Err(RemoteError::HostDenied {
+        // catalog withheld — see `RemoteError::HostDenied`.
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Denied,
+                message,
+            }),
+        ) => Err(RemoteError::HostDenied {
             endpoint: endpoint.to_owned(),
             message,
         }),
-        Some(Delivered::Governed) => {
+        (SuspendStatus::Abandoned, _) | (SuspendStatus::Answered, Some(Delivered::Governed)) => {
             slots.latch_fault(format!(
                 "the host abandoned the SERVICE <{endpoint}> effect, but the job's stop signal \
                  had not fired"
             ));
-            Err(RemoteError::Governed(cancelled))
+            Err(cancelled)
         }
-        Some(Delivered::Graph(_)) => {
-            slots.latch_fault(format!("a graph was delivered for SERVICE <{endpoint}>"));
-            Err(RemoteError::Governed(cancelled))
+        (SuspendStatus::Answered, Some(other @ (Delivered::Graph(_) | Delivered::Redirect(_)))) => {
+            slots.latch_fault(format!(
+                "{} was delivered for SERVICE <{endpoint}>",
+                other.label()
+            ));
+            Err(cancelled)
         }
-        None => {
+        (SuspendStatus::Answered, None) => {
             slots.latch_fault(format!(
                 "resolver returned without a delivery for SERVICE <{endpoint}>"
             ));
-            Err(RemoteError::Governed(cancelled))
+            Err(cancelled)
         }
     }
 }
 
-/// Map what a host delivered for a `LOAD` effect onto the `LOAD` seam.
+/// One hop of a `LOAD`, as its delivery decided it.
+#[derive(Debug)]
+enum LoadStep {
+    /// The document.
+    Graph(Arc<RdfDataset>),
+    /// The host was redirected to this `Location`.
+    Redirect(String),
+}
+
+/// Map what a host delivered for one hop of a `LOAD` onto the `LOAD` seam.
 ///
 /// A fired signal is the job's own stop, [`LoadError::Governed`]: the evaluator reports
 /// the trip, `SILENT` or not.
 fn load_answer(
     iri: &str,
+    status: SuspendStatus,
     fired: Option<StopCause>,
     delivered: Option<Delivered>,
     slots: &JobSlots,
-) -> Result<Arc<RdfDataset>, LoadError> {
+) -> Result<LoadStep, LoadError> {
     if let Some(cause) = fired {
         return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
     }
-    match delivered {
-        Some(Delivered::Graph(dataset)) => Ok(dataset),
-        Some(Delivered::Failure {
-            kind: FailureKind::Transport,
-            message,
-        }) => Err(LoadError::Transport(message)),
-        // Unlike a `SERVICE` denial, there is no native catalog gate for `LOAD` (see this
-        // module's doc comment): `ServiceCatalog::authorizeLoad` is a check the HOST makes
-        // of its own accord, before it ever calls back here, so whatever this delivery
-        // reports is, from this evaluator's point of view, always the host's own decision
-        // — reported as such rather than assumed to be a catalog-capability cause.
-        Some(Delivered::Failure {
-            kind: FailureKind::Denied,
-            message,
-        }) => Err(LoadError::HostDenied(message)),
-        other => {
-            let message = match other {
-                Some(Delivered::Governed) => format!(
-                    "the host abandoned the LOAD <{iri}> effect, but the job's stop signal had \
-                     not fired"
-                ),
-                Some(Delivered::Bindings(_)) => format!("bindings were delivered for LOAD <{iri}>"),
-                _ => format!("resolver returned without a delivery for LOAD <{iri}>"),
-            };
-            slots.latch_fault(message.clone());
-            Err(LoadError::Fault(message))
+    let message = match (status, delivered) {
+        (SuspendStatus::Answered, Some(Delivered::Graph(dataset))) => {
+            return Ok(LoadStep::Graph(dataset));
         }
-    }
+        (SuspendStatus::Answered, Some(Delivered::Redirect(location))) => {
+            return Ok(LoadStep::Redirect(location));
+        }
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Transport,
+                message,
+            }),
+        ) => return Err(LoadError::Transport(message)),
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Decode,
+                message,
+            }),
+        ) => return Err(LoadError::Decode(message)),
+        // The catalog's own refusal never reaches the host (see `JspiGraphResolver`), so
+        // a denial delivered here is the host's own decision.
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Failure {
+                kind: FailureKind::Denied,
+                message,
+            }),
+        ) => return Err(LoadError::HostDenied(message)),
+        // The fault already latched names the cause.
+        (SuspendStatus::Fault, _) => {
+            return Err(LoadError::Fault(slots.fault().map_or_else(
+                || "the host latched a fault".to_owned(),
+                str::to_owned,
+            )));
+        }
+        (SuspendStatus::Abandoned, _) | (SuspendStatus::Answered, Some(Delivered::Governed)) => {
+            format!(
+                "the host abandoned the LOAD <{iri}> effect, but the job's stop signal had not \
+                 fired"
+            )
+        }
+        (SuspendStatus::Answered, Some(Delivered::Bindings(_))) => {
+            format!("bindings were delivered for LOAD <{iri}>")
+        }
+        (SuspendStatus::Answered, None) => {
+            format!("resolver returned without a delivery for LOAD <{iri}>")
+        }
+    };
+    slots.latch_fault(message.clone());
+    Err(LoadError::Fault(message))
 }
+
+/// The header names whose presence makes a request user-specific: a shared cache must
+/// never answer one, because the answer is the credential holder's.
+const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
 
 /// The [`HttpTransport`] that suspends the job on a `SERVICE` effect.
 ///
 /// Wrapped in an [`HttpRemoteQuerySource`], so the catalog policy, the request shape and
-/// the bounded SPARQL Results JSON decode are all the native ones; this type only moves
-/// the request to the host and the answer back.
+/// the bounded SPARQL Results JSON decode are all the native ones; this type moves the
+/// request to the host and the answer back. A request the job already had answered is
+/// answered again from the job's memo, and a request another job has in flight is
+/// waited on rather than sent twice (see [`ExchangeKey`]).
 #[derive(Debug)]
 struct JspiTransport {
     watch: Arc<JspiStopWatch>,
+    /// The catalog requests are authorized against, for whether a request carries a
+    /// credential.
+    catalog: Option<NativeServiceCatalog>,
+    /// The identity of the host's `resolveService` handler: only requests to the same
+    /// handler share an exchange.
+    handler: u32,
+    /// The answers this job already received, by request. Successful bindings only: a
+    /// failure is never replayed to a later request.
+    memo: Mutex<BTreeMap<ExchangeKey, Arc<[u8]>>>,
+}
+
+impl JspiTransport {
+    /// Whether a shared cache may answer `request` or keep its answer.
+    fn cacheable(&self, request: &HttpRequest<'_>) -> bool {
+        let credentialed_profile = self.catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .profile_for(request.endpoint)
+                .is_some_and(|profile| profile.credential().is_some())
+        });
+        let credential_header = request.headers.iter().any(|(name, _)| {
+            CREDENTIAL_HEADERS
+                .iter()
+                .any(|credential| name.eq_ignore_ascii_case(credential))
+        });
+        !(credentialed_profile || credential_header)
+    }
 }
 
 impl HttpTransport for JspiTransport {
@@ -1464,16 +1789,43 @@ impl HttpTransport for JspiTransport {
             silent: context.is_some_and(|context| context.silent),
             max_intermediate_cells: context.and_then(|context| context.max_intermediate_cells),
             remaining_deadline_ms: self.watch.remaining_deadline_ms(),
+            cacheable: self.cacheable(&request),
         };
-        let Some(seq) = slots.issue(EffectPayload::Service(Box::new(effect))) else {
-            return service_answer(request.endpoint, self.watch.observe_now(), None, slots);
+        let key = ExchangeKey::new(self.handler, &effect);
+        if let Some(bytes) = lock(&self.memo).get(&key) {
+            return Ok(bytes.to_vec());
+        }
+        let deadline_at_ms = self.watch.deadline_at_ms;
+        let abandon = self.watch.abandonment(effect.timeout_ms);
+        let joined = find_exchange(&key, deadline_at_ms);
+        let exchange = joined.unwrap_or_else(next_exchange_id);
+        let payload = match joined {
+            Some(_) => EffectPayload::AwaitExchange { exchange },
+            None => EffectPayload::Service {
+                effect: Box::new(effect),
+                exchange,
+            },
         };
-        let _ = self.watch.suspend_on(seq, AsyncEffectKind::Service);
+        let kind = payload.kind();
+        let Some(seq) = slots.issue(payload, Some(abandon)) else {
+            let fired = self.watch.observe_now();
+            return service_answer(request.endpoint, SuspendStatus::Fault, fired, None, slots)
+                .map(|bytes| bytes.to_vec());
+        };
+        let waiter = (Arc::clone(slots), seq);
+        match joined {
+            Some(_) => add_waiter(exchange, waiter),
+            None => open_exchange(exchange, key.clone(), deadline_at_ms, waiter),
+        }
+        slots.wait_on(exchange);
+        let status = self.watch.suspend_on(seq, kind);
         let delivered = slots.resume(seq);
         // `request.stop` is this same watch; observing it directly avoids a second poll
         // that could slice into a yield before the answer is even mapped.
         let fired = self.watch.observe_now();
-        service_answer(request.endpoint, fired, delivered, slots)
+        let bytes = service_answer(request.endpoint, status, fired, delivered, slots)?;
+        lock(&self.memo).insert(key, Arc::clone(&bytes));
+        Ok(bytes.to_vec())
     }
 }
 
@@ -1500,10 +1852,10 @@ impl ServiceResolver for HostServiceSource {
     }
 }
 
-/// The fallback for a job with local services but no host `SERVICE` handler: an endpoint
-/// that is not local fails exactly as the offline lane's missing source does
-/// ([`RemoteError::Unconfigured`]) — an error, and under `SILENT` the join identity with a
-/// silenced record.
+/// The source a job with local services but no host `SERVICE` handler sends every other
+/// endpoint to: it fails exactly as the offline lane's missing source does
+/// ([`RemoteError::Unconfigured`]) — an error, and under `SILENT` the join identity with
+/// a silenced record.
 #[derive(Debug)]
 struct UnhandledServiceSource;
 
@@ -1526,11 +1878,11 @@ impl ServiceResolver for UnhandledServiceSource {
 ///
 /// Owned, so an operation can install it where a validation reads its sources (see
 /// [`JobRun`]). A job with local services routes each request exactly as a
-/// [`purrdf_sparql_eval::ServiceRouter`] with one route per local endpoint and the host's source as its
-/// fallback does — a fired signal prevents the exchange, a local endpoint is answered in
-/// process, every other endpoint goes to the fallback — without building one per
-/// request: a router borrows its resolvers, and this owns them. A job without local
-/// services hands every request to the host's source directly, as it always has.
+/// [`purrdf_sparql_eval::ServiceRouter`] with one route per local endpoint and the host's
+/// source for every other does — a fired signal prevents the exchange, a local endpoint
+/// is answered in process, every other endpoint goes to the host — without building one
+/// per request: a router borrows its resolvers, and this owns them. A job without local
+/// services hands every request to the host's source directly.
 #[derive(Debug)]
 struct JobServiceSource {
     /// The in-process resolver and the endpoints it serves.
@@ -1540,15 +1892,15 @@ struct JobServiceSource {
 
 impl ServiceResolver for JobServiceSource {
     fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
-        let fallback: &(dyn ServiceResolver + Sync) = match &self.host {
+        let remote: &(dyn ServiceResolver + Sync) = match &self.host {
             Some(host) => host,
             None => &UnhandledServiceSource,
         };
         let Some((local, endpoints)) = &self.local else {
-            return fallback.resolve(request);
+            return remote.resolve(request);
         };
-        // The router's own sequence. Its no-route denial cannot arise: there is always a
-        // fallback.
+        // The router's own sequence. Its no-route denial cannot arise: every endpoint
+        // that is not local has the host's source (or its refusal).
         if let Some(trip) = request.stop_trip() {
             return Err(trip);
         }
@@ -1558,32 +1910,281 @@ impl ServiceResolver for JobServiceSource {
         {
             local.resolve(request)
         } else {
-            fallback.resolve(request)
+            remote.resolve(request)
         }
     }
 }
 
+/// The `Accept` header of a `LOAD` fetch: every parseable RDF syntax's media type.
+fn load_accept() -> String {
+    purrdf::NativeRdfFormat::all()
+        .map(purrdf::NativeRdfFormat::media_type)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The `LOAD` source that suspends the job on a `Load` effect.
+///
+/// With a catalog installed, every hop's IRI — the source and every location a redirect
+/// names — is authorized against it before the host is asked: a `LOAD` needs the
+/// `network` capability (and `credentials` for a credential), exactly the policy a
+/// `SERVICE` meets, and a refusal is the catalog's [`LoadError::Denied`] with nothing
+/// fetched. The authorized profile supplies the hop's headers, credential, user agent and
+/// timeout, so a redirect to another origin carries only what that origin's own profile
+/// grants. A redirect is followed here, never by the host: its location is resolved
+/// against the hop's IRI and fetched as a fresh effect, up to [`MAX_LOAD_REDIRECTS`] hops.
 #[derive(Debug)]
 struct JspiGraphResolver {
     watch: Arc<JspiStopWatch>,
+    catalog: Option<NativeServiceCatalog>,
+}
+
+impl JspiGraphResolver {
+    /// The effect that fetches `iri`, or the catalog's refusal.
+    fn authorize(&self, iri: &str) -> Result<LoadEffect, LoadError> {
+        let default_timeout_ms = DEFAULT_TIMEOUT.as_secs_f64() * 1000.0;
+        let Some(catalog) = &self.catalog else {
+            return Ok(LoadEffect {
+                iri: iri.to_owned(),
+                accept: load_accept(),
+                user_agent: None,
+                headers: Vec::new(),
+                timeout_ms: default_timeout_ms,
+            });
+        };
+        let profile = catalog
+            .authorize(
+                iri,
+                ServiceCapabilities::granting([ServiceCapability::Network]),
+            )
+            .map_err(LoadError::Denied)?;
+        Ok(LoadEffect {
+            iri: iri.to_owned(),
+            accept: load_accept(),
+            user_agent: profile.user_agent().map(str::to_owned),
+            headers: profile.request_headers(),
+            timeout_ms: profile
+                .timeout()
+                .map_or(default_timeout_ms, |timeout| timeout.as_secs_f64() * 1000.0),
+        })
+    }
 }
 
 impl GraphResolver for JspiGraphResolver {
     fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
         let slots = &self.watch.slots;
-        let payload = EffectPayload::Load {
-            iri: request.iri.to_owned(),
-        };
-        let Some(seq) = slots.issue(payload) else {
+        let mut iri = request.iri.to_owned();
+        let mut hops = 0_u32;
+        loop {
+            let effect = self.authorize(&iri)?;
+            let abandon = self.watch.abandonment(effect.timeout_ms);
+            let Some(seq) = slots.issue(EffectPayload::Load(Box::new(effect)), Some(abandon))
+            else {
+                // Issuing refused, with the job's fault latched: the stop that fault
+                // fires is what the evaluator reports.
+                return Err(match self.watch.observe_now() {
+                    Some(cause) => LoadError::Governed(TrippedGovernor::Stopped { cause }),
+                    None => LoadError::Fault(format!("the LOAD <{iri}> effect was not issued")),
+                });
+            };
+            let status = self.watch.suspend_on(seq, EffectKind::Load);
+            let delivered = slots.resume(seq);
             let fired = self.watch.observe_now();
-            return load_answer(request.iri, fired, None, slots);
-        };
-        let _ = self.watch.suspend_on(seq, AsyncEffectKind::Load);
-        let delivered = slots.resume(seq);
-        let fired = self.watch.observe_now();
-        load_answer(request.iri, fired, delivered, slots)
+            match load_answer(&iri, status, fired, delivered, slots)? {
+                LoadStep::Graph(dataset) => return Ok(dataset),
+                LoadStep::Redirect(location) => {
+                    hops += 1;
+                    if hops > MAX_LOAD_REDIRECTS {
+                        return Err(LoadError::Transport(format!(
+                            "exceeded {MAX_LOAD_REDIRECTS} redirect hops; the last, from <{iri}>, \
+                             named {location:?}"
+                        )));
+                    }
+                    iri = redirect_target(&iri, &location).map_err(LoadError::Transport)?;
+                }
+            }
+        }
     }
+}
+
+/// The IRI a redirect from `from` to `location` names: the location resolved against
+/// the IRI it redirected (RFC 3986 §5.2).
+fn redirect_target(from: &str, location: &str) -> Result<String, String> {
+    purrdf::iri::parse(from)
+        .and_then(|base| base.resolve(location))
+        .map(|target| target.as_str().to_owned())
+        .map_err(|error| {
+            format!("<{from}> redirected to {location:?}, which is not a resolvable IRI: {error}")
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Shared SERVICE exchanges
+// ---------------------------------------------------------------------------
+
+/// What identifies a `SERVICE` request to the host: everything the host can observe but
+/// the deadline and the signal. Two effects with equal keys ask the host the same
+/// question, so a job answers a repeat from its memo, and concurrent jobs share one host
+/// call.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ExchangeKey {
+    handler: u32,
+    endpoint: String,
+    query_text: String,
+    accept: String,
+    content_type: String,
+    user_agent: String,
+    timeout_bits: u64,
+    headers: Vec<(String, String)>,
+    silent: bool,
+    max_intermediate_cells: Option<u64>,
+}
+
+impl ExchangeKey {
+    fn new(handler: u32, effect: &ServiceEffect) -> Self {
+        Self {
+            handler,
+            endpoint: effect.endpoint.clone(),
+            query_text: effect.query_text.clone(),
+            accept: effect.accept.clone(),
+            content_type: effect.content_type.clone(),
+            user_agent: effect.user_agent.clone(),
+            timeout_bits: effect.timeout_ms.to_bits(),
+            headers: effect.headers.clone(),
+            silent: effect.silent,
+            max_intermediate_cells: effect.max_intermediate_cells,
+        }
+    }
+}
+
+/// One host call in flight, and every job waiting on its answer.
+///
+/// A job joins an open exchange only when its key matches and the exchange's deadline is
+/// no earlier than the job's own (a job without a deadline joins only an exchange without
+/// one): the host was told the opening job's remaining deadline, so a host that bounds its
+/// work by it gives up no earlier than it would on the joining job's own call, and a
+/// failure the shared call reports by running out of time is one the job's own call would
+/// have reported too. The answer — rows, a failure, or a fault — is delivered to every
+/// waiting job as it stands. A job that is stopped while it waits leaves; when the last
+/// waiter leaves, the exchange closes and the host aborts its call.
+#[derive(Debug)]
+struct OpenExchange {
+    key: ExchangeKey,
+    deadline_at_ms: Option<f64>,
+    waiters: Vec<(Arc<JobSlots>, u32)>,
+}
+
+impl OpenExchange {
+    /// Whether a job whose deadline falls at `deadline_at_ms` may wait on this exchange.
+    fn covers(&self, deadline_at_ms: Option<f64>) -> bool {
+        match (self.deadline_at_ms, deadline_at_ms) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(exchange), Some(job)) => exchange >= job,
+        }
+    }
+}
+
+thread_local! {
+    /// Every open shared exchange, by id. Borrowed only inside the helpers below, never
+    /// across a delivery or a suspension.
+    static EXCHANGES: RefCell<BTreeMap<u64, OpenExchange>> = const { RefCell::new(BTreeMap::new()) };
+    /// The last exchange id handed out.
+    static LAST_EXCHANGE_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A fresh exchange id.
+fn next_exchange_id() -> u64 {
+    LAST_EXCHANGE_ID.with(|last| {
+        let id = last.get() + 1;
+        last.set(id);
+        id
+    })
+}
+
+/// The open exchange a job with `key` and `deadline_at_ms` may wait on.
+fn find_exchange(key: &ExchangeKey, deadline_at_ms: Option<f64>) -> Option<u64> {
+    EXCHANGES.with(|exchanges| {
+        exchanges
+            .borrow()
+            .iter()
+            .find(|(_, open)| open.key == *key && open.covers(deadline_at_ms))
+            .map(|(&id, _)| id)
+    })
+}
+
+fn open_exchange(
+    id: u64,
+    key: ExchangeKey,
+    deadline_at_ms: Option<f64>,
+    waiter: (Arc<JobSlots>, u32),
+) {
+    EXCHANGES.with(|exchanges| {
+        exchanges.borrow_mut().insert(
+            id,
+            OpenExchange {
+                key,
+                deadline_at_ms,
+                waiters: vec![waiter],
+            },
+        )
+    });
+}
+
+fn add_waiter(id: u64, waiter: (Arc<JobSlots>, u32)) {
+    EXCHANGES.with(|exchanges| {
+        if let Some(open) = exchanges.borrow_mut().get_mut(&id) {
+            open.waiters.push(waiter);
+        }
+    });
+}
+
+/// Job `job` stops waiting on exchange `id`; the exchange closes when no job is left.
+fn leave_exchange(id: u64, job: u32) {
+    let closed = EXCHANGES.with(|exchanges| {
+        let mut exchanges = exchanges.borrow_mut();
+        let open = exchanges.get_mut(&id)?;
+        open.waiters.retain(|(slots, _)| slots.job != job);
+        open.waiters
+            .is_empty()
+            .then(|| exchanges.remove(&id))
+            .flatten()
+    });
+    drop(closed);
+}
+
+/// Close exchange `id`, returning its waiters; `None` when it is not open.
+fn close_exchange(id: u64) -> Option<Vec<(Arc<JobSlots>, u32)>> {
+    EXCHANGES
+        .with(|exchanges| exchanges.borrow_mut().remove(&id))
+        .map(|open| open.waiters)
+}
+
+/// Deliver `value` to every job waiting on exchange `id`, closing it.
+fn settle_exchange(id: u64, value: &Delivered) -> DeliveryStatus {
+    let Some(waiters) = close_exchange(id) else {
+        return DeliveryStatus::Finished;
+    };
+    for (slots, seq) in waiters {
+        // A waiter that already left or finished takes nothing; that is not the other
+        // waiters' concern.
+        let _ = slots.deliver(seq, value.clone());
+    }
+    DeliveryStatus::Accepted
+}
+
+/// Latch `message(seq)` as the fault of every job waiting on exchange `id` with effect
+/// `seq`, closing it.
+fn fault_open_exchange(id: u64, message: impl Fn(u32) -> String) -> DeliveryStatus {
+    let Some(waiters) = close_exchange(id) else {
+        return DeliveryStatus::Finished;
+    };
+    for (slots, seq) in waiters {
+        if !slots.finished.load(Ordering::Relaxed) {
+            slots.latch_fault(message(seq));
+        }
+    }
+    DeliveryStatus::Fault
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,476 +2228,16 @@ pub enum AsyncOperationKind {
 
 impl AsyncOperationKind {
     const fn name(self) -> &'static str {
-        match self {
-            Self::Query => "query",
-            Self::Raw => "raw",
-            Self::RawWithContext => "rawWithContext",
-            Self::Governed => "governed",
-            Self::EntailmentGoverned => "entailmentGoverned",
-            Self::Update => "update",
-            Self::UpdateGoverned => "updateGoverned",
-            Self::Negotiated => "negotiated",
-            Self::Explain => "explain",
-            Self::Shacl => "shacl",
-        }
-    }
-
-    const fn is_governed(self) -> bool {
-        matches!(
-            self,
-            Self::Governed | Self::EntailmentGoverned | Self::UpdateGoverned | Self::Negotiated
-        )
-    }
-}
-
-/// How a job failed, for the host to decide what to reject with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobErrorKind {
-    /// A parse or evaluation failure, or a refused result shape.
-    Error,
-    /// An ungoverned operation's cancellation.
-    Cancelled,
-    /// An ungoverned operation's deadline (latched by the host).
-    Deadline,
-    /// A latched fault.
-    Fault,
-    /// A negotiated query's result, whose shape (a graph carrying named graphs) no format
-    /// the `Accept` header allows can carry.
-    NotAcceptable,
-}
-
-impl JobErrorKind {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Error => "error",
-            Self::Cancelled => "cancelled",
-            Self::Deadline => "deadline",
-            Self::Fault => "fault",
-            Self::NotAcceptable => "not-acceptable",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct JobError {
-    kind: JobErrorKind,
-    message: String,
-}
-
-impl JobError {
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            kind: JobErrorKind::Error,
-            message: message.into(),
-        }
-    }
-
-    /// This error with the asynchronous lane's remedy appended when it is the evaluator's
-    /// or the parser's stack refusal ([`is_stack_refusal`]): the code and message stay the
-    /// synchronous twin's,
-    /// and the hint names the region the job ran on and `stackBytes`, the option that
-    /// sizes it. (The synchronous lane appends its own remedy, the asynchronous twin; see
-    /// `query::SYNC_STACK_HINT`.) Any other error is returned as it is.
-    fn with_stack_hint(mut self, region_bytes: usize) -> Self {
-        if self.kind == JobErrorKind::Error && is_stack_refusal(&self.message) {
-            // Writing to a `String` cannot fail.
-            let _ = write!(
-                self.message,
-                "; this asynchronous job ran on a stack region of {region_bytes} bytes — \
-                 run it with a larger stackBytes"
-            );
-        }
-        self
-    }
-
-    /// A negotiated query whose result no acceptable format can carry.
-    const fn not_acceptable(message: String) -> Self {
-        Self {
-            kind: JobErrorKind::NotAcceptable,
-            message,
-        }
-    }
-
-    /// An ungoverned operation stopped by its signal. It has no outcome to carry a
-    /// truncation in, so the stop is its error.
-    fn stopped(tripped: TrippedGovernor) -> Self {
-        match tripped {
-            TrippedGovernor::Stopped {
-                cause: StopCause::Cancelled,
-            } => Self {
-                kind: JobErrorKind::Cancelled,
-                message: "the asynchronous operation was cancelled".to_owned(),
-            },
-            TrippedGovernor::Stopped {
-                cause: StopCause::Deadline,
-            } => Self {
-                kind: JobErrorKind::Deadline,
-                message: "the asynchronous operation's deadline expired".to_owned(),
-            },
-            other => Self::error(format!("the asynchronous operation stopped: {other}")),
-        }
-    }
-}
-
-/// What a finished operation left for the host to take.
-enum JobOutcome {
-    Query(SparqlResult),
-    Raw(Vec<u8>),
-    Governed(Box<GovernedOutcome>),
-    Entailment(Box<GovernedEntailment>),
-    Updated(Arc<RdfDataset>),
-    UpdateGoverned {
-        outcome: GovernedUpdateOutcome,
-        frozen: Option<Arc<RdfDataset>>,
-    },
-    Negotiated(Box<NegotiatedValue>),
-    /// A change validation's log beside the scope it describes.
-    ShaclChange(ShaclChangeValidation),
-    /// A prepared-product refusal: the job's error, carried as the class the synchronous
-    /// twin rejects with rather than flattened into a message.
-    Refused(ShaclProductRefusal),
-    Failed(JobError),
-}
-
-impl fmt::Debug for JobOutcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Query(_) => "Query",
-            Self::Raw(_) => "Raw",
-            Self::Governed(_) => "Governed",
-            Self::Entailment(_) => "Entailment",
-            Self::Updated(_) => "Updated",
-            Self::UpdateGoverned { .. } => "UpdateGoverned",
-            Self::Negotiated(_) => "Negotiated",
-            Self::ShaclChange(_) => "ShaclChange",
-            Self::Refused(_) => "Refused",
-            Self::Failed(_) => "Failed",
-        })
-    }
-}
-
-/// What an operation runs with: the job's stop signal and effect sources.
-///
-/// The sources are owned (`Arc`) rather than borrowed so an operation can hand them to
-/// code that reads its sources off an ambient scope rather than off a request — SHACL
-/// validation installs them with [`purrdf_shapes::sparql::enter_execution_scope`].
-struct JobRun<'r> {
-    stop: Arc<dyn StopSignal>,
-    remote: Option<Arc<dyn ServiceResolver + Send + Sync>>,
-    load: Option<Arc<dyn GraphResolver + Send + Sync>>,
-    counters: &'r AsyncCounters,
-}
-
-impl JobRun<'_> {
-    /// `ceilings` with the job's stop signal attached.
-    fn governors(&self, ceilings: QueryGovernors) -> QueryGovernors {
-        ceilings.with_stop_signal(Arc::clone(&self.stop))
-    }
-
-    /// Request options carrying the job's sources and `env`.
-    fn options<'o>(&'o self, env: &'o purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'o> {
-        QueryOptions::new()
-            .with_env(env)
-            .with_remote(
-                self.remote
-                    .as_deref()
-                    .map(|remote| remote as &(dyn ServiceResolver + Sync)),
-            )
-            .with_load(
-                self.load
-                    .as_deref()
-                    .map(|load| load as &(dyn GraphResolver + Sync)),
-            )
-    }
-
-    /// The job's sources, for an ambient execution scope.
-    fn sources(&self) -> purrdf_shapes::sparql::QuerySources {
-        purrdf_shapes::sparql::QuerySources {
-            remote: self.remote.clone(),
-            load: self.load.clone(),
-        }
-    }
-
-    fn timed<T>(&self, cell: &AtomicU64, work: impl FnOnce() -> T) -> T {
-        let started = now_ms();
-        let result = work();
-        add_ms(cell, now_ms() - started);
-        result
-    }
-
-    fn evaluate<T>(&self, work: impl FnOnce() -> T) -> T {
-        self.timed(&self.counters.evaluate_ms, work)
-    }
-
-    /// Keep the silenced invocations an evaluation's `evidence` recorded, for
-    /// [`AsyncEvidence::silenced`].
-    fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
-        self.counters.record_silenced(evidence);
-    }
-
-    fn serialize<T>(&self, work: impl FnOnce() -> T) -> T {
-        self.timed(&self.counters.serialize_ms, work)
+        self.spec().name
     }
 }
 
 /// A job's work: a closure over the run's signal and sources.
 type Operation = Box<dyn FnOnce(&JobRun<'_>) -> JobOutcome>;
 
-/// Everything an operation is built from.
-struct OperationInput {
-    kind: AsyncOperationKind,
-    engine: Rc<NativeSparqlEngine>,
-    frozen: Arc<RdfDataset>,
-    sparql: String,
-    base: Option<String>,
-    aggregate_namespace: Option<String>,
-    ceilings: GovernorArgs,
-    format: Option<String>,
-    provenance: Option<ProvenanceNamespace>,
-    jsonld: Option<JsonLdSerializeOptions>,
-    regime: Option<String>,
-    program: Option<String>,
-    accept: Option<String>,
-}
-
-/// Whether a job's error text is a stack refusal a larger region answers: the
-/// evaluator's (`native-sparql-evaluation-stack-exhausted`, the diagnostic's code) or the
-/// parser's (`SPARQL parse stack exhausted`, under the query or update parse code). Both
-/// measure the job's own region, so a larger `stackBytes` is always their remedy. The
-/// host-stack refusal (`native-sparql-host-stack-exhausted`) is not one: it is the
-/// budget for the JavaScript engine's own call stack, which is the same size on every
-/// lane and which no region size changes.
-fn is_stack_refusal(message: &str) -> bool {
-    let Some(rest) = message.strip_prefix("error ") else {
-        return false;
-    };
-    let coded = |code: &str| {
-        rest.strip_prefix(code)
-            .and_then(|rest| rest.strip_prefix(": "))
-    };
-    coded(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE).is_some()
-        || ["native-sparql-query-parse", "native-sparql-update-parse"]
-            .into_iter()
-            .filter_map(coded)
-            .any(|text| text.starts_with("SPARQL parse stack exhausted at byte "))
-}
-
-/// Run an ungoverned query under the metered base and the job's signal.
-fn ungoverned_query(
-    run: &JobRun<'_>,
-    engine: &NativeSparqlEngine,
-    frozen: &Arc<RdfDataset>,
-    sparql: &str,
-    base: Option<&str>,
-) -> Result<SparqlResult, JobError> {
-    let governors = run.governors(QueryGovernors::METERED);
-    let options = run.options(QueryOptions::EMPTY.env);
-    let outcome = run.evaluate(|| {
-        engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
-    });
-    if let Ok(outcome) = &outcome {
-        run.record_silenced(outcome.evidence());
-    }
-    match outcome {
-        Err(diagnostic) => Err(JobError::error(diagnostic.to_string())),
-        Ok(GovernedOutcome::Complete { result, .. }) => Ok(result),
-        Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
-            Err(JobError::stopped(exhausted.tripped))
-        }
-    }
-}
-
-/// The aggregate environment a governed operation's `aggregateNamespace` requests.
-fn governed_env(
-    aggregate_namespace: Option<String>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
-    aggregate_env_message(build_aggregates(aggregate_namespace).as_ref()).map_err(JobError::error)
-}
-
-impl OperationInput {
-    fn into_operation(self) -> Operation {
-        Box::new(move |run| self.execute(run).unwrap_or_else(JobOutcome::Failed))
-    }
-
-    fn execute(self, run: &JobRun<'_>) -> Result<JobOutcome, JobError> {
-        let Self {
-            kind,
-            engine,
-            frozen,
-            sparql,
-            base,
-            aggregate_namespace,
-            ceilings,
-            format,
-            provenance,
-            jsonld,
-            regime,
-            program,
-            accept,
-        } = self;
-        let request = sparql_request(&sparql, base.as_deref());
-        match kind {
-            AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
-                run,
-                &engine,
-                &frozen,
-                &sparql,
-                base.as_deref(),
-            )?)),
-            AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(run, &engine, &frozen, &sparql, base.as_deref())?;
-                let text = run.serialize(|| match (&jsonld, format.as_deref()) {
-                    (Some(options), Some(format)) => {
-                        serialize_configured_graph(result, format, options)
-                    }
-                    _ => serialize_query_result(
-                        &result,
-                        format.as_deref(),
-                        provenance.as_ref(),
-                        &sparql,
-                    ),
-                });
-                Ok(JobOutcome::Raw(text.map_err(JobError::error)?.into_bytes()))
-            }
-            AsyncOperationKind::Governed => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
-                let outcome = run
-                    .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
-                    })
-                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
-                run.record_silenced(outcome.evidence());
-                Ok(JobOutcome::Governed(Box::new(outcome)))
-            }
-            AsyncOperationKind::Negotiated => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
-                let outcome = run
-                    .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
-                    })
-                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
-                run.record_silenced(outcome.evidence());
-                let value = match outcome {
-                    GovernedOutcome::Complete {
-                        result, evidence, ..
-                    } => {
-                        // Negotiated against the result's actual shape: a graph carrying
-                        // named graphs is offered only in the syntaxes that can hold it,
-                        // so no format ever silently drops a graph.
-                        let shape = negotiable_result_kind(&result);
-                        let format = negotiate(accept.as_deref(), shape).ok_or_else(|| {
-                            JobError::not_acceptable(not_acceptable_message(shape))
-                        })?;
-                        let text = run
-                            .serialize(|| {
-                                serialize_query_result(&result, Some(format), None, &sparql)
-                            })
-                            .map_err(JobError::error)?;
-                        NegotiatedValue::Complete {
-                            bytes: text.into_bytes(),
-                            format,
-                            evidence,
-                        }
-                    }
-                    GovernedOutcome::BudgetExhausted(exhausted) => {
-                        NegotiatedValue::Exhausted(exhausted)
-                    }
-                };
-                Ok(JobOutcome::Negotiated(Box::new(value)))
-            }
-            AsyncOperationKind::EntailmentGoverned => {
-                let regime = regime.unwrap_or_default();
-                let plan = QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
-                    .map_err(JobError::error)?;
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
-                let outcome = run
-                    .evaluate(|| {
-                        query_with_entailment_governed(
-                            &engine,
-                            &frozen,
-                            request,
-                            plan.entailment(),
-                            run.options(&env),
-                            // This surface registers no relation, exactly as the
-                            // synchronous twin does.
-                            &ClosureRelations::NONE,
-                            &governors,
-                        )
-                    })
-                    .map_err(|error| JobError::error(error.to_string()))?;
-                if let Some(answered) = outcome.outcome() {
-                    run.record_silenced(answered.evidence());
-                }
-                Ok(JobOutcome::Entailment(Box::new(outcome)))
-            }
-            AsyncOperationKind::Explain => {
-                // The synchronous twin's measuring run — metered, never bounded — with
-                // the job's sources installed and its signal polled at every charge point.
-                let explanation = run
-                    .evaluate(|| {
-                        engine.explain_query_with_stop_signal(
-                            &frozen,
-                            &sparql,
-                            base.as_deref(),
-                            run.options(QueryOptions::EMPTY.env),
-                            Arc::clone(&run.stop),
-                        )
-                    })
-                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
-                run.record_silenced(explanation.evidence());
-                // A stop cut the measuring run short, so its ledger describes a truncated
-                // run rather than the query: the stop is the job's error, as it is for
-                // every ungoverned operation. Any other trip is part of the explanation,
-                // exactly as the synchronous twin renders it.
-                if let Some(tripped @ TrippedGovernor::Stopped { .. }) =
-                    explanation.evidence().tripped
-                {
-                    return Err(JobError::stopped(tripped));
-                }
-                Ok(JobOutcome::Raw(explanation.render().into_bytes()))
-            }
-            AsyncOperationKind::Update => {
-                let governors = run.governors(QueryGovernors::METERED);
-                let mut target = Arc::clone(&frozen);
-                let outcome = run
-                    .evaluate(|| {
-                        engine.update_governed(
-                            &mut target,
-                            request,
-                            run.options(QueryOptions::EMPTY.env),
-                            &governors,
-                        )
-                    })
-                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
-                run.record_silenced(outcome.evidence());
-                match outcome.tripped() {
-                    None => Ok(JobOutcome::Updated(target)),
-                    Some(tripped) => Err(JobError::stopped(tripped)),
-                }
-            }
-            // `beginAsync` refuses the kind before an input is ever built; a SHACL job's
-            // operation is `execute_shacl`, over no dataset and no SPARQL text.
-            AsyncOperationKind::Shacl => Err(JobError::error(SHACL_STARTS_ELSEWHERE)),
-            AsyncOperationKind::UpdateGoverned => {
-                let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
-                let mut target = Arc::clone(&frozen);
-                let outcome = run
-                    .evaluate(|| {
-                        engine.update_governed(&mut target, request, run.options(&env), &governors)
-                    })
-                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
-                run.record_silenced(outcome.evidence());
-                // The engine publishes into `target` only on the applied path, so a
-                // tripped request offers nothing to commit.
-                let frozen = outcome.is_applied().then_some(target);
-                Ok(JobOutcome::UpdateGoverned { outcome, frozen })
-            }
-        }
-    }
+/// The job's work for a SPARQL operation: the one implementation both lanes run.
+fn sparql_operation(input: OperationInput<'static>) -> Operation {
+    Box::new(move |run| input.execute(run).unwrap_or_else(JobOutcome::Failed))
 }
 
 // ---------------------------------------------------------------------------
@@ -2104,7 +2245,7 @@ impl OperationInput {
 // ---------------------------------------------------------------------------
 
 /// Why `beginAsync` refuses the SHACL kind.
-const SHACL_STARTS_ELSEWHERE: &str =
+pub(crate) const SHACL_STARTS_ELSEWHERE: &str =
     "a shacl operation reads no dataset and no SPARQL text; it starts through AsyncJob.beginShacl";
 
 /// Which SHACL surface a [`AsyncOperationKind::Shacl`] job runs: one per synchronous
@@ -2272,11 +2413,11 @@ impl ShaclRequest {
     /// what governs it: nothing here is a second implementation of any surface.
     fn run(self) -> JobOutcome {
         let text = |result: Result<String, String>| match result {
-            Ok(text) => JobOutcome::Raw(text.into_bytes()),
-            Err(message) => JobOutcome::Failed(JobError::error(message)),
+            Ok(text) => JobOutcome::Raw(text),
+            Err(message) => JobOutcome::Failed(JobError::message(SHACL_CODE, message)),
         };
         let refusable = |result: Result<String, ShaclProductRefusal>| match result {
-            Ok(text) => JobOutcome::Raw(text.into_bytes()),
+            Ok(text) => JobOutcome::Raw(text),
             Err(refusal) => JobOutcome::Refused(refusal),
         };
         match self {
@@ -2305,7 +2446,7 @@ impl ShaclRequest {
                 Ok((sarif, scope)) => {
                     JobOutcome::ShaclChange(ShaclChangeValidation::new(sarif, scope))
                 }
-                Err(message) => JobOutcome::Failed(JobError::error(message)),
+                Err(message) => JobOutcome::Failed(JobError::message(SHACL_CODE, message)),
             },
             Self::Entail {
                 shapes,
@@ -2454,12 +2595,16 @@ struct JobInner {
     kind: AsyncOperationKind,
     watch: Arc<JspiStopWatch>,
     operation: RefCell<Option<Operation>>,
-    service_handler: bool,
+    /// The identity of the host's `resolveService` handler, when it supplied one.
+    service_handler: Option<u32>,
     load_handler: bool,
     catalog: Option<NativeServiceCatalog>,
     local_services: Vec<(String, Arc<RdfDataset>)>,
     dataset_id: u64,
     dataset_generation: u64,
+    /// An update job's claim on its dataset: no other asynchronous update of it may begin
+    /// until [`AsyncJob::finish`] releases it.
+    update_claim: RefCell<Option<UpdateClaim>>,
     region: StackRegion,
     state: Cell<JobState>,
     outcome: RefCell<Option<JobOutcome>>,
@@ -2483,9 +2628,16 @@ impl fmt::Debug for JobInner {
 }
 
 impl JobInner {
-    fn run(&self) -> u32 {
+    /// The lane the job's failures are rendered for.
+    const fn lane(&self) -> Lane {
+        Lane::Async {
+            region_bytes: self.region.bounds.top - self.region.bounds.base,
+        }
+    }
+
+    fn run(&self) -> RunStatus {
         if self.state.get() != JobState::Pending {
-            return RUN_ALREADY_STARTED;
+            return RunStatus::AlreadyStarted;
         }
         self.state.set(JobState::Running);
         let operation = self.operation.borrow_mut().take();
@@ -2514,12 +2666,12 @@ impl JobInner {
         let outcome = match (operation, self.watch.stack_check()) {
             (_, Err(fault)) => {
                 slots.latch_fault(fault);
-                JobOutcome::Failed(JobError::error("the job did not start"))
+                JobOutcome::Failed(JobError::fault("the job did not start"))
             }
             (Some(operation), Ok(())) => self.execute(operation),
             (None, Ok(())) => {
                 slots.latch_fault("the job's operation was already taken");
-                JobOutcome::Failed(JobError::error("the job had no operation"))
+                JobOutcome::Failed(JobError::fault("the job had no operation"))
             }
         };
         slots.region_armed.store(false, Ordering::Relaxed);
@@ -2539,19 +2691,16 @@ impl JobInner {
             Overrun::Absorbed => slots.latch_fault(self.region.bounds.exhausted()),
             Overrun::Escaped => {
                 slots.finished.store(true, Ordering::Relaxed);
-                *self.error.borrow_mut() = Some(JobError {
-                    kind: JobErrorKind::Fault,
-                    message: format!(
-                        "asynchronous job {} ran more than {} bytes past the base of its \
-                         stack region ({} bytes), so memory outside it may be overwritten; \
-                         raise stackBytes",
-                        self.id,
-                        STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES,
-                        self.region.bounds.top - self.region.bounds.base
-                    ),
-                });
+                *self.error.borrow_mut() = Some(JobError::fault(format!(
+                    "asynchronous job {} ran more than {} bytes past the base of its stack \
+                     region ({} bytes), so memory outside it may be overwritten; raise \
+                     stackBytes",
+                    self.id,
+                    STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES,
+                    self.region.bounds.top - self.region.bounds.base
+                )));
                 self.state.set(JobState::Done);
-                return RUN_OVERRAN;
+                return RunStatus::Overran;
             }
         }
         slots.finished.store(true, Ordering::Relaxed);
@@ -2559,26 +2708,25 @@ impl JobInner {
         // produced by a job whose effects cannot be trusted, and an update is never
         // committed from it.
         let outcome = match slots.fault() {
-            Some(fault) => JobOutcome::Failed(JobError {
-                kind: JobErrorKind::Fault,
-                message: fault.to_owned(),
-            }),
+            Some(fault) => JobOutcome::Failed(JobError::fault(fault)),
             None => outcome,
         };
         let status = match outcome {
             JobOutcome::Failed(error) => {
-                *self.error.borrow_mut() =
-                    Some(error.with_stack_hint(self.region.bounds.top - self.region.bounds.base));
-                RUN_ERROR
+                *self.error.borrow_mut() = Some(error);
+                RunStatus::Error
             }
             JobOutcome::Refused(refusal) => {
-                *self.error.borrow_mut() = Some(JobError::error(refusal.to_js_string()));
+                *self.error.borrow_mut() = Some(JobError::message(
+                    SHACL_REFUSAL_CODE,
+                    refusal.to_js_string(),
+                ));
                 *self.refusal.borrow_mut() = Some(refusal);
-                RUN_ERROR
+                RunStatus::Error
             }
             JobOutcome::Updated(frozen) => {
                 *self.pending_commit.borrow_mut() = Some(frozen);
-                RUN_OUTCOME
+                RunStatus::Outcome
             }
             JobOutcome::UpdateGoverned { outcome, frozen } => {
                 *self.pending_commit.borrow_mut() = frozen;
@@ -2586,11 +2734,11 @@ impl JobInner {
                     outcome,
                     frozen: None,
                 });
-                RUN_OUTCOME
+                RunStatus::Outcome
             }
             other => {
                 *self.outcome.borrow_mut() = Some(other);
-                RUN_OUTCOME
+                RunStatus::Outcome
             }
         };
         self.state.set(JobState::Done);
@@ -2613,9 +2761,12 @@ impl JobInner {
                 .collect();
             (resolver, endpoints)
         });
-        let host = self.service_handler.then(|| {
+        let host = self.service_handler.map(|handler| {
             let transport = JspiTransport {
                 watch: Arc::clone(&self.watch),
+                catalog: self.catalog.clone(),
+                handler,
+                memo: Mutex::new(BTreeMap::new()),
             };
             let source = match &self.catalog {
                 Some(catalog) => {
@@ -2635,54 +2786,59 @@ impl JobInner {
         let load = self.load_handler.then(|| {
             Arc::new(JspiGraphResolver {
                 watch: Arc::clone(&self.watch),
+                catalog: self.catalog.clone(),
             }) as Arc<dyn GraphResolver + Send + Sync>
         });
         let stop: Arc<dyn StopSignal> = Arc::clone(&self.watch) as Arc<dyn StopSignal>;
         let run = JobRun {
-            stop,
+            stop: Some(stop),
             remote,
             load,
-            counters: &self.watch.slots.counters,
+            counters: Some(&self.watch.slots.counters),
         };
         operation(&run)
     }
 
-    fn require_done(&self, what: &str) -> Result<(), String> {
+    fn require_done(&self, what: &str) -> Result<(), JobError> {
         match self.state.get() {
             JobState::Done => Ok(()),
-            _ => Err(format!(
-                "{what} is not available until the asynchronous job has finished"
+            _ => Err(JobError::message(
+                USAGE_CODE,
+                format!("{what} is not available until the asynchronous job has finished"),
             )),
         }
     }
 
-    fn require_kind(&self, what: &str, kinds: &[AsyncOperationKind]) -> Result<(), String> {
+    fn require_kind(&self, what: &str, kinds: &[AsyncOperationKind]) -> Result<(), JobError> {
         if kinds.contains(&self.kind) {
             Ok(())
         } else {
-            Err(format!(
-                "{what} is not available on a {} job",
-                self.kind.name()
+            Err(JobError::message(
+                USAGE_CODE,
+                format!("{what} is not available on a {} job", self.kind.name()),
             ))
         }
     }
 
     /// The stored outcome, for a `take*` that expects this job's kind.
-    fn take_outcome(&self, what: &str, kinds: &[AsyncOperationKind]) -> Result<JobOutcome, String> {
+    fn take_outcome(
+        &self,
+        what: &str,
+        kinds: &[AsyncOperationKind],
+    ) -> Result<JobOutcome, JobError> {
         self.require_kind(what, kinds)?;
         self.require_done(what)?;
         if let Some(error) = self.error.borrow().as_ref() {
-            return Err(error.message.clone());
+            return Err(error.clone());
         }
-        self.outcome
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| format!("{what}: the outcome was already taken"))
+        self.outcome.borrow_mut().take().ok_or_else(|| {
+            JobError::message(USAGE_CODE, format!("{what}: the outcome was already taken"))
+        })
     }
 
     /// Commit an applied update into `dataset`, refusing any commit that could
     /// overwrite a mutation the update never saw.
-    fn commit_into(&self, dataset: &mut Dataset) -> Result<(), String> {
+    fn commit_into(&self, dataset: &mut Dataset) -> Result<(), JobError> {
         self.require_kind(
             "commitUpdate",
             &[
@@ -2692,28 +2848,36 @@ impl JobInner {
         )?;
         self.require_done("commitUpdate")?;
         if let Some(error) = self.error.borrow().as_ref() {
-            return Err(error.message.clone());
+            return Err(error.clone());
         }
         if self.pending_commit.borrow().is_none() {
-            return Err(
-                "nothing to commit: the update was not applied, or was already committed"
-                    .to_owned(),
-            );
-        }
-        if dataset.identity() != self.dataset_id {
-            return Err(format!(
-                "commit targets a different dataset (the update read dataset {}, this is \
-                 dataset {}); the update was not applied",
-                self.dataset_id,
-                dataset.identity()
+            return Err(JobError::message(
+                USAGE_CODE,
+                "nothing to commit: the update was not applied, or was already committed",
             ));
         }
+        if dataset.identity() != self.dataset_id {
+            return Err(JobError::message(
+                USAGE_CODE,
+                format!(
+                    "commit targets a different dataset (the update read dataset {}, this is \
+                 dataset {}); the update was not applied",
+                    self.dataset_id,
+                    dataset.identity()
+                ),
+            ));
+        }
+        // A mutation the update never saw is the conflict an update in flight is refused
+        // for, found at the commit rather than at the start.
         if dataset.current_generation() != self.dataset_generation {
-            return Err(format!(
-                "dataset mutated while an asynchronous update was in flight (generation {} → \
+            return Err(JobError::message(
+                FailureCode::UpdateInFlight.code(),
+                format!(
+                    "dataset mutated while an asynchronous update was in flight (generation {} → \
                  {}); the update was not applied",
-                self.dataset_generation,
-                dataset.current_generation()
+                    self.dataset_generation,
+                    dataset.current_generation()
+                ),
             ));
         }
         if let Some(frozen) = self.pending_commit.borrow_mut().take() {
@@ -2786,8 +2950,9 @@ impl fmt::Debug for AsyncJob {
     }
 }
 
-fn js_error(message: &str) -> JsError {
-    JsError::new(message)
+/// A usage refusal of the job handle, thrown as the error carrying its code.
+fn usage_error(message: &str) -> JsValue {
+    coded_error(message, USAGE_CODE)
 }
 
 #[wasm_bindgen]
@@ -2828,15 +2993,39 @@ impl AsyncJob {
         self.inner.state.get() == JobState::Done
     }
 
-    /// How the job failed — `"error"`, `"cancelled"`, `"deadline"` or `"fault"` — or
-    /// `undefined` when it did not (or has not finished).
+    /// How the job failed — `"error"`, `"cancelled"`, `"deadline"`, `"fault"` or
+    /// `"not-acceptable"` — or `undefined` when it did not (or has not finished).
     #[wasm_bindgen(getter, js_name = errorKind)]
     pub fn error_kind(&self) -> Option<String> {
         self.inner
             .error
             .borrow()
             .as_ref()
-            .map(|error| error.kind.name().to_owned())
+            .map(|error| error.kind().name().to_owned())
+    }
+
+    /// The stable code the job's failure is reported under — an engine diagnostic's own
+    /// code, or the code of a stop, a fault or a refusal — or `undefined` when it did not
+    /// fail (or has not finished).
+    #[wasm_bindgen(getter, js_name = errorCode)]
+    pub fn error_code(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .map(|error| error.code().to_owned())
+    }
+
+    /// The job's failure in words, or `undefined` when it did not fail (or has not
+    /// finished).
+    #[wasm_bindgen(getter, js_name = errorMessage)]
+    pub fn error_message(&self) -> Option<String> {
+        let lane = self.inner.lane();
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .map(|error| error.rendered(lane))
     }
 
     /// The effect the job is suspended on, once; `undefined` when there is none.
@@ -2845,38 +3034,26 @@ impl AsyncJob {
         self.inner.watch.slots.take_effect()
     }
 
-    /// Answer `SERVICE` effect `seq` with SPARQL Results JSON bytes.
-    #[wasm_bindgen(js_name = deliverBindings)]
-    pub fn deliver_bindings(&self, seq: u32, bytes: Vec<u8>) -> u32 {
-        self.inner
-            .watch
-            .slots
-            .deliver(seq, Delivered::Bindings(bytes))
-    }
-
-    /// Fail effect `seq`: `kind` is `"transport"` (unreachable, or unreadable) or
+    /// Fail `LOAD` effect `seq`: `kind` is `"transport"` (unreachable, or unreadable) or
     /// `"denied"` (the host's policy refused it). Any other kind is a fault.
     #[wasm_bindgen(js_name = deliverFailure)]
-    pub fn deliver_failure(&self, seq: u32, kind: &str, message: String) -> u32 {
+    pub fn deliver_failure(&self, seq: u32, kind: &str, message: String) -> DeliveryStatus {
         let slots = &self.inner.watch.slots;
         match FailureKind::parse(kind) {
             Some(kind) => slots.deliver(seq, Delivered::Failure { kind, message }),
             None => {
                 if slots.finished.load(Ordering::Relaxed) {
-                    return DELIVERY_FINISHED;
+                    return DeliveryStatus::Finished;
                 }
-                slots.latch_fault(format!(
-                    "unknown failure kind {kind:?} for effect {seq} (expected \"transport\" or \
-                     \"denied\")"
-                ));
-                DELIVERY_FAULT
+                slots.latch_fault(unknown_failure_kind(kind, &format!("effect {seq}")));
+                DeliveryStatus::Fault
             }
         }
     }
 
     /// Answer `LOAD` effect `seq` with a document. It is parsed here, by media type (or
     /// any format name `Dataset.parse` accepts); a document that cannot be parsed is the
-    /// `LOAD`'s failure, never a fault.
+    /// `LOAD`'s decode failure, never a fault.
     #[wasm_bindgen(js_name = deliverGraph)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn deliver_graph(
@@ -2885,11 +3062,11 @@ impl AsyncJob {
         bytes: &[u8],
         media_type: &str,
         base: Option<String>,
-    ) -> u32 {
+    ) -> DeliveryStatus {
         let delivered = match parse_document(bytes, media_type, base.as_deref()) {
             Ok(dataset) => Delivered::Graph(dataset),
             Err(message) => Delivered::Failure {
-                kind: FailureKind::Transport,
+                kind: FailureKind::Decode,
                 message,
             },
         };
@@ -2898,62 +3075,182 @@ impl AsyncJob {
 
     /// Answer `LOAD` effect `seq` with a snapshot of an existing dataset.
     #[wasm_bindgen(js_name = deliverGraphDataset)]
-    pub fn deliver_graph_dataset(&self, seq: u32, dataset: &Dataset) -> u32 {
+    pub fn deliver_graph_dataset(&self, seq: u32, dataset: &Dataset) -> DeliveryStatus {
         let delivered = match dataset.view().freeze() {
             Ok(frozen) => Delivered::Graph(frozen),
             Err(diagnostic) => Delivered::Failure {
-                kind: FailureKind::Transport,
+                kind: FailureKind::Decode,
                 message: diagnostic.to_string(),
             },
         };
         self.inner.watch.slots.deliver(seq, delivered)
     }
 
+    /// Answer `LOAD` effect `seq` with a redirect to `location`, the response's
+    /// `Location` as sent. The job resolves it against the effect's IRI, authorizes the
+    /// target against its catalog and fetches it as a fresh effect, up to its redirect
+    /// limit.
+    #[wasm_bindgen(js_name = deliverRedirect)]
+    pub fn deliver_redirect(&self, seq: u32, location: String) -> DeliveryStatus {
+        self.inner
+            .watch
+            .slots
+            .deliver(seq, Delivered::Redirect(location))
+    }
+
     /// Record that the host abandoned effect `seq` on the job's stop signal. When that
-    /// signal is not already latched (the host's own abort, rather than its deadline
-    /// timer, which latches through [`Self::trip_deadline`] first) this cancels the job.
+    /// signal is not already latched, this cancels the job. A job waiting on a shared
+    /// exchange leaves it; see [`Self::exchange_is_open`].
     #[wasm_bindgen(js_name = deliverGoverned)]
-    pub fn deliver_governed(&self, seq: u32) -> u32 {
+    pub fn deliver_governed(&self, seq: u32) -> DeliveryStatus {
         let watch = &self.inner.watch;
         if watch.slots.finished.load(Ordering::Relaxed) {
-            return DELIVERY_FINISHED;
+            return DeliveryStatus::Finished;
         }
         if watch.peek().is_none() {
             watch.cancel.cancel();
         }
+        watch.slots.leave_exchange();
         watch.slots.deliver(seq, Delivered::Governed)
+    }
+
+    /// Effect `seq`'s abandonment instant ([`AsyncEffect::abandon_after_ms`]) has
+    /// passed with no answer. When it was the job's deadline, the deadline is latched and
+    /// the effect abandoned (`Abandoned`); when it was the request's own timeout, the
+    /// effect fails as a transport failure the `SILENT` forms absorb (`Answered`). A job
+    /// waiting on a shared exchange leaves it. An effect already answered is left as it
+    /// is (`Answered`), and a fault is reported as one (`Fault`).
+    #[wasm_bindgen(js_name = expireEffect)]
+    pub fn expire_effect(&self, seq: u32) -> SuspendStatus {
+        let slots = &self.inner.watch.slots;
+        if slots.fault().is_some() {
+            return SuspendStatus::Fault;
+        }
+        let Some(outstanding) = slots.outstanding(seq) else {
+            if slots.has_delivery(seq) {
+                return SuspendStatus::Answered;
+            }
+            slots.latch_fault(format!(
+                "effect {seq} expired, but it is not the outstanding effect"
+            ));
+            return SuspendStatus::Fault;
+        };
+        slots.leave_exchange();
+        match outstanding.abandon {
+            Some(Abandon::Deadline) => {
+                slots.deadline_tripped.store(true, Ordering::Relaxed);
+                match slots.deliver(seq, Delivered::Governed) {
+                    DeliveryStatus::Accepted => SuspendStatus::Abandoned,
+                    DeliveryStatus::Stale | DeliveryStatus::Fault | DeliveryStatus::Finished => {
+                        SuspendStatus::Fault
+                    }
+                }
+            }
+            Some(Abandon::Timeout(ms)) => {
+                let failure = Delivered::Failure {
+                    kind: FailureKind::Transport,
+                    message: format!("no answer within {ms} ms"),
+                };
+                match slots.deliver(seq, failure) {
+                    DeliveryStatus::Accepted => SuspendStatus::Answered,
+                    DeliveryStatus::Stale | DeliveryStatus::Fault | DeliveryStatus::Finished => {
+                        SuspendStatus::Fault
+                    }
+                }
+            }
+            None => {
+                slots.latch_fault(format!(
+                    "effect {seq} expired, but a {:?} effect has no abandonment instant",
+                    outstanding.kind
+                ));
+                SuspendStatus::Fault
+            }
+        }
+    }
+
+    /// The status to resume effect `seq` with once the shared exchange it waited on has
+    /// settled: `Answered` when the exchange's answer was delivered to it, `Fault` when a
+    /// fault is latched (a settled exchange that delivered nothing to a job still waiting
+    /// on it latches one).
+    #[wasm_bindgen(js_name = settledStatus)]
+    pub fn settled_status(&self, seq: u32) -> SuspendStatus {
+        let slots = &self.inner.watch.slots;
+        if slots.fault().is_some() {
+            return SuspendStatus::Fault;
+        }
+        if slots.has_delivery(seq) {
+            return SuspendStatus::Answered;
+        }
+        slots.latch_fault(format!(
+            "the exchange effect {seq} waited on settled without an answer for it"
+        ));
+        SuspendStatus::Fault
+    }
+
+    /// Answer every job waiting on shared exchange `exchange` with SPARQL Results JSON
+    /// bytes, and close the exchange. `Finished` when no such exchange is open — its
+    /// last waiter left, or it was already answered.
+    #[wasm_bindgen(js_name = deliverExchangeBindings)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn deliver_exchange_bindings(exchange: f64, bytes: Vec<u8>) -> DeliveryStatus {
+        let Some(id) = exchange_id(exchange) else {
+            return DeliveryStatus::Finished;
+        };
+        settle_exchange(id, &Delivered::Bindings(Arc::from(bytes)))
+    }
+
+    /// Fail every job waiting on shared exchange `exchange`: `kind` is `"transport"` or
+    /// `"denied"`; any other kind latches a fault on every waiting job. Closes the
+    /// exchange.
+    #[wasm_bindgen(js_name = deliverExchangeFailure)]
+    pub fn deliver_exchange_failure(exchange: f64, kind: &str, message: String) -> DeliveryStatus {
+        let Some(id) = exchange_id(exchange) else {
+            return DeliveryStatus::Finished;
+        };
+        match FailureKind::parse(kind) {
+            Some(kind) => settle_exchange(id, &Delivered::Failure { kind, message }),
+            None => fault_open_exchange(id, |seq| {
+                unknown_failure_kind(kind, &format!("effect {seq}"))
+            }),
+        }
+    }
+
+    /// Latch `message` as the fault of every job waiting on shared exchange `exchange` —
+    /// the host's handler failed — and close the exchange.
+    #[wasm_bindgen(js_name = faultExchange)]
+    pub fn fault_exchange(exchange: f64, message: &str) -> DeliveryStatus {
+        let Some(id) = exchange_id(exchange) else {
+            return DeliveryStatus::Finished;
+        };
+        fault_open_exchange(id, |_| message.to_owned())
+    }
+
+    /// Whether shared exchange `exchange` is still open: some job waits on its answer.
+    /// Once it closes without an answer, the host aborts its call.
+    #[wasm_bindgen(js_name = exchangeIsOpen)]
+    pub fn exchange_is_open(exchange: f64) -> bool {
+        exchange_id(exchange)
+            .is_some_and(|id| EXCHANGES.with(|exchanges| exchanges.borrow().contains_key(&id)))
     }
 
     /// Latch `message` as the job's fault: a host bug the job cannot continue past. The
     /// job's signal fires, it winds down, and the fault becomes its error.
-    pub fn fault(&self, message: String) -> u32 {
+    pub fn fault(&self, message: String) -> DeliveryStatus {
         let slots = &self.inner.watch.slots;
         if slots.finished.load(Ordering::Relaxed) {
-            return DELIVERY_FINISHED;
+            return DeliveryStatus::Finished;
         }
         slots.latch_fault(message);
-        DELIVERY_ACCEPTED
-    }
-
-    /// Latch the job's deadline as expired — called by the host's deadline timer before
-    /// it aborts the resolver's signal, so the trip is reported as a deadline.
-    #[wasm_bindgen(js_name = tripDeadline)]
-    pub fn trip_deadline(&self) -> u32 {
-        let slots = &self.inner.watch.slots;
-        if slots.finished.load(Ordering::Relaxed) {
-            return DELIVERY_FINISHED;
-        }
-        slots.deadline_tripped.store(true, Ordering::Relaxed);
-        DELIVERY_ACCEPTED
+        DeliveryStatus::Accepted
     }
 
     /// Cancel the job. It observes the cancellation at its next poll, yield or effect.
-    pub fn cancel(&self) -> u32 {
+    pub fn cancel(&self) -> DeliveryStatus {
         if self.inner.watch.slots.finished.load(Ordering::Relaxed) {
-            return DELIVERY_FINISHED;
+            return DeliveryStatus::Finished;
         }
         self.inner.watch.cancel.cancel();
-        DELIVERY_ACCEPTED
+        DeliveryStatus::Accepted
     }
 
     /// A `query` job's typed result. `expect` — `"select"`, `"ask"`, `"construct"`,
@@ -2961,25 +3258,25 @@ impl AsyncJob {
     /// twin's message; `undefined` accepts any.
     #[wasm_bindgen(js_name = takeQueryResult)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn take_query_result(&self, expect: Option<String>) -> Result<QueryResult, JsError> {
+    pub fn take_query_result(&self, expect: Option<String>) -> Result<QueryResult, JsValue> {
         let expected = match expect.as_deref() {
             None => None,
             Some("select") => Some("SELECT solutions"),
             Some("ask") => Some("ASK boolean"),
             Some("construct" | "describe" | "graph") => Some("CONSTRUCT/DESCRIBE graph"),
             Some(other) => {
-                return Err(js_error(&format!(
+                return Err(usage_error(&format!(
                     "unknown expected result kind {other:?} (expected select, ask, construct, \
                      describe or graph)"
                 )));
             }
         };
-        let outcome = self
-            .inner
-            .take_outcome("takeQueryResult", &[AsyncOperationKind::Query])
-            .map_err(|message| js_error(&message))?;
-        let JobOutcome::Query(result) = outcome else {
-            return Err(js_error("takeQueryResult: the job holds no query result"));
+        let JobOutcome::Query(result) =
+            self.take("takeQueryResult", &[AsyncOperationKind::Query])?
+        else {
+            return Err(usage_error(
+                "takeQueryResult: the job holds no query result",
+            ));
         };
         if let Some(expected) = expected {
             let matches = matches!(
@@ -2989,44 +3286,36 @@ impl AsyncJob {
                     | ("CONSTRUCT/DESCRIBE graph", SparqlResult::Graph(_))
             );
             if !matches {
-                return Err(kind_mismatch(expected, &result));
+                return Err(kind_mismatch(expected, &result).into());
             }
         }
-        query_result_from_sparql(result)
+        Ok(query_result_from_sparql(result)?)
     }
 
     /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
     /// SARIF log or entailed N-Triples (UTF-8 text).
     #[wasm_bindgen(js_name = takeRawBytes)]
-    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsError> {
-        match self
-            .inner
-            .take_outcome(
-                "takeRawBytes",
-                &[
-                    AsyncOperationKind::Raw,
-                    AsyncOperationKind::RawWithContext,
-                    AsyncOperationKind::Explain,
-                    AsyncOperationKind::Shacl,
-                ],
-            )
-            .map_err(|message| js_error(&message))?
-        {
-            JobOutcome::Raw(bytes) => Ok(bytes),
-            _ => Err(js_error("takeRawBytes: the job holds no raw result")),
+    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        match self.take(
+            "takeRawBytes",
+            &[
+                AsyncOperationKind::Raw,
+                AsyncOperationKind::RawWithContext,
+                AsyncOperationKind::Explain,
+                AsyncOperationKind::Shacl,
+            ],
+        )? {
+            JobOutcome::Raw(text) => Ok(text.into_bytes()),
+            _ => Err(usage_error("takeRawBytes: the job holds no raw result")),
         }
     }
 
     /// A governed query job's outcome.
     #[wasm_bindgen(js_name = takeQueryOutcome)]
-    pub fn take_query_outcome(&self) -> Result<QueryOutcome, JsError> {
-        match self
-            .inner
-            .take_outcome("takeQueryOutcome", &[AsyncOperationKind::Governed])
-            .map_err(|message| js_error(&message))?
-        {
-            JobOutcome::Governed(outcome) => query_outcome_from_governed(*outcome),
-            _ => Err(js_error(
+    pub fn take_query_outcome(&self) -> Result<QueryOutcome, JsValue> {
+        match self.take("takeQueryOutcome", &[AsyncOperationKind::Governed])? {
+            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            _ => Err(usage_error(
                 "takeQueryOutcome: the job holds no governed outcome",
             )),
         }
@@ -3034,14 +3323,10 @@ impl AsyncJob {
 
     /// A negotiated query job's outcome: the serialized complete answer, or the trip.
     #[wasm_bindgen(js_name = takeNegotiatedOutcome)]
-    pub fn take_negotiated_outcome(&self) -> Result<NegotiatedOutcome, JsError> {
-        match self
-            .inner
-            .take_outcome("takeNegotiatedOutcome", &[AsyncOperationKind::Negotiated])
-            .map_err(|message| js_error(&message))?
-        {
-            JobOutcome::Negotiated(value) => negotiated_outcome_from_value(*value),
-            _ => Err(js_error(
+    pub fn take_negotiated_outcome(&self) -> Result<NegotiatedOutcome, JsValue> {
+        match self.take("takeNegotiatedOutcome", &[AsyncOperationKind::Negotiated])? {
+            JobOutcome::Negotiated(value) => Ok(negotiated_outcome_from_value(*value)?),
+            _ => Err(usage_error(
                 "takeNegotiatedOutcome: the job holds no negotiated outcome",
             )),
         }
@@ -3049,17 +3334,13 @@ impl AsyncJob {
 
     /// A governed entailment job's outcome.
     #[wasm_bindgen(js_name = takeEntailmentOutcome)]
-    pub fn take_entailment_outcome(&self) -> Result<EntailmentQueryOutcome, JsError> {
-        match self
-            .inner
-            .take_outcome(
-                "takeEntailmentOutcome",
-                &[AsyncOperationKind::EntailmentGoverned],
-            )
-            .map_err(|message| js_error(&message))?
-        {
-            JobOutcome::Entailment(outcome) => entailment_query_outcome_from_native(*outcome),
-            _ => Err(js_error(
+    pub fn take_entailment_outcome(&self) -> Result<EntailmentQueryOutcome, JsValue> {
+        match self.take(
+            "takeEntailmentOutcome",
+            &[AsyncOperationKind::EntailmentGoverned],
+        )? {
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            _ => Err(usage_error(
                 "takeEntailmentOutcome: the job holds no entailment outcome",
             )),
         }
@@ -3068,16 +3349,12 @@ impl AsyncJob {
     /// A governed update job's outcome. Whether it applied is on the outcome; applying it
     /// to the dataset is [`Self::commit_update`].
     #[wasm_bindgen(js_name = takeUpdateOutcome)]
-    pub fn take_update_outcome(&self) -> Result<UpdateOutcome, JsError> {
-        match self
-            .inner
-            .take_outcome("takeUpdateOutcome", &[AsyncOperationKind::UpdateGoverned])
-            .map_err(|message| js_error(&message))?
-        {
+    pub fn take_update_outcome(&self) -> Result<UpdateOutcome, JsValue> {
+        match self.take("takeUpdateOutcome", &[AsyncOperationKind::UpdateGoverned])? {
             JobOutcome::UpdateGoverned { outcome, .. } => {
                 Ok(update_outcome_from_governed(&outcome))
             }
-            _ => Err(js_error(
+            _ => Err(usage_error(
                 "takeUpdateOutcome: the job holds no update outcome",
             )),
         }
@@ -3086,14 +3363,10 @@ impl AsyncJob {
     /// A SHACL change-validation job's outcome: the SARIF log and the scope it
     /// describes, exactly as `shaclValidateChangesToSarif` returns them.
     #[wasm_bindgen(js_name = takeShaclChangeValidation)]
-    pub fn take_shacl_change_validation(&self) -> Result<ShaclChangeValidation, JsError> {
-        match self
-            .inner
-            .take_outcome("takeShaclChangeValidation", &[AsyncOperationKind::Shacl])
-            .map_err(|message| js_error(&message))?
-        {
+    pub fn take_shacl_change_validation(&self) -> Result<ShaclChangeValidation, JsValue> {
+        match self.take("takeShaclChangeValidation", &[AsyncOperationKind::Shacl])? {
             JobOutcome::ShaclChange(validation) => Ok(validation),
-            _ => Err(js_error(
+            _ => Err(usage_error(
                 "takeShaclChangeValidation: the job holds no change validation",
             )),
         }
@@ -3104,16 +3377,6 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeShaclRefusal)]
     pub fn take_shacl_refusal(&self) -> Option<ShaclProductRefusal> {
         self.inner.refusal.borrow_mut().take()
-    }
-
-    /// The job's error message, once; `undefined` when it has none.
-    #[wasm_bindgen(js_name = takeError)]
-    pub fn take_error(&self) -> Option<String> {
-        self.inner
-            .error
-            .borrow_mut()
-            .take()
-            .map(|error| error.message)
     }
 
     /// A snapshot of the job's evidence. Callable at any time, as often as wanted.
@@ -3130,22 +3393,45 @@ impl AsyncJob {
     /// untouched, when `dataset` is not the one the update read or has been mutated since
     /// it started.
     #[wasm_bindgen(js_name = commitUpdate)]
-    pub fn commit_update(&self, dataset: &mut Dataset) -> Result<(), JsError> {
+    pub fn commit_update(&self, dataset: &mut Dataset) -> Result<(), JsValue> {
         self.inner
             .commit_into(dataset)
-            .map_err(|message| js_error(&message))
+            .map_err(|error| error.to_js(self.inner.lane()))
     }
 
-    /// Remove the job from the registry once it has finished: returns 0, or 1 (and does
-    /// nothing) while it is still running, because the run is standing on the job's
-    /// region.
+    /// Remove the job from the registry once it has finished, and release an update's
+    /// claim on its dataset: returns 0, or 1 (and does nothing) while it is still
+    /// running, because the run is standing on the job's region.
     pub fn finish(&self) -> u32 {
         if self.inner.state.get() == JobState::Running {
             return 1;
         }
+        drop(self.inner.update_claim.borrow_mut().take());
         unregister_job(self.inner.id);
         0
     }
+}
+
+impl AsyncJob {
+    /// The stored outcome, for a `take*` that expects this job's kind, or the job's own
+    /// failure as the error carrying its code.
+    fn take(&self, what: &str, kinds: &[AsyncOperationKind]) -> Result<JobOutcome, JsValue> {
+        self.inner
+            .take_outcome(what, kinds)
+            .map_err(|error| error.to_js(self.inner.lane()))
+    }
+}
+
+/// An exchange id as JavaScript passes it back: the `number` [`AsyncEffect::exchange_id`]
+/// gave it. `None` for any other number, which names no exchange.
+fn exchange_id(exchange: f64) -> Option<u64> {
+    (exchange.is_finite() && exchange.fract() == 0.0 && (1.0..=2f64.powi(53)).contains(&exchange))
+        .then_some(exchange as u64)
+}
+
+/// The fault for a delivered failure kind the protocol does not define.
+fn unknown_failure_kind(kind: &str, target: &str) -> String {
+    format!("unknown failure kind {kind:?} for {target} (expected \"transport\" or \"denied\")")
 }
 
 /// Parse a `LOAD` document delivered by the host.
@@ -3162,46 +3448,261 @@ fn parse_document(
 // Options
 // ---------------------------------------------------------------------------
 
-/// The configuration of one asynchronous job, built by the package root through its
-/// `set…` methods and validated when the job begins.
+/// How an option's value is read from the options object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OptionShape {
+    /// A string.
+    Text,
+    /// A governor ceiling: an integer as a `number`, a `bigint` or an integral string.
+    Ceiling,
+    /// A count: a `number`, whose range is checked when the job begins.
+    Count,
+    /// `{ prefix, iri }`, two strings.
+    Provenance,
+    /// A `ServiceCatalog`.
+    Catalog,
+    /// An object mapping endpoint IRIs to `Dataset`s.
+    LocalServices,
+}
+
+/// Every option key an asynchronous operation reads, and its shape.
+const OPTION_SHAPES: [(&str, OptionShape); 17] = [
+    ("base", OptionShape::Text),
+    ("format", OptionShape::Text),
+    ("provenanceNamespace", OptionShape::Provenance),
+    ("optionsJson", OptionShape::Text),
+    ("yamlSchemaUrl", OptionShape::Text),
+    ("aggregateNamespace", OptionShape::Text),
+    ("program", OptionShape::Text),
+    ("accept", OptionShape::Text),
+    ("fuel", OptionShape::Ceiling),
+    ("deadlineMs", OptionShape::Ceiling),
+    ("maxAnswers", OptionShape::Ceiling),
+    ("maxIntermediateCells", OptionShape::Ceiling),
+    ("maxScratchBytes", OptionShape::Ceiling),
+    ("maxRemoteRequests", OptionShape::Ceiling),
+    ("yieldEveryPolls", OptionShape::Count),
+    ("stackBytes", OptionShape::Count),
+    ("catalog", OptionShape::Catalog),
+];
+
+/// The shape of option `key`, or `None` for a key no operation reads.
+fn option_shape(key: &str) -> Option<OptionShape> {
+    if key == "localServices" {
+        return Some(OptionShape::LocalServices);
+    }
+    OPTION_SHAPES
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|&(_, shape)| shape)
+}
+
+/// The keys every asynchronous operation accepts beside its own: the job's host options.
+const HOST_KEYS: [&str; 4] = ["yieldEveryPolls", "stackBytes", "catalog", "localServices"];
+
+/// The keys the package root reads itself and never passes on: the host's handlers and
+/// its signal. Named in a refusal's list of accepted keys.
+const PACKAGE_KEYS: [&str; 3] = ["resolveService", "resolveLoad", "signal"];
+
+/// The governor ceilings, in the order the synchronous governed entries name them.
+const CEILING_KEYS: [&str; 6] = [
+    "fuel",
+    "deadlineMs",
+    "maxAnswers",
+    "maxIntermediateCells",
+    "maxScratchBytes",
+    "maxRemoteRequests",
+];
+
+/// The keys every governed operation accepts.
+const GOVERNED_KEYS: [&str; 8] = [
+    "base",
+    "aggregateNamespace",
+    "fuel",
+    "deadlineMs",
+    "maxAnswers",
+    "maxIntermediateCells",
+    "maxScratchBytes",
+    "maxRemoteRequests",
+];
+
+/// One operation kind's options: the keys it accepts beside [`HOST_KEYS`], whether it
+/// enforces governors, and the positional argument its twin takes, if any. The one table
+/// an options object is validated against.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OperationSpec {
+    /// The operation's name, as refusals spell it.
+    pub(crate) name: &'static str,
+    /// The operation's own keys.
+    pub(crate) keys: &'static [&'static str],
+    /// Whether the operation enforces the governor ceilings.
+    pub(crate) governed: bool,
+    /// The name of the positional argument the twin passes (`regime`, `format`).
+    pub(crate) argument: Option<&'static str>,
+}
+
+impl AsyncOperationKind {
+    /// This kind's options.
+    pub(crate) const fn spec(self) -> OperationSpec {
+        const fn spec(
+            name: &'static str,
+            keys: &'static [&'static str],
+            governed: bool,
+            argument: Option<&'static str>,
+        ) -> OperationSpec {
+            OperationSpec {
+                name,
+                keys,
+                governed,
+                argument,
+            }
+        }
+        match self {
+            Self::Query => spec("query", &["base"], false, None),
+            Self::Raw => spec(
+                "raw",
+                &["base", "format", "provenanceNamespace", "optionsJson"],
+                false,
+                None,
+            ),
+            Self::RawWithContext => spec(
+                "rawWithContext",
+                &["base", "yamlSchemaUrl"],
+                false,
+                Some("format"),
+            ),
+            Self::Governed => spec("governed", &GOVERNED_KEYS, true, None),
+            Self::EntailmentGoverned => spec(
+                "entailmentGoverned",
+                &[
+                    "base",
+                    "aggregateNamespace",
+                    "fuel",
+                    "deadlineMs",
+                    "maxAnswers",
+                    "maxIntermediateCells",
+                    "maxScratchBytes",
+                    "maxRemoteRequests",
+                    "program",
+                ],
+                true,
+                Some("regime"),
+            ),
+            Self::Update => spec("update", &["base"], false, None),
+            // `maxAnswers` is accepted so it is refused by name when the job begins,
+            // exactly as the synchronous twin refuses it.
+            Self::UpdateGoverned => spec("updateGoverned", &GOVERNED_KEYS, true, None),
+            Self::Negotiated => spec(
+                "negotiated",
+                &[
+                    "base",
+                    "aggregateNamespace",
+                    "fuel",
+                    "deadlineMs",
+                    "maxAnswers",
+                    "maxIntermediateCells",
+                    "maxScratchBytes",
+                    "maxRemoteRequests",
+                    "accept",
+                ],
+                true,
+                None,
+            ),
+            // EXPLAIN measures a run that is metered and never bounded: no ceiling.
+            Self::Explain => spec("explain", &["base"], false, None),
+            // The SHACL twins take their synchronous twin's arguments positionally, and
+            // no ceiling: only the host options.
+            Self::Shacl => spec("shacl", &[], false, None),
+        }
+    }
+
+    fn accepts(self, key: &str) -> bool {
+        self.spec().keys.contains(&key) || HOST_KEYS.contains(&key)
+    }
+}
+
+/// One option as it was read off the options object.
+#[derive(Debug, Clone)]
+pub(crate) enum OptionValue {
+    Text(String),
+    Ceiling(i64),
+    Count(f64),
+    Provenance {
+        prefix: String,
+        iri: String,
+    },
+    Catalog(NativeServiceCatalog),
+    LocalServices(Vec<(String, Arc<RdfDataset>)>),
+    /// A key no operation reads; refused by name.
+    Unknown,
+}
+
+/// Why an options object was refused: a key or value of the wrong type is a `TypeError`,
+/// every other refusal an `Error`; both carry [`OPTIONS_CODE`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OptionsError {
+    message: String,
+    type_error: bool,
+}
+
+impl OptionsError {
+    fn type_error(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            type_error: true,
+        }
+    }
+
+    fn refused(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            type_error: false,
+        }
+    }
+
+    fn to_js(&self) -> JsValue {
+        if self.type_error {
+            coded_type_error(&self.message, OPTIONS_CODE)
+        } else {
+            coded_error(&self.message, OPTIONS_CODE)
+        }
+    }
+}
+
+impl fmt::Display for OptionsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// The configuration of one asynchronous job: an options object read and validated
+/// against its operation's [`OperationSpec`] ([`Self::from_js`]).
 ///
-/// Every setter is an explicit method rather than a property, and none of them
-/// validates: `beginAsync` does, all at once, so a refusal names the operation it was
-/// refused for. The ceilings take `bigint` exactly as the synchronous governed entries
-/// do; `yieldEveryPolls` and `stackBytes` take a `number` and are refused unless they are
+/// Every option a kind would ignore is refused by name rather than dropped: an option a
+/// caller believes applies and that nothing enforces is the silent hole this surface
+/// exists to close. The ceilings are 64-bit integers exactly as the synchronous governed
+/// entries take them; `yieldEveryPolls` and `stackBytes` are refused unless they are
 /// integers in range, so a negative never wraps into a huge value.
 #[wasm_bindgen]
 #[derive(Debug, Default, Clone)]
 pub struct AsyncJobOptions {
+    kind: Option<AsyncOperationKind>,
     base: Option<String>,
     format: Option<String>,
     options_json: Option<String>,
-    provenance_prefix: Option<String>,
-    provenance_iri: Option<String>,
+    yaml_schema_url: Option<String>,
+    provenance: Option<(String, String)>,
     aggregate_namespace: Option<String>,
     regime: Option<String>,
     program: Option<String>,
     accept: Option<String>,
-    fuel: Option<i64>,
-    deadline_ms: Option<i64>,
-    max_answers: Option<i64>,
-    max_intermediate_cells: Option<i64>,
-    max_scratch_bytes: Option<i64>,
-    max_remote_requests: Option<i64>,
-    yield_every_polls: Option<f64>,
-    stack_bytes: Option<f64>,
-    catalog: Option<NativeServiceCatalog>,
-    local_services: Vec<(String, Arc<RdfDataset>)>,
-    service_handler: bool,
-    load_handler: bool,
-}
-
-/// An [`AsyncJobOptions`] that passed validation for one operation kind.
-#[derive(Debug, Clone, Copy)]
-struct ValidatedOptions {
     ceilings: GovernorArgs,
     quantum: u32,
     stack_bytes: u32,
+    catalog: Option<NativeServiceCatalog>,
+    local_services: Vec<(String, Arc<RdfDataset>)>,
+    service_handler: Option<u32>,
+    load_handler: bool,
 }
 
 /// Read an integer option in `[min, u32::MAX]` from a JS `number`.
@@ -3224,149 +3725,361 @@ fn count_option(name: &str, value: Option<f64>, min: u32, default: u32) -> Resul
 }
 
 #[wasm_bindgen]
+extern "C" {
+    /// A value an option is read from.
+    type OptionSource;
+
+    #[wasm_bindgen(js_namespace = Object, js_name = keys)]
+    fn object_keys(value: &JsValue) -> Vec<String>;
+
+    #[wasm_bindgen(js_namespace = Array, js_name = isArray)]
+    fn is_array(value: &JsValue) -> bool;
+
+    #[wasm_bindgen(js_namespace = Reflect, js_name = get, catch)]
+    fn reflect_get(target: &JsValue, key: &str) -> Result<JsValue, JsValue>;
+
+    /// `ServiceCatalog#copy`, called on whatever was passed as the catalog.
+    #[wasm_bindgen(method, catch, js_name = copy)]
+    fn copy(this: &OptionSource) -> Result<JsValue, JsValue>;
+
+    /// `Dataset#snapshot`, called on whatever was passed as a local service.
+    #[wasm_bindgen(method, catch, js_name = snapshot)]
+    fn snapshot(this: &OptionSource) -> Result<JsValue, JsValue>;
+}
+
+/// Whether `value` is `undefined` or `null`: an option left unset.
+fn is_unset(value: &JsValue) -> bool {
+    value.is_undefined() || value.is_null()
+}
+
+/// Read option `key` of shape `shape` from `value`.
+fn read_option(
+    key: &str,
+    shape: OptionShape,
+    value: &JsValue,
+) -> Result<OptionValue, OptionsError> {
+    match shape {
+        OptionShape::Text => value.as_string().map(OptionValue::Text).ok_or_else(|| {
+            OptionsError::type_error(format!("query option {key} must be a string when supplied"))
+        }),
+        OptionShape::Count => value.as_f64().map(OptionValue::Count).ok_or_else(|| {
+            OptionsError::type_error(format!("query option {key} must be a number when supplied"))
+        }),
+        OptionShape::Ceiling => read_ceiling(key, value).map(OptionValue::Ceiling),
+        OptionShape::Provenance => {
+            if !value.is_object() {
+                return Err(OptionsError::type_error(
+                    "query option provenanceNamespace must be an object ({ prefix, iri }) when \
+                     supplied",
+                ));
+            }
+            let part = |name: &str| {
+                reflect_get(value, name)
+                    .ok()
+                    .and_then(|part| part.as_string())
+            };
+            match (part("prefix"), part("iri")) {
+                (Some(prefix), Some(iri)) => Ok(OptionValue::Provenance { prefix, iri }),
+                _ => Err(OptionsError::type_error(
+                    "query option provenanceNamespace must supply both a string `prefix` and \
+                     a string `iri`",
+                )),
+            }
+        }
+        OptionShape::Catalog => {
+            let refused = || {
+                OptionsError::type_error(
+                    "query option catalog must be a ServiceCatalog when supplied",
+                )
+            };
+            if !value.is_object() {
+                return Err(refused());
+            }
+            let copy = value
+                .unchecked_ref::<OptionSource>()
+                .copy()
+                .map_err(|_| refused())?;
+            ServiceCatalog::try_from_js_value(copy)
+                .map(|catalog| OptionValue::Catalog(catalog.inner))
+                .map_err(|_| refused())
+        }
+        OptionShape::LocalServices => {
+            if !value.is_object() || is_array(value) {
+                return Err(OptionsError::type_error(
+                    "query option localServices must be an object mapping endpoint IRIs to \
+                     Datasets",
+                ));
+            }
+            let mut services = Vec::new();
+            for endpoint in object_keys(value) {
+                let refused = || {
+                    OptionsError::type_error(format!(
+                        "query option localServices must map every endpoint to a Dataset; \
+                         {endpoint:?} does not"
+                    ))
+                };
+                let dataset = reflect_get(value, &endpoint).map_err(|_| refused())?;
+                if !dataset.is_object() {
+                    return Err(refused());
+                }
+                let snapshot = dataset
+                    .unchecked_ref::<OptionSource>()
+                    .snapshot()
+                    .map_err(|_| refused())?;
+                let snapshot = Dataset::try_from_js_value(snapshot).map_err(|_| refused())?;
+                let frozen = snapshot
+                    .view()
+                    .freeze()
+                    .map_err(|diagnostic| OptionsError::refused(diagnostic.to_string()))?;
+                services.push((endpoint, frozen));
+            }
+            Ok(OptionValue::LocalServices(services))
+        }
+    }
+}
+
+/// Read a governor ceiling: an integer as a `bigint`, a safe-integer `number` or an
+/// integral string. Its sign is checked when the job begins, with the synchronous
+/// entries' own message.
+fn read_ceiling(key: &str, value: &JsValue) -> Result<i64, OptionsError> {
+    let refused = || {
+        OptionsError::type_error(format!(
+            "query option {key} must be an integer (number, bigint, or integral string)"
+        ))
+    };
+    if value.is_bigint() {
+        return i64::try_from(value.clone()).map_err(|_| refused());
+    }
+    if let Some(number) = value.as_f64() {
+        const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+        return (number.fract() == 0.0 && number.abs() <= MAX_SAFE)
+            .then_some(number as i64)
+            .ok_or_else(refused);
+    }
+    if let Some(text) = value.as_string() {
+        let text = text.trim();
+        let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+        if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return text
+                .strip_prefix('+')
+                .unwrap_or(text)
+                .parse::<i64>()
+                .map_err(|_| refused());
+        }
+    }
+    Err(refused())
+}
+
+#[wasm_bindgen]
 impl AsyncJobOptions {
-    /// Options with nothing set: every default, no handler, no ceiling.
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The query's base IRI.
-    #[wasm_bindgen(js_name = setBase)]
-    pub fn set_base(&mut self, base: Option<String>) {
-        self.base = base;
-    }
-
-    /// The result format (raw operations only).
-    #[wasm_bindgen(js_name = setFormat)]
-    pub fn set_format(&mut self, format: Option<String>) {
-        self.format = format;
-    }
-
-    /// A JSON-LD options document (`queryRawConfigured`; raw operations only).
-    #[wasm_bindgen(js_name = setOptionsJson)]
-    pub fn set_options_json(&mut self, options_json: Option<String>) {
-        self.options_json = options_json;
-    }
-
-    /// The provenance namespace prefix (raw operations only; with the IRI).
-    #[wasm_bindgen(js_name = setProvenancePrefix)]
-    pub fn set_provenance_prefix(&mut self, prefix: Option<String>) {
-        self.provenance_prefix = prefix;
-    }
-
-    /// The provenance namespace IRI (raw operations only; with the prefix).
-    #[wasm_bindgen(js_name = setProvenanceIri)]
-    pub fn set_provenance_iri(&mut self, iri: Option<String>) {
-        self.provenance_iri = iri;
-    }
-
-    /// The statistical-aggregate namespace (governed operations only).
-    #[wasm_bindgen(js_name = setAggregateNamespace)]
-    pub fn set_aggregate_namespace(&mut self, namespace: Option<String>) {
-        self.aggregate_namespace = namespace;
-    }
-
-    /// The entailment regime (the entailment operation only, where it is required).
-    #[wasm_bindgen(js_name = setRegime)]
-    pub fn set_regime(&mut self, regime: Option<String>) {
-        self.regime = regime;
-    }
-
-    /// The RIF program text (the entailment operation only).
-    #[wasm_bindgen(js_name = setProgram)]
-    pub fn set_program(&mut self, program: Option<String>) {
-        self.program = program;
-    }
-
-    /// The client's `Accept` header (the negotiated operation only; absent means the
-    /// protocol's defaults).
-    #[wasm_bindgen(js_name = setAccept)]
-    pub fn set_accept(&mut self, accept: Option<String>) {
-        self.accept = accept;
-    }
-
-    /// The fuel ceiling (governed operations only).
-    #[wasm_bindgen(js_name = setFuel)]
-    pub fn set_fuel(&mut self, value: Option<i64>) {
-        self.fuel = value;
-    }
-
-    /// The wall deadline in milliseconds (governed operations only).
-    #[wasm_bindgen(js_name = setDeadlineMs)]
-    pub fn set_deadline_ms(&mut self, value: Option<i64>) {
-        self.deadline_ms = value;
-    }
-
-    /// The answer ceiling (governed queries only).
-    #[wasm_bindgen(js_name = setMaxAnswers)]
-    pub fn set_max_answers(&mut self, value: Option<i64>) {
-        self.max_answers = value;
-    }
-
-    /// The intermediate-cell ceiling (governed operations only).
-    #[wasm_bindgen(js_name = setMaxIntermediateCells)]
-    pub fn set_max_intermediate_cells(&mut self, value: Option<i64>) {
-        self.max_intermediate_cells = value;
-    }
-
-    /// The scratch-byte ceiling (governed operations only).
-    #[wasm_bindgen(js_name = setMaxScratchBytes)]
-    pub fn set_max_scratch_bytes(&mut self, value: Option<i64>) {
-        self.max_scratch_bytes = value;
-    }
-
-    /// The remote-request ceiling (governed operations only).
-    #[wasm_bindgen(js_name = setMaxRemoteRequests)]
-    pub fn set_max_remote_requests(&mut self, value: Option<i64>) {
-        self.max_remote_requests = value;
-    }
-
-    /// Polls between yields: an integer from 0 (yield at every poll) to 4 294 967 295.
-    /// Default 65 536.
-    #[wasm_bindgen(js_name = setYieldEveryPolls)]
-    pub fn set_yield_every_polls(&mut self, value: Option<f64>) {
-        self.yield_every_polls = value;
-    }
-
-    /// The job's stack region in bytes: an integer of at least 524 288 (512 KiB).
-    /// Default 2 MiB.
-    #[wasm_bindgen(js_name = setStackBytes)]
-    pub fn set_stack_bytes(&mut self, value: Option<f64>) {
-        self.stack_bytes = value;
-    }
-
-    /// The per-service policy host-resolved `SERVICE` requests are authorized against
-    /// (copied, so the catalog stays usable for later jobs). Requires the `SERVICE`
-    /// handler.
-    #[wasm_bindgen(js_name = setCatalog)]
-    pub fn set_catalog(&mut self, catalog: &ServiceCatalog) {
-        self.catalog = Some(catalog.inner.clone());
-    }
-
-    /// Serve `endpoint` in process from a snapshot of `dataset`, with no host call.
-    #[wasm_bindgen(js_name = addLocalService)]
-    pub fn add_local_service(
-        &mut self,
-        endpoint: String,
-        dataset: &Dataset,
-    ) -> Result<(), JsError> {
-        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        self.add_local_frozen(endpoint, frozen)
-            .map_err(|message| js_error(&message))
-    }
-
-    /// Which host handlers exist: the package root passes `typeof resolveService ===
-    /// "function"` and `typeof resolveLoad === "function"`. An effect with no handler
-    /// fails exactly as the synchronous lane's missing source does.
-    #[wasm_bindgen(js_name = setHandlers)]
-    pub fn set_handlers(&mut self, service: bool, load: bool) {
-        self.service_handler = service;
-        self.load_handler = load;
+    /// Read and validate the options object of an operation of `kind`.
+    ///
+    /// `options` is the twin's options object without the keys the package root reads
+    /// itself (`resolveService`, `resolveLoad`, `signal`); `serviceHandler` identifies
+    /// the host's `resolveService` handler when it supplied one (only requests to the
+    /// same handler share a host call), and `loadHandler` says whether it supplied
+    /// `resolveLoad`. `argument` is the twin's positional argument — the regime of
+    /// `entailmentGoverned`, the format of `rawWithContext` — and must be absent for
+    /// every other kind.
+    ///
+    /// # Errors
+    ///
+    /// A `TypeError` for a key the operation does not take or a value of the wrong type,
+    /// and an `Error` for a value it cannot honor; both carry the code
+    /// `purrdf-wasm-options`.
+    #[wasm_bindgen(js_name = fromJs)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn from_js(
+        kind: AsyncOperationKind,
+        options: JsValue,
+        service_handler: Option<u32>,
+        load_handler: bool,
+        argument: Option<String>,
+    ) -> Result<Self, JsValue> {
+        let entries = Self::read(&options).map_err(|error| error.to_js())?;
+        Self::from_entries(kind, entries, service_handler, load_handler, argument)
+            .map_err(|error| error.to_js())
     }
 }
 
 impl AsyncJobOptions {
+    /// Read the set keys of `options` by their shapes; a key no operation reads is
+    /// [`OptionValue::Unknown`].
+    fn read(options: &JsValue) -> Result<Vec<(String, OptionValue)>, OptionsError> {
+        if is_unset(options) {
+            return Ok(Vec::new());
+        }
+        if !options.is_object() || is_array(options) {
+            return Err(OptionsError::type_error(
+                "query options must be an object when supplied",
+            ));
+        }
+        let mut entries = Vec::new();
+        for key in object_keys(options) {
+            let value = reflect_get(options, &key).map_err(|_| {
+                OptionsError::type_error(format!("query option {key} could not be read"))
+            })?;
+            if is_unset(&value) {
+                continue;
+            }
+            let read = match option_shape(&key) {
+                Some(shape) => read_option(&key, shape, &value)?,
+                None => OptionValue::Unknown,
+            };
+            entries.push((key, read));
+        }
+        Ok(entries)
+    }
+
+    /// Validate `entries` for `kind`: every key the kind does not take is refused by
+    /// name, then every value the kind cannot honor.
+    pub(crate) fn from_entries(
+        kind: AsyncOperationKind,
+        entries: Vec<(String, OptionValue)>,
+        service_handler: Option<u32>,
+        load_handler: bool,
+        argument: Option<String>,
+    ) -> Result<Self, OptionsError> {
+        let spec = kind.spec();
+        let op = spec.name;
+        for (key, _) in &entries {
+            if kind.accepts(key) {
+                continue;
+            }
+            if key == "cancel" {
+                return Err(OptionsError::type_error(
+                    "query option cancel is not accepted by an asynchronous call; pass an \
+                     AbortSignal as signal instead",
+                ));
+            }
+            if !spec.governed && CEILING_KEYS.contains(&key.as_str()) {
+                return Err(OptionsError::type_error(format!(
+                    "query option {key} is an execution governor and is enforced only by \
+                     queryGovernedAsync/queryEntailmentGovernedAsync/updateGovernedAsync; this \
+                     call would ignore it entirely"
+                )));
+            }
+            if !spec.governed && key == "aggregateNamespace" {
+                return Err(OptionsError::type_error(
+                    "query option aggregateNamespace registers the statistical-aggregate \
+                     registry and is honored only by queryGovernedAsync/\
+                     queryEntailmentGovernedAsync/updateGovernedAsync; this call would ignore \
+                     it entirely",
+                ));
+            }
+            let accepted: Vec<&str> = spec
+                .keys
+                .iter()
+                .chain(HOST_KEYS.iter())
+                .chain(PACKAGE_KEYS.iter())
+                .copied()
+                .collect();
+            return Err(OptionsError::type_error(format!(
+                "unknown query option {key:?} (this call accepts {})",
+                accepted.join(", ")
+            )));
+        }
+        match (spec.argument, &argument) {
+            (Some(_), Some(_)) | (None, None) => {}
+            (Some(name), None) => {
+                return Err(OptionsError::refused(format!(
+                    "a {op} operation needs a {name}"
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(OptionsError::refused(format!(
+                    "a {op} operation takes no positional argument"
+                )));
+            }
+        }
+        let mut options = Self {
+            kind: Some(kind),
+            service_handler,
+            load_handler,
+            ..Self::default()
+        };
+        match spec.argument {
+            Some("regime") => options.regime = argument,
+            Some(_) => options.format = argument,
+            None => {}
+        }
+        let mut ceilings: BTreeMap<&str, i64> = BTreeMap::new();
+        let mut counts: BTreeMap<&str, f64> = BTreeMap::new();
+        for (key, value) in entries {
+            match (key.as_str(), value) {
+                ("base", OptionValue::Text(text)) => options.base = Some(text),
+                ("format", OptionValue::Text(text)) => options.format = Some(text),
+                ("optionsJson", OptionValue::Text(text)) => options.options_json = Some(text),
+                ("yamlSchemaUrl", OptionValue::Text(text)) => options.yaml_schema_url = Some(text),
+                ("aggregateNamespace", OptionValue::Text(text)) => {
+                    options.aggregate_namespace = Some(text);
+                }
+                ("program", OptionValue::Text(text)) => options.program = Some(text),
+                ("accept", OptionValue::Text(text)) => options.accept = Some(text),
+                ("provenanceNamespace", OptionValue::Provenance { prefix, iri }) => {
+                    options.provenance = Some((prefix, iri));
+                }
+                ("catalog", OptionValue::Catalog(catalog)) => options.catalog = Some(catalog),
+                ("localServices", OptionValue::LocalServices(services)) => {
+                    for (endpoint, frozen) in services {
+                        options
+                            .add_local_frozen(endpoint, frozen)
+                            .map_err(OptionsError::refused)?;
+                    }
+                }
+                (key, OptionValue::Ceiling(value)) => {
+                    let name = CEILING_KEYS
+                        .iter()
+                        .find(|name| **name == key)
+                        .ok_or_else(|| {
+                            OptionsError::type_error(format!("{key} is not a ceiling"))
+                        })?;
+                    ceilings.insert(name, value);
+                }
+                (key, OptionValue::Count(value)) => {
+                    let name = HOST_KEYS
+                        .iter()
+                        .find(|name| **name == key)
+                        .ok_or_else(|| OptionsError::type_error(format!("{key} is not a count")))?;
+                    counts.insert(name, value);
+                }
+                (key, _) => {
+                    return Err(OptionsError::type_error(format!(
+                        "query option {key} was read as a value it cannot hold"
+                    )));
+                }
+            }
+        }
+        if kind == AsyncOperationKind::UpdateGoverned && ceilings.contains_key("maxAnswers") {
+            return Err(OptionsError::refused(UPDATE_REFUSES_MAX_ANSWERS));
+        }
+        options.ceilings = GovernorArgs::decode(
+            ceilings.get("fuel").copied(),
+            ceilings.get("deadlineMs").copied(),
+            ceilings.get("maxAnswers").copied(),
+            ceilings.get("maxIntermediateCells").copied(),
+            ceilings.get("maxScratchBytes").copied(),
+            ceilings.get("maxRemoteRequests").copied(),
+        )
+        .map_err(OptionsError::refused)?;
+        options.quantum = count_option(
+            "yieldEveryPolls",
+            counts.get("yieldEveryPolls").copied(),
+            0,
+            DEFAULT_YIELD_EVERY_POLLS,
+        )
+        .map_err(OptionsError::refused)?;
+        options.stack_bytes = count_option(
+            "stackBytes",
+            counts.get("stackBytes").copied(),
+            MIN_STACK_BYTES,
+            DEFAULT_STACK_BYTES,
+        )
+        .map_err(OptionsError::refused)?;
+        options.check()?;
+        Ok(options)
+    }
+
     fn add_local_frozen(
         &mut self,
         endpoint: String,
@@ -3383,157 +4096,42 @@ impl AsyncJobOptions {
         Ok(())
     }
 
-    /// The name of the first governor ceiling set, in the synchronous entries' order.
-    fn first_ceiling_set(&self) -> Option<&'static str> {
-        [
-            ("fuel", self.fuel.is_some()),
-            ("deadlineMs", self.deadline_ms.is_some()),
-            ("maxAnswers", self.max_answers.is_some()),
-            (
-                "maxIntermediateCells",
-                self.max_intermediate_cells.is_some(),
-            ),
-            ("maxScratchBytes", self.max_scratch_bytes.is_some()),
-            ("maxRemoteRequests", self.max_remote_requests.is_some()),
-        ]
-        .into_iter()
-        .find_map(|(name, set)| set.then_some(name))
+    /// The refusals no key table can express: combinations of options, and a catalog
+    /// with nothing to govern.
+    fn check(&self) -> Result<(), OptionsError> {
+        if self.options_json.is_some() && self.format.is_none() {
+            return Err(OptionsError::refused(
+                "optionsJson needs a format: a configured serialization names the JSON-LD or \
+                 YAML-LD format it configures",
+            ));
+        }
+        if self.options_json.is_some() && self.provenance.is_some() {
+            return Err(OptionsError::refused(
+                "provenanceNamespace applies to SPARQL results documents, not to a configured \
+                 JSON-LD graph serialization",
+            ));
+        }
+        if self.catalog.is_some() && self.service_handler.is_none() && !self.load_handler {
+            return Err(OptionsError::refused(
+                "a service catalog governs host-resolved SERVICE and LOAD requests, and neither \
+                 a resolveService nor a resolveLoad handler was supplied; it would govern \
+                 nothing",
+            ));
+        }
+        Ok(())
     }
 
-    /// Check these options for `kind`. Every option a kind would ignore is refused by
-    /// name rather than dropped: an option a caller believes applies and that nothing
-    /// enforces is the silent hole this surface exists to close.
-    fn validate(&self, kind: AsyncOperationKind) -> Result<ValidatedOptions, String> {
-        let op = kind.name();
-        if !kind.is_governed() {
-            if let Some(name) = self.first_ceiling_set() {
-                return Err(format!(
-                    "{name} is an execution governor, enforced only by the governed \
-                     operations; a {op} operation would ignore it entirely"
-                ));
-            }
-            if self.aggregate_namespace.is_some() {
-                return Err(format!(
-                    "aggregateNamespace is honored only by the governed operations; a {op} \
-                     operation would ignore it entirely"
-                ));
-            }
+    /// The kind these options were validated for; refused for another.
+    fn require_kind(&self, kind: AsyncOperationKind) -> Result<(), String> {
+        match self.kind {
+            Some(validated) if validated == kind => Ok(()),
+            Some(validated) => Err(format!(
+                "these options were validated for a {} operation, not a {} one",
+                validated.name(),
+                kind.name()
+            )),
+            None => Err("these options were never validated for an operation".to_owned()),
         }
-        if kind == AsyncOperationKind::UpdateGoverned && self.max_answers.is_some() {
-            return Err(UPDATE_REFUSES_MAX_ANSWERS.to_owned());
-        }
-        if kind == AsyncOperationKind::Shacl && self.base.is_some() {
-            return Err(
-                "base is a SPARQL operation's base IRI; a shacl operation resolves its shapes \
-                 graph against shapesBase and would ignore it"
-                    .to_owned(),
-            );
-        }
-        let ceilings = GovernorArgs::decode(
-            self.fuel,
-            self.deadline_ms,
-            self.max_answers,
-            self.max_intermediate_cells,
-            self.max_scratch_bytes,
-            self.max_remote_requests,
-        )?;
-        match kind {
-            AsyncOperationKind::Raw => {
-                if self.options_json.is_some() && self.format.is_none() {
-                    return Err(
-                        "optionsJson needs a format: a configured serialization names the \
-                         JSON-LD or YAML-LD format it configures"
-                            .to_owned(),
-                    );
-                }
-                if self.options_json.is_some()
-                    && (self.provenance_prefix.is_some() || self.provenance_iri.is_some())
-                {
-                    return Err(
-                        "provenanceNamespace applies to SPARQL results documents, not to a \
-                         configured JSON-LD graph serialization"
-                            .to_owned(),
-                    );
-                }
-            }
-            AsyncOperationKind::RawWithContext => {
-                if self.format.is_none() {
-                    return Err(
-                        "a rawWithContext operation needs a format to serialize under the context"
-                            .to_owned(),
-                    );
-                }
-                if self.options_json.is_some() {
-                    return Err(
-                        "optionsJson is not accepted beside a compiled context: the context \
-                         is the configuration"
-                            .to_owned(),
-                    );
-                }
-            }
-            _ => {
-                if self.format.is_some() {
-                    return Err(format!(
-                        "format applies only to raw operations; a {op} operation returns a \
-                         typed result and would ignore it"
-                    ));
-                }
-                if self.options_json.is_some() {
-                    return Err(format!(
-                        "optionsJson applies only to raw operations; a {op} operation would \
-                         ignore it"
-                    ));
-                }
-            }
-        }
-        if kind != AsyncOperationKind::Raw
-            && (self.provenance_prefix.is_some() || self.provenance_iri.is_some())
-        {
-            return Err(format!(
-                "provenanceNamespace applies only to raw operations; a {op} operation would \
-                 ignore it"
-            ));
-        }
-        if kind != AsyncOperationKind::Negotiated && self.accept.is_some() {
-            return Err(format!(
-                "accept applies only to the negotiated operation; a {op} operation would \
-                 ignore it"
-            ));
-        }
-        if kind == AsyncOperationKind::EntailmentGoverned {
-            if self.regime.is_none() {
-                return Err("an entailmentGoverned operation needs a regime".to_owned());
-            }
-        } else if self.regime.is_some() || self.program.is_some() {
-            return Err(format!(
-                "regime and program apply only to the entailmentGoverned operation; a {op} \
-                 operation would ignore them"
-            ));
-        }
-        if self.catalog.is_some() && !self.service_handler {
-            return Err(
-                "a service catalog governs host-resolved SERVICE requests, and no \
-                 resolveService handler was supplied; it would govern nothing"
-                    .to_owned(),
-            );
-        }
-        let quantum = count_option(
-            "yieldEveryPolls",
-            self.yield_every_polls,
-            0,
-            DEFAULT_YIELD_EVERY_POLLS,
-        )?;
-        let stack_bytes = count_option(
-            "stackBytes",
-            self.stack_bytes,
-            MIN_STACK_BYTES,
-            DEFAULT_STACK_BYTES,
-        )?;
-        Ok(ValidatedOptions {
-            ceilings,
-            quantum,
-            stack_bytes,
-        })
     }
 }
 
@@ -3541,9 +4139,9 @@ impl AsyncJobOptions {
 // The service catalog
 // ---------------------------------------------------------------------------
 
-/// The per-service policy host-resolved `SERVICE` requests are authorized against,
-/// before the host is ever called: deny by default, one profile per endpoint, an optional
-/// fallback. Each profile is JSON:
+/// The per-service policy host-resolved `SERVICE` requests and `LOAD` fetches are
+/// authorized against, before the host is ever called: deny by default, one profile per
+/// endpoint (or `LOAD` source), an optional fallback. Each profile is JSON:
 ///
 /// ```json
 /// {
@@ -3555,9 +4153,11 @@ impl AsyncJobOptions {
 /// }
 /// ```
 ///
-/// `capabilities` is required; a host-resolved request needs `query` and `network`, and
-/// a `credential` needs `credentials` too (the native rule: a credential that may not be
-/// sent refuses the request rather than sending it without). `headers` is an array of
+/// `capabilities` is required; a host-resolved `SERVICE` request needs `query` and
+/// `network`, a `LOAD` fetch `network`, and a `credential` needs `credentials` too (the
+/// native rule: a credential that may not be sent refuses the request rather than sending
+/// it without). `timeoutMs` bounds each request to the service: the host abandons one
+/// unanswered after it, or at the job's deadline when that falls first. `headers` is an array of
 /// `[name, value]` pairs because order and repeated names are significant. Unknown keys
 /// and capability names are refused.
 #[wasm_bindgen]
@@ -3681,10 +4281,21 @@ fn parse_profile(json: &str) -> Result<ServiceProfile, String> {
         out = out.with_user_agent(user_agent);
     }
     if let Some(ms) = profile.timeout_ms {
+        if ms == 0 || ms > MAX_TIMEOUT_MS {
+            return Err(format!(
+                "service profile: timeoutMs must be an integer from 1 to {MAX_TIMEOUT_MS} (the \
+                 longest delay a JavaScript timer honours), got {ms}"
+            ));
+        }
         out = out.with_timeout(Duration::from_millis(ms));
     }
     Ok(out)
 }
+
+/// The longest request timeout a profile may name: the longest delay, in milliseconds, a
+/// JavaScript timer honours (a signed 32-bit count). The host abandons an unanswered
+/// request with such a timer, and a longer delay fires at once.
+const MAX_TIMEOUT_MS: u64 = (1 << 31) - 1;
 
 #[wasm_bindgen]
 impl ServiceCatalog {
@@ -3697,123 +4308,25 @@ impl ServiceCatalog {
     /// Register the profile `profileJson` for the service IRI `endpoint`, replacing any
     /// earlier one.
     #[wasm_bindgen(js_name = addService)]
-    pub fn add_service(&mut self, endpoint: String, profile_json: &str) -> Result<(), JsError> {
+    pub fn add_service(&mut self, endpoint: String, profile_json: &str) -> Result<(), JsValue> {
         self.add_service_message(endpoint, profile_json)
-            .map_err(|message| js_error(&message))
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))
     }
 
     /// Apply the profile `profileJson` to every service with no entry of its own — the
     /// explicit opt-out of deny-by-default.
     #[wasm_bindgen(js_name = setFallback)]
-    pub fn set_fallback(&mut self, profile_json: &str) -> Result<(), JsError> {
+    pub fn set_fallback(&mut self, profile_json: &str) -> Result<(), JsValue> {
         self.set_fallback_message(profile_json)
-            .map_err(|message| js_error(&message))
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))
     }
 
-    /// Whether the profile governing `endpoint` (its own, or the fallback) carries a
-    /// credential — whether a request to it is one a shared cache must never answer.
-    #[wasm_bindgen(js_name = carriesCredential)]
+    /// An independent copy of this catalog: later changes to either leave the other as
+    /// it is. An asynchronous operation's options take a copy of the catalog they name,
+    /// so the caller's own stays usable for later operations.
     #[must_use]
-    pub fn carries_credential(&self, endpoint: &str) -> bool {
-        self.inner
-            .profile_for(endpoint)
-            .is_some_and(|profile| profile.credential().is_some())
-    }
-
-    /// Authorize a `LOAD` of `iri` against this catalog, the same policy a `SERVICE`
-    /// request meets: a document fetch needs the `network` capability, and a credential
-    /// needs `credentials` too. The answer carries either the denial or everything the
-    /// fetch must send — the profile's headers and credential, its user agent and its
-    /// timeout, and an `Accept` header naming every RDF syntax a `LOAD` can parse.
-    #[wasm_bindgen(js_name = authorizeLoad)]
-    #[must_use]
-    pub fn authorize_load(&self, iri: &str) -> LoadAuthorization {
-        load_authorization(&self.inner, iri)
-    }
-}
-
-/// What [`ServiceCatalog::authorize_load`] decided for one `LOAD` IRI.
-#[wasm_bindgen]
-#[derive(Debug, Clone)]
-pub struct LoadAuthorization {
-    denial: Option<String>,
-    headers: Vec<(String, String)>,
-    user_agent: Option<String>,
-    timeout_ms: Option<f64>,
-}
-
-#[wasm_bindgen]
-impl LoadAuthorization {
-    /// Why the catalog refuses the `LOAD`, or `undefined` when it allows it.
-    #[wasm_bindgen(getter)]
-    #[must_use]
-    pub fn denial(&self) -> Option<String> {
-        self.denial.clone()
-    }
-
-    /// The request headers as flattened `[name, value, name, value, …]` pairs — the
-    /// profile's headers, then its credential header — in the order they must be sent.
-    /// Empty on a denial.
-    #[wasm_bindgen(getter)]
-    #[must_use]
-    pub fn headers(&self) -> Vec<String> {
-        self.headers
-            .iter()
-            .flat_map(|(name, value)| [name.clone(), value.clone()])
-            .collect()
-    }
-
-    /// The `Accept` header a `LOAD` fetch sends: the media type of every RDF syntax the
-    /// engine parses, in its registry order.
-    #[wasm_bindgen(getter)]
-    #[must_use]
-    pub fn accept(&self) -> String {
-        load_accept()
-    }
-
-    /// The profile's `User-Agent`, when it names one.
-    #[wasm_bindgen(getter, js_name = userAgent)]
-    #[must_use]
-    pub fn user_agent(&self) -> Option<String> {
-        self.user_agent.clone()
-    }
-
-    /// The profile's per-request timeout in milliseconds, when it sets one.
-    #[wasm_bindgen(getter, js_name = timeoutMs)]
-    #[must_use]
-    pub fn timeout_ms(&self) -> Option<f64> {
-        self.timeout_ms
-    }
-}
-
-/// The `Accept` header of a `LOAD` fetch: every parseable RDF syntax's media type.
-fn load_accept() -> String {
-    purrdf::NativeRdfFormat::all()
-        .map(purrdf::NativeRdfFormat::media_type)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// [`ServiceCatalog::authorize_load`], on the native catalog.
-fn load_authorization(catalog: &NativeServiceCatalog, iri: &str) -> LoadAuthorization {
-    match catalog.authorize(
-        iri,
-        ServiceCapabilities::granting([ServiceCapability::Network]),
-    ) {
-        Err(denial) => LoadAuthorization {
-            denial: Some(format!("LOAD <{iri}>: {denial}")),
-            headers: Vec::new(),
-            user_agent: None,
-            timeout_ms: None,
-        },
-        Ok(profile) => LoadAuthorization {
-            denial: None,
-            headers: profile.request_headers(),
-            user_agent: profile.user_agent().map(str::to_owned),
-            timeout_ms: profile
-                .timeout()
-                .map(|timeout| timeout.as_secs_f64() * 1000.0),
-        },
+    pub fn copy(&self) -> Self {
+        self.clone()
     }
 }
 
@@ -3835,41 +4348,53 @@ impl ServiceCatalog {
 // Starting a job
 // ---------------------------------------------------------------------------
 
-/// What `beginAsync` decoded at the boundary, beside the validated options.
-struct Decoded {
-    validated: ValidatedOptions,
-    jsonld: Option<JsonLdSerializeOptions>,
-    provenance: Option<ProvenanceNamespace>,
-}
-
-/// Freeze `dataset`, build the operation and register the job.
+/// Freeze `dataset`, build the operation and register the job. An update claims the
+/// dataset first: a second asynchronous update of it cannot begin while this one is in
+/// flight.
 fn begin_job(
     engine: &Rc<NativeSparqlEngine>,
     dataset: &Dataset,
     kind: AsyncOperationKind,
     sparql: String,
     options: &AsyncJobOptions,
-    decoded: Decoded,
-) -> Result<AsyncJob, String> {
-    let Decoded {
-        validated,
-        jsonld,
-        provenance,
-    } = decoded;
+    jsonld: Option<JsonLdSerializeOptions>,
+) -> Result<AsyncJob, JobError> {
+    options
+        .require_kind(kind)
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let provenance = match &options.provenance {
+        None => None,
+        Some((prefix, iri)) => Some(
+            ProvenanceNamespace::new(prefix.clone(), iri.clone())
+                .map_err(|error| JobError::message(OPTIONS_CODE, error.to_string()))?,
+        ),
+    };
+    let update_claim = match kind {
+        AsyncOperationKind::Update | AsyncOperationKind::UpdateGoverned => {
+            Some(dataset.claim_update().ok_or_else(|| {
+                JobError::message(
+                    FailureCode::UpdateInFlight.code(),
+                    format!(
+                        "an asynchronous update of dataset {} is already in flight; await it \
+                         before beginning another",
+                        dataset.identity()
+                    ),
+                )
+            })?)
+        }
+        _ => None,
+    };
     let freeze_started = now_ms();
-    let frozen = dataset
-        .view()
-        .freeze()
-        .map_err(|diagnostic| diagnostic.to_string())?;
+    let frozen = dataset.view().freeze().map_err(JobError::diagnostic)?;
     let freeze_ms = now_ms() - freeze_started;
     let input = OperationInput {
         kind,
         engine: Rc::clone(engine),
         frozen,
-        sparql,
-        base: options.base.clone(),
+        sparql: Cow::Owned(sparql),
+        base: options.base.clone().map(Cow::Owned),
         aggregate_namespace: options.aggregate_namespace.clone(),
-        ceilings: validated.ceilings,
+        ceilings: options.ceilings,
         format: options.format.clone(),
         provenance,
         jsonld,
@@ -3879,33 +4404,33 @@ fn begin_job(
     };
     Ok(register_operation(
         kind,
-        input.into_operation(),
-        validated,
+        sparql_operation(input),
         options,
         freeze_ms,
         (dataset.identity(), dataset.current_generation()),
+        update_claim,
     ))
 }
 
-/// Register a job of `kind` that runs `operation` under `validated` and `options`.
-/// `dataset` is the identity and generation an update's commit is checked against
-/// (`(0, 0)` for an operation that reads no dataset).
+/// Register a job of `kind` that runs `operation` under `options`. `dataset` is the
+/// identity and generation an update's commit is checked against (`(0, 0)` for an
+/// operation that reads no dataset).
 fn register_operation(
     kind: AsyncOperationKind,
     operation: Operation,
-    validated: ValidatedOptions,
     options: &AsyncJobOptions,
     freeze_ms: f64,
     dataset: (u64, u64),
+    update_claim: Option<UpdateClaim>,
 ) -> AsyncJob {
-    let region = StackRegion::new(validated.stack_bytes as usize);
+    let region = StackRegion::new(options.stack_bytes as usize);
     let inner = register_job(|id| {
         let slots = Arc::new(JobSlots::new(id, region.bounds));
         add_ms(&slots.counters.freeze_ms, freeze_ms);
         let watch = Arc::new(JspiStopWatch::new(
             slots,
-            validated.ceilings.deadline_ms(),
-            validated.quantum,
+            options.ceilings.deadline_ms(),
+            options.quantum,
         ));
         JobInner {
             id,
@@ -3918,6 +4443,7 @@ fn register_operation(
             local_services: options.local_services.clone(),
             dataset_id: dataset.0,
             dataset_generation: dataset.1,
+            update_claim: RefCell::new(update_claim),
             region,
             state: Cell::new(JobState::Pending),
             outcome: RefCell::new(None),
@@ -3929,43 +4455,54 @@ fn register_operation(
     AsyncJob { inner }
 }
 
-/// Validate `options` for a SHACL job, match the arguments to `operation`, and register
-/// the job. Native-testable core of [`AsyncJob::begin_shacl`].
+/// Match the arguments to `operation` and register the SHACL job `options` were
+/// validated for. Native-testable core of [`AsyncJob::begin_shacl`].
 fn begin_shacl_job(
     operation: ShaclAsyncOperation,
     arguments: ShaclArguments,
     options: &AsyncJobOptions,
-) -> Result<AsyncJob, String> {
-    let validated = options.validate(AsyncOperationKind::Shacl)?;
-    let request = ShaclRequest::build(operation, arguments)?;
+) -> Result<AsyncJob, JobError> {
+    options
+        .require_kind(AsyncOperationKind::Shacl)
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let request = ShaclRequest::build(operation, arguments)
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     Ok(register_operation(
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
-        validated,
         options,
         0.0,
         (0, 0),
+        None,
     ))
+}
+
+/// A refusal to begin a job, thrown before any job exists.
+fn begin_refused(error: &JobError) -> JsValue {
+    error.to_js(Lane::Async {
+        region_bytes: DEFAULT_STACK_BYTES as usize,
+    })
 }
 
 #[wasm_bindgen]
 impl AsyncJob {
     /// Start an asynchronous SHACL operation: the twin of the synchronous entry
-    /// `operation` names, over the same arguments.
+    /// `operation` names, over the same arguments, under `options` (from
+    /// `AsyncJobOptions.fromJs` for the `shacl` kind).
     ///
     /// `shapesTtl`, `shapesBase`, `addedNt` and `removedNt` are the text-shapes entries'
     /// arguments and `product` and `expectIdentity` the product entries'; an argument the
-    /// operation does not take is refused by name, as is an option it would ignore. The
-    /// documents are parsed when the job runs, so a parse error — like a product refusal
-    /// — is the job's error, with the synchronous twin's words.
+    /// operation does not take is refused by name. The documents are parsed when the job
+    /// runs, so a parse error — like a product refusal — is the job's error, with the
+    /// synchronous twin's words.
     ///
     /// A static constructor rather than a free function: it is the package root's
     /// plumbing, reached through its `shacl…Async` twins, never a consumer entry point.
     ///
     /// # Errors
     ///
-    /// An option the operation would ignore or cannot honor, or an argument it does not
-    /// take or is missing.
+    /// Options validated for another kind, or an argument the operation does not take or
+    /// is missing.
     #[wasm_bindgen(js_name = beginShacl)]
     #[allow(clippy::too_many_arguments)] // one argument per synchronous twin's argument
     pub fn begin_shacl(
@@ -3978,7 +4515,7 @@ impl AsyncJob {
         removed_nt: Option<String>,
         product: Option<Vec<u8>>,
         expect_identity: Option<String>,
-    ) -> Result<Self, JsError> {
+    ) -> Result<Self, JsValue> {
         begin_shacl_job(
             operation,
             ShaclArguments {
@@ -3992,25 +4529,28 @@ impl AsyncJob {
             },
             options,
         )
-        .map_err(|message| js_error(&message))
+        .map_err(|error| begin_refused(&error))
     }
 }
 
 #[wasm_bindgen]
 impl QueryEngine {
-    /// Start an asynchronous operation of `kind` over a snapshot of `dataset`.
+    /// Start an asynchronous operation of `kind` over a snapshot of `dataset`, under
+    /// `options` (from `AsyncJobOptions.fromJs` for the same kind).
     ///
     /// The dataset is frozen now: a query sees this snapshot whatever happens to the
     /// dataset afterwards, and an update captures its identity and generation so
-    /// `commitUpdate` can refuse to overwrite a mutation made while it ran. The SPARQL
+    /// `commitUpdate` can refuse to overwrite a mutation made while it ran. An update
+    /// also claims the dataset until the job is finished: a second asynchronous update of
+    /// it is refused (`native-sparql-update-in-flight`) rather than queued. The SPARQL
     /// text is parsed when the job runs, so a parse error is the job's error, with the
     /// synchronous twin's words. A `rawWithContext` operation starts through
     /// `beginAsyncWithContext` instead.
     ///
     /// # Errors
     ///
-    /// An option the operation would ignore or cannot honor, a malformed ceiling, a
-    /// malformed JSON-LD options document or provenance namespace, or a dataset that
+    /// Options validated for another kind, a malformed JSON-LD options document or
+    /// provenance namespace, an update already in flight on `dataset`, or a dataset that
     /// cannot be frozen.
     #[wasm_bindgen(js_name = beginAsync)]
     pub fn begin_async(
@@ -4019,50 +4559,33 @@ impl QueryEngine {
         kind: AsyncOperationKind,
         sparql: String,
         options: &AsyncJobOptions,
-    ) -> Result<AsyncJob, JsError> {
+    ) -> Result<AsyncJob, JsValue> {
+        let refused = |message: &str| begin_refused(&JobError::message(OPTIONS_CODE, message));
         if kind == AsyncOperationKind::RawWithContext {
-            return Err(js_error(
+            return Err(refused(
                 "a rawWithContext operation starts through beginAsyncWithContext",
             ));
         }
         if kind == AsyncOperationKind::Shacl {
-            return Err(js_error(SHACL_STARTS_ELSEWHERE));
+            return Err(refused(SHACL_STARTS_ELSEWHERE));
         }
-        let validated = options
-            .validate(kind)
-            .map_err(|message| js_error(&message))?;
         let jsonld = match (kind, options.options_json.as_deref()) {
             (AsyncOperationKind::Raw, Some(json)) => Some(decode_options(json)?),
             _ => None,
         };
-        let provenance = build_provenance_namespace(
-            options.provenance_prefix.clone(),
-            options.provenance_iri.clone(),
-        )?;
-        begin_job(
-            self.engine(),
-            dataset,
-            kind,
-            sparql,
-            options,
-            Decoded {
-                validated,
-                jsonld,
-                provenance,
-            },
-        )
-        .map_err(|message| js_error(&message))
+        begin_job(self.engine(), dataset, kind, sparql, options, jsonld)
+            .map_err(|error| begin_refused(&error))
     }
 
     /// Start a `rawWithContext` operation: a CONSTRUCT/DESCRIBE serialized under a
-    /// compiled JSON-LD context (and, for YAML-LD, `yamlSchemaUrl`).
+    /// compiled JSON-LD context (and, for YAML-LD, the options' `yamlSchemaUrl`), in the
+    /// format the options were validated with.
     ///
     /// # Errors
     ///
     /// As [`Self::begin_async`], plus a kind other than `rawWithContext` and an invalid
     /// `yamlSchemaUrl`.
     #[wasm_bindgen(js_name = beginAsyncWithContext)]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn begin_async_with_context(
         &self,
         dataset: &Dataset,
@@ -4070,44 +4593,34 @@ impl QueryEngine {
         sparql: String,
         options: &AsyncJobOptions,
         context: &CompiledJsonLdContext,
-        yaml_schema_url: Option<String>,
-    ) -> Result<AsyncJob, JsError> {
+    ) -> Result<AsyncJob, JsValue> {
         if kind != AsyncOperationKind::RawWithContext {
-            return Err(js_error(&format!(
-                "beginAsyncWithContext starts only a rawWithContext operation, not {}",
-                kind.name()
+            return Err(begin_refused(&JobError::message(
+                OPTIONS_CODE,
+                format!(
+                    "beginAsyncWithContext starts only a rawWithContext operation, not {}",
+                    kind.name()
+                ),
             )));
         }
-        let validated = options
-            .validate(kind)
-            .map_err(|message| js_error(&message))?;
         let mut jsonld = context_options(context);
-        if let Some(url) = yaml_schema_url {
-            jsonld = jsonld
-                .with_yaml_schema_url(&url)
-                .map_err(|error| js_error(&error.to_string()))?;
+        if let Some(url) = &options.yaml_schema_url {
+            jsonld = jsonld.with_yaml_schema_url(url).map_err(|error| {
+                begin_refused(&JobError::message(OPTIONS_CODE, error.to_string()))
+            })?;
         }
-        begin_job(
-            self.engine(),
-            dataset,
-            kind,
-            sparql,
-            options,
-            Decoded {
-                validated,
-                jsonld: Some(jsonld),
-                provenance: None,
-            },
-        )
-        .map_err(|message| js_error(&message))
+        begin_job(self.engine(), dataset, kind, sparql, options, Some(jsonld))
+            .map_err(|error| begin_refused(&error))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use purrdf_core::SparqlEngine as _;
+    use purrdf_sparql_eval::{GovernedOutcome, QueryOptions};
 
     use super::*;
+    use crate::query::sparql_request;
 
     const SEED_NT: &str = concat!(
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
@@ -4122,30 +4635,134 @@ mod tests {
         Dataset::parse(SEED_NT, "ntriples", None).expect("seed parses")
     }
 
-    fn options() -> AsyncJobOptions {
-        AsyncJobOptions::new()
+    /// An options object as a twin passes it: entries by key, the handlers and the
+    /// positional argument.
+    #[derive(Debug, Default, Clone)]
+    struct Opts {
+        entries: Vec<(String, OptionValue)>,
+        service_handler: Option<u32>,
+        load_handler: bool,
+        argument: Option<String>,
     }
 
-    /// Validate and begin, as `beginAsync` does, without the wasm-only decoding.
+    impl Opts {
+        fn with(mut self, key: &str, value: OptionValue) -> Self {
+            self.entries.push((key.to_owned(), value));
+            self
+        }
+
+        fn text(self, key: &str, value: &str) -> Self {
+            self.with(key, OptionValue::Text(value.to_owned()))
+        }
+
+        fn ceiling(self, key: &str, value: i64) -> Self {
+            self.with(key, OptionValue::Ceiling(value))
+        }
+
+        fn count(self, key: &str, value: f64) -> Self {
+            self.with(key, OptionValue::Count(value))
+        }
+
+        fn handlers(mut self, service: bool, load: bool) -> Self {
+            self.service_handler = service.then_some(1);
+            self.load_handler = load;
+            self
+        }
+
+        fn argument(mut self, argument: &str) -> Self {
+            self.argument = Some(argument.to_owned());
+            self
+        }
+
+        fn set(&mut self, key: &str, value: OptionValue) {
+            self.entries.push((key.to_owned(), value));
+        }
+
+        fn set_fuel(&mut self, value: Option<i64>) {
+            if let Some(value) = value {
+                self.set("fuel", OptionValue::Ceiling(value));
+            }
+        }
+
+        fn set_deadline_ms(&mut self, value: Option<i64>) {
+            if let Some(value) = value {
+                self.set("deadlineMs", OptionValue::Ceiling(value));
+            }
+        }
+
+        fn set_max_answers(&mut self, value: Option<i64>) {
+            if let Some(value) = value {
+                self.set("maxAnswers", OptionValue::Ceiling(value));
+            }
+        }
+
+        fn set_accept(&mut self, value: Option<String>) {
+            if let Some(value) = value {
+                self.set("accept", OptionValue::Text(value));
+            }
+        }
+
+        /// Serve `endpoint` from `frozen`, in the one `localServices` entry.
+        fn add_local_frozen(
+            &mut self,
+            endpoint: String,
+            frozen: Arc<RdfDataset>,
+        ) -> Result<(), String> {
+            let existing = self
+                .entries
+                .iter_mut()
+                .find_map(|(key, value)| match value {
+                    OptionValue::LocalServices(services) if key == "localServices" => {
+                        Some(services)
+                    }
+                    _ => None,
+                });
+            match existing {
+                Some(services) => services.push((endpoint, frozen)),
+                None => self.set(
+                    "localServices",
+                    OptionValue::LocalServices(vec![(endpoint, frozen)]),
+                ),
+            }
+            Ok(())
+        }
+
+        fn validate(self, kind: AsyncOperationKind) -> Result<AsyncJobOptions, String> {
+            AsyncJobOptions::from_entries(
+                kind,
+                self.entries,
+                self.service_handler,
+                self.load_handler,
+                self.argument,
+            )
+            .map_err(|error| error.to_string())
+        }
+    }
+
+    fn options() -> Opts {
+        Opts::default()
+    }
+
+    /// Validate and begin, as `beginAsync` does, without the wasm-only reading.
     fn begin(
         engine: &QueryEngine,
         dataset: &Dataset,
         kind: AsyncOperationKind,
         sparql: &str,
-        options: &AsyncJobOptions,
+        options: impl std::borrow::Borrow<Opts>,
     ) -> AsyncJob {
-        let validated = options.validate(kind).expect("options are valid");
+        let options = options
+            .borrow()
+            .clone()
+            .validate(kind)
+            .expect("options are valid");
         begin_job(
             engine.engine(),
             dataset,
             kind,
             sparql.to_owned(),
-            options,
-            Decoded {
-                validated,
-                jsonld: None,
-                provenance: None,
-            },
+            &options,
+            None,
         )
         .expect("the job begins")
     }
@@ -4164,26 +4781,36 @@ mod tests {
         )
     }
 
+    fn catalog(entries: &[(&str, &str)]) -> ServiceCatalog {
+        let mut catalog = ServiceCatalog::new();
+        for (endpoint, profile) in entries {
+            catalog
+                .add_service_message((*endpoint).to_owned(), profile)
+                .expect("profile parses");
+        }
+        catalog
+    }
+
     // ── Options: every refusal beside the valid neighbour it must not catch ─────────
 
     #[test]
     fn yield_every_polls_refuses_a_negative_and_accepts_zero() {
-        let mut refused = options();
-        refused.set_yield_every_polls(Some(-1.0));
-        let error = refused
+        let error = options()
+            .count("yieldEveryPolls", -1.0)
             .validate(AsyncOperationKind::Query)
             .expect_err("a negative quantum is refused");
         assert!(error.contains("yieldEveryPolls"), "{error}");
-        let mut fractional = options();
-        fractional.set_yield_every_polls(Some(1.5));
-        assert!(fractional.validate(AsyncOperationKind::Query).is_err());
-
-        let mut zero = options();
-        zero.set_yield_every_polls(Some(0.0));
-        let validated = zero
+        assert!(
+            options()
+                .count("yieldEveryPolls", 1.5)
+                .validate(AsyncOperationKind::Query)
+                .is_err()
+        );
+        let zero = options()
+            .count("yieldEveryPolls", 0.0)
             .validate(AsyncOperationKind::Query)
             .expect("zero yields at every poll");
-        assert_eq!(validated.quantum, 0);
+        assert_eq!(zero.quantum, 0);
         let default = options()
             .validate(AsyncOperationKind::Query)
             .expect("defaults are valid");
@@ -4192,22 +4819,19 @@ mod tests {
 
     #[test]
     fn stack_bytes_refuses_a_region_below_the_minimum_and_accepts_the_minimum() {
-        let mut refused = options();
-        refused.set_stack_bytes(Some(4096.0));
-        let error = refused
+        let error = options()
+            .count("stackBytes", 4096.0)
             .validate(AsyncOperationKind::Query)
             .expect_err("a 4 KiB region is refused");
         assert!(
             error.contains("stackBytes") && error.contains("524288"),
             "{error}"
         );
-
-        let mut minimum = options();
-        minimum.set_stack_bytes(Some(524_288.0));
-        let validated = minimum
+        let minimum = options()
+            .count("stackBytes", 524_288.0)
             .validate(AsyncOperationKind::Query)
             .expect("the minimum is accepted");
-        assert_eq!(validated.stack_bytes, 524_288);
+        assert_eq!(minimum.stack_bytes, 524_288);
         assert_eq!(
             options()
                 .validate(AsyncOperationKind::Query)
@@ -4219,27 +4843,30 @@ mod tests {
 
     #[test]
     fn an_ungoverned_operation_refuses_a_ceiling_the_governed_one_enforces() {
-        let mut with_fuel = options();
-        with_fuel.set_fuel(Some(10));
-        let error = with_fuel
+        let error = options()
+            .ceiling("fuel", 10)
             .validate(AsyncOperationKind::Query)
             .expect_err("an ungoverned query would ignore fuel");
-        assert!(error.contains("fuel") && error.contains("query"), "{error}");
-        let governed = with_fuel
+        assert!(
+            error.contains("fuel") && error.contains("execution governor"),
+            "{error}"
+        );
+        let governed = options()
+            .ceiling("fuel", 10)
             .validate(AsyncOperationKind::Governed)
             .expect("a governed query enforces fuel");
         assert!(format!("{:?}", governed.ceilings).contains("fuel: Some(10)"));
 
-        let mut with_namespace = options();
-        with_namespace.set_aggregate_namespace(Some("http://example.org/agg#".to_owned()));
         assert!(
-            with_namespace
+            options()
+                .text("aggregateNamespace", "http://example.org/agg#")
                 .validate(AsyncOperationKind::Raw)
                 .expect_err("an ungoverned raw query would ignore it")
                 .contains("aggregateNamespace")
         );
         assert!(
-            with_namespace
+            options()
+                .text("aggregateNamespace", "http://example.org/agg#")
                 .validate(AsyncOperationKind::Governed)
                 .is_ok()
         );
@@ -4247,139 +4874,206 @@ mod tests {
 
     #[test]
     fn a_negative_ceiling_is_refused_and_zero_is_a_ceiling() {
-        let mut negative = options();
-        negative.set_max_answers(Some(-1));
-        let error = negative
+        let error = options()
+            .ceiling("maxAnswers", -1)
             .validate(AsyncOperationKind::Governed)
             .expect_err("negative");
         assert!(error.contains("maxAnswers"), "{error}");
-        let mut zero = options();
-        zero.set_max_answers(Some(0));
-        assert!(zero.validate(AsyncOperationKind::Governed).is_ok());
+        assert!(
+            options()
+                .ceiling("maxAnswers", 0)
+                .validate(AsyncOperationKind::Governed)
+                .is_ok()
+        );
     }
 
     #[test]
     fn a_governed_update_refuses_max_answers_and_a_governed_query_takes_it() {
-        let mut with_answers = options();
-        with_answers.set_max_answers(Some(5));
         assert_eq!(
-            with_answers
+            options()
+                .ceiling("maxAnswers", 5)
                 .validate(AsyncOperationKind::UpdateGoverned)
                 .expect_err("an UPDATE has no answer sequence"),
             UPDATE_REFUSES_MAX_ANSWERS
         );
-        assert!(with_answers.validate(AsyncOperationKind::Governed).is_ok());
-        let mut with_fuel = options();
-        with_fuel.set_fuel(Some(5));
         assert!(
-            with_fuel
+            options()
+                .ceiling("maxAnswers", 5)
+                .validate(AsyncOperationKind::Governed)
+                .is_ok()
+        );
+        assert!(
+            options()
+                .ceiling("fuel", 5)
                 .validate(AsyncOperationKind::UpdateGoverned)
                 .is_ok()
         );
     }
 
     #[test]
-    fn format_is_refused_where_nothing_is_serialized() {
-        let mut with_format = options();
-        with_format.set_format(Some("json".to_owned()));
+    fn a_key_the_operation_does_not_take_is_refused_by_name() {
+        let error = options()
+            .text("format", "json")
+            .validate(AsyncOperationKind::Query)
+            .expect_err("a typed result has no format");
+        assert!(error.contains("unknown query option \"format\""), "{error}");
         assert!(
-            with_format
-                .validate(AsyncOperationKind::Query)
-                .expect_err("a typed result has no format")
-                .contains("format")
+            error.contains("resolveService"),
+            "the accepted keys are named: {error}"
         );
-        assert!(with_format.validate(AsyncOperationKind::Raw).is_ok());
         assert!(
-            with_format
-                .validate(AsyncOperationKind::RawWithContext)
+            options()
+                .text("format", "json")
+                .validate(AsyncOperationKind::Raw)
                 .is_ok()
         );
         assert!(
             options()
-                .validate(AsyncOperationKind::RawWithContext)
-                .is_err(),
-            "a context serialization needs its format"
+                .with("retries", OptionValue::Unknown)
+                .validate(AsyncOperationKind::Raw)
+                .expect_err("a key no operation reads")
+                .contains("retries")
         );
-        assert!(options().validate(AsyncOperationKind::Raw).is_ok());
+        assert!(
+            options()
+                .with("cancel", OptionValue::Unknown)
+                .validate(AsyncOperationKind::Governed)
+                .expect_err("a cancellation token")
+                .contains("pass an AbortSignal as signal instead")
+        );
+    }
+
+    #[test]
+    fn the_positional_argument_is_required_by_its_kinds_and_refused_by_the_rest() {
+        assert!(
+            options()
+                .validate(AsyncOperationKind::RawWithContext)
+                .expect_err("a context serialization needs its format")
+                .contains("needs a format")
+        );
+        let with_format = options()
+            .argument("jsonld")
+            .validate(AsyncOperationKind::RawWithContext)
+            .expect("the format is the argument");
+        assert_eq!(with_format.format.as_deref(), Some("jsonld"));
+        assert!(
+            options()
+                .validate(AsyncOperationKind::EntailmentGoverned)
+                .expect_err("an entailment query needs its regime")
+                .contains("needs a regime")
+        );
+        let with_regime = options()
+            .argument("rdfs")
+            .validate(AsyncOperationKind::EntailmentGoverned)
+            .expect("the regime is the argument");
+        assert_eq!(with_regime.regime.as_deref(), Some("rdfs"));
+        assert!(
+            options()
+                .argument("rdfs")
+                .validate(AsyncOperationKind::Governed)
+                .expect_err("a governed query takes no argument")
+                .contains("takes no positional argument")
+        );
     }
 
     #[test]
     fn options_json_needs_a_format_and_a_raw_operation() {
-        let mut configured = options();
-        configured.set_options_json(Some("{}".to_owned()));
-        assert!(configured.validate(AsyncOperationKind::Raw).is_err());
-        assert!(configured.validate(AsyncOperationKind::Governed).is_err());
-        configured.set_format(Some("jsonld".to_owned()));
-        assert!(configured.validate(AsyncOperationKind::Raw).is_ok());
+        assert!(
+            options()
+                .text("optionsJson", "{}")
+                .validate(AsyncOperationKind::Raw)
+                .is_err()
+        );
+        assert!(
+            options()
+                .text("optionsJson", "{}")
+                .validate(AsyncOperationKind::Governed)
+                .is_err()
+        );
+        assert!(
+            options()
+                .text("optionsJson", "{}")
+                .text("format", "jsonld")
+                .validate(AsyncOperationKind::Raw)
+                .is_ok()
+        );
     }
 
     #[test]
     fn provenance_is_refused_outside_a_raw_operation() {
-        let mut provenance = options();
-        provenance.set_provenance_prefix(Some("prov".to_owned()));
-        provenance.set_provenance_iri(Some("http://example.org/prov#".to_owned()));
+        let provenance = || {
+            options().with(
+                "provenanceNamespace",
+                OptionValue::Provenance {
+                    prefix: "prov".to_owned(),
+                    iri: "http://example.org/prov#".to_owned(),
+                },
+            )
+        };
         assert!(
-            provenance
+            provenance()
                 .validate(AsyncOperationKind::Governed)
                 .expect_err("a governed outcome has no results document")
                 .contains("provenanceNamespace")
         );
-        assert!(provenance.validate(AsyncOperationKind::Raw).is_ok());
+        assert!(provenance().validate(AsyncOperationKind::Raw).is_ok());
     }
 
     #[test]
-    fn an_entailment_operation_needs_a_regime_that_no_other_operation_takes() {
+    fn a_catalog_without_a_handler_is_refused() {
+        let catalog = || {
+            OptionValue::Catalog(
+                catalog(&[(ENDPOINT, r#"{"capabilities":["query","network"]}"#)]).inner,
+            )
+        };
         assert!(
             options()
-                .validate(AsyncOperationKind::EntailmentGoverned)
-                .is_err()
-        );
-        let mut with_regime = options();
-        with_regime.set_regime(Some("rdfs".to_owned()));
-        assert!(
-            with_regime
-                .validate(AsyncOperationKind::EntailmentGoverned)
-                .is_ok()
-        );
-        assert!(with_regime.validate(AsyncOperationKind::Governed).is_err());
-    }
-
-    #[test]
-    fn a_catalog_without_a_service_handler_is_refused() {
-        let mut catalog = ServiceCatalog::new();
-        catalog
-            .add_service_message(
-                ENDPOINT.to_owned(),
-                r#"{"capabilities":["query","network"]}"#,
-            )
-            .expect("profile parses");
-        let mut orphan = options();
-        orphan.set_catalog(&catalog);
-        assert!(
-            orphan
+                .with("catalog", catalog())
                 .validate(AsyncOperationKind::Query)
                 .expect_err("a catalog with nothing to govern")
                 .contains("resolveService")
         );
-        orphan.set_handlers(true, false);
-        assert!(orphan.validate(AsyncOperationKind::Query).is_ok());
+        assert!(
+            options()
+                .with("catalog", catalog())
+                .handlers(true, false)
+                .validate(AsyncOperationKind::Query)
+                .is_ok()
+        );
+        assert!(
+            options()
+                .with("catalog", catalog())
+                .handlers(false, true)
+                .validate(AsyncOperationKind::Update)
+                .is_ok(),
+            "a catalog governs LOAD too"
+        );
     }
 
     #[test]
     fn a_local_service_declared_twice_is_refused() {
         let frozen = seed().view().freeze().expect("freeze");
-        let mut local = options();
-        local
-            .add_local_frozen(ENDPOINT.to_owned(), Arc::clone(&frozen))
-            .expect("first declaration");
+        let services = |endpoints: &[&str]| {
+            OptionValue::LocalServices(
+                endpoints
+                    .iter()
+                    .map(|endpoint| ((*endpoint).to_owned(), Arc::clone(&frozen)))
+                    .collect(),
+            )
+        };
         assert!(
-            local
-                .add_local_frozen("http://example.org/other".to_owned(), Arc::clone(&frozen))
+            options()
+                .with(
+                    "localServices",
+                    services(&[ENDPOINT, "http://example.org/other"])
+                )
+                .validate(AsyncOperationKind::Query)
                 .is_ok()
         );
         assert!(
-            local
-                .add_local_frozen(ENDPOINT.to_owned(), frozen)
+            options()
+                .with("localServices", services(&[ENDPOINT, ENDPOINT]))
+                .validate(AsyncOperationKind::Query)
                 .expect_err("duplicate")
                 .contains("twice")
         );
@@ -4398,6 +5092,26 @@ mod tests {
                 .expect_err("capabilities are required")
                 .contains("capabilities")
         );
+    }
+
+    /// A timeout the host's timer could not honour is refused; the longest one it can is
+    /// accepted, and so is the shortest.
+    #[test]
+    fn a_profile_timeout_past_the_host_timer_range_is_refused() {
+        for refused in ["0", "2147483648", "18446744073709551615"] {
+            let error = parse_profile(&format!(
+                r#"{{"capabilities":["query"],"timeoutMs":{refused}}}"#
+            ))
+            .expect_err("out of range");
+            assert!(error.contains("timeoutMs"), "{refused}: {error}");
+        }
+        for accepted in [1_u64, MAX_TIMEOUT_MS] {
+            let profile = parse_profile(&format!(
+                r#"{{"capabilities":["query"],"timeoutMs":{accepted}}}"#
+            ))
+            .expect("in range");
+            assert_eq!(profile.timeout(), Some(Duration::from_millis(accepted)));
+        }
     }
 
     #[test]
@@ -4482,10 +5196,30 @@ mod tests {
 
     // ── Effect mapping ──────────────────────────────────────────────────────────────
 
+    const ANSWERED: SuspendStatus = SuspendStatus::Answered;
+
+    fn bindings() -> Delivered {
+        Delivered::Bindings(Arc::from(SRJ))
+    }
+
+    fn service(
+        status: SuspendStatus,
+        fired: Option<StopCause>,
+        delivered: Option<Delivered>,
+        slots: &JobSlots,
+    ) -> Result<Vec<u8>, RemoteError> {
+        service_answer(ENDPOINT, status, fired, delivered, slots).map(|bytes| bytes.to_vec())
+    }
+
     #[test]
     fn a_fired_signal_is_reported_before_whatever_was_delivered() {
         let slots = slots();
-        let abandoned = service_answer(ENDPOINT, Some(StopCause::Deadline), None, &slots);
+        let abandoned = service(
+            SuspendStatus::Abandoned,
+            Some(StopCause::Deadline),
+            None,
+            &slots,
+        );
         assert_eq!(
             abandoned,
             Err(RemoteError::Governed(TrippedGovernor::Stopped {
@@ -4493,10 +5227,10 @@ mod tests {
             })),
             "an abandoned exchange keeps the positional prefix"
         );
-        let completed = service_answer(
-            ENDPOINT,
+        let completed = service(
+            ANSWERED,
             Some(StopCause::Cancelled),
-            Some(Delivered::Bindings(SRJ.to_vec())),
+            Some(bindings()),
             &slots,
         );
         assert_eq!(
@@ -4508,8 +5242,8 @@ mod tests {
             )),
             "a completed, discarded response withdraws it"
         );
-        let failed = service_answer(
-            ENDPOINT,
+        let failed = service(
+            ANSWERED,
             Some(StopCause::Cancelled),
             Some(Delivered::Failure {
                 kind: FailureKind::Transport,
@@ -4528,17 +5262,12 @@ mod tests {
     fn deliveries_map_onto_the_remote_seam() {
         let slots = slots();
         assert_eq!(
-            service_answer(
-                ENDPOINT,
-                None,
-                Some(Delivered::Bindings(SRJ.to_vec())),
-                &slots
-            ),
+            service(ANSWERED, None, Some(bindings()), &slots),
             Ok(SRJ.to_vec())
         );
         assert_eq!(
-            service_answer(
-                ENDPOINT,
+            service(
+                ANSWERED,
                 None,
                 Some(Delivered::Failure {
                     kind: FailureKind::Transport,
@@ -4552,8 +5281,8 @@ mod tests {
         // this engine withheld — see `RemoteError::HostDenied`'s docs. Only the native
         // catalog gate in `HttpRemoteQuerySource::resolve` produces `RemoteError::Denied`,
         // and that path never reaches `service_answer` at all.
-        let denied = service_answer(
-            ENDPOINT,
+        let denied = service(
+            ANSWERED,
             None,
             Some(Delivered::Failure {
                 kind: FailureKind::Denied,
@@ -4574,7 +5303,7 @@ mod tests {
     #[test]
     fn a_resolver_that_returns_without_a_delivery_is_a_fault_not_an_answer() {
         let slots = slots();
-        let result = service_answer(ENDPOINT, None, None, &slots);
+        let result = service(ANSWERED, None, None, &slots);
         assert!(
             matches!(result, Err(RemoteError::Governed(_))),
             "{result:?}"
@@ -4584,24 +5313,47 @@ mod tests {
             fault.contains("resolver returned without a delivery"),
             "{fault}"
         );
+        // The neighbour: a host that reports its own fault latches nothing more here.
+        let faulted = slots_with_fault("the host's own words");
+        assert!(matches!(
+            service(SuspendStatus::Fault, None, None, &faulted),
+            Err(RemoteError::Governed(_))
+        ));
+        assert_eq!(faulted.fault(), Some("the host's own words"));
+    }
+
+    fn slots_with_fault(message: &str) -> JobSlots {
+        let slots = slots();
+        slots.latch_fault(message);
+        slots
+    }
+
+    fn load(
+        status: SuspendStatus,
+        delivered: Option<Delivered>,
+        slots: &JobSlots,
+    ) -> Result<LoadStep, LoadError> {
+        load_answer("http://example.org/doc", status, None, delivered, slots)
     }
 
     #[test]
     fn load_deliveries_map_onto_the_load_seam() {
         let slots = slots();
         let graph = parse_document(REMOTE_NT.as_bytes(), "text/turtle", None).expect("parses");
-        assert!(
-            load_answer(
-                "http://example.org/doc",
-                None,
-                Some(Delivered::Graph(graph)),
+        assert!(matches!(
+            load(ANSWERED, Some(Delivered::Graph(graph)), &slots),
+            Ok(LoadStep::Graph(_))
+        ));
+        assert!(matches!(
+            load(
+                ANSWERED,
+                Some(Delivered::Redirect("/moved".to_owned())),
                 &slots
-            )
-            .is_ok()
-        );
-        let failed = load_answer(
-            "http://example.org/doc",
-            None,
+            ),
+            Ok(LoadStep::Redirect(location)) if location == "/moved"
+        ));
+        let failed = load(
+            ANSWERED,
             Some(Delivered::Failure {
                 kind: FailureKind::Transport,
                 message: "HTTP 404".to_owned(),
@@ -4611,9 +5363,18 @@ mod tests {
         .expect_err("a failure");
         assert_eq!(failed, LoadError::Transport("HTTP 404".to_owned()));
         assert_eq!(failed.code(), "native-sparql-load-failed");
-        let denied = load_answer(
-            "http://example.org/doc",
-            None,
+        let undecodable = load(
+            ANSWERED,
+            Some(Delivered::Failure {
+                kind: FailureKind::Decode,
+                message: "not Turtle".to_owned(),
+            }),
+            &slots,
+        )
+        .expect_err("a decode failure");
+        assert_eq!(undecodable.code(), "native-sparql-load-decode");
+        let denied = load(
+            ANSWERED,
             Some(Delivered::Failure {
                 kind: FailureKind::Denied,
                 message: "policy".to_owned(),
@@ -4621,80 +5382,95 @@ mod tests {
             &slots,
         )
         .expect_err("a denial");
-        assert_eq!(denied.code(), "native-sparql-load-denied");
+        assert_eq!(denied.code(), "native-sparql-load-host-denied");
         assert_eq!(
             denied,
             LoadError::HostDenied("policy".to_owned()),
-            "a LOAD denial reports the host's own decision, never an invented catalog cause"
+            "a LOAD denial the host delivers is the host's own decision"
         );
         assert_eq!(denied.to_string(), "the host denied the request: policy");
         assert!(slots.fault().is_none(), "failures are answers, not faults");
-        let missing =
-            load_answer("http://example.org/doc", None, None, &slots).expect_err("no delivery");
+        let missing = load(ANSWERED, None, &slots).expect_err("no delivery");
         assert_eq!(missing.code(), "native-sparql-load-fault");
         assert!(slots.fault().is_some(), "a missing delivery is a fault");
     }
 
-    // ── The ticket exchange ─────────────────────────────────────────────────────────
-
+    /// With a catalog, a `LOAD` source the catalog does not grant `network` is the
+    /// catalog's own denial, decided before any effect; a granted one is fetched with its
+    /// profile's headers, user agent and timeout; without a catalog nothing is refused.
     #[test]
-    fn a_delivery_must_name_the_outstanding_effect() {
-        let slots = slots();
-        let seq = slots
-            .issue(EffectPayload::Load {
-                iri: "http://example.org/doc".to_owned(),
-            })
-            .expect("issued");
-        let effect = slots.take_effect().expect("posted");
-        assert_eq!(effect.seq(), seq);
-        assert_eq!(effect.kind(), AsyncEffectKind::Load);
-        assert_eq!(effect.iri().as_deref(), Some("http://example.org/doc"));
-        assert!(slots.take_effect().is_none(), "an effect is taken once");
-
-        // Bindings cannot answer a LOAD: a fault, and the effect stays outstanding.
-        assert_eq!(
-            slots.deliver(seq, Delivered::Bindings(SRJ.to_vec())),
-            DELIVERY_FAULT
-        );
-        assert!(slots.fault().expect("latched").contains("Load"));
-    }
-
-    #[test]
-    fn stale_future_and_late_deliveries_are_told_apart() {
-        let slots = slots();
-        let first = slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
-            .expect("issued");
-        assert_eq!(
-            slots.deliver(first, Delivered::Bindings(SRJ.to_vec())),
-            DELIVERY_ACCEPTED
-        );
-        assert!(matches!(slots.resume(first), Some(Delivered::Bindings(_))));
-        let second = slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
-            .expect("issued");
-        // A promise settling for the first effect after it was answered: stale, no fault.
-        assert_eq!(
-            slots.deliver(first, Delivered::Bindings(SRJ.to_vec())),
-            DELIVERY_STALE
-        );
-        assert!(slots.fault().is_none());
-        // A sequence number never issued is a bridge bug.
-        assert_eq!(
-            slots.deliver(second + 5, Delivered::Bindings(SRJ.to_vec())),
-            DELIVERY_FAULT
-        );
-        let fault = slots.fault().expect("latched");
+    fn the_catalog_decides_a_load_before_the_host_is_asked() {
+        let catalog = catalog(&[
+            (
+                "http://example.org/doc",
+                r#"{"capabilities":["network"],"headers":[["X-A","1"]],"userAgent":"w/1","timeoutMs":250}"#,
+            ),
+            (
+                "http://example.org/query-only",
+                r#"{"capabilities":["query"]}"#,
+            ),
+        ]);
+        let resolver = JspiGraphResolver {
+            watch: Arc::new(JspiStopWatch::new(Arc::new(slots()), None, u32::MAX)),
+            catalog: Some(catalog.inner),
+        };
+        let allowed = resolver
+            .authorize("http://example.org/doc")
+            .expect("granted network");
+        assert_eq!(allowed.headers, [("X-A".to_owned(), "1".to_owned())]);
+        assert_eq!(allowed.user_agent.as_deref(), Some("w/1"));
+        assert!((allowed.timeout_ms - 250.0).abs() < f64::EPSILON);
+        assert!(allowed.accept.contains("text/turtle"));
+        let withheld = resolver
+            .authorize("http://example.org/query-only")
+            .expect_err("no network");
+        assert_eq!(withheld.code(), "native-sparql-load-denied");
+        assert!(withheld.to_string().contains("network"), "{withheld}");
+        assert!(matches!(
+            resolver.authorize("http://example.org/unlisted"),
+            Err(LoadError::Denied(_))
+        ));
         assert!(
-            fault.contains(&(second + 5).to_string()) && fault.contains(&second.to_string()),
-            "the fault names both sequence numbers: {fault}"
+            resolver.watch.slots.take_effect().is_none(),
+            "a denial issues no effect"
         );
-        slots.finished.store(true, Ordering::Relaxed);
+        // Without a catalog, every source is fetched, with the default timeout.
+        let open = JspiGraphResolver {
+            watch: Arc::clone(&resolver.watch),
+            catalog: None,
+        };
+        let effect = open
+            .authorize("http://example.org/unlisted")
+            .expect("no catalog, no gate");
+        assert_eq!(effect.headers, Vec::<(String, String)>::new());
         assert_eq!(
-            slots.deliver(second, Delivered::Bindings(SRJ.to_vec())),
-            DELIVERY_FINISHED
+            effect.timeout_ms.to_bits(),
+            (DEFAULT_TIMEOUT.as_secs_f64() * 1000.0).to_bits()
         );
     }
+
+    #[test]
+    fn a_redirect_resolves_against_the_iri_it_redirected() {
+        assert_eq!(
+            redirect_target("http://example.org/a/doc", "/moved").as_deref(),
+            Ok("http://example.org/moved")
+        );
+        assert_eq!(
+            redirect_target("http://example.org/a/doc", "next").as_deref(),
+            Ok("http://example.org/a/next")
+        );
+        assert_eq!(
+            redirect_target("http://example.org/a/doc", "https://example.org/x").as_deref(),
+            Ok("https://example.org/x")
+        );
+        assert!(
+            redirect_target("http://example.org/a/doc", "http://exa mple.org/")
+                .expect_err("not an IRI")
+                .contains("not a resolvable IRI")
+        );
+    }
+
+    // ── The ticket exchange ─────────────────────────────────────────────────────────
 
     fn service_effect() -> ServiceEffect {
         ServiceEffect {
@@ -4708,16 +5484,106 @@ mod tests {
             silent: true,
             max_intermediate_cells: Some(10),
             remaining_deadline_ms: None,
+            cacheable: false,
         }
+    }
+
+    fn service_payload() -> EffectPayload {
+        EffectPayload::Service {
+            effect: Box::new(service_effect()),
+            exchange: 1,
+        }
+    }
+
+    fn load_payload(iri: &str) -> EffectPayload {
+        EffectPayload::Load(Box::new(LoadEffect {
+            iri: iri.to_owned(),
+            accept: load_accept(),
+            user_agent: None,
+            headers: vec![("X-Key".to_owned(), "secret".to_owned())],
+            timeout_ms: 30_000.0,
+        }))
+    }
+
+    #[test]
+    fn a_delivery_must_name_the_outstanding_effect() {
+        let slots = slots();
+        let seq = slots
+            .issue(load_payload("http://example.org/doc"), None)
+            .expect("issued");
+        let effect = slots.take_effect().expect("posted");
+        assert_eq!(effect.seq(), seq);
+        assert_eq!(effect.kind(), EffectKind::Load);
+        assert_eq!(effect.iri().as_deref(), Some("http://example.org/doc"));
+        assert!(
+            effect
+                .accept()
+                .expect("a LOAD accept")
+                .contains("text/turtle")
+        );
+        assert_eq!(effect.headers(), ["X-Key", "secret"]);
+        assert!(
+            !format!("{effect:?}").contains("secret"),
+            "a log never shows a header value"
+        );
+        assert!(slots.take_effect().is_none(), "an effect is taken once");
+
+        // Bindings cannot answer a LOAD: a fault, and the effect stays outstanding.
+        assert_eq!(slots.deliver(seq, bindings()), DeliveryStatus::Fault);
+        assert!(slots.fault().expect("latched").contains("Load"));
+    }
+
+    #[test]
+    fn stale_future_and_late_deliveries_are_told_apart() {
+        let slots = slots();
+        let first = slots.issue(service_payload(), None).expect("issued");
+        assert_eq!(slots.deliver(first, bindings()), DeliveryStatus::Accepted);
+        assert!(matches!(slots.resume(first), Some(Delivered::Bindings(_))));
+        let second = slots.issue(service_payload(), None).expect("issued");
+        // A promise settling for the first effect after it was answered: stale, no fault.
+        assert_eq!(slots.deliver(first, bindings()), DeliveryStatus::Stale);
+        assert!(slots.fault().is_none());
+        // A sequence number never issued is a bridge bug.
+        assert_eq!(slots.deliver(second + 5, bindings()), DeliveryStatus::Fault);
+        let fault = slots.fault().expect("latched");
+        assert!(
+            fault.contains(&(second + 5).to_string()) && fault.contains(&second.to_string()),
+            "the fault names both sequence numbers: {fault}"
+        );
+        slots.finished.store(true, Ordering::Relaxed);
+        assert_eq!(slots.deliver(second, bindings()), DeliveryStatus::Finished);
+    }
+
+    /// A job that has issued every sequence number there is latches a fault rather than
+    /// wrapping around to a number a stale delivery could name; the number before it is
+    /// still issued.
+    #[test]
+    fn the_last_sequence_number_is_issued_and_the_next_one_latches_a_fault() {
+        let slots = slots();
+        lock(&slots.tickets).last_issued = u32::MAX - 1;
+        let last = slots
+            .issue(EffectPayload::Yield, None)
+            .expect("the last number");
+        assert_eq!(last, u32::MAX);
+        assert!(slots.fault().is_none());
+        drop(slots.resume(last));
+        assert_eq!(slots.issue(EffectPayload::Yield, None), None);
+        assert!(
+            slots
+                .fault()
+                .expect("latched")
+                .contains("every effect sequence number")
+        );
     }
 
     #[test]
     fn a_service_effect_exposes_its_request_and_hides_its_secret_from_logs() {
         let effect = AsyncEffect {
             seq: 7,
-            payload: EffectPayload::Service(Box::new(service_effect())),
+            payload: service_payload(),
+            abandon_after_ms: Some(1.0),
         };
-        assert_eq!(effect.kind(), AsyncEffectKind::Service);
+        assert_eq!(effect.kind(), EffectKind::Service);
         assert_eq!(effect.endpoint().as_deref(), Some(ENDPOINT));
         assert_eq!(
             effect.content_type().as_deref(),
@@ -4728,6 +5594,9 @@ mod tests {
             Some("application/sparql-results+json")
         );
         assert!(effect.silent());
+        assert!(!effect.cacheable());
+        assert_eq!(effect.exchange_id(), Some(1.0));
+        assert_eq!(effect.abandon_after_ms(), Some(1.0));
         assert_eq!(effect.max_intermediate_cells(), Some(10));
         assert_eq!(effect.headers(), vec!["Authorization", "Bearer secret"]);
         assert!(effect.iri().is_none());
@@ -4744,32 +5613,39 @@ mod tests {
             &dataset,
             AsyncOperationKind::Query,
             "ASK {}",
-            &options(),
+            options(),
         );
         let slots = &job.inner.watch.slots;
         let seq = slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
+            .issue(load_payload("http://example.org/doc"), None)
             .expect("issued");
         assert_eq!(
             job.deliver_failure(seq, "nope", "x".to_owned()),
-            DELIVERY_FAULT
+            DeliveryStatus::Fault
         );
-        assert!(slots.fault().expect("latched").contains("nope"));
+        assert_eq!(
+            slots.fault(),
+            Some(
+                "unknown failure kind \"nope\" for effect 1 (expected \"transport\" or \
+                 \"denied\")"
+            )
+        );
+        job.finish();
 
         let neighbour = begin(
             &engine,
             &dataset,
             AsyncOperationKind::Query,
             "ASK {}",
-            &options(),
+            options(),
         );
         let slots = &neighbour.inner.watch.slots;
         let seq = slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
+            .issue(load_payload("http://example.org/doc"), None)
             .expect("issued");
         assert_eq!(
             neighbour.deliver_failure(seq, "denied", "policy".to_owned()),
-            DELIVERY_ACCEPTED
+            DeliveryStatus::Accepted
         );
         assert!(slots.fault().is_none());
         assert!(matches!(
@@ -4779,39 +5655,347 @@ mod tests {
                 ..
             })
         ));
+        neighbour.finish();
     }
 
+    /// A document that arrives and does not parse — an unknown media type, or bytes that
+    /// are not the syntax named — is the `LOAD`'s decode failure; the neighbour parses.
     #[test]
-    fn an_unparseable_load_document_is_a_load_failure_not_a_fault() {
+    fn an_unparseable_load_document_is_a_decode_failure_not_a_fault() {
         let engine = QueryEngine::new();
         let dataset = seed();
-        for (media_type, parses) in [("text/x-unknown", false), ("text/turtle", true)] {
+        for (media_type, bytes, parses) in [
+            ("text/x-unknown", REMOTE_NT, false),
+            ("text/turtle", "<http://example.org/s> <", false),
+            ("text/turtle", REMOTE_NT, true),
+        ] {
             let job = begin(
                 &engine,
                 &dataset,
                 AsyncOperationKind::Update,
                 "CLEAR ALL",
-                &options(),
+                options(),
             );
             let slots = &job.inner.watch.slots;
             let seq = slots
-                .issue(EffectPayload::Load {
-                    iri: "http://example.org/doc".to_owned(),
-                })
+                .issue(load_payload("http://example.org/doc"), None)
                 .expect("issued");
             assert_eq!(
-                job.deliver_graph(seq, REMOTE_NT.as_bytes(), media_type, None),
-                DELIVERY_ACCEPTED
+                job.deliver_graph(seq, bytes.as_bytes(), media_type, None),
+                DeliveryStatus::Accepted
             );
             assert!(slots.fault().is_none(), "{media_type}");
             match (slots.resume(seq), parses) {
                 (Some(Delivered::Graph(graph)), true) => assert_eq!(graph.quads().count(), 1),
-                (Some(Delivered::Failure { message, .. }), false) => {
-                    assert!(message.contains("text/x-unknown"), "{message}");
-                }
+                (
+                    Some(Delivered::Failure {
+                        kind: FailureKind::Decode,
+                        ..
+                    }),
+                    false,
+                ) => {}
                 (other, _) => panic!("{media_type}: unexpected {other:?}"),
             }
+            job.finish();
         }
+    }
+
+    // ── Abandonment ─────────────────────────────────────────────────────────────────
+
+    /// An effect abandoned at the job's deadline is the deadline's trip; one abandoned at
+    /// its own, earlier timeout is a transport failure `SILENT` absorbs. The instant is
+    /// whichever falls first.
+    #[test]
+    fn an_effect_expires_as_the_deadline_or_as_its_own_timeout() {
+        let short = JspiStopWatch::new(Arc::new(slots()), Some(1_000), u32::MAX);
+        let (after, why) = short.abandonment(30_000.0);
+        assert_eq!(why, Abandon::Deadline);
+        assert!(after <= 1_000.0);
+        assert_eq!(after.fract(), 0.0, "a timer takes whole milliseconds");
+        let long = JspiStopWatch::new(Arc::new(slots()), Some(60_000), u32::MAX);
+        assert_eq!(long.abandonment(0.25), (1.0, Abandon::Timeout(0.25)));
+        assert_eq!(
+            long.abandonment(30_000.0),
+            (30_000.0, Abandon::Timeout(30_000.0))
+        );
+        let unbounded = JspiStopWatch::new(Arc::new(slots()), None, u32::MAX);
+        assert_eq!(
+            unbounded.abandonment(250.0),
+            (250.0, Abandon::Timeout(250.0))
+        );
+
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        // At the deadline: the effect is abandoned and the trip reads as a deadline.
+        let deadline = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "ASK {}",
+            options(),
+        );
+        let slots = &deadline.inner.watch.slots;
+        let seq = slots
+            .issue(
+                load_payload("http://example.org/doc"),
+                Some((0.0, Abandon::Deadline)),
+            )
+            .expect("issued");
+        assert_eq!(deadline.expire_effect(seq), SuspendStatus::Abandoned);
+        assert_eq!(
+            deadline.inner.watch.observe_now(),
+            Some(StopCause::Deadline)
+        );
+        assert!(matches!(slots.resume(seq), Some(Delivered::Governed)));
+        deadline.finish();
+        // At its own timeout: a transport failure, and the job's signal stays quiet.
+        let timeout = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "ASK {}",
+            options(),
+        );
+        let slots = &timeout.inner.watch.slots;
+        let seq = slots
+            .issue(
+                load_payload("http://example.org/doc"),
+                Some((250.0, Abandon::Timeout(250.0))),
+            )
+            .expect("issued");
+        assert_eq!(timeout.expire_effect(seq), SuspendStatus::Answered);
+        assert_eq!(timeout.inner.watch.observe_now(), None);
+        match slots.resume(seq) {
+            Some(Delivered::Failure {
+                kind: FailureKind::Transport,
+                message,
+            }) => assert_eq!(message, "no answer within 250 ms"),
+            other => panic!("expected a transport failure, got {other:?}"),
+        }
+        // An effect already answered stays answered.
+        let seq = slots
+            .issue(
+                load_payload("http://example.org/doc"),
+                Some((250.0, Abandon::Timeout(250.0))),
+            )
+            .expect("issued");
+        assert_eq!(
+            timeout.deliver_failure(seq, "transport", "down".to_owned()),
+            DeliveryStatus::Accepted
+        );
+        assert_eq!(timeout.expire_effect(seq), SuspendStatus::Answered);
+        assert!(slots.fault().is_none());
+        timeout.finish();
+    }
+
+    // ── Shared SERVICE exchanges ────────────────────────────────────────────────────
+
+    fn key(handler: u32, silent: bool) -> ExchangeKey {
+        let mut effect = service_effect();
+        effect.silent = silent;
+        ExchangeKey::new(handler, &effect)
+    }
+
+    /// A job joins an open exchange only for the same request, to the same handler,
+    /// under a deadline no later than the exchange's; every other job opens its own.
+    #[test]
+    fn a_job_joins_only_an_exchange_asking_the_same_question_by_its_deadline() {
+        let owner = Arc::new(slots());
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), Some(60_000.0), (Arc::clone(&owner), 1));
+        assert_eq!(find_exchange(&key(1, false), Some(30_000.0)), Some(id));
+        assert_eq!(find_exchange(&key(1, false), Some(60_000.0)), Some(id));
+        assert_eq!(find_exchange(&key(1, false), Some(90_000.0)), None);
+        assert_eq!(find_exchange(&key(1, false), None), None, "no deadline");
+        assert_eq!(find_exchange(&key(1, true), Some(30_000.0)), None, "SILENT");
+        assert_eq!(
+            find_exchange(&key(2, false), Some(30_000.0)),
+            None,
+            "handler"
+        );
+        leave_exchange(id, owner.job);
+        assert!(!AsyncJob::exchange_is_open(id as f64));
+
+        let unbounded = next_exchange_id();
+        open_exchange(unbounded, key(1, false), None, (Arc::clone(&owner), 2));
+        assert_eq!(find_exchange(&key(1, false), None), Some(unbounded));
+        assert_eq!(
+            find_exchange(&key(1, false), Some(90_000.0)),
+            Some(unbounded)
+        );
+        leave_exchange(unbounded, owner.job);
+    }
+
+    /// An exchange's answer reaches every job still waiting on it; a job that left takes
+    /// nothing; the exchange stays open while any job waits and closes with the last.
+    #[test]
+    fn an_exchange_fans_its_answer_out_and_closes_with_its_last_waiter() {
+        let first = Arc::new(JobSlots::new(101, slots().bounds));
+        let second = Arc::new(JobSlots::new(102, slots().bounds));
+        let first_seq = first.issue(service_payload(), None).expect("issued");
+        let second_seq = second.issue(service_payload(), None).expect("issued");
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), None, (Arc::clone(&first), first_seq));
+        add_waiter(id, (Arc::clone(&second), second_seq));
+        assert_eq!(
+            AsyncJob::deliver_exchange_bindings(id as f64, SRJ.to_vec()),
+            DeliveryStatus::Accepted
+        );
+        assert!(matches!(
+            first.resume(first_seq),
+            Some(Delivered::Bindings(_))
+        ));
+        assert!(matches!(
+            second.resume(second_seq),
+            Some(Delivered::Bindings(_))
+        ));
+        assert!(!AsyncJob::exchange_is_open(id as f64));
+        assert_eq!(
+            AsyncJob::deliver_exchange_bindings(id as f64, SRJ.to_vec()),
+            DeliveryStatus::Finished,
+            "a closed exchange takes nothing"
+        );
+
+        let staying = Arc::new(JobSlots::new(103, slots().bounds));
+        let leaving = Arc::new(JobSlots::new(104, slots().bounds));
+        let staying_seq = staying.issue(service_payload(), None).expect("issued");
+        let leaving_seq = leaving.issue(service_payload(), None).expect("issued");
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), None, (Arc::clone(&staying), staying_seq));
+        add_waiter(id, (Arc::clone(&leaving), leaving_seq));
+        leaving.wait_on(id);
+        drop(leaving.resume(leaving_seq));
+        assert!(AsyncJob::exchange_is_open(id as f64), "one job still waits");
+        assert_eq!(
+            AsyncJob::deliver_exchange_failure(id as f64, "transport", "down".to_owned()),
+            DeliveryStatus::Accepted
+        );
+        assert!(matches!(
+            staying.resume(staying_seq),
+            Some(Delivered::Failure {
+                kind: FailureKind::Transport,
+                ..
+            })
+        ));
+        assert!(leaving.fault().is_none(), "the job that left took nothing");
+
+        let only = Arc::new(JobSlots::new(105, slots().bounds));
+        let seq = only.issue(service_payload(), None).expect("issued");
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), None, (Arc::clone(&only), seq));
+        only.wait_on(id);
+        drop(only.resume(seq));
+        assert!(
+            !AsyncJob::exchange_is_open(id as f64),
+            "the last waiter left"
+        );
+    }
+
+    /// A host fault in the shared call — or an answer of a kind the protocol does not
+    /// define — is the fault of every job waiting on it; a defined failure is an answer.
+    #[test]
+    fn a_fault_in_a_shared_call_is_every_waiting_jobs_fault() {
+        let first = Arc::new(JobSlots::new(111, slots().bounds));
+        let second = Arc::new(JobSlots::new(112, slots().bounds));
+        let first_seq = first.issue(service_payload(), None).expect("issued");
+        let second_seq = second.issue(service_payload(), None).expect("issued");
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), None, (Arc::clone(&first), first_seq));
+        add_waiter(id, (Arc::clone(&second), second_seq));
+        assert_eq!(
+            AsyncJob::deliver_exchange_failure(id as f64, "nope", "?".to_owned()),
+            DeliveryStatus::Fault
+        );
+        assert_eq!(
+            first.fault(),
+            Some(
+                "unknown failure kind \"nope\" for effect 1 (expected \"transport\" or \
+                 \"denied\")"
+            )
+        );
+        assert!(second.fault().is_some());
+        let third = Arc::new(JobSlots::new(113, slots().bounds));
+        let seq = third.issue(service_payload(), None).expect("issued");
+        let id = next_exchange_id();
+        open_exchange(id, key(1, false), None, (Arc::clone(&third), seq));
+        assert_eq!(
+            AsyncJob::fault_exchange(id as f64, "resolveService threw: boom"),
+            DeliveryStatus::Fault
+        );
+        assert_eq!(third.fault(), Some("resolveService threw: boom"));
+    }
+
+    /// Only a request that could not have been shared with another's host call can be
+    /// cached by a shared cache: one carrying a credential — in its catalog profile or
+    /// in a credential header — is not cacheable; the neighbour without one is.
+    #[test]
+    fn a_credentialed_request_is_never_cacheable() {
+        let catalog = catalog(&[
+            (
+                "http://example.org/secret",
+                r#"{"capabilities":["query","network","credentials"],"credential":{"header":"X-Key","value":"k"}}"#,
+            ),
+            (ENDPOINT, r#"{"capabilities":["query","network"]}"#),
+        ]);
+        let transport = JspiTransport {
+            watch: Arc::new(JspiStopWatch::new(Arc::new(slots()), None, u32::MAX)),
+            catalog: Some(catalog.inner),
+            handler: 1,
+            memo: Mutex::new(BTreeMap::new()),
+        };
+        let request = |endpoint: &'static str, headers: &'static [(String, String)]| HttpRequest {
+            endpoint,
+            query_text: "SELECT * WHERE { ?s ?p ?o }",
+            user_agent: "test",
+            timeout: Duration::from_secs(1),
+            content_type: "application/sparql-query",
+            accept: "application/sparql-results+json",
+            headers,
+            stop: None,
+        };
+        assert!(!transport.cacheable(&request("http://example.org/secret", &[])));
+        let cookie: &'static [(String, String)] =
+            Box::leak(Box::new([("Cookie".to_owned(), "a=b".to_owned())]));
+        assert!(!transport.cacheable(&request(ENDPOINT, cookie)));
+        let plain: &'static [(String, String)] =
+            Box::leak(Box::new([("X-Tenant".to_owned(), "a".to_owned())]));
+        assert!(transport.cacheable(&request(ENDPOINT, plain)));
+        assert!(transport.cacheable(&request(ENDPOINT, &[])));
+    }
+
+    /// A request the job already had answered with rows is answered from its memo: the
+    /// bytes, and no effect issued. (A request not in the memo suspends, which only a
+    /// JSPI host can resume; the package's own tests observe that neighbour.)
+    #[test]
+    fn a_repeated_request_is_answered_from_the_jobs_memo() {
+        let transport = JspiTransport {
+            watch: Arc::new(JspiStopWatch::new(Arc::new(slots()), None, u32::MAX)),
+            catalog: None,
+            handler: 1,
+            memo: Mutex::new(BTreeMap::new()),
+        };
+        let request = HttpRequest {
+            endpoint: ENDPOINT,
+            query_text: "SELECT * WHERE { ?s ?p ?o }",
+            user_agent: "test",
+            timeout: Duration::from_millis(1),
+            content_type: "application/sparql-query",
+            accept: "application/sparql-results+json",
+            headers: &[],
+            stop: None,
+        };
+        let mut effect = service_effect();
+        effect.headers = Vec::new();
+        effect.silent = false;
+        effect.max_intermediate_cells = None;
+        effect.cacheable = true;
+        lock(&transport.memo).insert(ExchangeKey::new(1, &effect), Arc::from(SRJ));
+        assert_eq!(transport.post(request), Ok(SRJ.to_vec()));
+        assert!(
+            transport.watch.slots.take_effect().is_none(),
+            "a memo hit issues no effect"
+        );
+        assert_eq!(lock(&transport.watch.slots.tickets).last_issued, 0);
     }
 
     // ── The stop watch ──────────────────────────────────────────────────────────────
@@ -4841,7 +6025,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_faults_and_the_host_deadline_stop_the_watch_and_stay_stopped() {
+    fn cancellation_faults_and_an_expired_effect_stop_the_watch_and_stay_stopped() {
         let cancelled = watch(None);
         assert_eq!(cancelled.poll(), None);
         cancelled.cancel.cancel();
@@ -4874,37 +6058,44 @@ mod tests {
             &dataset,
             AsyncOperationKind::Query,
             "ASK {}",
-            &options(),
+            options(),
         );
         let seq = job
             .inner
             .watch
             .slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
+            .issue(load_payload("http://example.org/doc"), None)
             .expect("issued");
-        assert_eq!(job.deliver_governed(seq), DELIVERY_ACCEPTED);
+        assert_eq!(job.deliver_governed(seq), DeliveryStatus::Accepted);
         assert_eq!(job.inner.watch.observe_now(), Some(StopCause::Cancelled));
+        job.finish();
 
         let timed_out = begin(
             &engine,
             &dataset,
             AsyncOperationKind::Query,
             "ASK {}",
-            &options(),
+            options(),
         );
+        timed_out
+            .inner
+            .watch
+            .slots
+            .deadline_tripped
+            .store(true, Ordering::Relaxed);
         let seq = timed_out
             .inner
             .watch
             .slots
-            .issue(EffectPayload::Service(Box::new(service_effect())))
+            .issue(load_payload("http://example.org/doc"), None)
             .expect("issued");
-        assert_eq!(timed_out.trip_deadline(), DELIVERY_ACCEPTED);
-        assert_eq!(timed_out.deliver_governed(seq), DELIVERY_ACCEPTED);
+        assert_eq!(timed_out.deliver_governed(seq), DeliveryStatus::Accepted);
         assert_eq!(
             timed_out.inner.watch.observe_now(),
             Some(StopCause::Deadline),
-            "the host's deadline timer latched first, so the trip is a deadline"
+            "the deadline latched first, so the trip is a deadline"
         );
+        timed_out.finish();
     }
 
     #[test]
@@ -4933,65 +6124,6 @@ mod tests {
                 .expect_err("outside the region")
                 .contains("not running on its stack region")
         );
-    }
-
-    #[test]
-    fn only_the_shadow_stack_refusals_gain_the_region_hint() {
-        let hint = "; this asynchronous job ran on a stack region of 524288 bytes — \
-                    run it with a larger stackBytes";
-        // The evaluator's refusal and the parser's, under the query and the update
-        // parse code: each measured the job's region, so a larger one answers it.
-        for refusal in [
-            "error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: \
-             the request's nesting exceeds what this host's stack can evaluate (OPTIONAL \
-             needs more stack than this thread has left above its 65536-byte reserve)",
-            "error native-sparql-query-parse: SPARQL parse stack exhausted at byte 9: the \
-             group graph pattern opened there nests deeper than the stack parsing it can \
-             hold",
-            "error native-sparql-update-parse: SPARQL parse stack exhausted at byte 9: the \
-             group graph pattern opened there nests deeper than the stack parsing it can \
-             hold",
-        ] {
-            assert_eq!(
-                JobError::error(refusal).with_stack_hint(524_288).message,
-                format!("{refusal}{hint}")
-            );
-        }
-        // The neighbours keep their text: the host-stack refusal (the JavaScript
-        // engine's call stack, which no region changes), a parse error that is not a
-        // stack refusal, another evaluation error, a code that merely starts the same
-        // way, and a fault naming the code.
-        for (kind, message) in [
-            (
-                JobErrorKind::Error,
-                "error native-sparql-host-stack-exhausted: SPARQL nesting exceeds the host \
-                 call-stack budget at byte 9: the group graph pattern opened there nests \
-                 deeper than the JavaScript engine's own call stack holds",
-            ),
-            (
-                JobErrorKind::Error,
-                "error native-sparql-query-parse: SPARQL syntax error at byte 9: \
-                 SPARQL parse stack exhausted at byte 9 is not a keyword",
-            ),
-            (
-                JobErrorKind::Error,
-                "error native-sparql-evaluation: the example.org function failed",
-            ),
-            (
-                JobErrorKind::Error,
-                "error native-sparql-evaluation-stack-exhausted-elsewhere: not this code",
-            ),
-            (
-                JobErrorKind::Fault,
-                "error native-sparql-evaluation-stack-exhausted: a host fault quoting it",
-            ),
-        ] {
-            let error = JobError {
-                kind,
-                message: message.to_owned(),
-            };
-            assert_eq!(error.with_stack_hint(524_288).message, message);
-        }
     }
 
     #[test]
@@ -5100,9 +6232,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Raw,
             SELECT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         assert!(job.is_finished());
         let expected = engine
             .query_raw(&dataset, SELECT, None, None, None, None)
@@ -5119,12 +6251,13 @@ mod tests {
         assert_eq!(
             job.inner
                 .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
-                .expect_err("an outcome is taken once"),
+                .expect_err("an outcome is taken once")
+                .rendered(Lane::Sync),
             "takeRawBytes: the outcome was already taken"
         );
-        assert_eq!(run_job(job.id()), RUN_ALREADY_STARTED);
+        assert_eq!(run_job(job.id()), RunStatus::AlreadyStarted);
         assert_eq!(job.finish(), 0);
-        assert_eq!(run_job(job.id()), RUN_UNKNOWN_JOB);
+        assert_eq!(run_job(job.id()), RunStatus::UnknownJob);
     }
 
     #[test]
@@ -5136,9 +6269,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Query,
             SELECT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let mut result = job
             .take_query_result(Some("select".to_owned()))
             .expect("a SELECT result");
@@ -5156,16 +6289,16 @@ mod tests {
             &dataset,
             AsyncOperationKind::Query,
             "SELEC",
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("error"));
         let frozen = dataset.view().freeze().expect("freeze");
         let expected = NativeSparqlEngine::new()
             .query(&frozen, sparql_request("SELEC", None))
             .expect_err("the sync twin refuses it too")
             .to_string();
-        assert_eq!(job.take_error().as_deref(), Some(expected.as_str()));
+        assert_eq!(job.error_message().as_deref(), Some(expected.as_str()));
         job.finish();
     }
 
@@ -5179,10 +6312,10 @@ mod tests {
             &dataset,
             AsyncOperationKind::Raw,
             &query,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
-        let error = job.take_error().expect("an error");
+        assert_eq!(run_job(job.id()), RunStatus::Error);
+        let error = job.error_message().expect("an error");
         assert!(
             error.contains(&format!(
                 "no remote query source configured for SERVICE <{ENDPOINT}>"
@@ -5200,9 +6333,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Raw,
             &silent,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .query_raw(&dataset, &silent, None, None, None, None)
             .expect("sync twin");
@@ -5232,7 +6365,7 @@ mod tests {
              SERVICE <{ENDPOINT}> {{ ?o <http://example.org/q> ?x }} }}"
         );
         let job = begin(&engine, &dataset, AsyncOperationKind::Raw, &query, &local);
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let text = raw_text(&job);
         assert!(
             text.contains("http://example.org/x") && text.contains("http://example.org/s"),
@@ -5249,9 +6382,9 @@ mod tests {
             &unlisted,
             &local,
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert!(
-            job.take_error()
+            job.error_message()
                 .expect("an error")
                 .contains("no remote query source configured")
         );
@@ -5260,7 +6393,11 @@ mod tests {
         // as an endpoint no handler reaches.
         let silent = unlisted.replace("SERVICE <", "SERVICE SILENT <");
         let job = begin(&engine, &dataset, AsyncOperationKind::Raw, &silent, &local);
-        assert_eq!(run_job(job.id()), RUN_OUTCOME, "silenced, as offline");
+        assert_eq!(
+            run_job(job.id()),
+            RunStatus::Outcome,
+            "silenced, as offline"
+        );
         let text = raw_text(&job);
         assert!(!text.contains("http://example.org/x"), "{text}");
         let silenced = job.take_evidence().silenced();
@@ -5280,7 +6417,7 @@ mod tests {
             &silent_listed,
             &local,
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let text = raw_text(&job);
         assert!(text.contains("http://example.org/x"), "{text}");
         job.finish();
@@ -5295,12 +6432,12 @@ mod tests {
             &dataset,
             AsyncOperationKind::Query,
             SELECT,
-            &options(),
+            options(),
         );
-        assert_eq!(job.cancel(), DELIVERY_ACCEPTED);
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(job.cancel(), DeliveryStatus::Accepted);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
-        assert_eq!(job.cancel(), DELIVERY_FINISHED);
+        assert_eq!(job.cancel(), DeliveryStatus::Finished);
         job.finish();
     }
 
@@ -5313,9 +6450,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Explain,
             SELECT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
             .explain_query(&dataset, SELECT, None)
             .expect("sync twin");
@@ -5327,7 +6464,8 @@ mod tests {
         assert_eq!(
             job.inner
                 .take_outcome("takeQueryResult", &[AsyncOperationKind::Query])
-                .expect_err("a take of the wrong kind is refused"),
+                .expect_err("a take of the wrong kind is refused")
+                .rendered(Lane::Sync),
             "takeQueryResult is not available on a explain job"
         );
         job.finish();
@@ -5364,7 +6502,7 @@ mod tests {
             &query,
             &local,
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let text = raw_text(&job);
         // One seed row joins the endpoint's one row: the SERVICE node materialised the
         // endpoint's row and the projection the joined one.
@@ -5388,10 +6526,10 @@ mod tests {
             &dataset,
             AsyncOperationKind::Explain,
             SELECT,
-            &options(),
+            options(),
         );
-        assert_eq!(job.cancel(), DELIVERY_ACCEPTED);
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(job.cancel(), DeliveryStatus::Accepted);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
         job.finish();
     }
@@ -5422,14 +6560,15 @@ mod tests {
             SELECT,
             &governed,
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let mut outcome = job.take_query_outcome().expect("an outcome");
         assert!(!outcome.is_complete());
         assert!(outcome.take_tripped().is_some());
         assert_eq!(
             job.inner
                 .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
-                .expect_err("a take of the wrong kind is refused"),
+                .expect_err("a take of the wrong kind is refused")
+                .rendered(Lane::Sync),
             "takeRawBytes is not available on a governed job"
         );
         job.finish();
@@ -5444,16 +6583,17 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             "INSERT DATA { <http://example.org/n> <http://example.org/p> <http://example.org/o> }",
-            &options(),
+            options(),
         );
-        assert_eq!(job.fault("host bug".to_owned()), DELIVERY_ACCEPTED);
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(job.fault("host bug".to_owned()), DeliveryStatus::Accepted);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("fault"));
         let before = dataset.current_generation();
         assert_eq!(
             job.inner
                 .commit_into(&mut dataset)
-                .expect_err("nothing to commit"),
+                .expect_err("nothing to commit")
+                .rendered(Lane::Sync),
             "host bug"
         );
         assert_eq!(dataset.current_generation(), before);
@@ -5474,11 +6614,11 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             "LOAD <http://example.org/doc>",
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert!(
-            job.take_error()
+            job.error_message()
                 .expect("an error")
                 .contains("native-sparql-load-no-resolver")
         );
@@ -5489,9 +6629,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             &format!("LOAD SILENT <http://example.org/doc> ; {INSERT}"),
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let silenced = job.take_evidence().silenced();
         assert_eq!(silenced.len(), 1);
         assert_eq!(silenced[0].target(), "load");
@@ -5516,9 +6656,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             INSERT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         assert_eq!(dataset.size(), 2, "nothing lands before the commit");
         job.inner.commit_into(&mut dataset).expect("commits");
         assert_eq!(dataset.size(), 3);
@@ -5526,7 +6666,8 @@ mod tests {
         assert_eq!(
             job.inner
                 .commit_into(&mut dataset)
-                .expect_err("a second commit"),
+                .expect_err("a second commit")
+                .rendered(Lane::Sync),
             "nothing to commit: the update was not applied, or was already committed"
         );
         assert_eq!(dataset.size(), 3);
@@ -5542,9 +6683,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             INSERT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         engine
             .update(
                 &mut dataset,
@@ -5552,7 +6693,11 @@ mod tests {
                 None,
             )
             .expect("a synchronous mutation meanwhile");
-        let error = job.inner.commit_into(&mut dataset).expect_err("stale");
+        let error = job
+            .inner
+            .commit_into(&mut dataset)
+            .expect_err("stale")
+            .rendered(Lane::Sync);
         assert_eq!(
             error,
             "dataset mutated while an asynchronous update was in flight (generation 0 → 1); \
@@ -5572,13 +6717,14 @@ mod tests {
             &dataset,
             AsyncOperationKind::Update,
             INSERT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let error = job
             .inner
             .commit_into(&mut other)
-            .expect_err("wrong dataset");
+            .expect_err("wrong dataset")
+            .rendered(Lane::Sync);
         assert!(
             error.starts_with("commit targets a different dataset"),
             "{error}"
@@ -5600,13 +6746,14 @@ mod tests {
             INSERT,
             &governed,
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let outcome = job.take_update_outcome().expect("an outcome");
         assert!(!outcome.is_applied());
         assert!(
             job.inner
                 .commit_into(&mut dataset)
                 .expect_err("not applied")
+                .rendered(Lane::Sync)
                 .starts_with("nothing to commit")
         );
         assert_eq!(dataset.size(), 2);
@@ -5617,9 +6764,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::UpdateGoverned,
             INSERT,
-            &options(),
+            options(),
         );
-        assert_eq!(run_job(applied.id()), RUN_OUTCOME);
+        assert_eq!(run_job(applied.id()), RunStatus::Outcome);
         assert!(applied.take_update_outcome().expect("outcome").is_applied());
         applied.inner.commit_into(&mut dataset).expect("commits");
         assert_eq!(dataset.size(), 3);
@@ -5712,7 +6859,7 @@ mod tests {
     const GRAPH_CONSTRUCT: &str = "CONSTRUCT { GRAPH <http://example.org/out> { ?s ?p ?o } } \
                                    WHERE { ?s ?p ?o }";
 
-    fn negotiated(accept: Option<&str>) -> AsyncJobOptions {
+    fn negotiated(accept: Option<&str>) -> Opts {
         let mut options = options();
         options.set_accept(accept.map(str::to_owned));
         options
@@ -5727,9 +6874,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             GRAPH_CONSTRUCT,
-            &negotiated(None),
+            negotiated(None),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let mut outcome = job.take_negotiated_outcome().expect("an outcome");
         assert!(outcome.is_complete());
         assert_eq!(outcome.format().as_deref(), Some("trig"));
@@ -5745,9 +6892,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             "CONSTRUCT WHERE { ?s ?p ?o }",
-            &negotiated(None),
+            negotiated(None),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let outcome = job.take_negotiated_outcome().expect("an outcome");
         assert_eq!(outcome.format().as_deref(), Some("turtle"));
         job.finish();
@@ -5762,11 +6909,11 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             GRAPH_CONSTRUCT,
-            &negotiated(Some("text/turtle")),
+            negotiated(Some("text/turtle")),
         );
-        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(run_job(job.id()), RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("not-acceptable"));
-        let error = job.take_error().expect("an error");
+        let error = job.error_message().expect("an error");
         assert!(error.contains("application/trig, application/n-quads, application/ld+json"));
         job.finish();
 
@@ -5775,9 +6922,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             "CONSTRUCT WHERE { ?s ?p ?o }",
-            &negotiated(Some("text/turtle")),
+            negotiated(Some("text/turtle")),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let outcome = job.take_negotiated_outcome().expect("an outcome");
         assert_eq!(outcome.format().as_deref(), Some("turtle"));
         job.finish();
@@ -5788,9 +6935,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             GRAPH_CONSTRUCT,
-            &negotiated(Some("text/turtle, application/n-quads;q=0.5")),
+            negotiated(Some("text/turtle, application/n-quads;q=0.5")),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let outcome = job.take_negotiated_outcome().expect("an outcome");
         assert_eq!(outcome.format().as_deref(), Some("nquads"));
         job.finish();
@@ -5805,9 +6952,9 @@ mod tests {
             &dataset,
             AsyncOperationKind::Negotiated,
             "SELECT ?s WHERE { ?s ?p ?o }",
-            &negotiated(Some("text/csv")),
+            negotiated(Some("text/csv")),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let mut outcome = job.take_negotiated_outcome().expect("an outcome");
         assert_eq!(outcome.format().as_deref(), Some("csv"));
         let body = String::from_utf8(outcome.take_body().expect("a body")).expect("UTF-8");
@@ -5823,7 +6970,7 @@ mod tests {
             "SELECT ?s WHERE { ?s ?p ?o }",
             &capped,
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let mut outcome = job.take_negotiated_outcome().expect("an outcome");
         assert!(!outcome.is_complete());
         assert!(outcome.take_body().is_none());
@@ -5835,68 +6982,96 @@ mod tests {
 
     #[test]
     fn accept_is_refused_on_every_operation_but_the_negotiated_one() {
-        let with_accept = negotiated(Some("text/csv"));
-        let error = with_accept
+        let error = negotiated(Some("text/csv"))
             .validate(AsyncOperationKind::Governed)
             .expect_err("a governed query would ignore accept");
+        assert!(error.contains("unknown query option \"accept\""), "{error}");
         assert!(
-            error.contains("accept applies only to the negotiated operation"),
-            "{error}"
+            negotiated(Some("text/csv"))
+                .validate(AsyncOperationKind::Negotiated)
+                .is_ok()
         );
-        assert!(with_accept.validate(AsyncOperationKind::Negotiated).is_ok());
-        let mut with_format = options();
-        with_format.set_format(Some("json".to_owned()));
         assert!(
-            with_format
+            options()
+                .text("format", "json")
                 .validate(AsyncOperationKind::Negotiated)
                 .is_err()
         );
-        assert!(with_format.validate(AsyncOperationKind::Raw).is_ok());
+        assert!(
+            options()
+                .text("format", "json")
+                .validate(AsyncOperationKind::Raw)
+                .is_ok()
+        );
     }
 
+    /// Beginning an asynchronous update while another update of the same dataset is in
+    /// flight is refused with its own code; once the first is finished, the next begins,
+    /// and a query never claims the dataset at all.
     #[test]
-    fn load_authorization_is_the_catalogs_policy() {
-        let mut catalog = ServiceCatalog::new();
-        catalog
-            .add_service_message(
-                "http://example.org/doc".to_owned(),
-                r#"{"capabilities":["network"],"headers":[["X-A","1"]],"userAgent":"w/1","timeoutMs":250}"#,
-            )
-            .expect("profile");
-        catalog
-            .add_service_message(
-                "http://example.org/query-only".to_owned(),
-                r#"{"capabilities":["query"]}"#,
-            )
-            .expect("profile");
-        let allowed = catalog.authorize_load("http://example.org/doc");
-        assert_eq!(allowed.denial(), None);
-        assert_eq!(allowed.headers(), ["X-A", "1"]);
-        assert_eq!(allowed.user_agent().as_deref(), Some("w/1"));
-        assert_eq!(allowed.timeout_ms(), Some(250.0));
-        assert!(allowed.accept().contains("text/turtle"));
-        let withheld = catalog.authorize_load("http://example.org/query-only");
-        assert!(withheld.denial().expect("denied").contains("network"));
-        assert!(
-            catalog
-                .authorize_load("http://example.org/unlisted")
-                .denial()
-                .is_some()
+    fn a_second_update_in_flight_is_refused_and_a_sequential_one_begins() {
+        let engine = QueryEngine::new();
+        let mut dataset = seed();
+        let first = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Update,
+            INSERT,
+            options(),
         );
-        assert!(!catalog.carries_credential("http://example.org/doc"));
-        catalog
-            .add_service_message(
-                "http://example.org/secret".to_owned(),
-                r#"{"capabilities":["network","credentials"],"credential":{"header":"X-Key","value":"k"}}"#,
-            )
-            .expect("profile");
-        assert!(catalog.carries_credential("http://example.org/secret"));
+        let validated = options()
+            .validate(AsyncOperationKind::UpdateGoverned)
+            .expect("valid");
+        let refused = begin_job(
+            engine.engine(),
+            &dataset,
+            AsyncOperationKind::UpdateGoverned,
+            INSERT.to_owned(),
+            &validated,
+            None,
+        )
+        .expect_err("an update is in flight");
+        assert_eq!(refused.code(), "native-sparql-update-in-flight");
         assert_eq!(
-            catalog
-                .authorize_load("http://example.org/secret")
-                .headers(),
-            ["X-Key", "k"]
+            FailureCode::from_diagnostic_code(refused.code()),
+            FailureCode::UpdateInFlight
         );
+        // A query reads a snapshot and claims nothing.
+        let query = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            SELECT,
+            options(),
+        );
+        assert_eq!(run_job(query.id()), RunStatus::Outcome);
+        query.finish();
+        // Another dataset is not claimed by the first update.
+        let other = seed();
+        let elsewhere = begin(
+            &engine,
+            &other,
+            AsyncOperationKind::Update,
+            INSERT,
+            options(),
+        );
+        elsewhere.finish();
+
+        assert_eq!(run_job(first.id()), RunStatus::Outcome);
+        first.inner.commit_into(&mut dataset).expect("commits");
+        assert_eq!(first.finish(), 0);
+        // The neighbour: the next update, once the first is finished, begins and applies.
+        let second = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Update,
+            "INSERT DATA { <http://example.org/m> <http://example.org/p> <http://example.org/o> }",
+            options(),
+        );
+        assert_eq!(run_job(second.id()), RunStatus::Outcome);
+        second.inner.commit_into(&mut dataset).expect("commits");
+        second.finish();
+        assert_eq!(dataset.size(), 4);
     }
 
     // ── SHACL jobs ──────────────────────────────────────────────────────────────────
@@ -5944,9 +7119,14 @@ mod tests {
     fn run_shacl(
         operation: ShaclAsyncOperation,
         arguments: ShaclArguments,
-        options: &AsyncJobOptions,
-    ) -> (AsyncJob, u32) {
-        let job = begin_shacl_job(operation, arguments, options).expect("the job begins");
+        options: impl std::borrow::Borrow<Opts>,
+    ) -> (AsyncJob, RunStatus) {
+        let options = options
+            .borrow()
+            .clone()
+            .validate(AsyncOperationKind::Shacl)
+            .expect("options are valid");
+        let job = begin_shacl_job(operation, arguments, &options).expect("the job begins");
         let status = run_job(job.id());
         (job, status)
     }
@@ -5957,9 +7137,9 @@ mod tests {
         let (job, status) = run_shacl(
             ShaclAsyncOperation::ValidateToSarif,
             shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_OUTCOME);
+        assert_eq!(status, RunStatus::Outcome);
         let expected = validate_to_sarif_impl(&shapes, None, PEOPLE_NT).expect("sync entry");
         assert!(
             expected.contains("DatatypeConstraintComponent"),
@@ -5979,9 +7159,9 @@ mod tests {
                 added: Some(added.to_owned()),
                 ..shacl_arguments(Some(shapes.clone()), PEOPLE_NT)
             },
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_OUTCOME);
+        assert_eq!(status, RunStatus::Outcome);
         let (sarif, scope) =
             validate_changes_to_sarif_impl(&shapes, None, PEOPLE_NT, Some(added), None)
                 .expect("sync entry");
@@ -6001,9 +7181,9 @@ mod tests {
         let (job, status) = run_shacl(
             ShaclAsyncOperation::Entail,
             shacl_arguments(Some(rules.clone()), PEOPLE_NT),
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_OUTCOME);
+        assert_eq!(status, RunStatus::Outcome);
         let entailed = entail_to_ntriples_impl(&rules, None, PEOPLE_NT).expect("sync entry");
         assert!(entailed.contains("<http://example.org/adult>"));
         assert_eq!(raw_text(&job), entailed);
@@ -6020,9 +7200,9 @@ mod tests {
                     product: Some(product.clone()),
                     ..shacl_arguments(None, PEOPLE_NT)
                 },
-                &options(),
+                options(),
             );
-            assert_eq!(status, RUN_OUTCOME, "{operation:?}");
+            assert_eq!(status, RunStatus::Outcome, "{operation:?}");
             assert_eq!(raw_text(&job), expected, "{operation:?}");
             job.finish();
         }
@@ -6040,14 +7220,15 @@ mod tests {
         let (job, status) = run_shacl(
             ShaclAsyncOperation::ValidateToSarif,
             shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
-            &options(),
+            options(),
         );
         assert_eq!(
-            status, RUN_ERROR,
+            status,
+            RunStatus::Error,
             "a job with no source refuses it the same way"
         );
         assert!(
-            job.take_error()
+            job.error_message()
                 .expect("an error")
                 .contains("no remote query source configured")
         );
@@ -6075,7 +7256,7 @@ mod tests {
                 shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
                 &local,
             );
-            assert_eq!(status, RUN_OUTCOME);
+            assert_eq!(status, RunStatus::Outcome);
             let sarif = raw_text(&job);
             assert!(
                 sarif.contains(&format!("http://example.org/{banned}")),
@@ -6095,22 +7276,24 @@ mod tests {
             let job = begin_shacl_job(
                 ShaclAsyncOperation::ValidateToSarif,
                 shacl_arguments(Some(core_shapes()), PEOPLE_NT),
-                &options(),
+                &options()
+                    .validate(AsyncOperationKind::Shacl)
+                    .expect("valid"),
             )
             .expect("begins");
-            assert_eq!(job.cancel(), DELIVERY_ACCEPTED);
+            assert_eq!(job.cancel(), DeliveryStatus::Accepted);
             let status = run_job(job.id());
             (job, status)
         };
-        assert_eq!(status, RUN_ERROR);
+        assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
         job.finish();
         let (job, status) = run_shacl(
             ShaclAsyncOperation::ValidateToSarif,
             shacl_arguments(Some(core_shapes()), PEOPLE_NT),
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_OUTCOME);
+        assert_eq!(status, RunStatus::Outcome);
         job.finish();
     }
 
@@ -6126,9 +7309,9 @@ mod tests {
                 product: Some(corrupted),
                 ..shacl_arguments(None, PEOPLE_NT)
             },
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_ERROR);
+        assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("error"));
         let refusal = job.take_shacl_refusal().expect("the refusal is kept");
         assert_eq!(refusal.dimension().as_deref(), Some("section-digest"));
@@ -6142,9 +7325,9 @@ mod tests {
                 expect_identity: Some("not-hex".to_owned()),
                 ..shacl_arguments(None, PEOPLE_NT)
             },
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_ERROR);
+        assert_eq!(status, RunStatus::Error);
         let refusal = job.take_shacl_refusal().expect("the refusal is kept");
         assert_eq!(refusal.dimension(), None, "no product was inspected");
         job.finish();
@@ -6155,30 +7338,28 @@ mod tests {
                 product: Some(product),
                 ..shacl_arguments(None, PEOPLE_NT)
             },
-            &options(),
+            options(),
         );
-        assert_eq!(status, RUN_OUTCOME);
+        assert_eq!(status, RunStatus::Outcome);
         assert!(job.take_shacl_refusal().is_none());
         job.finish();
     }
 
     #[test]
     fn a_shacl_operation_refuses_what_it_would_ignore_and_takes_what_its_twin_takes() {
-        let mut ceiling = options();
-        ceiling.set_fuel(Some(10));
         assert!(
-            ceiling
+            options()
+                .ceiling("fuel", 10)
                 .validate(AsyncOperationKind::Shacl)
                 .expect_err("no SHACL entry takes a ceiling")
                 .contains("fuel is an execution governor")
         );
-        let mut based = options();
-        based.set_base(Some("http://example.org/".to_owned()));
         assert!(
-            based
+            options()
+                .text("base", "http://example.org/")
                 .validate(AsyncOperationKind::Shacl)
                 .expect_err("a SPARQL base would be ignored")
-                .contains("shapesBase")
+                .contains("unknown query option \"base\"")
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
 

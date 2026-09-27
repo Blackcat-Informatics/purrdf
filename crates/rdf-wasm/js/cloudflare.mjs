@@ -8,29 +8,27 @@
 //   * `createFetchServiceResolver` — a `resolveService` handler that sends each `SERVICE`
 //     request with `fetch` (or through a service binding), with an optional Cache API
 //     layer.
-//   * `createFetchLoadResolver` — a `resolveLoad` handler that fetches each `LOAD`
-//     document.
+//   * `createFetchLoadResolver` — a `resolveLoad` handler that fetches each hop of a
+//     `LOAD`.
 //   * `handleSparqlRequest` — a whole `/sparql` endpoint: an HTTP `Request` in, a
 //     `Response` out.
 //
-// Policy and protocol live in Rust. Which endpoints may be called, with which headers
-// and credential, is the `ServiceCatalog`'s decision — enforced inside the job before
-// any `SERVICE` effect reaches a resolver, and asked of it (`authorizeLoad`) before any
-// `LOAD` fetch. How an HTTP request becomes an operation, how its dataset parameters are
-// applied and which format answers it is `SparqlProtocolRequest`'s. This module moves
-// bytes between those decisions and the network, and maps their typed outcomes onto
-// HTTP statuses. It imports nothing but the package root.
+// Policy and protocol live in Rust. Which endpoints and `LOAD` sources may be reached,
+// with which headers, credential and timeout, is the `ServiceCatalog`'s decision —
+// enforced inside the job before any effect reaches a resolver, for every redirect hop
+// too — and so is whether a request may be cached. How an HTTP request becomes an
+// operation, how its dataset parameters are applied, which format answers it, and which
+// HTTP problem answers a failure is `SparqlProtocolRequest`'s. This module moves bytes
+// between those decisions and the network, builds the `Response`, and keeps the one hook
+// Rust cannot: reporting a host fault's real error under a correlation id. It imports
+// nothing but the package root.
 
-import { Dataset, QueryEngine, ServiceCatalog, SparqlProtocolRequest } from "./index.mjs";
+import { Dataset, QueryEngine, SparqlProtocolRequest } from "./index.mjs";
 
 // The Cache API keys requests by URL. A service answer is keyed under a fixed origin on
 // the reserved `.invalid` top-level domain (RFC 2606), which can never name a real host,
 // so a cached SPARQL answer can never be mistaken for, or served as, a real resource.
 const CACHE_ORIGIN = "https://purrdf-service-cache.invalid/";
-
-// Header names whose presence makes a request user-specific. A shared cache must never
-// answer one: the answer is the credential holder's, not the endpoint's.
-const CREDENTIAL_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
 
 const GOVERNOR_KEYS = [
   "fuel",
@@ -55,22 +53,6 @@ const HANDLER_KEYS = [
   "maxRequestBytes",
   "onInternalError",
 ];
-
-// RFC 9110 §15 reason phrases: an `about:blank` problem's `title` is its status's phrase
-// (RFC 9457 §4.2.1). RFC 9110 renamed 413 from RFC 7231's "Payload Too Large" to "Content
-// Too Large"; this table follows the current RFC.
-const STATUS_TITLES = {
-  400: "Bad Request",
-  403: "Forbidden",
-  405: "Method Not Allowed",
-  406: "Not Acceptable",
-  413: "Content Too Large",
-  415: "Unsupported Media Type",
-  422: "Unprocessable Content",
-  500: "Internal Server Error",
-  502: "Bad Gateway",
-  503: "Service Unavailable",
-};
 
 // A SPARQL query or update's text is a program, not a payload: even a large one — a
 // VALUES clause pasted with thousands of rows — is kilobytes. 1 MiB comfortably covers
@@ -108,31 +90,11 @@ function refuseUnknownKeys(source, accepted, what) {
   }
 }
 
-function requireCatalog(value, caller) {
-  if (!(value instanceof ServiceCatalog)) {
-    throw new TypeError(
-      `${caller} requires catalog, a ServiceCatalog: it is the policy every request is ` +
-        `authorized against, and nothing is sent without one`,
-    );
-  }
-  return value;
-}
-
 function positiveInteger(value, name, caller) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${caller}: ${name} must be a positive integer, got ${String(value)}`);
   }
   return value;
-}
-
-function requireTimeout(value, caller) {
-  if (!isPresent(value)) {
-    throw new TypeError(
-      `${caller} requires timeoutMs: every request needs a bound of its own, independent ` +
-        `of the query's deadline`,
-    );
-  }
-  return positiveInteger(value, "timeoutMs", caller);
 }
 
 function fetchOption(value, caller) {
@@ -189,16 +151,6 @@ function bindingsOption(value, caller) {
 }
 
 /**
- * The default `onCacheError`: the cache is an optimisation, so its own failure is never
- * the query's answer, but it must never be silent either. One `console.warn` line names
- * the operation and the endpoint whose answer was still served (or fetched fresh);
- * Workers routes `console.warn` to its logs, so this is visible without any host wiring.
- */
-function defaultCacheErrorReporter(error, { operation, endpoint }) {
-  console.warn(`createFetchServiceResolver: cache ${operation} failed for <${endpoint}>: ${errorText(error)}`);
-}
-
-/**
  * The default `onInternalError`: every error this module refuses to describe to an HTTP
  * client — a bug in a host-supplied `resolveService`/`resolveLoad`, or any exception
  * `handleSparqlRequest` did not otherwise classify — is still never silent. One
@@ -211,12 +163,11 @@ function defaultInternalErrorReporter(error, { correlationId }) {
 }
 
 /**
- * Call a host-supplied reporter (`onCacheError`, `onInternalError`) so that the reporter
- * itself can never change what this module answers. A reporter is observability, not
- * control flow: a cache failure must still fall through to the remote, a `put` failure
- * must still return the answer, and an internal error must still become a sanitized `500`
- * — so a reporter that throws synchronously, or returns a promise that rejects, is caught
- * here rather than rejecting the resolver or escaping as an unhandled rejection.
+ * Call the host-supplied `onInternalError` so that the reporter itself can never change
+ * what this module answers. A reporter is observability, not control flow: an internal
+ * error must still become a sanitized `500` — so a reporter that throws synchronously, or
+ * returns a promise that rejects, is caught here rather than escaping as an unhandled
+ * rejection.
  *
  * Catching it is not swallowing it: the reporter's failure means the original error was
  * never reported, so both go to the default console path in one `console.error` line —
@@ -224,8 +175,7 @@ function defaultInternalErrorReporter(error, { correlationId }) {
  * to the Worker log, never to a response.
  *
  * Returns a promise that always fulfils once the reporter has settled (immediately for a
- * synchronous one), so a caller that wants an asynchronous reporter's work kept alive —
- * the `put` path under `waitUntil` — can hand it on without ever seeing it reject.
+ * synchronous one).
  */
 function report(hook, reporter, error, context) {
   const reporterFailed = (reporterError) => {
@@ -250,16 +200,10 @@ function report(hook, reporter, error, context) {
 }
 
 function cacheOptions(source, caller) {
-  const { cache, cacheTtlSeconds, waitUntil, onCacheError } = source;
+  const { cache, cacheTtlSeconds } = source;
   if (!isPresent(cache)) {
     if (isPresent(cacheTtlSeconds)) {
       throw new TypeError(`${caller}: cacheTtlSeconds needs cache; without one it caches nothing`);
-    }
-    if (isPresent(waitUntil)) {
-      throw new TypeError(`${caller}: waitUntil defers cache writes and needs cache`);
-    }
-    if (isPresent(onCacheError)) {
-      throw new TypeError(`${caller}: onCacheError reports cache failures and needs cache`);
     }
     return undefined;
   }
@@ -272,20 +216,7 @@ function cacheOptions(source, caller) {
         `is the host's decision, never a default`,
     );
   }
-  if (isPresent(waitUntil) && typeof waitUntil !== "function") {
-    throw new TypeError(`${caller}: waitUntil must be a function, e.g. (p) => ctx.waitUntil(p)`);
-  }
-  if (isPresent(onCacheError) && typeof onCacheError !== "function") {
-    throw new TypeError(
-      `${caller}: onCacheError must be a function, (error, { operation, endpoint }) => void`,
-    );
-  }
-  return {
-    cache,
-    ttl: positiveInteger(cacheTtlSeconds, "cacheTtlSeconds", caller),
-    waitUntil: isPresent(waitUntil) ? waitUntil : undefined,
-    onCacheError: isPresent(onCacheError) ? onCacheError : defaultCacheErrorReporter,
-  };
+  return { cache, ttl: positiveInteger(cacheTtlSeconds, "cacheTtlSeconds", caller) };
 }
 
 // ---------------------------------------------------------------------------
@@ -298,13 +229,6 @@ function route(url, bindings, fetchImpl) {
   return binding === undefined ? fetchImpl : (input, init) => binding.fetch(input, init);
 }
 
-/** Flattened `[name, value, …]` pairs → `[[name, value], …]`. */
-function pairs(flat) {
-  const out = [];
-  for (let index = 0; index + 1 < flat.length; index += 2) out.push([flat[index], flat[index + 1]]);
-  return out;
-}
-
 function errorText(error) {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
@@ -313,66 +237,41 @@ function errorText(error) {
 // `Location` response header retargets. 304 (Not Modified) is not among them.
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-// How many redirect hops `createFetchLoadResolver` follows before giving up (its
-// `maxRedirects` option). Chosen, not derived: generous enough for a real document
-// mirror, small enough that a redirect loop fails fast.
-const DEFAULT_MAX_LOAD_REDIRECTS = 5;
-
-/**
- * Whether `response` is a redirect this adapter refuses to follow blindly: a 3xx with a
- * `Location`, or the opaque-redirect filtering a browser's `fetch` applies to
- * `redirect: "manual"` (`type === "opaqueredirect"`, `status === 0`, headers withheld).
- */
-function isRedirectResponse(response) {
-  return response.type === "opaqueredirect" || REDIRECT_STATUSES.has(response.status);
-}
-
-/** `response`'s redirect status and `Location` (`location` is `null` for an opaque one). */
-function redirectTarget(response) {
-  if (response.type === "opaqueredirect") return { status: 0, location: null };
-  return { status: response.status, location: response.headers.get("Location") };
-}
-
 /**
  * Issue one request with `redirect: "manual"` and read its whole body. This never
  * follows a redirect itself: a redirect response is handed back as `{ redirect: { status,
- * location } }` for the caller to decide — a transport failure that names the endpoint
- * (`SERVICE`, which must never send a second request to an origin the catalog never
- * authorized), or a hop to re-authorize and re-fetch (`LOAD`). Every other way it can fail
- * to produce a 2xx body — an unparsable URL, a network error, the timeout, the job
- * abandoning the request, a non-2xx non-redirect status — is a `{ kind: "transport" }`
- * failure; the body of a refused or redirect response is cancelled, never read.
+ * location } }` (`location` is `null` for a browser's opaque-redirect response, which
+ * withholds it). Every other way it can fail to produce a 2xx body — an unparsable URL, a
+ * network error, the job abandoning the request (its own timeout or deadline included,
+ * through `signal`), a non-2xx non-redirect status — is a `{ kind: "transport" }` failure;
+ * the body of a refused or redirect response is cancelled, never read.
  */
-async function fetchOnce({ what, url, method, headers, body, timeoutMs, signal, bindings, fetchImpl }) {
+async function fetchOnce({ what, url, method, headers, body, signal, bindings, fetchImpl }) {
   let parsed;
   try {
     parsed = new URL(url);
   } catch (error) {
     return { kind: "transport", message: `${what}: not a fetchable URL (${errorText(error)})` };
   }
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const combined = AbortSignal.any([signal, timeout]);
   let response;
   try {
     response = await route(parsed, bindings, fetchImpl)(url, {
       method,
       headers,
       body,
-      signal: combined,
+      signal,
       redirect: "manual",
     });
   } catch (error) {
-    if (timeout.aborted) {
-      return { kind: "transport", message: `${what}: no response within ${timeoutMs} ms` };
-    }
     if (signal.aborted) {
       return { kind: "transport", message: `${what}: abandoned by the query` };
     }
     return { kind: "transport", message: `${what}: ${errorText(error)}` };
   }
-  if (isRedirectResponse(response)) {
+  if (response.type === "opaqueredirect" || REDIRECT_STATUSES.has(response.status)) {
     await response.body?.cancel().catch(() => undefined);
-    return { redirect: redirectTarget(response) };
+    const location = response.type === "opaqueredirect" ? null : response.headers.get("Location");
+    return { redirect: { status: response.status, location } };
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -385,37 +284,17 @@ async function fetchOnce({ what, url, method, headers, body, timeoutMs, signal, 
     const bytes = new Uint8Array(await response.arrayBuffer());
     return { bytes, contentType: response.headers.get("Content-Type"), url: response.url };
   } catch (error) {
-    if (timeout.aborted) {
-      return { kind: "transport", message: `${what}: the body did not arrive within ${timeoutMs} ms` };
+    if (signal.aborted) {
+      return { kind: "transport", message: `${what}: abandoned by the query while the body arrived` };
     }
     return { kind: "transport", message: `${what}: reading the body failed (${errorText(error)})` };
   }
 }
 
-/** A message for a redirect `fetchOnce` refuses to follow: its status and, when readable, its `Location`. */
+/** A message for a redirect a `SERVICE` never follows: its status and, when readable, its `Location`. */
 function redirectMessage({ status, location }) {
   const where = location ? ` to ${location}` : " (Location withheld by an opaque redirect)";
   return `redirected (HTTP ${status || "opaque"}${where}); a catalogued endpoint's redirect is never followed`;
-}
-
-/** A message for a redirect that carries no usable `Location` to follow (opaque, or unparsable). */
-function noLocationMessage(status) {
-  return `an opaque redirect (HTTP ${status || "opaque"}) withheld its Location; nothing to follow`;
-}
-
-/**
- * `fetchOnce`, for a caller that never follows a redirect itself: `SERVICE`, whose
- * profile headers and credential must never be sent to any origin beyond the one the
- * catalog authorized. A redirect response becomes a `{ kind: "transport" }` failure
- * naming the endpoint and the redirect's status and `Location`; no request is ever sent
- * to the `Location`, and neither its headers nor its body leave this function.
- */
-async function exchange(args) {
-  const result = await fetchOnce(args);
-  if (result.redirect !== undefined) {
-    return { kind: "transport", message: `${args.what}: ${redirectMessage(result.redirect)}` };
-  }
-  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -445,11 +324,11 @@ async function cacheKey(request) {
  *
  * Headers are sent in this order: `Content-Type`, `Accept` and `User-Agent` from the
  * request, then the catalog profile's headers and its credential header, each appended
- * (a repeated name is kept, never merged). The request is abandoned at `timeoutMs` or at
- * the request's own `timeoutMs` (the catalog profile's, or the engine's default),
- * whichever comes first, and whenever the query abandons it (`ctx.signal`). Everything
- * that stops a 2xx answer arriving is a `{ kind: "transport" }` failure — never a throw,
- * which would be a fault that fails even a `SERVICE SILENT`.
+ * (a repeated name is kept, never merged). The request is abandoned when the query
+ * abandons it (`ctx.signal`): at its catalog profile's timeout, or the query's deadline,
+ * whichever comes first. Everything that stops a 2xx answer arriving is a
+ * `{ kind: "transport" }` failure — never a throw, which would be a fault that fails even
+ * a `SERVICE SILENT`.
  *
  * The fetch is always sent with `redirect: "manual"` and never follows one: a 3xx (or a
  * browser's opaque-redirect response to a cross-origin `redirect: "manual"` fetch) is
@@ -458,72 +337,38 @@ async function cacheKey(request) {
  * or anywhere else — so the profile's headers and credential (an `X-Api-Key`, a
  * `Cookie`, …) can never reach an origin the catalog did not authorize.
  *
- * With `cache` (a Cache API object such as `caches.default`) and `cacheTtlSeconds`,
- * answers are reused: keyed under a fixed `.invalid` origin by a SHA-256 of the endpoint,
- * query text, `Accept` and headers, stored with `Cache-Control: max-age=<ttl>` (through
- * `waitUntil` when given, else awaited). A request that carries a credential — an
- * `Authorization`, `Cookie` or `Proxy-Authorization` header, or any credential the
- * catalog profile sets — is refused with a `TypeError` rather than answered from or
- * written to a shared cache.
- *
- * The cache is an optimisation and never decides the answer: a `cache.match` rejection
- * is treated as a miss (the request still goes to the remote), and a `cache.put` failure
- * never discards an answer the remote already returned — with `waitUntil` the rejected
- * put is still handed to it, and without one the put is awaited inside a `try`, so either
- * way the answer is returned regardless. Every cache failure is reported through
- * `onCacheError(error, { operation: "match" | "put", endpoint })`, which defaults to one
- * `console.warn` line (Workers routes it to logs) so a failure is visible, never silent.
- * The reporter cannot change the answer either: one that throws or returns a rejecting
- * promise still falls through to the remote on a `match` failure and still returns the
- * answer on a `put` failure (with or without `waitUntil`), and its own failure goes to
- * `console.error` together with the cache error it was handed. A `waitUntil` that throws
- * is reported the same way, and the put is then awaited instead of deferred.
+ * With `cache` (a Cache API object such as `caches.default`) and `cacheTtlSeconds`, the
+ * answer to every request the job marks `cacheable` is reused: keyed under a fixed
+ * `.invalid` origin by a SHA-256 of the endpoint, query text, `Accept` and headers, and
+ * stored with `Cache-Control: max-age=<ttl>`. A request that carries a credential is not
+ * cacheable and goes to the endpoint with no cache involved. A `cache.match` or
+ * `cache.put` that fails is the invocation's transport failure: `SERVICE SILENT` answers
+ * it with the join identity (and records it), and without `SILENT` it fails the query.
  */
 export function createFetchServiceResolver(options) {
   const caller = "createFetchServiceResolver";
-  const source = plainObject(options, `${caller} options`);
-  refuseUnknownKeys(
-    source,
-    ["catalog", "fetch", "bindings", "timeoutMs", "cache", "cacheTtlSeconds", "waitUntil", "onCacheError"],
-    caller,
-  );
-  const catalog = requireCatalog(source.catalog, caller);
-  const timeoutMs = requireTimeout(source.timeoutMs, caller);
+  const source = plainObject(isPresent(options) ? options : {}, `${caller} options`);
+  refuseUnknownKeys(source, ["fetch", "bindings", "cache", "cacheTtlSeconds"], caller);
   const fetchImpl = fetchOption(source.fetch, caller);
   const bindings = bindingsOption(source.bindings, caller);
   const caching = cacheOptions(source, caller);
 
   return async function resolveService(request, ctx) {
+    const what = `SERVICE <${request.endpoint}>`;
+    const cached = caching !== undefined && request.cacheable;
     let key;
-    if (caching !== undefined) {
-      const credentialHeader = request.headers.find(([name]) =>
-        CREDENTIAL_HEADERS.has(name.toLowerCase()),
-      );
-      if (credentialHeader !== undefined || catalog.carriesCredential(request.endpoint)) {
-        throw new TypeError(
-          `SERVICE <${request.endpoint}> carries a credential ` +
-            `(${credentialHeader === undefined ? "the catalog profile's" : credentialHeader[0]}); ` +
-            `its answer belongs to the credential holder and is never read from or written to ` +
-            `a shared cache`,
-        );
-      }
+    if (cached) {
       key = await cacheKey(request);
       let hit;
       try {
         hit = await caching.cache.match(key);
+        if (hit) return new Uint8Array(await hit.arrayBuffer());
       } catch (error) {
-        // Not awaited: the fetch below never waits on the reporter, and `report` never
-        // rejects, so a throwing or rejecting reporter cannot turn this miss into a failure.
-        void report("onCacheError", caching.onCacheError, error, {
-          operation: "match",
-          endpoint: request.endpoint,
-        });
-        hit = undefined;
+        return { kind: "transport", message: `${what}: the cache lookup failed (${errorText(error)})` };
       }
-      if (hit) return new Uint8Array(await hit.arrayBuffer());
     }
-    const answer = await exchange({
-      what: `SERVICE <${request.endpoint}>`,
+    const answer = await fetchOnce({
+      what,
       url: request.endpoint,
       method: "POST",
       headers: [
@@ -533,51 +378,26 @@ export function createFetchServiceResolver(options) {
         ...request.headers,
       ],
       body: request.queryText,
-      timeoutMs: Math.min(timeoutMs, request.timeoutMs),
       signal: ctx.signal,
       bindings,
       fetchImpl,
     });
+    if (answer.redirect !== undefined) {
+      return { kind: "transport", message: `${what}: ${redirectMessage(answer.redirect)}` };
+    }
     if (answer.kind !== undefined) return answer;
-    if (caching !== undefined) {
+    if (cached) {
       const stored = new Response(answer.bytes, {
         headers: [
           ["Content-Type", answer.contentType ?? request.accept],
           ["Cache-Control", `max-age=${caching.ttl}`],
         ],
       });
-      // `cache.put` never decides the answer: a failure — sync throw or rejection — is
-      // reported, never discards `answer.bytes`, which the remote already returned.
-      let put;
       try {
-        put = Promise.resolve(caching.cache.put(key, stored));
+        await caching.cache.put(key, stored);
       } catch (error) {
-        put = Promise.reject(error);
+        return { kind: "transport", message: `${what}: the cache write failed (${errorText(error)})` };
       }
-      // `reportedPut` never rejects — `report` isolates the reporter too — and it settles
-      // only once an asynchronous reporter has, so `waitUntil` keeps that work alive.
-      const reportedPut = put.catch((error) =>
-        report("onCacheError", caching.onCacheError, error, {
-          operation: "put",
-          endpoint: request.endpoint,
-        }),
-      );
-      let deferred = false;
-      if (caching.waitUntil !== undefined) {
-        try {
-          caching.waitUntil(reportedPut);
-          deferred = true;
-        } catch (error) {
-          // A `waitUntil` that throws never held the put: await it here instead, so the
-          // write still completes, and say so — the host's deferral is broken.
-          console.error(
-            `${caller}: waitUntil threw, so the cache put for <${request.endpoint}> is ` +
-              `awaited instead:`,
-            error,
-          );
-        }
-      }
-      if (!deferred) await reportedPut;
     }
     return answer.bytes;
   };
@@ -588,108 +408,59 @@ export function createFetchServiceResolver(options) {
 // ---------------------------------------------------------------------------
 
 /**
- * A `resolveLoad` handler that GETs each `LOAD` document with `fetch` (or the origin's
+ * A `resolveLoad` handler that GETs one hop of a `LOAD` with `fetch` (or the origin's
  * service binding) and answers `{ bytes, mediaType, base }`: the media type from the
- * response's `Content-Type` (parameters stripped), the base from the final URL after
- * redirects.
+ * response's `Content-Type` (parameters stripped), the base the hop's URL.
  *
- * Before any fetch — and before *every* redirect hop — the catalog authorizes the IRI
- * (`ServiceCatalog.authorizeLoad`: the `network` capability, and `credentials` for a
- * credential); a refusal is a `{ kind: "denied" }` failure — an error, and under
- * `LOAD SILENT` a success with nothing loaded — whether it is the initial IRI or one a
- * redirect retargeted to. Each
- * hop's request sends an `Accept` naming every RDF syntax the engine parses, and the
- * `User-Agent`, headers and credential of *that hop's own* authorization — never the
- * previous hop's, so a redirect to a different origin never carries along a credential or
- * header the target's own catalog profile did not itself grant. Each hop is bounded by
- * `timeoutMs` and its own profile's timeout, whichever is shorter.
- *
- * The fetch is always sent with `redirect: "manual"`. A 3xx (or a browser's
- * opaque-redirect response) is followed by hand: its `Location` is resolved against the
- * current URL and re-authorized from scratch, up to `maxRedirects` hops (5 by default,
- * an option here); a 307/308 on this always-`GET` request is simply re-fetched with
- * `GET`, and the loaded document's `base` is the *final* authorized URL, not the
- * originally requested one. Exceeding `maxRedirects`, or a redirect whose `Location` is
- * missing or unparsable (including an opaque redirect, which withholds it), is a
- * `{ kind: "transport" }` failure. Everything else that stops a document arriving —
- * including a response with no `Content-Type` — is a `{ kind: "transport" }` failure too.
+ * The job has already authorized the hop against its catalog, and hands over what it
+ * sends: an `Accept` naming every RDF syntax the engine parses, and the `User-Agent`,
+ * headers and credential of that hop's own catalog profile. The fetch is sent with
+ * `redirect: "manual"`, and a redirect is answered `{ kind: "redirect", location }`: the
+ * job resolves the location, re-authorizes it and asks for it as a fresh hop, with that
+ * hop's own headers — so a redirect to another origin never carries a credential its
+ * profile did not grant. A redirect whose `Location` is withheld (a browser's opaque
+ * redirect) or absent is a `{ kind: "transport" }` failure, and so is everything else
+ * that stops a document arriving — including a response with no `Content-Type`.
  */
 export function createFetchLoadResolver(options) {
   const caller = "createFetchLoadResolver";
-  const source = plainObject(options, `${caller} options`);
-  refuseUnknownKeys(source, ["catalog", "fetch", "bindings", "timeoutMs", "maxRedirects"], caller);
-  const catalog = requireCatalog(source.catalog, caller);
-  const timeoutMs = requireTimeout(source.timeoutMs, caller);
+  const source = plainObject(isPresent(options) ? options : {}, `${caller} options`);
+  refuseUnknownKeys(source, ["fetch", "bindings"], caller);
   const fetchImpl = fetchOption(source.fetch, caller);
   const bindings = bindingsOption(source.bindings, caller);
-  const maxRedirects = isPresent(source.maxRedirects)
-    ? positiveInteger(source.maxRedirects, "maxRedirects", caller)
-    : DEFAULT_MAX_LOAD_REDIRECTS;
 
   return async function resolveLoad(request, ctx) {
-    let iri = request.iri;
-    let hop = 0;
-    for (;;) {
-      const authorization = catalog.authorizeLoad(iri);
-      let denial;
-      let headers;
-      let profileTimeout;
-      try {
-        denial = authorization.denial;
-        headers = [["Accept", authorization.accept]];
-        const userAgent = authorization.userAgent;
-        if (userAgent !== undefined) headers.push(["User-Agent", userAgent]);
-        headers.push(...pairs(authorization.headers));
-        profileTimeout = authorization.timeoutMs;
-      } finally {
-        authorization.free();
+    const { iri } = request;
+    const what = `LOAD <${iri}>`;
+    const headers = [["Accept", request.accept]];
+    if (request.userAgent !== undefined) headers.push(["User-Agent", request.userAgent]);
+    headers.push(...request.headers);
+    const result = await fetchOnce({
+      what,
+      url: iri,
+      method: "GET",
+      headers,
+      body: undefined,
+      signal: ctx.signal,
+      bindings,
+      fetchImpl,
+    });
+    if (result.redirect !== undefined) {
+      const { status, location } = result.redirect;
+      if (!location) {
+        return {
+          kind: "transport",
+          message: `${what}: a redirect (HTTP ${status || "opaque"}) withheld its Location; nothing to follow`,
+        };
       }
-      if (denial !== undefined) return { kind: "denied", message: denial };
-      const what = iri === request.iri ? `LOAD <${iri}>` : `LOAD <${iri}> (redirected from <${request.iri}>)`;
-      const result = await fetchOnce({
-        what,
-        url: iri,
-        method: "GET",
-        headers,
-        body: undefined,
-        timeoutMs: profileTimeout === undefined ? timeoutMs : Math.min(timeoutMs, profileTimeout),
-        signal: ctx.signal,
-        bindings,
-        fetchImpl,
-      });
-      if (result.redirect !== undefined) {
-        if (hop >= maxRedirects) {
-          return {
-            kind: "transport",
-            message:
-              `LOAD <${request.iri}>: exceeded ${maxRedirects} redirect hop${maxRedirects === 1 ? "" : "s"}; ` +
-              `the last was ${what}`,
-          };
-        }
-        const { location, status } = result.redirect;
-        if (!location) {
-          return { kind: "transport", message: `${what}: ${noLocationMessage(status)}` };
-        }
-        let next;
-        try {
-          next = new URL(location, iri).toString();
-        } catch (error) {
-          return {
-            kind: "transport",
-            message: `${what}: Location ${JSON.stringify(location)} is not a resolvable URL (${errorText(error)})`,
-          };
-        }
-        hop += 1;
-        iri = next;
-        continue;
-      }
-      if (result.kind !== undefined) return result;
-      const mediaType = result.contentType?.split(";")[0].trim();
-      if (!mediaType) {
-        return { kind: "transport", message: `${what}: the response has no Content-Type` };
-      }
-      return { bytes: result.bytes, mediaType, base: result.url || iri };
+      return { kind: "redirect", location };
     }
+    if (result.kind !== undefined) return result;
+    const mediaType = result.contentType?.split(";")[0].trim();
+    if (!mediaType) {
+      return { kind: "transport", message: `${what}: the response has no Content-Type` };
+    }
+    return { bytes: result.bytes, mediaType, base: result.url || iri };
   };
 }
 
@@ -799,9 +570,9 @@ function exactNumber(value) {
   return JSON.rawJSON(String(value));
 }
 
-/** An RFC 9457 `application/problem+json` response. */
+/** An RFC 9457 `application/problem+json` response for a refusal this module builds itself. */
 function problem(status, detail, extensions, headers) {
-  const body = { type: "about:blank", title: STATUS_TITLES[status], status, detail };
+  const body = { type: "about:blank", title: SparqlProtocolRequest.statusTitle(status), status, detail };
   for (const [name, value] of Object.entries(extensions)) {
     if (value !== undefined) body[name] = value;
   }
@@ -854,153 +625,48 @@ function protocolStep(step, headers, cors) {
 }
 
 /**
- * The response for a twin (`updateGovernedAsync`/`queryGovernedNegotiatedAsync`) that
- * rejected while running the operation text straight from `operation.text` — the case
- * with no dataset parameters, where nothing was parsed before the engine's own parse (see
- * `handleSparqlRequest`). The twin's rejection carries no distinction between a syntax
- * failure and an evaluation one, so it is reclassified by asking the protocol reading
- * once, here on the failure path only: a text that fails there is the client's malformed
- * request — the same `400` this endpoint always gave a malformed operation, just
- * discovered a step later — and a text that reads fine there failed for a real evaluation
- * reason, which `failure` answers exactly as it always has. A request that carried dataset
- * parameters skips the recheck: its text was already parsed and validated by the splice
- * before the engine ever saw it, so a rejection there is never a syntax failure.
+ * The response for an operation that failed with `error` — a twin's rejection, or any
+ * exception this adapter did not classify. Rust decides the problem from the error's
+ * `code` (`SparqlProtocolRequest.problemFor`): its status, its `code`, and whether its
+ * `detail` may be the error's own words. A failure that is this endpoint's own is
+ * sanitized, and its real error goes to `onInternalError` under a correlation id —
+ * `correlationId` when a host handler's fault was already reported under one, a fresh id
+ * otherwise.
  */
-function reclassifiedFailure(operation, error, signal, headers, cors, internal) {
-  if (!operation.hasDatasetParameters) {
-    const recheck = protocolStep(() => operation.effectiveText(), headers, cors);
-    if (recheck.response !== undefined) return recheck.response;
-  }
-  return failure(error, signal, headers, internal);
-}
-
-/**
- * The engine's diagnostic codes for a request it refuses to evaluate as written — the
- * client's to change, so a `400`, never the `500` of an evaluation that failed: a
- * construct it does not evaluate (a `SERVICE ?e` no solution names an endpoint for, an
- * unrecognized `VERSION`), a function IRI nothing is registered under, a variable in a
- * quoted triple term's component, and nesting past the budget kept under the JavaScript
- * engine's call stack, which no configuration of this endpoint raises.
- */
-const CLIENT_REFUSAL_CODES = new Set([
-  "native-sparql-unsupported",
-  "native-sparql-custom-function",
-  "native-sparql-quoted-triple-term-variable",
-  "native-sparql-host-stack-exhausted",
-]);
-
-/**
- * The engine's diagnostic codes for a `SERVICE` or `LOAD` that did not answer, each with
- * the status its meaning takes and the fixed `detail` that replaces the engine's message.
- * That message is never the response's: it carries host configuration (the catalog
- * policy that withheld a capability) or a host's or a remote's own words (a resolver's
- * denial reason, a transport error, an upstream status line).
- *
- *   * `403` — the host refused to contact the endpoint or source the request named: a
- *     catalog capability withheld, or the resolver's own policy. The request's to change.
- *   * `502` — the endpoint or source was contacted and did not produce a usable answer:
- *     a network error, a timeout of the resolver's own, an HTTP error status, a redirect
- *     that is never followed, an undecodable body.
- *   * `500` — this endpoint had no way to contact it (no resolver reaches it), or its own
- *     resolver answered with something that is not an answer. The real message goes to
- *     `onInternalError` under a fresh `correlationId`, exactly as a host bug's does.
- */
-const ENGINE_CODE_PROBLEMS = new Map([
-  [
-    "native-sparql-service-denied",
-    {
-      status: 403,
-      detail: "the service catalog does not authorize a SERVICE request this operation makes; no endpoint was contacted",
-    },
-  ],
-  [
-    "native-sparql-service-host-denied",
-    {
-      status: 403,
-      detail: "this endpoint's host policy refused a SERVICE request this operation makes; no endpoint was contacted",
-    },
-  ],
-  [
-    "native-sparql-load-denied",
-    {
-      status: 403,
-      detail: "the service catalog does not authorize a LOAD source this update names; nothing was fetched",
-    },
-  ],
-  [
-    "native-sparql-service-failed",
-    { status: 502, detail: "a SERVICE endpoint this operation names did not return a usable answer" },
-  ],
-  [
-    "native-sparql-load-failed",
-    { status: 502, detail: "a LOAD source this update names could not be fetched or read" },
-  ],
-  [
-    "native-sparql-service-unconfigured",
-    {
-      status: 500,
-      detail: "this endpoint has no way to reach a SERVICE endpoint this operation names",
-      internal: true,
-    },
-  ],
-  [
-    "native-sparql-load-no-resolver",
-    { status: 500, detail: "this endpoint has no way to fetch a LOAD source", internal: true },
-  ],
-  [
-    "native-sparql-load-fault",
-    {
-      status: 500,
-      detail: "this endpoint's LOAD resolver answered with something that is not a LOAD answer",
-      internal: true,
-    },
-  ],
-]);
-
-/** The diagnostic code an engine error's message leads with (`error <code>: …`), if any. */
-function engineCode(error) {
-  if (!(error instanceof Error)) return undefined;
-  return /^error ([a-z0-9-]+): /.exec(error.message)?.[1];
-}
-
-/**
- * The response for a twin that rejected. `internal` is `{ onInternalError, request }`, for
- * the failures whose real words go to the log alone (see `ENGINE_CODE_PROBLEMS`, and an
- * error that carries no engine code at all).
- */
-function failure(error, signal, headers, internal) {
+function failureResponse(error, signal, headers, internal, correlationId) {
   const timing = serverTiming(error?.evidence?.async);
-  if (error?.name === "NotAcceptableError") {
-    return problem(
-      406,
-      error.message,
-      { code: "NotAcceptable", offered: SparqlProtocolRequest.offeredMediaTypes("dataset") },
-      [...timing, ...headers],
-    );
-  }
-  if (signal.aborted || error?.name === "AbortError" || error?.name === "TimeoutError") {
-    return problem(503, errorText(error), { code: "cancelled" }, [...timing, ...headers]);
-  }
-  const code = engineCode(error);
-  if (code === undefined) {
-    // Nothing the engine classified — a rejection from outside it, or one no code names.
-    // Its words are not the query's, so they go to the log alone.
-    const correlationId = reportInternalError(error, internal.onInternalError, internal.request);
-    return internalErrorProblem(correlationId, [...timing, ...headers]);
-  }
-  if (CLIENT_REFUSAL_CODES.has(code)) {
-    return problem(400, error.message, { code }, [...timing, ...headers]);
-  }
-  const mapped = ENGINE_CODE_PROBLEMS.get(code);
-  if (mapped !== undefined) {
-    let correlationId;
-    if (mapped.internal) {
-      correlationId = reportInternalError(error, internal.onInternalError, internal.request);
+  const found = SparqlProtocolRequest.problemFor(error, signal?.aborted === true);
+  try {
+    let id;
+    if (found.internal) {
+      id = correlationId ?? reportInternalError(error, internal.onInternalError, internal.request);
     }
-    return problem(mapped.status, mapped.detail, { code, correlationId }, [...timing, ...headers]);
+    return new Response(found.body(id), {
+      status: found.status,
+      headers: [["Content-Type", found.contentType], ...timing, ...headers],
+    });
+  } finally {
+    found.free();
   }
-  // The query's own evaluation failed: the engine's words are the reason it is owed.
-  return problem(500, error.message, { code }, [...timing, ...headers]);
+}
+
+/**
+ * The sanitized `500` for an exception nothing classified — a bug in this adapter — or
+ * for a host handler's fault whose real error was already reported under
+ * `correlationId`. The exception's own words, and any `code` it happens to carry, never
+ * reach the response: they go to `onInternalError` alone.
+ */
+function internalFailure(error, headers, internal, correlationId) {
+  const found = SparqlProtocolRequest.problemFor(undefined, false);
+  try {
+    const id = correlationId ?? reportInternalError(error, internal.onInternalError, internal.request);
+    return new Response(found.body(id), {
+      status: found.status,
+      headers: [["Content-Type", found.contentType], ...headers],
+    });
+  } finally {
+    found.free();
+  }
 }
 
 /**
@@ -1017,37 +683,16 @@ function reportInternalError(error, onInternalError, request) {
 }
 
 /**
- * The `500` problem for an error this module never puts in front of a client: a fixed
- * detail plus `correlationId`, never `error.message` or `error.stack` — those went to
- * `onInternalError` alone (see `reportInternalError`), which is the only place a fault's
- * real words, or an unexpected exception's, are ever written.
- */
-function internalErrorProblem(correlationId, headers) {
-  return problem(
-    500,
-    `internal error; see the Worker log for correlation id ${correlationId}`,
-    { code: "InternalError", correlationId },
-    headers,
-  );
-}
-
-/**
  * Wrap a host-supplied `resolveService`/`resolveLoad` so that a bug in *it* — a throw, a
  * rejection — never reaches the client as its own words, while still reaching the engine
- * as exactly the fault it always was. `./pkg/purrdf_jspi.mjs` already treats a throwing or
- * rejecting resolver as a fault, latched on the job: a fault is about this endpoint's own
- * correctness, never the remote's, so `SERVICE SILENT`/`LOAD SILENT` — a promise about the
- * *remote*, "it may be unreachable" — does not, and must not, swallow it. That invariant
- * has to survive this wrapper, so it never *answers* the effect with a value (a
- * `{ kind: "transport" }` failure is exactly the shape `SILENT` swallows, which would turn
- * a host bug into a quietly incomplete `200`). Instead the real error goes to
- * `onInternalError` with a fresh correlation id, and a sanitized `Error` carrying only
- * that id is re-thrown — the same throw the host's own bug would have produced, so it
- * becomes the same non-silenceable fault it always did, just with the host's words
- * replaced before they ever reach Rust. `sawFault` reports whether this ever fired, and
- * with which id, so the catch around the twin call — which a fault always reaches,
- * `SILENT` or not, because a fault rejects the whole job — can answer `500` with that same
- * id rather than whatever text the engine built around the sanitized message.
+ * as exactly the fault it always was. The package root treats a throwing or rejecting
+ * resolver as a fault, latched on the job: a fault is about this endpoint's own
+ * correctness, never the remote's, so `SERVICE SILENT`/`LOAD SILENT` does not swallow it.
+ * That invariant survives this wrapper, which never answers the effect with a value.
+ * Instead the real error goes to `onInternalError` with a fresh correlation id, and a
+ * sanitized `Error` carrying only that id is re-thrown — the same fault, with the host's
+ * words replaced before they reach Rust. `sawFault` reports whether this fired, and with
+ * which id, so the failure response carries that same id.
  *
  * A `handler` that is not a function (the option was never given) passes through
  * unchanged: `undefined` must stay `undefined`, or the engine would believe a handler was
@@ -1129,49 +774,46 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * understated one is still caught while the body streams in, so a body can never be made
  * to buffer past the bound by lying about its size.
  *
- * Statuses: `200` with the negotiated document; `204` for an applied update; `400` for a
- * malformed request or operation, or one the engine refuses to evaluate as written (its
- * diagnostic code — `native-sparql-unsupported`, `native-sparql-custom-function`,
- * `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` — is
- * the problem's `code`, and its message the `detail`) (`405` for a method the protocol
- * does not bind, `415` for a `Content-Type` it does not define); `403` when the host
- * refused to contact a `SERVICE` endpoint or `LOAD` source the request named
- * (`native-sparql-service-denied`: the catalog withheld a capability;
- * `native-sparql-service-host-denied`: the resolver's own policy refused it;
- * `native-sparql-load-denied`); `406` when the `Accept` header allows no format that can
- * carry the result; `413` when the body exceeds `maxRequestBytes`; `422` when a
- * deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
- * requests) stopped it; `502` when a `SERVICE` endpoint or `LOAD` source was contacted
- * and gave no usable answer — a network error, the resolver's own timeout, an HTTP error
- * status, a redirect, an undecodable body (`native-sparql-service-failed`,
- * `native-sparql-load-failed`); `503` when the deadline or a cancellation did (with no
- * `Retry-After`: the same request would stop again); `500` when evaluation failed — with
- * the engine's diagnostic code as `code` and its own words in `detail`, exactly as a
- * SPARQL client is owed the reason its query failed. A `403` or `502` never carries the
- * engine's message: it would echo the catalog's policy or a resolver's or remote's own
- * words, so `detail` is a fixed description of the code. This endpoint's own faults are
- * a `500` with a fixed `detail` and a `correlationId`, and their real error goes to
- * `onInternalError(error, { correlationId, request })` (one `console.error` line by
- * default) and never into the response: no resolver reaches a named endpoint
- * (`native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`), the
- * `resolveLoad` answered with something that is not an answer
- * (`native-sparql-load-fault`), or — with `code: "InternalError"` — a bug in a
- * host-supplied `resolveService`/`resolveLoad`, a rejection no engine code classifies, or
- * an unexpected exception anywhere in this adapter. An `onInternalError` that itself
- * throws or rejects changes none of that: the response is still the sanitized `500`, and
- * the reporter's failure goes to `console.error` together with the error it was handed.
- * Never a `200` with a partial body. Every error is an RFC 9457
- * `application/problem+json` document (`type: "about:blank"`, `title`, `status`,
+ * Statuses: `200` with the negotiated document; `204` for an applied update; the
+ * protocol's own refusals (`400`, `405` for a method the protocol does not bind, `415`
+ * for a `Content-Type` it does not define); `406` when the `Accept` header allows no
+ * format that can carry the result; `413` when the body exceeds `maxRequestBytes`; `422`
+ * when a deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
+ * requests) stopped it; `503` when the deadline or a cancellation did (with no
+ * `Retry-After`: the same request would stop again). A failed operation is answered with
+ * the problem Rust maps its code to (`SparqlProtocolRequest.problemFor`): `400` for an
+ * operation that does not parse or that the engine refuses to evaluate as written (its
+ * code — `native-sparql-query-parse`, `native-sparql-unsupported`, … — is the problem's
+ * `code`, and its message the `detail`); `403` when a `SERVICE` endpoint or `LOAD` source
+ * was refused before anything was contacted (`native-sparql-service-denied` and
+ * `native-sparql-load-denied`: the catalog; `native-sparql-service-host-denied` and
+ * `native-sparql-load-host-denied`: the resolver's own policy); `409` when another
+ * update of the dataset is in flight (`native-sparql-update-in-flight`); `502` when a
+ * `SERVICE` endpoint or `LOAD` source was contacted and gave no usable answer
+ * (`native-sparql-service-failed`, `native-sparql-load-failed`,
+ * `native-sparql-load-decode`); `500` when evaluation failed, with the engine's code and
+ * its own words. A `403` or `502` never carries the engine's message: it would echo the
+ * catalog's policy or a resolver's or remote's own words, so `detail` is a fixed
+ * description of the code. This endpoint's own faults are a `500` with a fixed `detail`
+ * and a `correlationId`, and their real error goes to `onInternalError(error, {
+ * correlationId, request })` (one `console.error` line by default) and never into the
+ * response: no resolver reaches a named endpoint or source
+ * (`native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`), or — with
+ * `code: "InternalError"` — a bug in a host-supplied `resolveService`/`resolveLoad`, an
+ * exception no code classifies, or an unexpected exception anywhere in this adapter. An
+ * `onInternalError` that itself throws or rejects changes none of that: the response is
+ * still the sanitized `500`, and the reporter's failure goes to `console.error` together
+ * with the error it was handed. Never a `200` with a partial body. Every error is an RFC
+ * 9457 `application/problem+json` document (`type: "about:blank"`, `title`, `status`,
  * `detail`, and `code` — the refusal's stable name — plus `parameter`, `dimension`,
- * `limit`, `consumed`, `estimate`, `correlationId` where they apply). Every
+ * `limit`, `consumed`, `estimate`, `offered`, `correlationId` where they apply). Every
  * evaluated response carries `Server-Timing` from the job's `evidence.async`.
  *
- * The operation text is parsed exactly once on the success path: without dataset
- * parameters it goes to the engine exactly as the request carried it (the engine takes
- * text and parses it once, itself; there is no pre-parsed form to hand it), and with
- * dataset parameters the `FROM`/`USING` splice — which only the protocol module may
- * compute — parses it once to rewrite the dataset clause before the engine parses the
- * rewritten text again.
+ * The operation text is parsed exactly once: without dataset parameters it goes to the
+ * engine exactly as the request carried it, and a text that does not parse is the
+ * engine's own parse refusal — the `400` above; with dataset parameters the
+ * `FROM`/`USING` splice — which only the protocol module may compute — parses it once to
+ * rewrite the dataset clause before the engine parses the rewritten text again.
  *
  * With `cors: { origins: "*" | string[], maxAgeSeconds? }` it answers `OPTIONS`
  * preflights with `204` and adds `Access-Control-Allow-Origin` (`*`, or the request's
@@ -1196,7 +838,7 @@ export async function handleSparqlRequest(request, options) {
   }
   const headers = [...cors, ...vary];
   // Everything below is either an already-classified refusal (`protocolStep`,
-  // `reclassifiedFailure`, `trippedProblem`) or a `500`: nothing past this point may ever
+  // `failureResponse`, `trippedProblem`) or a `500`: nothing past this point may ever
   // let an exception escape as anything but a problem response. An error this catch
   // reaches unclassified — a bug in this adapter, or `protocolStep` re-throwing something
   // that was never a protocol refusal — is exactly `handleSparqlRequest`'s own version of
@@ -1255,16 +897,14 @@ export async function handleSparqlRequest(request, options) {
         try {
           outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
         } catch (error) {
-          const fault = hostFault();
-          if (fault !== undefined) return internalErrorProblem(fault.correlationId, headers);
-          return reclassifiedFailure(operation, error, request.signal, headers, o.cors, internal);
+          return failureResponse(error, request.signal, headers, internal, hostFault()?.correlationId);
         }
         // Defensive: a fault always rejects (see `wrapHostHandler`), so `outcome` here
         // should never coexist with a recorded fault — but a `200`-adjacent response is
         // exactly the outcome a fault must never produce, so this is checked anyway.
         {
           const fault = hostFault();
-          if (fault !== undefined) return internalErrorProblem(fault.correlationId, headers);
+          if (fault !== undefined) return internalFailure(undefined, headers, internal, fault.correlationId);
         }
         const timing = serverTiming(outcome.evidence.async);
         if (!outcome.isApplied) return trippedProblem(outcome.tripped, [...timing, ...headers]);
@@ -1290,17 +930,12 @@ export async function handleSparqlRequest(request, options) {
           accept,
         });
       } catch (error) {
-        const fault = hostFault();
-        if (fault !== undefined) {
-          return internalErrorProblem(fault.correlationId, [["Vary", "Accept"], ...headers]);
-        }
-        return reclassifiedFailure(
-          operation,
+        return failureResponse(
           error,
           request.signal,
           [["Vary", "Accept"], ...headers],
-          o.cors,
           internal,
+          hostFault()?.correlationId,
         );
       }
       // Defensive: see the update branch above — `outcome` here should never coexist
@@ -1308,7 +943,7 @@ export async function handleSparqlRequest(request, options) {
       {
         const fault = hostFault();
         if (fault !== undefined) {
-          return internalErrorProblem(fault.correlationId, [["Vary", "Accept"], ...headers]);
+          return internalFailure(undefined, [["Vary", "Accept"], ...headers], internal, fault.correlationId);
         }
       }
       const timing = serverTiming(outcome.evidence.async);
@@ -1328,7 +963,6 @@ export async function handleSparqlRequest(request, options) {
       operation.free();
     }
   } catch (error) {
-    const correlationId = reportInternalError(error, o.onInternalError, request);
-    return internalErrorProblem(correlationId, headers);
+    return internalFailure(error, headers, { onInternalError: o.onInternalError, request });
   }
 }

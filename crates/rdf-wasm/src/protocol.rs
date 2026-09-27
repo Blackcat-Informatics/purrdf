@@ -18,14 +18,26 @@
 //! not bind and `415` for a `Content-Type` it does not define), and which carries
 //! `parameter` — the protocol parameter at fault — when there is one. The message is the
 //! error's own rendering. A host builds its problem document from those three fields.
+//!
+//! # A failed operation's problem
+//!
+//! Once a request has been read, every way its operation can fail reaches the host as an
+//! error carrying a `code` ([`crate::operation`]). [`SparqlProtocolRequest::problem_for`]
+//! answers it with the RFC 9457 problem [`problem_for`] maps its failure to: the status,
+//! the problem's `code`, and a `detail` that is the failure's own words only where the
+//! client is owed them. A failure that is the host's own is sanitized: its `detail` names
+//! a correlation id the host logs the real error under, and nothing else.
+
+use std::fmt::Write as _;
 
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::protocol::{
-    OperationKind, ProtocolError, ProtocolRequest, ResultKind, format_media_type, negotiate,
-    offered_media_types,
+    FailureCode, OperationKind, ProblemDetail, ProtocolError, ProtocolRequest, ResultKind,
+    format_media_type, negotiate, offered_media_types, problem_for,
 };
 use wasm_bindgen::prelude::*;
 
+use crate::operation::{OPTIONS_CODE, USAGE_CODE};
 use crate::query::aggregate_env_message;
 
 #[wasm_bindgen]
@@ -46,6 +58,172 @@ extern "C" {
 
     #[wasm_bindgen(method, setter = parameter)]
     fn set_parameter(this: &ProtocolJsError, parameter: &str);
+
+    /// Whatever a failed operation rejected with, read for its `code` and `message`.
+    type Failure;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn code(this: &Failure) -> JsValue;
+
+    #[wasm_bindgen(method, getter, structural)]
+    fn message(this: &Failure) -> JsValue;
+}
+
+/// The media type of every problem document.
+const PROBLEM_JSON: &str = "application/problem+json";
+
+/// The reason phrase of `status` (RFC 9110 §15), the `title` of an `about:blank` problem
+/// (RFC 9457 §4.2.1); `None` for a status no problem here is answered with.
+const fn status_title(status: u16) -> Option<&'static str> {
+    Some(match status {
+        400 => "Bad Request",
+        403 => "Forbidden",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        409 => "Conflict",
+        413 => "Content Too Large",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => return None,
+    })
+}
+
+/// A JSON string literal for `text`.
+fn json_string(text: &str) -> String {
+    serde_json::Value::String(text.to_owned()).to_string()
+}
+
+/// The HTTP problem a failed operation is answered with: build it with
+/// [`SparqlProtocolRequest::problem_for`], read its `status` and whether it is
+/// `internal`, and render its `body`.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct FailureProblem {
+    failure: FailureCode,
+    /// The failure's own code, the problem's `code` for an evaluation failure.
+    failure_code: String,
+    message: String,
+}
+
+impl FailureProblem {
+    /// The problem for a failure reported under `code` (none: an exception nothing
+    /// classified) in `message`'s words; `cancelled` when the request's own signal
+    /// stopped the operation, whatever it rejected with.
+    fn new(code: Option<&str>, message: &str, cancelled: bool) -> Self {
+        let failure = match code {
+            _ if cancelled => FailureCode::Cancelled,
+            // An operation the host began with options it refuses, or a job the host drove
+            // out of turn, is the host's own fault: nothing the client sent caused it.
+            Some(OPTIONS_CODE | USAGE_CODE) | None => FailureCode::HostFault,
+            Some(code) => FailureCode::from_diagnostic_code(code),
+        };
+        Self {
+            failure,
+            failure_code: code
+                .unwrap_or_else(|| FailureCode::HostFault.code())
+                .to_owned(),
+            message: message.to_owned(),
+        }
+    }
+
+    /// The problem document, with `correlation_id` for a failure that is the host's own.
+    fn render(&self, correlation_id: Option<&str>) -> Result<String, String> {
+        let problem = problem_for(self.failure);
+        let code = match self.failure {
+            FailureCode::Evaluation => self.failure_code.as_str(),
+            _ => problem.code,
+        };
+        let (detail, correlation) = match (problem.detail, correlation_id) {
+            (ProblemDetail::Message, _) => (self.message.clone(), None),
+            (ProblemDetail::Fixed(detail), _) => (detail.to_owned(), None),
+            (ProblemDetail::Internal { .. }, None) => {
+                return Err(format!(
+                    "a {} problem is the host's own fault and needs the correlation id its \
+                     error was logged under",
+                    problem.status
+                ));
+            }
+            (
+                ProblemDetail::Internal {
+                    detail,
+                    names_correlation,
+                },
+                Some(id),
+            ) => (
+                if names_correlation {
+                    format!("{detail} {id}")
+                } else {
+                    detail.to_owned()
+                },
+                Some(id),
+            ),
+        };
+        let mut body = format!(
+            "{{\"type\":\"about:blank\",\"title\":{},\"status\":{},\"detail\":{},\"code\":{}",
+            json_string(status_title(problem.status).unwrap_or("Error")),
+            problem.status,
+            json_string(&detail),
+            json_string(code)
+        );
+        if let Some(id) = correlation {
+            // Writing to a `String` cannot fail.
+            let _ = write!(body, ",\"correlationId\":{}", json_string(id));
+        }
+        if self.failure == FailureCode::NotAcceptable {
+            // A negotiated operation refuses only the one shape no format can carry
+            // unasked: a graph with named graphs.
+            let offered: Vec<String> = offered_media_types(ResultKind::Dataset)
+                .map(json_string)
+                .collect();
+            let _ = write!(body, ",\"offered\":[{}]", offered.join(","));
+        }
+        body.push('}');
+        Ok(body)
+    }
+}
+
+#[wasm_bindgen]
+impl FailureProblem {
+    /// The response status.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn status(&self) -> u16 {
+        problem_for(self.failure).status
+    }
+
+    /// The response's `Content-Type`: `application/problem+json`.
+    #[wasm_bindgen(getter, js_name = contentType)]
+    #[must_use]
+    pub fn content_type(&self) -> String {
+        PROBLEM_JSON.to_owned()
+    }
+
+    /// Whether the failure is the host's own: its real error belongs in the host's log
+    /// under a correlation id, which `body` must be given and the response carries.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn internal(&self) -> bool {
+        matches!(
+            problem_for(self.failure).detail,
+            ProblemDetail::Internal { .. }
+        )
+    }
+
+    /// The RFC 9457 problem document: `type`, `title`, `status`, `detail` and `code`,
+    /// plus `correlationId` for an internal failure and `offered` for a `406`.
+    ///
+    /// # Errors
+    ///
+    /// An internal failure without a `correlationId`.
+    #[wasm_bindgen]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn body(&self, correlation_id: Option<String>) -> Result<String, JsError> {
+        self.render(correlation_id.as_deref())
+            .map_err(|message| JsError::new(&message))
+    }
 }
 
 /// The HTTP status a protocol refusal maps to: `405 Method Not Allowed` for a method the
@@ -315,6 +493,31 @@ impl SparqlProtocolRequest {
         Ok(offered_media_types(kind).map(str::to_owned).collect())
     }
 
+    /// The HTTP problem a failed operation is answered with: `error` is what it rejected
+    /// with, read for its `code` and `message`; `cancelled` says the request's own signal
+    /// stopped it, whatever it rejected with. An error without a string `code` is an
+    /// exception nothing classified — the host's own fault.
+    #[wasm_bindgen(js_name = problemFor)]
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn problem_for(error: JsValue, cancelled: bool) -> FailureProblem {
+        let (code, message) = if error.is_object() {
+            let failure = error.unchecked_ref::<Failure>();
+            (failure.code().as_string(), failure.message().as_string())
+        } else {
+            (None, error.as_string())
+        };
+        FailureProblem::new(code.as_deref(), &message.unwrap_or_default(), cancelled)
+    }
+
+    /// The reason phrase of an HTTP `status` (RFC 9110 §15) — an `about:blank`
+    /// problem's `title` — or `undefined` for a status no problem is answered with here.
+    #[wasm_bindgen(js_name = statusTitle)]
+    #[must_use]
+    pub fn status_title(status: u16) -> Option<String> {
+        status_title(status).map(str::to_owned)
+    }
+
     /// Why a result of `kind` cannot be sent to a client whose `Accept` header allows none
     /// of the formats that carry it — the `detail` of a `406`, naming those formats.
     ///
@@ -489,6 +692,134 @@ mod tests {
         assert!(message.contains("named graphs"), "{message}");
         assert!(message.contains("application/trig, application/n-quads, application/ld+json"));
         assert!(!message.contains("text/turtle"));
+    }
+
+    fn body(problem: &FailureProblem, id: Option<&str>) -> serde_json::Value {
+        serde_json::from_str(&problem.render(id).expect("renders")).expect("valid JSON")
+    }
+
+    /// A parse refusal is the client's `400` in its own words; an evaluation failure is a
+    /// `500` in its own words under its own code; the two differ only by their codes.
+    #[test]
+    fn a_parse_refusal_and_an_evaluation_failure_are_told_apart_by_code() {
+        let parse = FailureProblem::new(
+            Some("native-sparql-query-parse"),
+            "error native-sparql-query-parse: SPARQL syntax error at byte 7",
+            false,
+        );
+        assert_eq!(parse.status(), 400);
+        assert!(!parse.internal());
+        let document = body(&parse, None);
+        assert_eq!(document["title"], "Bad Request");
+        assert_eq!(document["code"], "native-sparql-query-parse");
+        assert_eq!(
+            document["detail"],
+            "error native-sparql-query-parse: SPARQL syntax error at byte 7"
+        );
+        let evaluation = FailureProblem::new(
+            Some("native-sparql-query-eval"),
+            "error native-sparql-query-eval: a cyclic list",
+            false,
+        );
+        assert_eq!(evaluation.status(), 500);
+        assert!(!evaluation.internal());
+        assert_eq!(body(&evaluation, None)["code"], "native-sparql-query-eval");
+    }
+
+    /// A host fault — an exception with no code, or a job's latched fault — never shows
+    /// its words, and cannot be rendered without the correlation id it was logged under.
+    /// A catalog denial is a `403` whose detail is fixed, never the policy's words.
+    #[test]
+    fn host_faults_and_denials_never_disclose_their_words() {
+        for fault in [
+            FailureProblem::new(None, "secret-token-abc", false),
+            FailureProblem::new(Some("native-sparql-host-fault"), "secret-token-abc", false),
+        ] {
+            assert_eq!(fault.status(), 500);
+            assert!(fault.internal());
+            assert!(
+                fault.render(None).is_err(),
+                "an internal problem needs its id"
+            );
+            let document = body(&fault, Some("id-1"));
+            assert_eq!(document["code"], "InternalError");
+            assert_eq!(
+                document["detail"],
+                "internal error; see the Worker log for correlation id id-1"
+            );
+            assert_eq!(document["correlationId"], "id-1");
+            assert!(!document.to_string().contains("secret-token-abc"));
+        }
+        let denied = FailureProblem::new(
+            Some("native-sparql-load-denied"),
+            "LOAD <http://example.org/doc>: denied: secret policy",
+            false,
+        );
+        assert_eq!(denied.status(), 403);
+        let document = body(&denied, None);
+        assert!(!document.to_string().contains("secret policy"));
+        let host_denied = FailureProblem::new(
+            Some("native-sparql-load-host-denied"),
+            "LOAD <http://example.org/doc>: the host denied the request: secret",
+            false,
+        );
+        assert_eq!(host_denied.status(), 403);
+        assert_ne!(
+            body(&host_denied, None)["detail"],
+            document["detail"],
+            "the catalog's refusal and the host's read differently"
+        );
+    }
+
+    /// A stopped request is a `503` whatever it rejected with; a conflicting update a
+    /// `409`; a result no acceptable format carries a `406` naming the formats offered.
+    #[test]
+    fn stops_conflicts_and_unacceptable_results_have_their_statuses() {
+        let aborted = FailureProblem::new(None, "AbortError: the client went away", true);
+        assert_eq!(aborted.status(), 503);
+        assert!(!aborted.internal());
+        assert_eq!(body(&aborted, None)["code"], "cancelled");
+        // The neighbour: the same exception with the request still live is a host fault.
+        let unexplained = FailureProblem::new(None, "AbortError: the client went away", false);
+        assert_eq!(unexplained.status(), 500);
+        // Options the host began an operation with and the operation refused are the
+        // host's fault too; a serialization the operation could not write is its own.
+        let misconfigured =
+            FailureProblem::new(Some(OPTIONS_CODE), "a catalog governs nothing", false);
+        assert!(misconfigured.internal());
+        let unserializable = FailureProblem::new(
+            Some(crate::operation::SERIALIZE_CODE),
+            "unsupported format",
+            false,
+        );
+        assert!(!unserializable.internal());
+        assert_eq!(
+            body(&unserializable, None)["code"],
+            crate::operation::SERIALIZE_CODE
+        );
+        let conflict = FailureProblem::new(
+            Some("native-sparql-update-in-flight"),
+            "an asynchronous update of dataset 3 is already in flight",
+            false,
+        );
+        assert_eq!(conflict.status(), 409);
+        assert_eq!(body(&conflict, None)["title"], "Conflict");
+        let unacceptable = FailureProblem::new(
+            Some("native-sparql-not-acceptable"),
+            &not_acceptable_message(ResultKind::Dataset),
+            false,
+        );
+        assert_eq!(unacceptable.status(), 406);
+        let document = body(&unacceptable, None);
+        assert_eq!(document["code"], "NotAcceptable");
+        assert_eq!(
+            document["offered"],
+            serde_json::json!([
+                "application/trig",
+                "application/n-quads",
+                "application/ld+json"
+            ])
+        );
     }
 
     #[test]

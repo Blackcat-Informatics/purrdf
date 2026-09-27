@@ -342,6 +342,17 @@ Workers (workerd). `hasAsyncQueries()` reports whether the current engine has it
 it does not, every twin rejects with one error naming what is missing before it touches
 wasm, and the synchronous API works as before.
 
+### Errors carry their code
+
+Every error the package throws for a failure it classifies carries the stable code it
+is reported under as `error.code`, on the synchronous and the asynchronous lane alike:
+an engine diagnostic's own (`native-sparql-query-parse`, `native-sparql-load-denied`,
+…), a job's stop or fault (`native-sparql-cancelled`, `native-sparql-deadline`,
+`native-sparql-not-acceptable`, `native-sparql-update-in-flight`,
+`native-sparql-host-fault`), or one of the package's own refusals
+(`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on the
+message. A cancellation with a `signal.reason` rejects with that reason itself.
+
 ### Answering `SERVICE`: `resolveService`
 
 `resolveService(request, ctx)` is called once for each distinct `SERVICE` request a job
@@ -353,17 +364,20 @@ Protocol POST to send:
 - `contentType`: `application/sparql-query`;
 - `accept`: `application/sparql-results+json`;
 - `userAgent`;
-- `timeoutMs`: the catalog profile's timeout, or the default;
+- `timeoutMs`: the catalog profile's timeout, or the default (30 s);
 - `headers`: the catalog profile's headers and then its credential header, as
   `[name, value]` pairs in sending order. Append each pair and never merge repeated
-  names. Without a catalog the list is empty.
+  names. Without a catalog the list is empty;
+- `cacheable`: whether a shared cache may answer the request or keep its answer —
+  `false` when it carries a credential, whose answer belongs to the credential's holder.
 
 `ctx` carries four fields:
 
-- `signal`: an `AbortSignal` that fires when the job is cancelled or its deadline
-  passes. From then on the job no longer waits for the handler. For a call that several
-  jobs share (see [Concurrency](#concurrency)), it fires only once every one of them has
-  stopped.
+- `signal`: an `AbortSignal` that fires once no job waits on the call any more: every
+  job waiting on it was cancelled, or reached its request's timeout or its deadline,
+  whichever comes first (the job decides that instant, not the handler). For a call that
+  several jobs share (see [Concurrency](#concurrency)), it fires only once every one of
+  them has stopped waiting.
 - `remainingDeadlineMs`: the time left before the deadline, when the job has one.
 - `silent`: whether the clause was written `SERVICE SILENT`.
 - `maxIntermediateCells`: the query's cell ceiling, when one is set.
@@ -405,7 +419,8 @@ async function resolveService(request, { signal }) {
         ...request.headers, // the catalog profile's headers, in sending order
       ],
       body: request.queryText,
-      signal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
+      // Fires at the request's timeout, the job's deadline or its cancellation.
+      signal,
     });
   } catch (error) {
     // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
@@ -429,11 +444,15 @@ const { rows } = await engine.selectAsync(
 for (const row of rows) console.log(row.s.value, row.x.value);
 ```
 
-A `ServiceCatalog` passed as `catalog` authorizes every request before the handler is
-called. It denies by default, holds one profile per endpoint and an optional fallback,
-and a profile grants the capabilities `query`, `network` and `credentials` and may add
-headers, a credential header, a `User-Agent` and a timeout. A denied request fails the
-query, and under `SERVICE SILENT` is the join identity recorded as `"denied"`.
+A `ServiceCatalog` passed as `catalog` authorizes every request — every `SERVICE`, and
+every `LOAD` source and redirect — before the handler is called. It denies by default,
+holds one profile per endpoint and an optional fallback, and a profile grants the
+capabilities `query`, `network` and `credentials` and may add headers, a credential
+header, a `User-Agent` and a `timeoutMs` (at most 2 147 483 647, the longest delay a
+JavaScript timer honours): the job abandons a request still unanswered at that timeout,
+as a transport failure, or at its deadline when that falls first. A denied request fails
+the query, and under `SERVICE SILENT` is the join identity recorded as `"denied"`. The
+catalog is copied, so it stays usable for later operations.
 `localServices: { [endpoint]: dataset }` answers the
 named endpoints in process from a snapshot of a `Dataset`, without calling the handler.
 
@@ -492,21 +511,34 @@ union — with the endpoints to try taken from the evaluation order, which it al
 
 ### Answering `LOAD`: `resolveLoad`
 
-`resolveLoad({ kind: "load", iri }, { signal })` answers one `LOAD` with any of:
+`resolveLoad(request, { signal })` answers one hop of a `LOAD`. `request` is the `GET` to
+send: `{ kind: "load", iri, accept, userAgent, headers, timeoutMs }`, where `accept`
+names every RDF syntax a `LOAD` parses and `userAgent`, `headers` and `timeoutMs` are
+the source's catalog profile's (no headers and the default timeout without a catalog).
+With a catalog, the job authorizes the IRI before the handler is called: a source the
+catalog does not grant `network` fails with `native-sparql-load-denied`, and nothing is
+fetched. `signal` fires at the job's cancellation, the request's timeout or the job's
+deadline. The answer is any of:
 
 - `{ bytes, mediaType, base? }` or `{ text, mediaType, base? }`. `mediaType` is a media
   type or any format name `Dataset.parse` accepts, and `base` defaults to the IRI;
 - a `Response`, whose `Content-Type` names the media type;
 - a `Dataset`;
+- `{ kind: "redirect", location }`: the job resolves `location` against the IRI,
+  authorizes it against the catalog as a source of its own, and asks for it as a fresh
+  hop with that source's own profile — up to five hops; a sixth redirect fails the
+  `LOAD` as a transport failure;
 - `{ kind: "transport" }` when the document could not be fetched or read;
-- `{ kind: "denied" }` when the host's policy refuses the request.
+- `{ kind: "denied" }` when the host's policy refuses the request
+  (`native-sparql-load-host-denied`, apart from the catalog's own denial).
 
-Either failure fails the request. `LOAD SILENT` succeeds over either — and over a
+Each failure fails the request. `LOAD SILENT` succeeds over any of them — and over a
 missing `resolveLoad` — with nothing loaded (SPARQL 1.1 Update §3.1.4), and the job's
 `evidence.async.silenced` records the source's `iri` and the failure's `kind`.
 
 A bare string or bytes carry no media type and are a fault. A document that does not
-parse is the `LOAD`'s own failure.
+parse — or names a media type no parser reads — is the `LOAD`'s decode failure
+(`native-sparql-load-decode`).
 
 ### Yielding, cancellation and deadlines
 
@@ -529,8 +561,9 @@ effect, and the twin rejects with `signal.reason` (an `AbortError` when the sign
 reason). A governed twin reports the cancellation as a tripped governor instead. Passing
 `cancel` (a `CancellationToken`) to a twin is a `TypeError` that names `signal`. On the
 governed twins, `deadlineMs` includes the time spent waiting for the handlers as well as
-evaluation. The job checks it at every yield and every host effect, and a timer aborts an
-effect still pending when it passes.
+evaluation. The job checks it at every yield and every host effect, and every effect
+names the instant it is abandoned at if still unanswered — its request's timeout or the
+deadline, whichever falls first — so an effect still pending at the deadline trips it.
 
 On Cloudflare Workers, `Date.now()` does not advance during CPU-bound execution; it moves
 only across I/O. A synchronous `deadlineMs` therefore cannot trip during CPU-bound work
@@ -541,17 +574,19 @@ is where the clock moves.
 
 Jobs interleave at every yield and effect, and synchronous calls may run between them. A
 query reads the snapshot taken when it started, so a later mutation never shows up in a
-running job. Asynchronous updates on one dataset run one at a time, in call order. Each
-update reads a snapshot and is applied only if the dataset was not mutated while it ran;
-otherwise it rejects and applies nothing. `dataset.id` identifies a dataset within the
+running job. One asynchronous update of a dataset may be in flight at a time: beginning
+another while it runs rejects at once with the code `native-sparql-update-in-flight`, and
+applies and asks nothing — await the first, then send the next. Each update reads a
+snapshot and is applied only if the dataset was not mutated while it ran; otherwise it
+rejects with the same code and applies nothing. `dataset.id` identifies a dataset within the
 wasm instance, and `dataset.generation` counts the mutations it has seen.
 `configureAsync({ maxConcurrentJobs })` bounds how many jobs may be in flight (16 by
 default); a twin started beyond the bound rejects.
 
 A job asks `resolveService` once for each distinct `SERVICE` request. When it repeats a
 request with the same `ctx.silent` and `ctx.maxIntermediateCells`, it reuses the first
-answer, a failure included. A fault is never reused. Another job, even one issuing the
-same request later, asks again.
+answer when that answer was rows; a failure or a fault is never reused, so a repeat asks
+again. Another job, even one issuing the same request later, asks again.
 
 Concurrent jobs share one call only when the handler would see an equivalent context.
 A job joins a call already in flight through the same `resolveService` when all of these
@@ -585,6 +620,9 @@ add the region's size and a larger `stackBytes` as the remedy. Both check the st
 above the region's base at every recursive step and refuse while 64 KiB remain. On the
 synchronous lane the same two refusals name the asynchronous twin and a larger
 `stackBytes` as the remedy instead.
+
+The parser's refusal carries its own code, `native-sparql-parse-stack-exhausted`, apart
+from a syntax error's `native-sparql-query-parse`.
 
 A region sizes only the shadow stack in linear memory. Every wasm call also takes frames
 on the JavaScript engine's own call stack, which no wasm code can read, and V8 (Node.js,
@@ -636,33 +674,27 @@ defect to report.
 `@blackcatinformatics/purrdf/cloudflare` builds a SPARQL 1.1 Protocol endpoint from these
 pieces:
 
-- `createFetchServiceResolver({ catalog, timeoutMs, fetch?, bindings?, cache?, cacheTtlSeconds?, waitUntil?, onCacheError? })`
+- `createFetchServiceResolver({ fetch?, bindings?, cache?, cacheTtlSeconds? })`
   returns a `resolveService` that POSTs each request with `fetch`, or through the
-  service binding registered for the endpoint's origin, always with `redirect: "manual"`.
-  A network error, a timeout or a non-2xx status is reported as `{ kind: "transport" }`,
-  never thrown — and so is a 3xx (or a browser's opaque-redirect response): it is never
-  followed, so the profile's headers and credential (an `X-Api-Key`, a `Cookie`, …) can
-  never reach an origin the catalog did not authorize. With `cache` and `cacheTtlSeconds`
-  it reuses answers through the Cache API, and it refuses a request that carries a
-  credential with a `TypeError` (a fault) rather than read it from or write it to a shared
-  cache. The cache is an optimisation and never decides the answer: a `cache.match`
-  rejection (e.g. "No Cache was configured" from a workerd runtime started without a
-  cache) is treated as a miss, and a
-  `cache.put` failure never discards an answer the remote already returned — with
-  `waitUntil` the failed put is still handed to it, and without one it is awaited inside a
-  `try`. Every cache failure is reported through `onCacheError(error, { operation, endpoint })`,
-  which defaults to one `console.warn` line, so a failure is visible, never silent —
-  including under `SERVICE SILENT`, which still yields the join identity when the remote
-  itself fails, not a fault, regardless of the cache's own health.
-- `createFetchLoadResolver({ catalog, timeoutMs, fetch?, bindings?, maxRedirects? })`
-  returns a `resolveLoad` that authorizes each IRI against the catalog and then GETs it,
-  also with `redirect: "manual"`. A redirect is followed by hand, up to `maxRedirects`
-  hops (5 by default): its `Location` is resolved and re-authorized against the catalog
-  exactly as the initial IRI is — an unauthorized hop is the same `{ kind: "denied" }`
-  failure as an unauthorized initial `LOAD` — and that hop's own headers and credential
-  are sent, never the previous hop's. The loaded document's `base` is the final, redirected
-  and authorized URL. Exceeding `maxRedirects`, or a redirect with no usable `Location`
-  (an opaque one withholds it), is a `{ kind: "transport" }` failure.
+  service binding registered for the endpoint's origin, always with `redirect: "manual"`
+  and bounded by `ctx.signal` (the request's catalog timeout or the query's deadline). A
+  network error, an abandoned request or a non-2xx status is reported as
+  `{ kind: "transport" }`, never thrown — and so is a 3xx (or a browser's opaque-redirect
+  response): it is never followed, so the profile's headers and credential (an
+  `X-Api-Key`, a `Cookie`, …) can never reach an origin the catalog did not authorize.
+  With `cache` and `cacheTtlSeconds` it reuses the answer of every request the job marks
+  `cacheable` through the Cache API; a request that carries a credential is never read
+  from or written to the shared cache, and goes to the endpoint instead. A `cache.match`
+  or `cache.put` that fails (e.g. "No Cache was configured" from a workerd runtime
+  started without a cache) is that request's transport failure: under `SERVICE SILENT`
+  the join identity, recorded, and without it the query's failure. Pass no `cache` where
+  none is configured.
+- `createFetchLoadResolver({ fetch?, bindings? })` returns a `resolveLoad` that GETs
+  each hop the job asks for — with the `Accept`, `User-Agent`, headers and credential of
+  that hop's own catalog profile, which the job authorized first — also with
+  `redirect: "manual"`, and answers a redirect `{ kind: "redirect", location }` for the
+  job to resolve, re-authorize and ask for as a fresh hop. A redirect whose `Location`
+  is withheld (an opaque one) or missing is a `{ kind: "transport" }` failure.
 - `handleSparqlRequest(request, options)` answers one protocol request (`GET ?query=`,
   or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
   a `Response`, by the status table below. A partial answer is never sent with a `200`.
@@ -692,21 +724,25 @@ pieces:
 |---|---|---|
 | `200` | — | a query answered, with the negotiated document |
 | `204` | — | an update applied |
-| `400` | the protocol refusal's name | a malformed request or operation |
+| `400` | the protocol refusal's name | a malformed request, or dataset parameters applied to an operation that does not parse |
+| `400` | `native-sparql-query-parse`, `native-sparql-update-parse`, `native-sparql-parse-stack-exhausted` | the operation does not parse; `detail` is the parser's message |
 | `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, nesting past the host-stack budget); `detail` is the engine's message |
 | `403` | `native-sparql-service-denied` | the catalog withholds a capability from a `SERVICE` endpoint the query names; no endpoint was contacted |
 | `403` | `native-sparql-service-host-denied` | `resolveService` refused the request by its own policy (`{ kind: "denied" }`); no endpoint was contacted |
-| `403` | `native-sparql-load-denied` | the catalog does not authorize a `LOAD` source; nothing was fetched |
+| `403` | `native-sparql-load-denied` | the catalog does not authorize a `LOAD` source, or a location it redirected to; nothing was fetched |
+| `403` | `native-sparql-load-host-denied` | `resolveLoad` refused the source by its own policy (`{ kind: "denied" }`) |
 | `405` | the protocol refusal's name | a method the protocol does not bind |
 | `406` | `NotAcceptable` | no acceptable format can carry the result |
+| `409` | `native-sparql-update-in-flight` | another update of the dataset is in flight, or the dataset was mutated while this one ran; nothing was applied |
 | `413` | `ContentTooLarge` | the body exceeds `maxRequestBytes` |
 | `415` | the protocol refusal's name | a `Content-Type` the protocol does not define |
 | `422` | the governor's label | a deterministic ceiling stopped the request |
 | `500` | the engine's diagnostic code (`native-sparql-query-eval`, `native-sparql-evaluation-stack-exhausted`, …) | the query's evaluation failed; `detail` is the engine's message |
-| `500` | `native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`, `native-sparql-load-fault` | no resolver reaches a named endpoint or source, or `resolveLoad` answered with something that is not an answer; with a `correlationId` |
-| `500` | `InternalError` | a host-supplied resolver threw or rejected, a rejection no engine code classifies, or any other unexpected exception; with a `correlationId` |
+| `500` | `native-sparql-service-unconfigured`, `native-sparql-load-no-resolver` | no resolver reaches a named endpoint or source; with a `correlationId` |
+| `500` | `InternalError` | a host-supplied resolver threw, rejected or answered with something that is not an answer, an exception no code classifies, or any other unexpected exception; with a `correlationId` |
 | `502` | `native-sparql-service-failed` | a `SERVICE` endpoint was contacted and gave no usable answer: a network error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body |
-| `502` | `native-sparql-load-failed` | a `LOAD` source could not be fetched or read |
+| `502` | `native-sparql-load-failed` | a `LOAD` source could not be fetched: a network error, its timeout, an HTTP error status, more than five redirects |
+| `502` | `native-sparql-load-decode` | a `LOAD` source was fetched and could not be parsed |
 | `503` | the governor's label, or `cancelled` | the deadline or a cancellation stopped the request (no `Retry-After`: the same request would stop again) |
 
 A complete Worker:
@@ -725,18 +761,15 @@ const dataset = Dataset.parse(
 const catalog = new ServiceCatalog();
 catalog.addService(
   "https://remote.example.org/sparql",
-  JSON.stringify({ capabilities: ["query", "network"] }),
+  JSON.stringify({ capabilities: ["query", "network"], timeoutMs: 5_000 }),
 );
 
 export default {
-  fetch(request, env, ctx) {
+  fetch(request, env) {
     const resolveService = createFetchServiceResolver({
-      catalog,
-      timeoutMs: 5_000,
       bindings: { "https://remote.example.org": env.REMOTE },
       cache: caches.default,
       cacheTtlSeconds: 300,
-      waitUntil: (promise) => ctx.waitUntil(promise),
     });
     return handleSparqlRequest(request, {
       engine,
@@ -760,8 +793,8 @@ solution that reaches it, not once per endpoint (see
 solutions. The Cache API does nothing on `workers.dev` hostnames, so caching is effectively
 off there; on a Worker served from a custom domain it works. A runtime started without a
 cache configured (a locally run workerd, for example) rejects `cache.match` and
-`cache.put` with "No Cache was configured", which is exactly the failure `onCacheError`
-reports while the query still answers from the remote.
+`cache.put` with "No Cache was configured", which fails every request that consults the
+cache: configure no `cache` there.
 
 ## Scope
 

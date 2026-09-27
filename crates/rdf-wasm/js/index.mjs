@@ -62,6 +62,8 @@ import init, {
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
+  DeliveryStatus,
+  EffectKind,
   entailCertainAnswers,
   entailCheckAbsentProof,
   entailCheckGoldenVectors,
@@ -95,6 +97,7 @@ import init, {
   Reasoner,
   ReasoningAnswer,
   RegimeClosure,
+  RunStatus,
   SerializeLoss,
   ServiceCatalog,
   ShaclChangeValidation,
@@ -112,6 +115,7 @@ import init, {
   shaclValidateToSarif,
   Sink,
   SparqlProtocolRequest,
+  SuspendStatus,
   Term,
   version,
 } from "./pkg/purrdf_wasm.js";
@@ -123,7 +127,6 @@ import {
   hasAsyncQueries as jspiHasAsyncQueries,
   installAsync,
   runJob,
-  withDatasetUpdateLock,
 } from "./pkg/purrdf_jspi.mjs";
 
 let _ready = false;
@@ -668,65 +671,16 @@ function updateOutcomeToObject(raw) {
 //
 // Every twin runs the same Rust operation its synchronous twin runs, as a job the
 // scheduler drives (see `./pkg/purrdf_jspi.mjs` and the Rust `async_query` module). This
-// layer only translates: an options object into an `AsyncJobOptions`, the host's
-// handlers and signal into the scheduler's `host`, and a finished job into the result
-// shape the synchronous twin returns. Every option a twin would ignore is refused by
-// name, exactly as the synchronous normalizers refuse a governor on an ungoverned call.
+// layer only translates: it takes the host's handlers and signal off the options object
+// (the one part of it Rust cannot hold), hands Rust the rest to validate against the
+// operation's own table (`AsyncJobOptions.fromJs`), and drains a finished job into the
+// result shape the synchronous twin returns.
 
-// The keys every asynchronous twin accepts beside its operation's own.
-const ASYNC_HOST_OPTION_KEYS = [
-  "resolveService",
-  "resolveLoad",
-  "signal",
-  "yieldEveryPolls",
-  "stackBytes",
-  "catalog",
-  "localServices",
-];
-
-const GOVERNOR_CEILING_KEYS = GOVERNOR_OPTION_KEYS.filter((key) => key !== "cancel");
-
-const GOVERNED_ASYNC_KEYS = ["base", "aggregateNamespace", ...GOVERNOR_CEILING_KEYS];
-
-// The operation keys each kind of twin accepts. `maxAnswers` stays on `updateGoverned`:
-// it is forwarded so Rust refuses it by name, exactly as the synchronous twin does.
-const ASYNC_OPERATION_KEYS = {
-  query: { keys: ["base"], governed: false },
-  raw: { keys: ["base", "format", "provenanceNamespace", "optionsJson"], governed: false },
-  rawWithContext: { keys: ["base", "yamlSchemaUrl"], governed: false },
-  governed: { keys: GOVERNED_ASYNC_KEYS, governed: true },
-  entailmentGoverned: { keys: [...GOVERNED_ASYNC_KEYS, "program"], governed: true },
-  update: { keys: ["base"], governed: false },
-  updateGoverned: { keys: GOVERNED_ASYNC_KEYS, governed: true },
-  negotiated: { keys: [...GOVERNED_ASYNC_KEYS, "accept"], governed: true },
-  // EXPLAIN measures a run that is metered and never bounded, so it takes no ceiling:
-  // exactly `explainQuery`'s options.
-  explain: { keys: ["base"], governed: false },
-  // The SHACL twins take their synchronous twin's arguments positionally — `shapesBase`
-  // among them — and no ceiling, since no synchronous SHACL entry takes one: only the
-  // host options.
-  shacl: { keys: [], governed: false },
-};
+// The keys this layer reads itself; every other key is Rust's to validate.
+const PACKAGE_OPTION_KEYS = ["resolveService", "resolveLoad", "signal"];
 
 function isPresent(value) {
   return value !== undefined && value !== null;
-}
-
-function optionalString(value, name) {
-  if (!isPresent(value)) return undefined;
-  if (typeof value !== "string") {
-    throw new TypeError(`query option ${name} must be a string when supplied`);
-  }
-  return value;
-}
-
-function optionalNumber(value, name) {
-  if (!isPresent(value)) return undefined;
-  if (typeof value !== "number") {
-    throw new TypeError(`query option ${name} must be a number when supplied`);
-  }
-  // The range (and integrality) is Rust's to refuse, with the one message it owns.
-  return value;
 }
 
 function optionalHandler(value, name) {
@@ -750,146 +704,42 @@ function optionalSignal(value) {
   return value;
 }
 
-function optionalCatalog(value) {
-  if (!isPresent(value)) return undefined;
-  if (!(value instanceof ServiceCatalog)) {
-    throw new TypeError("query option catalog must be a ServiceCatalog when supplied");
-  }
-  return value;
-}
+// Each distinct `resolveService` function's identity, as Rust keys a shared host call by
+// it: jobs share a call only through the same handler.
+const serviceHandlerIds = new WeakMap();
+let lastServiceHandlerId = 0;
 
-function optionalLocalServices(value) {
-  if (!isPresent(value)) return [];
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(
-      "query option localServices must be an object mapping endpoint IRIs to Datasets",
-    );
+function serviceHandlerId(resolveService) {
+  if (resolveService === undefined) return undefined;
+  let id = serviceHandlerIds.get(resolveService);
+  if (id === undefined) {
+    lastServiceHandlerId += 1;
+    id = lastServiceHandlerId;
+    serviceHandlerIds.set(resolveService, id);
   }
-  const services = [];
-  for (const [endpoint, dataset] of Object.entries(value)) {
-    if (!(dataset instanceof Dataset)) {
-      throw new TypeError(
-        `query option localServices must map every endpoint to a Dataset; ` +
-          `${JSON.stringify(endpoint)} does not`,
-      );
-    }
-    services.push([endpoint, dataset]);
-  }
-  return services;
+  return id;
 }
 
 /**
- * Validate an asynchronous twin's options for operation `kind` (a key of
- * `ASYNC_OPERATION_KEYS`) and return them normalized. Pure JavaScript: nothing here
- * touches wasm, so a refused option never leaves a half-built job behind.
+ * Split an asynchronous twin's options into the host's handlers and signal — this
+ * layer's — and everything else, which Rust validates against the operation's table.
  */
-function normalizeAsyncOptions(options, kind) {
-  const operation = ASYNC_OPERATION_KEYS[kind];
-  const source = options ?? {};
-  if (typeof source !== "object" || Array.isArray(source)) {
+function splitAsyncOptions(options) {
+  if (!isPresent(options)) return { rest: undefined, host: {}, signal: undefined };
+  if (typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("query options must be an object when supplied");
   }
-  if (isPresent(source.cancel)) {
-    throw new TypeError(
-      "query option cancel is not accepted by an asynchronous call; pass an AbortSignal " +
-        "as signal instead",
-    );
+  const rest = {};
+  for (const key of Object.keys(options)) {
+    if (!PACKAGE_OPTION_KEYS.includes(key)) rest[key] = options[key];
   }
-  const accepted = new Set([...operation.keys, ...ASYNC_HOST_OPTION_KEYS]);
-  for (const key of Object.keys(source)) {
-    if (accepted.has(key) || !isPresent(source[key])) continue;
-    if (!operation.governed && GOVERNOR_CEILING_KEYS.includes(key)) {
-      throw new TypeError(
-        `query option ${key} is an execution governor and is enforced only by ` +
-          `queryGovernedAsync/queryEntailmentGovernedAsync/updateGovernedAsync; this ` +
-          `call would ignore it entirely`,
-      );
-    }
-    if (!operation.governed && key === "aggregateNamespace") {
-      throw new TypeError(
-        "query option aggregateNamespace registers the statistical-aggregate registry " +
-          "and is honored only by queryGovernedAsync/queryEntailmentGovernedAsync/" +
-          "updateGovernedAsync; this call would ignore it entirely",
-      );
-    }
-    throw new TypeError(
-      `unknown query option ${JSON.stringify(key)} (this call accepts ` +
-        `${[...accepted].join(", ")})`,
-    );
-  }
-  const governed = operation.governed ? normalizeGovernedOptions(source) : undefined;
-  const { prefix: provenancePrefix, iri: provenanceIri } = normalizeProvenanceNamespace(
-    source.provenanceNamespace,
-  );
-  const resolveService = optionalHandler(source.resolveService, "resolveService");
-  const resolveLoad = optionalHandler(source.resolveLoad, "resolveLoad");
-  const signal = optionalSignal(source.signal);
-  const deadlineMs = governed?.deadlineMs;
-  return {
-    base: optionalString(source.base, "base"),
-    format: optionalString(source.format, "format"),
-    accept: optionalString(source.accept, "accept"),
-    optionsJson: optionalString(source.optionsJson, "optionsJson"),
-    yamlSchemaUrl: optionalString(source.yamlSchemaUrl, "yamlSchemaUrl"),
-    // Positional on `queryEntailmentGovernedAsync`, set there.
-    regime: undefined,
-    program: optionalString(source.program, "program"),
-    provenancePrefix,
-    provenanceIri,
-    governed,
-    yieldEveryPolls: optionalNumber(source.yieldEveryPolls, "yieldEveryPolls"),
-    stackBytes: optionalNumber(source.stackBytes, "stackBytes"),
-    catalog: optionalCatalog(source.catalog),
-    localServices: optionalLocalServices(source.localServices),
+  const signal = optionalSignal(options.signal);
+  const host = {
+    resolveService: optionalHandler(options.resolveService, "resolveService"),
+    resolveLoad: optionalHandler(options.resolveLoad, "resolveLoad"),
     signal,
-    host: {
-      resolveService,
-      resolveLoad,
-      signal,
-      // The scheduler's deadline timer abandons an awaited effect when it passes; the
-      // job reports the trip itself, as a deadline.
-      deadlineMs,
-    },
   };
-}
-
-/** Build the `AsyncJobOptions` a normalized options record describes. */
-function buildJobOptions(normalized) {
-  const jobOptions = new AsyncJobOptions();
-  try {
-    jobOptions.setBase(normalized.base);
-    jobOptions.setFormat(normalized.format);
-    jobOptions.setAccept(normalized.accept);
-    jobOptions.setOptionsJson(normalized.optionsJson);
-    jobOptions.setProvenancePrefix(normalized.provenancePrefix);
-    jobOptions.setProvenanceIri(normalized.provenanceIri);
-    jobOptions.setRegime(normalized.regime);
-    jobOptions.setProgram(normalized.program);
-    const governed = normalized.governed;
-    if (governed !== undefined) {
-      jobOptions.setAggregateNamespace(governed.aggregateNamespace);
-      jobOptions.setFuel(governed.fuel);
-      jobOptions.setDeadlineMs(governed.deadlineMs);
-      jobOptions.setMaxAnswers(governed.maxAnswers);
-      jobOptions.setMaxIntermediateCells(governed.maxIntermediateCells);
-      jobOptions.setMaxScratchBytes(governed.maxScratchBytes);
-      jobOptions.setMaxRemoteRequests(governed.maxRemoteRequests);
-    }
-    jobOptions.setYieldEveryPolls(normalized.yieldEveryPolls);
-    jobOptions.setStackBytes(normalized.stackBytes);
-    if (normalized.catalog !== undefined) jobOptions.setCatalog(normalized.catalog);
-    for (const [endpoint, dataset] of normalized.localServices) {
-      jobOptions.addLocalService(endpoint, dataset);
-    }
-    jobOptions.setHandlers(
-      typeof normalized.host.resolveService === "function",
-      typeof normalized.host.resolveLoad === "function",
-    );
-    return jobOptions;
-  } catch (error) {
-    jobOptions.free();
-    throw error;
-  }
+  return { rest, host, signal };
 }
 
 function asyncEvidenceToObject(raw) {
@@ -928,14 +778,16 @@ function abortRejection(signal, message) {
 }
 
 /**
- * The rejection for a job whose run stored an error: the synchronous twin's words for an
- * ordinary failure, the signal's reason (or an `AbortError`) for a cancellation, a
- * `TimeoutError` for a deadline, and the fault's own text for a fault. Every error this
- * builds carries the job's evidence as `error.evidence.async`.
+ * The rejection for a job whose run stored an error: the job's own words and, as
+ * `code`, the stable code Rust reported it under — an `Error` for an ordinary failure or
+ * a fault, the signal's reason (or an `AbortError`) for a cancellation, a `TimeoutError`
+ * for a deadline, a `NotAcceptableError` for a result no acceptable format carries.
+ * Every error this builds carries the job's evidence as `error.evidence.async`.
  */
 function jobFailure(job, signal) {
   const kind = job.errorKind;
-  const message = job.takeError() ?? `the asynchronous operation failed (${kind})`;
+  const code = job.errorCode;
+  const message = job.errorMessage ?? `the asynchronous operation failed (${kind})`;
   const evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
   let error;
   switch (kind) {
@@ -953,30 +805,38 @@ function jobFailure(job, signal) {
       error = namedError(message, "Error");
       break;
   }
+  error.code = code;
   error.evidence = evidence;
   return error;
 }
 
 /**
- * Begin a job with `begin(jobOptions)`, run it to completion and settle it with
+ * Validate `options` for operation `kind` (its positional `argument`, when it has one),
+ * begin a job with `begin(jobOptions)`, run it to completion and settle it with
  * `settle(job)`. The job is always finished and freed, whatever happens.
  */
-async function driveAsyncJob(normalized, begin, settle, fail = jobFailure) {
-  const { signal } = normalized;
-  if (signal !== undefined && signal.aborted) {
-    throw abortRejection(signal, "the asynchronous operation was cancelled");
-  }
-  const jobOptions = buildJobOptions(normalized);
+async function driveAsyncJob(kind, options, argument, begin, settle, fail = jobFailure) {
+  const { rest, host, signal } = splitAsyncOptions(options);
+  const jobOptions = AsyncJobOptions.fromJs(
+    kind,
+    rest,
+    serviceHandlerId(host.resolveService),
+    host.resolveLoad !== undefined,
+    argument,
+  );
   let job;
   try {
+    if (signal !== undefined && signal.aborted) {
+      throw abortRejection(signal, "the asynchronous operation was cancelled");
+    }
     job = begin(jobOptions);
   } finally {
     jobOptions.free();
   }
   try {
-    const status = await runJob(job, normalized.host);
-    if (status === 0) return settle(job);
-    if (status === 1) throw fail(job, signal);
+    const status = await runJob(job, host);
+    if (status === RunStatus.Outcome) return settle(job);
+    if (status === RunStatus.Error) throw fail(job, signal);
     throw new Error(
       `asynchronous job ${job.id} could not run (scheduler status ${status})`,
     );
@@ -984,17 +844,6 @@ async function driveAsyncJob(normalized, begin, settle, fail = jobFailure) {
     job.finish();
     job.free();
   }
-}
-
-/** Run an update job on `dataset` behind the dataset's asynchronous-update queue. */
-function driveAsyncUpdate(dataset, normalized, begin, settle) {
-  const { signal } = normalized;
-  if (signal !== undefined && signal.aborted) {
-    return Promise.reject(
-      abortRejection(signal, "the asynchronous operation was cancelled"),
-    );
-  }
-  return withDatasetUpdateLock(dataset.id, () => driveAsyncJob(normalized, begin, settle));
 }
 
 function takeAsk(job) {
@@ -1036,9 +885,10 @@ const utf8 = new TextDecoder();
  */
 async function driveShaclJob(operation, args, options, settle, fail) {
   assertAsyncQueries();
-  const o = normalizeAsyncOptions(options, "shacl");
   return driveAsyncJob(
-    o,
+    AsyncOperationKind.Shacl,
+    options,
+    undefined,
     (jobOptions) =>
       AsyncJob.beginShacl(
         operation,
@@ -1068,7 +918,6 @@ function shaclRefusalFailure(job, signal) {
   if (job.errorKind === "error") {
     const refusal = job.takeShaclRefusal();
     if (refusal !== undefined) {
-      job.takeError();
       refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
       return refusal;
     }
@@ -1238,7 +1087,7 @@ export async function ready(wasmBytesOrUrl) {
   } else {
     exports = await init();
   }
-  installAsync(exports);
+  installAsync(exports, { AsyncJob, RunStatus, SuspendStatus, DeliveryStatus, EffectKind });
 
   // RDF/JS DatasetCore is iterable over its quads.
   if (!Dataset.prototype[Symbol.iterator]) {
@@ -1464,63 +1313,70 @@ export async function ready(wasmBytesOrUrl) {
 
     QueryEngine.prototype.queryAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Query,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Query, sparql),
         (job) => queryResultToObject(job.takeQueryResult(undefined)),
       );
     };
     QueryEngine.prototype.selectAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Query,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Query, sparql),
         (job) => queryResultToObject(job.takeQueryResult("select")),
       );
     };
     QueryEngine.prototype.askAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Query,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Query, sparql),
         takeAsk,
       );
     };
     QueryEngine.prototype.constructAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Query,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Query, sparql),
         (job) => takeGraph(job, "construct"),
       );
     };
     QueryEngine.prototype.describeAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Query,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Query, sparql),
         (job) => takeGraph(job, "describe"),
       );
     };
     QueryEngine.prototype.queryRawBytesAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "raw");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Raw,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
         (job) => job.takeRawBytes(),
       );
     };
     QueryEngine.prototype.queryRawAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "raw");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Raw,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
         (job) => utf8.decode(job.takeRawBytes()),
       );
@@ -1533,16 +1389,16 @@ export async function ready(wasmBytesOrUrl) {
       options,
     ) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "rawWithContext");
       if (typeof format !== "string") {
         throw new TypeError("queryRawWithContextAsync expects a format string");
       }
       if (!(context instanceof CompiledJsonLdContext)) {
         throw new TypeError("queryRawWithContextAsync expects a CompiledJsonLdContext");
       }
-      o.format = format;
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.RawWithContext,
+        options,
+        format,
         (jobOptions) =>
           wasmBeginAsyncWithContext.call(
             this,
@@ -1551,16 +1407,16 @@ export async function ready(wasmBytesOrUrl) {
             sparql,
             jobOptions,
             context,
-            o.yamlSchemaUrl,
           ),
         (job) => utf8.decode(job.takeRawBytes()),
       );
     };
     QueryEngine.prototype.queryGovernedAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "governed");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Governed,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Governed, sparql),
         (job) => {
           const evidence = asyncEvidenceToObject(job.takeEvidence());
@@ -1576,9 +1432,10 @@ export async function ready(wasmBytesOrUrl) {
       options,
     ) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "negotiated");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Negotiated,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Negotiated, sparql),
         (job) => {
           const evidence = asyncEvidenceToObject(job.takeEvidence());
@@ -1595,15 +1452,15 @@ export async function ready(wasmBytesOrUrl) {
       options,
     ) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "entailmentGoverned");
       if (typeof entailment !== "string") {
         throw new TypeError(
           "queryEntailmentGovernedAsync expects an entailment regime string",
         );
       }
-      o.regime = entailment;
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.EntailmentGoverned,
+        options,
+        entailment,
         beginWith(this, dataset, AsyncOperationKind.EntailmentGoverned, sparql),
         (job) => {
           const evidence = asyncEvidenceToObject(job.takeEvidence());
@@ -1619,19 +1476,22 @@ export async function ready(wasmBytesOrUrl) {
     };
     QueryEngine.prototype.explainQueryAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "explain");
       return driveAsyncJob(
-        o,
+        AsyncOperationKind.Explain,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Explain, sparql),
         (job) => utf8.decode(job.takeRawBytes()),
       );
     };
+    // An asynchronous update claims its dataset until it is finished: a second one begun
+    // meanwhile is refused (`native-sparql-update-in-flight`), not queued.
     QueryEngine.prototype.updateAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "update");
-      return driveAsyncUpdate(
-        dataset,
-        o,
+      return driveAsyncJob(
+        AsyncOperationKind.Update,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.Update, sparql),
         (job) => {
           job.commitUpdate(dataset);
@@ -1641,12 +1501,12 @@ export async function ready(wasmBytesOrUrl) {
     };
     QueryEngine.prototype.updateGovernedAsync = async function (dataset, sparql, options) {
       assertAsyncQueries();
-      // `maxAnswers` is forwarded rather than dropped, exactly as on `updateGoverned`:
+      // `maxAnswers` is passed on rather than dropped, exactly as on `updateGoverned`:
       // Rust refuses it by name.
-      const o = normalizeAsyncOptions(options, "updateGoverned");
-      return driveAsyncUpdate(
-        dataset,
-        o,
+      return driveAsyncJob(
+        AsyncOperationKind.UpdateGoverned,
+        options,
+        undefined,
         beginWith(this, dataset, AsyncOperationKind.UpdateGoverned, sparql),
         (job) => {
           const evidence = asyncEvidenceToObject(job.takeEvidence());
@@ -1666,11 +1526,12 @@ export async function ready(wasmBytesOrUrl) {
     // a result carrying a named graph) for CONSTRUCT/DESCRIBE.
     Dataset.prototype.queryAsync = async function (sparql, options) {
       assertAsyncQueries();
-      const o = normalizeAsyncOptions(options, "query");
       const engine = new QueryEngine();
       try {
         return await driveAsyncJob(
-          o,
+          AsyncOperationKind.Raw,
+          options,
+          undefined,
           (jobOptions) =>
             engine.beginAsync(this, AsyncOperationKind.Raw, sparql, jobOptions),
           (job) => utf8.decode(job.takeRawBytes()),

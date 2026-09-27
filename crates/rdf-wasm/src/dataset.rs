@@ -10,6 +10,8 @@
 //! `add`/`delete`/`has`/`match`/`quads` are the RDF/JS `DatasetCore` mutation + query
 //! surface over the COW delta.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -248,6 +250,11 @@ static NEXT_DATASET_ID: AtomicU64 = AtomicU64::new(1);
 /// therefore private to this module, and `Dataset::mutate` is the one door every writer
 /// in the crate goes through — a writer that bypassed it would be a mutation no commit
 /// could detect.
+///
+/// An asynchronous UPDATE also *claims* the dataset while it is in flight
+/// ([`Dataset::claim_update`]): a second asynchronous update of the same dataset is
+/// refused until the first is finished, rather than evaluated against a snapshot its
+/// commit would then be refused over.
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct Dataset {
@@ -257,6 +264,19 @@ pub struct Dataset {
     id: u64,
     /// Advances by one on every mutation of `inner`.
     generation: u64,
+    /// Whether an asynchronous update of this dataset is in flight: set by
+    /// [`Dataset::claim_update`] and cleared when its [`UpdateClaim`] is dropped.
+    update_in_flight: Rc<Cell<bool>>,
+}
+
+/// An asynchronous update's claim on its dataset, released when dropped.
+#[derive(Debug)]
+pub(crate) struct UpdateClaim(Rc<Cell<bool>>);
+
+impl Drop for UpdateClaim {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 impl Dataset {
@@ -274,6 +294,7 @@ impl Dataset {
             inner,
             id: NEXT_DATASET_ID.fetch_add(1, Ordering::Relaxed),
             generation: 0,
+            update_in_flight: Rc::new(Cell::new(false)),
         }
     }
 
@@ -319,6 +340,15 @@ impl Dataset {
     /// This dataset's generation, as the asynchronous commit compares it.
     pub(crate) const fn current_generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Claim this dataset for an asynchronous update, or `None` while another one is in
+    /// flight. The claim holds until it is dropped.
+    pub(crate) fn claim_update(&self) -> Option<UpdateClaim> {
+        if self.update_in_flight.replace(true) {
+            return None;
+        }
+        Some(UpdateClaim(Rc::clone(&self.update_in_flight)))
     }
 }
 
@@ -589,6 +619,19 @@ impl Dataset {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> f64 {
         self.id as f64
+    }
+
+    /// `snapshot()` → an independent dataset holding this one's current content, with an
+    /// identity of its own at generation zero. Later changes to either leave the other as
+    /// it is; the content is shared until one of them changes.
+    ///
+    /// # Errors
+    ///
+    /// A dataset whose pending changes cannot be frozen.
+    #[wasm_bindgen(js_name = snapshot)]
+    pub fn snapshot(&self) -> Result<Self, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        Ok(Self::from_frozen(frozen))
     }
 
     /// `generation` — how many mutations this dataset's content has seen.

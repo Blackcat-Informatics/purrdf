@@ -73,12 +73,15 @@ use wasm_bindgen::prelude::*;
 //   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
 //                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
+//   * `operation` — the one implementation of every SPARQL operation kind, run
+//                 offline by `query` and under a job's signal and sources by
+//                 `async_query`, and the coded errors both lanes throw
 //   * `async_query` — the asynchronous operation runtime: every evaluating `query`
 //                 and SHACL surface as a job that suspends on host-resolved SERVICE /
 //                 LOAD effects and yields to the event loop, through JSPI
 //   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
 //                 an HTTP request read into an operation, its dataset parameters
-//                 applied, its response format negotiated
+//                 applied, its response format negotiated, and a failure's HTTP problem
 //   * `panic_poison` — the panic hook that poisons the instance before a panic's trap
 //                 unwinds, so no later call runs on the state the panic left behind
 mod async_query;
@@ -88,6 +91,7 @@ mod dataset;
 pub mod entail;
 mod factory;
 mod jsonld;
+mod operation;
 mod panic_poison;
 mod projection;
 mod protocol;
@@ -99,8 +103,8 @@ mod term;
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;
 pub use async_query::{
-    AsyncEffect, AsyncEffectKind, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind,
-    LoadAuthorization, ServiceCatalog, ShaclAsyncOperation,
+    AsyncEffect, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind, DeliveryStatus,
+    EffectKind, RunStatus, ServiceCatalog, ShaclAsyncOperation, SuspendStatus,
 };
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;

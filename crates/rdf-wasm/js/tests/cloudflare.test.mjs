@@ -6,7 +6,7 @@
 // underneath them (`SparqlProtocolRequest`) and the negotiated twin
 // (`queryGovernedNegotiatedAsync`), against the actual optimized wasm module.
 //
-// No network is ever touched: every `fetch`, service binding, cache and `waitUntil` is a
+// No network is ever touched: every `fetch`, service binding and cache is a
 // deterministic double that RECORDS what it was handed, so the assertions observe what
 // the adapter actually sent. Every refusal is paired with a valid neighbour whose result
 // observably differs. Wall-clock bounds are never asserted.
@@ -188,13 +188,6 @@ function rejectingPutCache(error = new Error("No Cache was configured")) {
   };
 }
 
-/** An `onCacheError` double that records every `(error, context)` it was handed. */
-function recordingCacheErrors() {
-  const errors = [];
-  const onCacheError = (error, context) => errors.push({ error, ...context });
-  return { errors, onCacheError };
-}
-
 /** An `onInternalError` double that records every `(error, context)` it was handed. */
 function recordingInternalErrors() {
   const errors = [];
@@ -221,6 +214,14 @@ async function rejection(promise) {
 }
 
 const GOVERNORS = { deadlineMs: 10_000 };
+
+/** Each row's `s`/`x` bindings, `UNBOUND` where a variable is not bound, sorted. */
+function summarizeRows(rows) {
+  return rows
+    .toArray()
+    .map((row) => `s=${row.s?.value ?? "UNBOUND"}&x=${row.x?.value ?? "UNBOUND"}`)
+    .sort();
+}
 const SELECT_S = `SELECT ?s WHERE { ?s <${EX}p> ?o } ORDER BY ?s`;
 
 /** Build an HTTP request to the endpoint. */
@@ -440,29 +441,25 @@ test("refusal pair: accept is refused by every twin but the negotiated one", asy
 // createFetchServiceResolver
 // ---------------------------------------------------------------------------
 
-test("refusal pair: the service resolver requires catalog and timeoutMs", () => {
+test("refusal pair: the service resolver refuses an option it would ignore; its own options build", () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const noCatalog = syncThrow(() => createFetchServiceResolver({ timeoutMs: 1000, fetch: neverFetch }));
-  assert.ok(noCatalog instanceof TypeError);
-  assert.match(noCatalog.message, /requires catalog/);
-  const noTimeout = syncThrow(() => createFetchServiceResolver({ catalog, fetch: neverFetch }));
-  assert.ok(noTimeout instanceof TypeError);
-  assert.match(noTimeout.message, /requires timeoutMs/);
-  const zero = syncThrow(() => createFetchServiceResolver({ catalog, timeoutMs: 0, fetch: neverFetch }));
-  assert.match(zero.message, /positive integer/);
-  const unknown = syncThrow(() =>
-    createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, retries: 3 }),
-  );
-  assert.match(unknown.message, /unknown createFetchServiceResolver option "retries"/);
-  assert.equal(
-    typeof createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: neverFetch }),
-    "function",
-  );
+  // The catalog and the request's timeout are the job's: the resolver takes neither.
+  for (const [key, value] of [
+    ["catalog", catalog],
+    ["timeoutMs", 1000],
+    ["retries", 3],
+  ]) {
+    const refused = syncThrow(() => createFetchServiceResolver({ fetch: neverFetch, [key]: value }));
+    assert.ok(refused instanceof TypeError);
+    assert.match(refused.message, new RegExp(`unknown createFetchServiceResolver option "${key}"`));
+  }
+  assert.equal(typeof createFetchServiceResolver({ fetch: neverFetch }), "function");
+  assert.equal(typeof createFetchServiceResolver(), "function", "every option has a default");
 });
 
 test("refusal pair: cache options are all-or-nothing", () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const base = { catalog, timeoutMs: 1000, fetch: neverFetch };
+  const base = { fetch: neverFetch };
   assert.match(
     syncThrow(() => createFetchServiceResolver({ ...base, cache: fakeCache() })).message,
     /cache requires cacheTtlSeconds/,
@@ -472,31 +469,21 @@ test("refusal pair: cache options are all-or-nothing", () => {
     /cacheTtlSeconds needs cache/,
   );
   assert.match(
-    syncThrow(() => createFetchServiceResolver({ ...base, waitUntil: () => {} })).message,
-    /waitUntil defers cache writes and needs cache/,
-  );
-  assert.match(
     syncThrow(() => createFetchServiceResolver({ ...base, cache: {}, cacheTtlSeconds: 60 })).message,
     /cache must be a Cache/,
   );
-  assert.match(
-    syncThrow(() => createFetchServiceResolver({ ...base, onCacheError: () => {} })).message,
-    /onCacheError reports cache failures and needs cache/,
-  );
-  assert.match(
-    syncThrow(() =>
-      createFetchServiceResolver({ ...base, cache: fakeCache(), cacheTtlSeconds: 60, onCacheError: "nope" }),
-    ).message,
-    /onCacheError must be a function/,
-  );
+  // A cache failure is the request's transport failure, so there is nothing to defer or
+  // report beside it: the options that did are gone.
+  for (const key of ["waitUntil", "onCacheError"]) {
+    assert.match(
+      syncThrow(() =>
+        createFetchServiceResolver({ ...base, cache: fakeCache(), cacheTtlSeconds: 60, [key]: () => {} }),
+      ).message,
+      new RegExp(`unknown createFetchServiceResolver option "${key}"`),
+    );
+  }
   assert.equal(
-    typeof createFetchServiceResolver({
-      ...base,
-      cache: fakeCache(),
-      cacheTtlSeconds: 60,
-      waitUntil: () => {},
-      onCacheError: () => {},
-    }),
+    typeof createFetchServiceResolver({ ...base, cache: fakeCache(), cacheTtlSeconds: 60 }),
     "function",
   );
 });
@@ -506,21 +493,17 @@ test("refusal pair: a bindings key must be an origin", () => {
   const binding = { fetch: neverFetch };
   const error = syncThrow(() =>
     createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
       fetch: neverFetch,
       bindings: { [`${REMOTE_ORIGIN}/`]: binding },
     }),
   );
   assert.match(error.message, /must be an origin/);
   const notBinding = syncThrow(() =>
-    createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, bindings: { [REMOTE_ORIGIN]: {} } }),
+    createFetchServiceResolver({ fetch: neverFetch, bindings: { [REMOTE_ORIGIN]: {} } }),
   );
   assert.match(notBinding.message, /must be a service binding/);
   assert.equal(
     typeof createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
       fetch: neverFetch,
       bindings: { [REMOTE_ORIGIN]: binding },
     }),
@@ -533,8 +516,6 @@ test("a request to a bound origin goes through its binding; any other through fe
   const binding = recordingFetch(() => srjResponse());
   const global = recordingFetch(() => srjResponse());
   const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: global.fetch,
     bindings: { [REMOTE_ORIGIN]: { fetch: binding.fetch } },
   });
@@ -555,7 +536,7 @@ test("a request to a bound origin goes through its binding; any other through fe
 test("headers are sent protocol first, then the profile's, then the credential", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolve = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolve = createFetchServiceResolver({ fetch });
   await resolve(
     serviceRequest({
       headers: [
@@ -590,7 +571,7 @@ test("the effect's headers are the catalog profile's, then its credential, end t
     },
   ]);
   const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolveService = createFetchServiceResolver({ fetch });
   const outcome = await new QueryEngine().queryGovernedAsync(dataset(), FEDERATED(), {
     resolveService,
     catalog,
@@ -606,23 +587,11 @@ test("the effect's headers are the catalog profile's, then its credential, end t
   ]);
 });
 
-test("a request is abandoned at the shorter of the adapter's and the request's timeout", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const adapter = hangingFetch();
-  const shortAdapter = createFetchServiceResolver({ catalog, timeoutMs: 20, fetch: adapter.fetch });
-  assert.deepEqual(await shortAdapter(serviceRequest({ timeoutMs: 60_000 }), liveCtx()), {
-    kind: "transport",
-    message: `SERVICE <${REMOTE}>: no response within 20 ms`,
-  });
-  const profile = hangingFetch();
-  const longAdapter = createFetchServiceResolver({ catalog, timeoutMs: 60_000, fetch: profile.fetch });
-  assert.deepEqual(await longAdapter(serviceRequest({ timeoutMs: 25 }), liveCtx()), {
-    kind: "transport",
-    message: `SERVICE <${REMOTE}>: no response within 25 ms`,
-  });
-  // The query abandoning the request aborts it too, and is reported as such.
+test("a request is abandoned when the query abandons it: at its profile's timeout, a transport failure SILENT absorbs; the prompt neighbour answers", async () => {
+  // The resolver is bounded by `ctx.signal` alone: the query abandoning the request aborts
+  // it, and is reported as such.
   const abandoned = hangingFetch();
-  const resolve = createFetchServiceResolver({ catalog, timeoutMs: 60_000, fetch: abandoned.fetch });
+  const resolve = createFetchServiceResolver({ fetch: abandoned.fetch });
   const controller = new AbortController();
   const pending = resolve(serviceRequest(), { signal: controller.signal });
   controller.abort();
@@ -630,13 +599,28 @@ test("a request is abandoned at the shorter of the adapter's and the request's t
     kind: "transport",
     message: `SERVICE <${REMOTE}>: abandoned by the query`,
   });
-  // The neighbour: an endpoint that answers inside the bound is answered.
-  const prompt = createFetchServiceResolver({
+
+  // End to end: the catalog profile's timeout is the job's abandonment instant for the
+  // request. Past it the request fails as a transport failure — the query's error, and the
+  // join identity under SILENT — and the fetch's signal is aborted.
+  const catalog = catalogFor([REMOTE, { capabilities: ["query", "network"], timeoutMs: 20 }]);
+  const hanging = hangingFetch();
+  const resolveService = createFetchServiceResolver({ fetch: hanging.fetch });
+  const engine = new QueryEngine();
+  const error = await rejection(engine.queryAsync(dataset(), FEDERATED(), { resolveService, catalog }));
+  assert.equal(error.code, "native-sparql-service-failed");
+  assert.match(error.message, /no answer within 20 ms/);
+  assert.equal(hanging.calls[0].init.signal.aborted, true, "the abandoned fetch was aborted");
+  const silent = await engine.selectAsync(dataset(), FEDERATED().replace("SERVICE <", "SERVICE SILENT <"), {
+    resolveService,
     catalog,
-    timeoutMs: 20,
-    fetch: async () => srjResponse(),
   });
-  assert.deepEqual(rowsOf(decoder.decode(await prompt(serviceRequest(), liveCtx()))), rowsOf(REMOTE_OX));
+  assert.deepEqual(summarizeRows(silent.rows), [`s=${EX}a&x=UNBOUND`, `s=${EX}b&x=UNBOUND`]);
+
+  // The neighbour: an endpoint that answers inside the same bound is joined.
+  const prompt = createFetchServiceResolver({ fetch: async () => srjResponse() });
+  const answered = await engine.selectAsync(dataset(), FEDERATED(), { resolveService: prompt, catalog });
+  assert.deepEqual(summarizeRows(answered.rows), [`s=${EX}a&x=x1`, `s=${EX}b&x=x2`]);
 });
 
 test("a non-2xx answer is a transport failure and its body is cancelled, unread", async () => {
@@ -658,7 +642,7 @@ test("a non-2xx answer is a transport failure and its body is cancelled, unread"
       ),
       { status: 503, statusText: "Busy" },
     );
-  const resolve = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: failing });
+  const resolve = createFetchServiceResolver({ fetch: failing });
   assert.deepEqual(await resolve(serviceRequest(), liveCtx()), {
     kind: "transport",
     message: `SERVICE <${REMOTE}>: HTTP 503 Busy`,
@@ -666,8 +650,6 @@ test("a non-2xx answer is a transport failure and its body is cancelled, unread"
   assert.equal(cancelled, true);
   assert.equal(pulled, false);
   const network = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: async () => {
       throw new TypeError("fetch failed");
     },
@@ -681,8 +663,6 @@ test("a non-2xx answer is a transport failure and its body is cancelled, unread"
 test("a transport failure fails a query, and SERVICE SILENT swallows it", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const resolveService = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: async () => new Response("down", { status: 502 }),
   });
   const engine = new QueryEngine();
@@ -700,13 +680,6 @@ test("a transport failure fails a query, and SERVICE SILENT swallows it", async 
 // SERVICE and a redirecting endpoint: `redirect: "manual"`, never followed
 // ---------------------------------------------------------------------------
 
-/** Each row's `s`/`x` bindings, `UNBOUND` where a variable is not bound, sorted. */
-function summarizeRows(rows) {
-  return rows
-    .toArray()
-    .map((row) => `s=${row.s?.value ?? "UNBOUND"}&x=${row.x?.value ?? "UNBOUND"}`)
-    .sort();
-}
 
 test("SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
@@ -715,7 +688,7 @@ test("SERVICE redirect: a 302 to an unlisted origin is a transport failure, neve
     assert.equal(String(url), REMOTE, "no request is ever sent anywhere but the catalogued endpoint");
     return new Response(null, { status: 302, headers: { Location: `${evilOrigin}/steal` } });
   });
-  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolveService = createFetchServiceResolver({ fetch });
   const answer = await resolveService(serviceRequest(), liveCtx());
   assert.equal(answer.kind, "transport");
   assert.equal(
@@ -736,8 +709,6 @@ test("SERVICE redirect: a 302 to an unlisted origin is a transport failure, neve
     { resolveService, catalog },
   );
   const resolveDown = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: async () => new Response("down", { status: 502 }),
   });
   const silentDown = await engine.selectAsync(
@@ -754,7 +725,7 @@ test("SERVICE redirect: a 307 is never followed — no body or header ever reach
   const { calls, fetch } = recordingFetch(() =>
     new Response(null, { status: 307, headers: { Location: `${REMOTE_ORIGIN}/elsewhere` } }),
   );
-  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolveService = createFetchServiceResolver({ fetch });
   const answer = await resolveService(serviceRequest(), liveCtx());
   assert.equal(answer.kind, "transport");
   assert.equal(
@@ -771,30 +742,20 @@ test("SERVICE redirect: an opaque-redirect response is also a transport failure,
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const opaque = { type: "opaqueredirect", status: 0, ok: false, headers: new Headers(), body: null };
   const { calls, fetch } = recordingFetch(() => opaque);
-  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolveService = createFetchServiceResolver({ fetch });
   const answer = await resolveService(serviceRequest(), liveCtx());
   assert.equal(answer.kind, "transport");
   assert.match(answer.message, /redirected \(HTTP opaque \(Location withheld by an opaque redirect\)\)/);
   assert.equal(calls.length, 1);
 });
 
-test("the cache answers a repeated request and stores through waitUntil", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+test("the cache answers a repeated cacheable request, and a different request is a miss", async () => {
   const cache = fakeCache();
-  const deferred = [];
   const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch,
-    cache,
-    cacheTtlSeconds: 120,
-    waitUntil: (promise) => deferred.push(promise),
-  });
-  const miss = await resolve(serviceRequest(), liveCtx());
+  const resolve = createFetchServiceResolver({ fetch, cache, cacheTtlSeconds: 120 });
+  const miss = await resolve(serviceRequest({ cacheable: true }), liveCtx());
   assert.equal(calls.length, 1);
-  assert.equal(deferred.length, 1, "the put was handed to waitUntil");
-  await Promise.all(deferred);
+  assert.equal(cache.store.size, 1, "stored before the answer was returned");
   const [[matchKind, key], [putKind, putKey, cacheControl]] = cache.calls;
   assert.equal(matchKind, "match");
   assert.match(key, /^https:\/\/purrdf-service-cache\.invalid\/[0-9a-f]{64}$/);
@@ -802,201 +763,100 @@ test("the cache answers a repeated request and stores through waitUntil", async 
   assert.equal(putKey, key);
   assert.equal(cacheControl, "max-age=120");
 
-  const hit = await resolve(serviceRequest(), liveCtx());
+  const hit = await resolve(serviceRequest({ cacheable: true }), liveCtx());
   assert.equal(calls.length, 1, "the hit never reached the network");
   assert.deepEqual(hit, miss);
 
   // The neighbour: a different query text is a different key, and a miss.
-  await resolve(serviceRequest({ queryText: "SELECT * WHERE { ?o ?q ?x }" }), liveCtx());
+  await resolve(serviceRequest({ cacheable: true, queryText: "SELECT * WHERE { ?o ?q ?x }" }), liveCtx());
   assert.equal(calls.length, 2);
   assert.notEqual(cache.calls.at(-2)[1], key);
 });
 
-test("without waitUntil the cache write is awaited", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = fakeCache();
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache,
-    cacheTtlSeconds: 5,
-  });
-  await resolve(serviceRequest(), liveCtx());
-  assert.equal(cache.store.size, 1, "stored before the answer was returned");
-});
-
-test("refusal pair: a credentialed request is never cached; an anonymous one is", async () => {
-  const catalog = catalogFor(
-    [REMOTE, QUERY_NETWORK],
-    [OTHER, { capabilities: ["query", "network", "credentials"], credential: { header: "X-Api-Key", value: "k" } }],
-  );
+// Whether a request may be cached is the job's decision (a request carrying a credential
+// is not); the resolver only obeys it. A request the job marks not cacheable goes to the
+// endpoint every time and never touches the cache; the cacheable neighbour is cached.
+test("refusal pair: a request the job marks not cacheable never touches the cache; a cacheable one is cached", async () => {
   const cache = fakeCache();
   const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolve = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch, cache, cacheTtlSeconds: 60 });
-  for (const name of ["Authorization", "cookie", "Proxy-Authorization"]) {
-    const error = await rejection(resolve(serviceRequest({ headers: [[name, "x"]] }), liveCtx()));
-    assert.ok(error instanceof TypeError);
-    assert.match(error.message, /never read from or written to a shared cache/);
+  const resolve = createFetchServiceResolver({ fetch, cache, cacheTtlSeconds: 60 });
+  for (let round = 0; round < 2; round += 1) {
+    await resolve(serviceRequest({ cacheable: false, headers: [["X-Api-Key", "k"]] }), liveCtx());
   }
-  // A credential whose header name is not credential-shaped is known from the catalog.
-  const profiled = await rejection(
-    resolve(serviceRequest({ endpoint: OTHER, headers: [["X-Api-Key", "k"]] }), liveCtx()),
-  );
-  assert.match(profiled.message, /the catalog profile's/);
-  assert.equal(calls.length, 0);
-  assert.equal(cache.calls.length, 0);
-  // The neighbour: the same endpoint with a non-credential header is fetched and cached.
-  await resolve(serviceRequest({ headers: [["X-Trace", "x"]] }), liveCtx());
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2, "each request went to the endpoint");
+  assert.deepEqual(cache.calls, [], "the cache was never consulted nor written");
+  for (let round = 0; round < 2; round += 1) {
+    await resolve(serviceRequest({ cacheable: true }), liveCtx());
+  }
+  assert.equal(calls.length, 3, "the second cacheable request was answered from the cache");
   assert.equal(cache.store.size, 1);
 });
 
-test("a credentialed request through the cache is a job fault, even under SILENT", async () => {
-  const catalog = catalogFor([
-    REMOTE,
-    { capabilities: ["query", "network", "credentials"], credential: { header: "Authorization", value: "Bearer t" } },
-  ]);
-  const resolveService = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: neverFetch,
-    cache: fakeCache(),
-    cacheTtlSeconds: 60,
-  });
-  const error = await rejection(
-    new QueryEngine().queryAsync(dataset(), FEDERATED().replace("SERVICE <", "SERVICE SILENT <"), {
-      resolveService,
-      catalog,
-    }),
+test("the job marks a request carrying a credential not cacheable, end to end", async () => {
+  const catalog = catalogFor(
+    [REMOTE, { capabilities: ["query", "network", "credentials"], credential: { header: "X-Api-Key", value: "k" } }],
+    [OTHER, QUERY_NETWORK],
   );
-  assert.match(error.message, /shared cache/);
-});
-
-// ---------------------------------------------------------------------------
-// A cache failure is an optimisation-layer fault, never the query's answer (gap G10)
-// ---------------------------------------------------------------------------
-
-test("a cache whose match rejects is treated as a miss: the query still answers with the remote rows, and the hook observes exactly one match error", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = rejectingMatchCache();
-  const { errors, onCacheError } = recordingCacheErrors();
-  const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch,
-    cache,
-    cacheTtlSeconds: 60,
-    onCacheError,
-  });
-  const answer = await resolve(serviceRequest(), liveCtx());
-  assert.equal(calls.length, 1, "a rejecting match still lets the request reach the remote");
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].operation, "match");
-  assert.equal(errors[0].endpoint, REMOTE);
-  assert.ok(errors[0].error instanceof Error);
-
-  // The oracle: byte-for-byte the same rows a resolver with no cache at all would answer.
-  const noCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() });
-  const plain = await noCache(serviceRequest(), liveCtx());
-  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(decoder.decode(plain)));
-});
-
-test("a cache whose put rejects never discards the answer, with waitUntil: the hook observes the put error", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = rejectingPutCache();
-  const { errors, onCacheError } = recordingCacheErrors();
-  const deferred = [];
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache,
-    cacheTtlSeconds: 60,
-    waitUntil: (promise) => deferred.push(promise),
-    onCacheError,
-  });
-  const answer = await resolve(serviceRequest(), liveCtx());
-  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(REMOTE_OX));
-  assert.equal(deferred.length, 1, "the rejecting put is still handed to waitUntil");
-  await Promise.all(deferred); // never rejects: the resolver attaches its own handler first
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].operation, "put");
-  assert.equal(errors[0].endpoint, REMOTE);
-});
-
-test("a cache whose put rejects never discards the answer, without waitUntil: the hook observes the put error", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = rejectingPutCache();
-  const { errors, onCacheError } = recordingCacheErrors();
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache,
-    cacheTtlSeconds: 60,
-    onCacheError,
-  });
-  const answer = await resolve(serviceRequest(), liveCtx());
-  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(REMOTE_OX));
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].operation, "put");
-  assert.equal(errors[0].endpoint, REMOTE);
-});
-
-test("valid neighbour: a healthy cache still answers the second identical request from cache, with no reported error", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = fakeCache();
-  const { errors, onCacheError } = recordingCacheErrors();
-  const { calls, fetch } = recordingFetch(() => srjResponse());
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch,
-    cache,
-    cacheTtlSeconds: 60,
-    onCacheError,
-  });
-  await resolve(serviceRequest(), liveCtx());
-  await resolve(serviceRequest(), liveCtx());
-  assert.equal(calls.length, 1, "the second identical request was served from the cache, not the remote");
-  assert.equal(errors.length, 0, "a healthy cache never reports a cache error");
-});
-
-test("the default onCacheError writes one console.warn line naming the operation and endpoint", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const cache = rejectingMatchCache();
-  const resolve = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache,
-    cacheTtlSeconds: 60,
-  });
-  const calls = [];
-  const original = console.warn;
-  console.warn = (...args) => calls.push(args.join(" "));
-  try {
-    await resolve(serviceRequest(), liveCtx());
-  } finally {
-    console.warn = original;
-  }
-  // Exact equality, not a substring or unanchored match: the whole line is the contract —
-  // operation, endpoint and the cache error's own words, and nothing else.
-  assert.deepEqual(calls, [
-    `createFetchServiceResolver: cache match failed for <${REMOTE}>: Error: No Cache was configured`,
+  const seen = [];
+  const resolveService = async (request) => {
+    seen.push([request.endpoint, request.cacheable]);
+    return REMOTE_OX;
+  };
+  const engine = new QueryEngine();
+  await engine.queryAsync(dataset(), FEDERATED(), { resolveService, catalog });
+  await engine.queryAsync(dataset(), FEDERATED(OTHER), { resolveService, catalog });
+  assert.deepEqual(seen, [
+    [REMOTE, false],
+    [OTHER, true],
   ]);
 });
 
 // ---------------------------------------------------------------------------
-// A cache failure never changes the answer — including through its own reporter
+// A cache failure is the invocation's transport failure
 // ---------------------------------------------------------------------------
-//
-// `onCacheError`/`onInternalError`/`waitUntil` are host code. One that throws or rejects
-// must neither change what the adapter answers nor vanish: its failure is written to
-// `console.error` together with the error it was handed. Every treatment row below is
-// paired with a control row whose console.error count (0) differs from the treatment's (1).
+
+test("refusal pair: a cache whose match or put rejects fails the request as a transport failure; a healthy cache answers", async () => {
+  for (const [operation, cache] of [
+    ["lookup", rejectingMatchCache()],
+    ["write", rejectingPutCache()],
+  ]) {
+    const resolve = createFetchServiceResolver({ fetch: async () => srjResponse(), cache, cacheTtlSeconds: 60 });
+    assert.deepEqual(await resolve(serviceRequest({ cacheable: true }), liveCtx()), {
+      kind: "transport",
+      message: `SERVICE <${REMOTE}>: the cache ${operation} failed (Error: No Cache was configured)`,
+    });
+  }
+  // The neighbour: the same request through a healthy cache is answered.
+  const resolve = createFetchServiceResolver({ fetch: async () => srjResponse(), cache: fakeCache(), cacheTtlSeconds: 60 });
+  assert.deepEqual(rowsOf(decoder.decode(await resolve(serviceRequest({ cacheable: true }), liveCtx()))), rowsOf(REMOTE_OX));
+});
+
+test("a failed cache call fails a plain SERVICE and is the join identity under SERVICE SILENT, recorded", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const resolveService = createFetchServiceResolver({
+    fetch: async () => srjResponse(),
+    cache: rejectingMatchCache(),
+    cacheTtlSeconds: 60,
+  });
+  const engine = new QueryEngine();
+  const error = await rejection(engine.queryAsync(dataset(), FEDERATED(), { resolveService, catalog }));
+  assert.equal(error.code, "native-sparql-service-failed");
+  assert.match(error.message, /the cache lookup failed/);
+  const outcome = await engine.queryGovernedAsync(dataset(), FEDERATED().replace("SERVICE <", "SERVICE SILENT <"), {
+    resolveService,
+    catalog,
+  });
+  assert.deepEqual(summarizeRows(outcome.result.rows), [`s=${EX}a&x=UNBOUND`, `s=${EX}b&x=UNBOUND`]);
+  assert.deepEqual(
+    outcome.evidence.silenced.map((record) => [record.endpoint, record.kind]),
+    [[REMOTE, "transport"]],
+  );
+});
+
+// `onInternalError` is host code. One that throws or rejects must neither change what the
+// adapter answers nor vanish: its failure is written to `console.error` together with the
+// error it was handed. Every treatment row below is paired with a control row whose
+// console.error count (0) differs from the treatment's (1).
 
 /** Run `fn` with console.error (and console.warn) recorded; settles pending reporter work. */
 async function withConsoleRecorded(fn) {
@@ -1035,221 +895,6 @@ function assertReporterFailureLogged(errorCalls, hook, handed, reporterError) {
   assert.equal(errorCalls[0].length, 4);
 }
 
-const noCacheAnswer = async (catalog) => {
-  const noCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() });
-  return noCache(serviceRequest(), liveCtx());
-};
-
-for (const [shape, makeReporter] of [
-  [
-    "throws synchronously",
-    (seen, reporterError) => (error, context) => {
-      seen.push({ error, ...context });
-      throw reporterError;
-    },
-  ],
-  [
-    "returns a rejecting promise",
-    (seen, reporterError) => async (error, context) => {
-      seen.push({ error, ...context });
-      throw reporterError;
-    },
-  ],
-]) {
-  test(`an onCacheError that ${shape} on a match failure still falls through to the remote: the answer equals the no-cache answer`, async () => {
-    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-    const cacheError = new Error("No Cache was configured");
-    const cache = rejectingMatchCache(cacheError);
-    const reporterError = new Error("the host reporter is broken");
-    const seen = [];
-    const { calls, fetch } = recordingFetch(() => srjResponse());
-    const resolve = createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
-      fetch,
-      cache,
-      cacheTtlSeconds: 60,
-      onCacheError: makeReporter(seen, reporterError),
-    });
-    const { result: answer, errorCalls, warnCalls, unhandled } = await withConsoleRecorded(() =>
-      resolve(serviceRequest(), liveCtx()),
-    );
-    assert.equal(calls.length, 1, "the match failure fell through to the remote");
-    assert.deepEqual(answer, await noCacheAnswer(catalog), "byte-for-byte the no-cache answer");
-    assert.equal(seen.length, 1, "the reporter was still called, once");
-    assert.equal(seen[0].operation, "match");
-    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
-    assert.equal(warnCalls.length, 0);
-    assert.deepEqual(unhandled, []);
-  });
-
-  test(`an onCacheError that ${shape} on a put failure, without waitUntil, still returns the answer`, async () => {
-    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-    const cacheError = new Error("No Cache was configured");
-    const cache = rejectingPutCache(cacheError);
-    const reporterError = new Error("the host reporter is broken");
-    const seen = [];
-    const resolve = createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
-      fetch: async () => srjResponse(),
-      cache,
-      cacheTtlSeconds: 60,
-      onCacheError: makeReporter(seen, reporterError),
-    });
-    const { result: answer, errorCalls, unhandled } = await withConsoleRecorded(() =>
-      resolve(serviceRequest(), liveCtx()),
-    );
-    assert.deepEqual(answer, await noCacheAnswer(catalog), "the remote answer is returned, not discarded");
-    assert.equal(seen.length, 1);
-    assert.equal(seen[0].operation, "put");
-    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
-    assert.deepEqual(unhandled, []);
-  });
-
-  test(`an onCacheError that ${shape} on a put failure, with waitUntil, still returns the answer and hands waitUntil a promise that never rejects`, async () => {
-    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-    const cacheError = new Error("No Cache was configured");
-    const cache = rejectingPutCache(cacheError);
-    const reporterError = new Error("the host reporter is broken");
-    const seen = [];
-    const deferred = [];
-    const resolve = createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
-      fetch: async () => srjResponse(),
-      cache,
-      cacheTtlSeconds: 60,
-      waitUntil: (promise) => deferred.push(promise),
-      onCacheError: makeReporter(seen, reporterError),
-    });
-    const { result: answer, errorCalls, unhandled } = await withConsoleRecorded(async () => {
-      const bytes = await resolve(serviceRequest(), liveCtx());
-      assert.equal(deferred.length, 1);
-      assert.equal(await deferred[0], undefined, "the deferred put fulfils; it never rejects");
-      return bytes;
-    });
-    assert.deepEqual(answer, await noCacheAnswer(catalog));
-    assert.equal(seen.length, 1);
-    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
-    assert.deepEqual(unhandled, []);
-  });
-}
-
-test("valid neighbour: a non-throwing onCacheError (sync, and async-resolving) is called exactly once per failure and console.error is never called", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  for (const reporterOf of [
-    (seen) => (error, context) => {
-      seen.push({ error, ...context });
-    },
-    (seen) => async (error, context) => {
-      seen.push({ error, ...context });
-    },
-  ]) {
-    for (const [operation, cache] of [
-      ["match", rejectingMatchCache()],
-      ["put", rejectingPutCache()],
-    ]) {
-      const seen = [];
-      const resolve = createFetchServiceResolver({
-        catalog,
-        timeoutMs: 1000,
-        fetch: async () => srjResponse(),
-        cache,
-        cacheTtlSeconds: 60,
-        onCacheError: reporterOf(seen),
-      });
-      const { result: answer, errorCalls, warnCalls, unhandled } = await withConsoleRecorded(() =>
-        resolve(serviceRequest(), liveCtx()),
-      );
-      assert.deepEqual(answer, await noCacheAnswer(catalog));
-      assert.equal(seen.length, 1, `the ${operation} reporter is called exactly once`);
-      assert.equal(seen[0].operation, operation);
-      assert.equal(seen[0].endpoint, REMOTE);
-      assert.equal(errorCalls.length, 0, "a working reporter never reaches console.error");
-      assert.equal(warnCalls.length, 0, "a host reporter replaces the default console.warn");
-      assert.deepEqual(unhandled, []);
-    }
-  }
-});
-
-test("a waitUntil that throws never discards the answer: the put is awaited instead and the throw is logged; a working waitUntil is the neighbour", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const waitUntilError = new Error("waitUntil called outside a request");
-  const broken = fakeCache();
-  const resolveBroken = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache: broken,
-    cacheTtlSeconds: 60,
-    waitUntil: () => {
-      throw waitUntilError;
-    },
-  });
-  const treated = await withConsoleRecorded(() => resolveBroken(serviceRequest(), liveCtx()));
-  assert.deepEqual(treated.result, await noCacheAnswer(catalog));
-  assert.equal(broken.store.size, 1, "the put was awaited to completion instead of deferred");
-  assert.equal(treated.errorCalls.length, 1);
-  assert.deepEqual(treated.errorCalls[0], [
-    `createFetchServiceResolver: waitUntil threw, so the cache put for <${REMOTE}> is awaited instead:`,
-    waitUntilError,
-  ]);
-
-  const healthy = fakeCache();
-  const deferred = [];
-  const resolveHealthy = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: async () => srjResponse(),
-    cache: healthy,
-    cacheTtlSeconds: 60,
-    waitUntil: (promise) => deferred.push(promise),
-  });
-  const control = await withConsoleRecorded(async () => {
-    const bytes = await resolveHealthy(serviceRequest(), liveCtx());
-    await Promise.all(deferred);
-    return bytes;
-  });
-  assert.deepEqual(control.result, treated.result);
-  assert.equal(deferred.length, 1, "a working waitUntil holds the put");
-  assert.equal(healthy.store.size, 1);
-  assert.equal(control.errorCalls.length, 0, "a working waitUntil never reaches console.error");
-});
-
-test("SERVICE SILENT with the remote down and a rejecting cache yields the join identity, not a fault", async () => {
-  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
-  const down = async () => new Response("down", { status: 502 });
-  const resolveRejectingCache = createFetchServiceResolver({
-    catalog,
-    timeoutMs: 1000,
-    fetch: down,
-    cache: rejectingMatchCache(),
-    cacheTtlSeconds: 60,
-  });
-  const resolveNoCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: down });
-  const engine = new QueryEngine();
-  const silentRejectingCache = await engine.selectAsync(
-    dataset(),
-    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
-    { resolveService: resolveRejectingCache, catalog },
-  );
-  const silentNoCache = await engine.selectAsync(
-    dataset(),
-    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
-    { resolveService: resolveNoCache, catalog },
-  );
-  assert.equal(silentRejectingCache.rowCount, silentNoCache.rowCount);
-  assert.deepEqual(summarizeRows(silentRejectingCache.rows), summarizeRows(silentNoCache.rows));
-
-  // The neighbour: without SILENT, the same setup still fails the query on the remote's own
-  // failure — the cache's rejection never turns into the query's error, nor hides the real one.
-  const error = await rejection(
-    engine.queryAsync(dataset(), FEDERATED(), { resolveService: resolveRejectingCache, catalog }),
-  );
-  assert.match(error.message, /HTTP 502/);
-});
-
 // ---------------------------------------------------------------------------
 // createFetchLoadResolver
 // ---------------------------------------------------------------------------
@@ -1257,37 +902,75 @@ test("SERVICE SILENT with the remote down and a rejecting cache yields the join 
 const DOC = `${REMOTE_ORIGIN}/doc.ttl`;
 const TTL = `<${EX}loaded> <${EX}p> <${EX}o> .\n`;
 
-test("refusal pair: the load resolver requires catalog and timeoutMs and takes no cache", () => {
-  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
-  assert.match(syncThrow(() => createFetchLoadResolver({ timeoutMs: 1000 })).message, /requires catalog/);
-  assert.match(syncThrow(() => createFetchLoadResolver({ catalog })).message, /requires timeoutMs/);
-  assert.match(
-    syncThrow(() => createFetchLoadResolver({ catalog, timeoutMs: 1000, cache: fakeCache() })).message,
-    /unknown createFetchLoadResolver option "cache"/,
-  );
-  assert.equal(typeof createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch: neverFetch }), "function");
+/** A `LOAD` hop, as the job hands one to `resolveLoad`. */
+const loadRequest = (iri, overrides = {}) => ({
+  kind: "load",
+  iri,
+  accept: "text/turtle, application/n-triples",
+  userAgent: undefined,
+  headers: [],
+  timeoutMs: 30_000,
+  ...overrides,
 });
 
-test("refusal pair: a LOAD the catalog does not authorize is denied before any fetch", async () => {
-  const catalog = catalogFor([DOC, { capabilities: ["network"], userAgent: "loader/1", headers: [["X-A", "1"]] }]);
+test("refusal pair: the load resolver refuses an option it would ignore; its own options build", () => {
+  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
+  // Authorization, timeouts and redirect hops are the job's: the resolver takes none of them.
+  for (const [key, value] of [
+    ["catalog", catalog],
+    ["timeoutMs", 1000],
+    ["maxRedirects", 3],
+    ["cache", fakeCache()],
+  ]) {
+    assert.match(
+      syncThrow(() => createFetchLoadResolver({ fetch: neverFetch, [key]: value })).message,
+      new RegExp(`unknown createFetchLoadResolver option "${key}"`),
+    );
+  }
+  assert.equal(typeof createFetchLoadResolver({ fetch: neverFetch }), "function");
+});
+
+test("one LOAD hop sends the job's Accept, User-Agent and headers, and answers the document", async () => {
   const { calls, fetch } = recordingFetch(
     () => new Response(TTL, { status: 200, headers: { "Content-Type": "text/turtle; charset=utf-8" } }),
   );
-  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
-  const denied = await resolveLoad({ kind: "load", iri: `${REMOTE_ORIGIN}/secret.ttl` }, liveCtx());
-  assert.equal(denied.kind, "denied");
-  assert.equal(
-    denied.message,
-    `LOAD <${REMOTE_ORIGIN}/secret.ttl>: <${REMOTE_ORIGIN}/secret.ttl> withholds the query ` +
-      `capability: no profile is configured for this service, and the catalog has no fallback`,
+  const resolveLoad = createFetchLoadResolver({ fetch });
+  const loaded = await resolveLoad(
+    loadRequest(DOC, { userAgent: "loader/1", headers: [["X-A", "1"]] }),
+    liveCtx(),
   );
-  assert.equal(calls.length, 0);
-
-  const loaded = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
   assert.equal(loaded.mediaType, "text/turtle");
   assert.equal(loaded.base, DOC);
   assert.equal(decoder.decode(loaded.bytes), TTL);
   assert.equal(calls[0].init.method, "GET");
+  assert.equal(calls[0].init.redirect, "manual");
+  assert.deepEqual(calls[0].init.headers, [
+    ["Accept", "text/turtle, application/n-triples"],
+    ["User-Agent", "loader/1"],
+    ["X-A", "1"],
+  ]);
+});
+
+// The catalog is the job's: a source it does not authorize is refused in Rust before the
+// resolver is ever called. The neighbour, a source it authorizes, is fetched with its own
+// profile's headers.
+test("refusal pair: a LOAD the catalog does not authorize is denied before any fetch; an authorized one is fetched with its profile", async () => {
+  const catalog = catalogFor([DOC, { capabilities: ["network"], userAgent: "loader/1", headers: [["X-A", "1"]] }]);
+  const { calls, fetch } = recordingFetch(
+    () => new Response(TTL, { status: 200, headers: { "Content-Type": "text/turtle; charset=utf-8" } }),
+  );
+  const resolveLoad = createFetchLoadResolver({ fetch });
+  const engine = new QueryEngine();
+  const denied = await rejection(
+    engine.updateAsync(new Dataset(), `LOAD <${REMOTE_ORIGIN}/secret.ttl>`, { resolveLoad, catalog }),
+  );
+  assert.equal(denied.code, "native-sparql-load-denied");
+  assert.match(denied.message, /withholds the network capability/);
+  assert.equal(calls.length, 0, "nothing was fetched");
+
+  const target = new Dataset();
+  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  assert.equal(target.size, 1);
   const [accept, ...rest] = calls[0].init.headers;
   assert.equal(accept[0], "Accept");
   assert.match(accept[1], /text\/turtle/);
@@ -1298,19 +981,14 @@ test("refusal pair: a LOAD the catalog does not authorize is denied before any f
 });
 
 test("a LOAD response without a Content-Type is a transport failure; with one it loads", async () => {
-  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
   const bare = createFetchLoadResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: async () => new Response(new Blob([TTL]), { status: 200 }),
   });
-  assert.deepEqual(await bare({ kind: "load", iri: DOC }, liveCtx()), {
+  assert.deepEqual(await bare(loadRequest(DOC), liveCtx()), {
     kind: "transport",
     message: `LOAD <${DOC}>: the response has no Content-Type`,
   });
   const resolveLoad = createFetchLoadResolver({
-    catalog,
-    timeoutMs: 1000,
     fetch: async () => new Response(TTL, { headers: { "Content-Type": "text/turtle" } }),
   });
   const target = new Dataset();
@@ -1323,13 +1001,28 @@ test("a LOAD response without a Content-Type is a transport failure; with one it
 });
 
 // ---------------------------------------------------------------------------
-// createFetchLoadResolver and a redirecting document: manual, re-authorized hops
+// createFetchLoadResolver and a redirecting document: the job follows every hop
 // ---------------------------------------------------------------------------
 
 const SECOND_ORIGIN = "https://second.example.org";
 const SECOND_DOC = `${SECOND_ORIGIN}/doc2.ttl`;
 // A relative IRI: only correct if resolved against the redirected document's own URL.
 const RELATIVE_TTL = `<rel> <${EX}p> <${EX}o> .\n`;
+
+test("a redirect is handed back to the job, never followed; an opaque one withholds its Location", async () => {
+  const { calls, fetch } = recordingFetch(
+    () => new Response(null, { status: 302, headers: { Location: "/moved.ttl" } }),
+  );
+  const resolveLoad = createFetchLoadResolver({ fetch });
+  assert.deepEqual(await resolveLoad(loadRequest(DOC), liveCtx()), { kind: "redirect", location: "/moved.ttl" });
+  assert.equal(calls.length, 1, "nothing was sent to the Location");
+  const opaque = createFetchLoadResolver({
+    fetch: async () => ({ type: "opaqueredirect", status: 0, ok: false, headers: new Headers(), body: null }),
+  });
+  const answer = await opaque(loadRequest(DOC), liveCtx());
+  assert.equal(answer.kind, "transport");
+  assert.match(answer.message, /withheld its Location/);
+});
 
 test("LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched", async () => {
   const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
@@ -1338,15 +1031,11 @@ test("LOAD redirect: a redirect to an unlisted origin is denied, and the unliste
     assert.equal(String(url), DOC, "only the authorized DOC is ever fetched");
     return new Response(null, { status: 302, headers: { Location: `${evilOrigin}/steal.ttl` } });
   });
-  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
-  const denied = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
-  assert.equal(denied.kind, "denied");
-  // Exact: the refusal names the redirect's own target (never the authorized DOC).
-  assert.equal(
-    denied.message,
-    `LOAD <${evilOrigin}/steal.ttl>: <${evilOrigin}/steal.ttl> withholds the query capability: ` +
-      `no profile is configured for this service, and the catalog has no fallback`,
-  );
+  const resolveLoad = createFetchLoadResolver({ fetch });
+  const denied = await rejection(new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }));
+  assert.equal(denied.code, "native-sparql-load-denied");
+  // The refusal names the redirect's own target (never the authorized DOC).
+  assert.match(denied.message, new RegExp(`<${evilOrigin}/steal\\.ttl> withholds the network capability`));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, DOC);
 });
@@ -1363,9 +1052,9 @@ test("LOAD redirect: the valid neighbour — a redirect to a listed origin loads
     assert.equal(String(url), SECOND_DOC);
     return new Response(RELATIVE_TTL, { status: 200, headers: { "Content-Type": "text/turtle" } });
   });
-  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
+  const resolveLoad = createFetchLoadResolver({ fetch });
   const target = new Dataset();
-  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad });
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
   assert.equal(target.size, 1);
   // The oracle: the document's relative `<rel>` IRI is `${SECOND_ORIGIN}/rel` only if it
   // was resolved against the redirected document's own URL — a base of the originally
@@ -1378,49 +1067,38 @@ test("LOAD redirect: the valid neighbour — a redirect to a listed origin loads
   assert.equal(calls[1].url, SECOND_DOC);
 });
 
-test("LOAD redirect: a redirect loop fails as typed transport after exactly maxRedirects hops", async () => {
+test("LOAD redirect: a redirect loop fails as typed transport after exactly five hops; four hops load", async () => {
   // A fallback profile authorizes every origin, so only the hop limit — never a denial —
-  // can stop this loop: each hop's URL is distinct (a growing query string) but always
-  // redirects again.
+  // can stop this loop: each hop's URL is distinct (a growing query string).
   const catalog = new ServiceCatalog();
   catalog.setFallback(JSON.stringify({ capabilities: ["network"] }));
-  const { calls, fetch } = recordingFetch((url) => {
-    const next = `${DOC}?n=${calls.length}`;
+  const looping = recordingFetch(() => {
+    const next = `${DOC}?n=${looping.calls.length}`;
     return new Response(null, { status: 302, headers: { Location: next } });
   });
-  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch, maxRedirects: 3 });
-  const answer = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
-  assert.equal(answer.kind, "transport");
-  assert.match(answer.message, /exceeded 3 redirect hops/);
-  assert.equal(calls.length, 4, "the initial request plus exactly the 3 hops the limit allows");
+  const error = await rejection(
+    new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, {
+      resolveLoad: createFetchLoadResolver({ fetch: looping.fetch }),
+      catalog,
+    }),
+  );
+  assert.equal(error.code, "native-sparql-load-failed");
+  assert.match(error.message, /exceeded 5 redirect hops/);
+  assert.equal(looping.calls.length, 6, "the source plus exactly the five hops the limit allows");
 
-  // The valid neighbour: the same loop with a taller limit follows more hops before
-  // failing, proving the count is the limit's, not some other fixed constant.
-  const taller = recordingFetch((url) => {
-    const next = `${DOC}?n=${taller.calls.length}`;
-    return new Response(null, { status: 302, headers: { Location: next } });
-  });
-  const generousLoad = createFetchLoadResolver({
+  // The valid neighbour: a chain of four redirects ends in a document, which loads.
+  const chain = recordingFetch(() =>
+    chain.calls.length <= 4
+      ? new Response(null, { status: 302, headers: { Location: `${DOC}?n=${chain.calls.length}` } })
+      : new Response(TTL, { status: 200, headers: { "Content-Type": "text/turtle" } }),
+  );
+  const target = new Dataset();
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, {
+    resolveLoad: createFetchLoadResolver({ fetch: chain.fetch }),
     catalog,
-    timeoutMs: 1000,
-    fetch: taller.fetch,
-    maxRedirects: 6,
   });
-  await generousLoad({ kind: "load", iri: DOC }, liveCtx());
-  assert.equal(taller.calls.length, 7);
-});
-
-test("refusal pair: maxRedirects must be a positive integer when given; without it, 5 is the default", () => {
-  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
-  assert.match(
-    syncThrow(() => createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, maxRedirects: 0 }))
-      .message,
-    /maxRedirects must be a positive integer/,
-  );
-  assert.equal(
-    typeof createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, maxRedirects: 2 }),
-    "function",
-  );
+  assert.equal(target.size, 1);
+  assert.equal(chain.calls.length, 5);
 });
 
 test("LOAD redirect: the redirected origin's own profile headers are sent, never the source's", async () => {
@@ -1433,9 +1111,10 @@ test("LOAD redirect: the redirected origin's own profile headers are sent, never
       ? new Response(null, { status: 302, headers: { Location: SECOND_DOC } })
       : new Response(TTL, { status: 200, headers: { "Content-Type": "text/turtle" } }),
   );
-  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
-  const loaded = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
-  assert.equal(loaded.base, SECOND_DOC);
+  const resolveLoad = createFetchLoadResolver({ fetch });
+  const target = new Dataset();
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  assert.equal(target.size, 1);
   assert.equal(calls.length, 2);
   const sourceHeaders = calls[0].init.headers;
   const targetHeaders = calls[1].init.headers;
@@ -1690,7 +1369,7 @@ test("dataset parameters are honoured, and without them the query's own dataset 
   assert.deepEqual(rowsOf(unrestricted), [`o=${EX}o1`, `o=${EX}o2`]);
 });
 
-test("the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters, or to reclassify a failure", async () => {
+test("the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters", async () => {
   // A spy on the Rust-backed prototype method: it counts every call and still runs the
   // real implementation, so this observes exactly what handleSparqlRequest invokes without
   // changing what it computes.
@@ -1722,14 +1401,16 @@ test("the operation text is parsed exactly once on the request path: effectiveTe
     assert.equal(calls, 1);
 
     // Malformed, no dataset parameters: negotiate's lightweight token scan sees a valid
-    // query-form keyword and lets it through, so the engine's own parse is attempted first
-    // and fails; effectiveText then runs once, on this failure path only, to reclassify the
-    // rejection as the client's 400 rather than a bare 500 evaluation failure.
+    // query-form keyword and lets it through, so the engine's own parse is the one that
+    // refuses it — the client's 400 under the parse code, with the parser's words, and
+    // nothing is parsed a second time to classify it.
     calls = 0;
     const malformed = await handleSparqlRequest(httpRequest({ query: q("SELECT WHERE {") }), options);
     assert.equal(malformed.status, 400);
-    assert.equal((await problemOf(malformed)).code, "MalformedOperation");
-    assert.equal(calls, 1);
+    const malformedBody = await problemOf(malformed);
+    assert.equal(malformedBody.code, "native-sparql-query-parse");
+    assert.match(malformedBody.detail, /^error native-sparql-query-parse: SPARQL syntax error/);
+    assert.equal(calls, 0);
 
     // An update, no dataset parameters, well-formed: zero calls, exactly as the query case.
     calls = 0;
@@ -1948,7 +1629,7 @@ test("refusal pair: a SERVICE no resolver reaches is a 500 with its engine code 
     dataset: dataset(),
     governors: GOVERNORS,
     catalog,
-    resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() }),
+    resolveService: createFetchServiceResolver({ fetch: async () => srjResponse() }),
     onInternalError,
   });
   assert.equal(answered.status, 200);
@@ -2242,7 +1923,7 @@ test("the catalog denies an unlisted endpoint before any fetch; a listed one is 
     dataset: dataset(),
     governors: GOVERNORS,
     catalog,
-    resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch }),
+    resolveService: createFetchServiceResolver({ fetch }),
   };
   const denied = await handleSparqlRequest(httpRequest({ query: q(FEDERATED(OTHER)) }), options);
   assert.equal(denied.status, 403);
@@ -2280,7 +1961,7 @@ function federatedEndpoint(fetch, onInternalError) {
     dataset: dataset(),
     governors: GOVERNORS,
     catalog,
-    resolveService: createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch }),
+    resolveService: createFetchServiceResolver({ fetch }),
     onInternalError,
   };
 }
@@ -2390,11 +2071,12 @@ test("refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails
       ? new Response("upstream-secret-body", { status: 503 })
       : new Response(TTL, { headers: { "Content-Type": "text/turtle" } }),
   );
-  const options = () => ({
+  const options = (resolveLoad = createFetchLoadResolver({ fetch })) => ({
     engine: new QueryEngine(),
     dataset: dataset(),
     governors: GOVERNORS,
-    resolveLoad: createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch }),
+    catalog,
+    resolveLoad,
   });
   const update = (text) =>
     httpRequest({ method: "POST", body: text, contentType: "application/sparql-update" });
@@ -2410,23 +2092,45 @@ test("refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails
   );
   assert.equal(calls.length, 0);
 
+  // The host's own refusal is a 403 too, under its own code and a detail that names the
+  // host's policy rather than the catalog.
+  const hostDenied = await handleSparqlRequest(
+    update(`LOAD <${DOC}>`),
+    options(async () => ({ kind: "denied", message: "tenant-secret-policy" })),
+  );
+  assert.equal(hostDenied.status, 403);
+  assert.doesNotMatch(await hostDenied.clone().text(), /tenant-secret-policy/);
+  const hostDeniedBody = await problemOf(hostDenied);
+  assert.equal(hostDeniedBody.code, "native-sparql-load-host-denied");
+  assert.notEqual(hostDeniedBody.detail, deniedBody.detail);
+
   const failed = await handleSparqlRequest(update(`LOAD <${BROKEN}>`), options());
   assert.equal(failed.status, 502);
   assert.doesNotMatch(await failed.clone().text(), /upstream-secret|HTTP 503/);
   const failedBody = await problemOf(failed);
   assert.equal(failedBody.code, "native-sparql-load-failed");
-  assert.equal(failedBody.detail, "a LOAD source this update names could not be fetched or read");
+  assert.equal(failedBody.detail, "a LOAD source this update names could not be fetched");
+
+  // A document that arrives and does not parse is its own 502.
+  const garbled = await handleSparqlRequest(
+    update(`LOAD <${DOC}>`),
+    options(async () => ({ text: "this is not turtle", mediaType: "text/turtle" })),
+  );
+  assert.equal(garbled.status, 502);
+  const garbledBody = await problemOf(garbled);
+  assert.equal(garbledBody.code, "native-sparql-load-decode");
+  assert.equal(garbledBody.detail, "a LOAD source this update names was fetched and could not be parsed");
 
   const loaded = await handleSparqlRequest(update(`LOAD <${DOC}>`), options());
   assert.equal(loaded.status, 204);
   assert.deepEqual(calls.map((call) => call.url), [BROKEN, DOC]);
 });
 
-// A rejection no engine code classifies is not the query's failure, and its words are
-// never the client's: a 500 under the adapter's own stable name, never a JavaScript error
-// class name. Here the engine's twin refuses a catalog given with no resolveService; the
-// neighbour gives it one and answers.
-test("refusal pair: a rejection no engine code classifies is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200", async () => {
+// A refusal of the options this endpoint began the operation with is not the query's
+// failure, and its words are never the client's: a 500 under the adapter's own stable
+// name, never a JavaScript error class name. Here the engine refuses a catalog given with
+// no handler to govern; the neighbour gives it one and answers.
+test("refusal pair: an operation this endpoint misconfigured is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const { errors, onInternalError } = recordingInternalErrors();
   const unclassified = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
@@ -2445,7 +2149,8 @@ test("refusal pair: a rejection no engine code classifies is a 500 InternalError
   assert.equal(body.detail, `internal error; see the Worker log for correlation id ${body.correlationId}`);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].correlationId, body.correlationId);
-  assert.match(errors[0].error.message, /no resolveService handler was supplied/);
+  assert.match(errors[0].error.message, /neither a resolveService nor a resolveLoad handler was supplied/);
+  assert.equal(errors[0].error.code, "purrdf-wasm-options");
 
   const answered = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
     engine: new QueryEngine(),
@@ -2504,8 +2209,6 @@ test("a federated query runs end to end through a service binding", async () => 
     governors: { ...GOVERNORS, maxRemoteRequests: 4 },
     catalog,
     resolveService: createFetchServiceResolver({
-      catalog,
-      timeoutMs: 1000,
       fetch: neverFetch,
       bindings: { [REMOTE_ORIGIN]: { fetch: binding.fetch } },
     }),

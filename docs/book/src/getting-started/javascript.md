@@ -147,9 +147,10 @@ touches wasm, and the synchronous API works as before.
 
 `resolveService(request, ctx)` receives the SPARQL 1.1 Protocol POST to send:
 `endpoint`, `queryText`, `contentType` (`application/sparql-query`), `accept`
-(`application/sparql-results+json`), `userAgent`, `timeoutMs`, and `headers` —
+(`application/sparql-results+json`), `userAgent`, `timeoutMs`, `headers` —
 the catalog profile's headers and credential as `[name, value]` pairs in sending
-order. `ctx` carries `signal` (fires on cancellation or the deadline),
+order — and `cacheable` (`false` for a request carrying a credential). `ctx`
+carries `signal` (fires on cancellation, the request's timeout or the deadline),
 `remainingDeadlineMs`, `silent` and `maxIntermediateCells`. The handler answers
 with SPARQL Results JSON (bytes or a string), a `Response` (a non-2xx status is a
 transport failure), `{ kind: "transport", message }` or
@@ -178,7 +179,8 @@ async function resolveService(request, { signal }) {
         ...request.headers, // the catalog profile's headers, in sending order
       ],
       body: request.queryText,
-      signal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
+      // Fires at the request's timeout, the job's deadline or its cancellation.
+      signal,
     });
   } catch (error) {
     // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
@@ -202,13 +204,17 @@ const { rows } = await engine.selectAsync(
 for (const row of rows) console.log(row.s.value, row.x.value);
 ```
 
-A `ServiceCatalog` passed as `catalog` authorizes every request before the
-handler is called (deny by default, one profile per endpoint, an optional
-fallback); a denial fails the query, and under `SERVICE SILENT` is the join
-identity. `localServices` answers named endpoints in process from a `Dataset`.
-`resolveLoad` answers `LOAD` the same way, with a document and its media type, a
-`Response`, a `Dataset`, or a typed failure: either failure fails the request,
-and `LOAD SILENT` succeeds over it with nothing loaded.
+A `ServiceCatalog` passed as `catalog` authorizes every request — every
+`SERVICE`, every `LOAD` source and every location a `LOAD` is redirected to —
+before the handler is called (deny by default, one profile per endpoint, an
+optional fallback), and its profile's `timeoutMs` bounds each request; a denial
+fails the query, and under `SERVICE SILENT` is the join identity.
+`localServices` answers named endpoints in process from a `Dataset`.
+`resolveLoad` answers one hop of a `LOAD` the same way, with a document and its
+media type, a `Response`, a `Dataset`, `{ kind: "redirect", location }` (the job
+resolves and re-authorizes the location, up to five hops), or a typed failure:
+each failure fails the request, and `LOAD SILENT` succeeds over it with nothing
+loaded. Every error the package throws carries its stable code as `error.code`.
 
 In a browser, the remote endpoint's CORS policy governs whether `fetch` can
 read its answer: an endpoint that does not allow the page's origin surfaces as a
@@ -291,10 +297,12 @@ with a partial body), `application/problem+json` errors, `Server-Timing`
 from the job's evidence, and CORS when asked for. A request the engine
 refuses to evaluate as written — an unsupported construct, an unregistered
 function, nesting past the host-stack budget — is a `400` whose `code` is
-the engine's diagnostic code. A `SERVICE` endpoint or `LOAD` source the host
-refuses to contact — the catalog withholds a capability, or the resolver's
-own policy refuses — is a `403`, and one that was contacted and gave no
-usable answer is a `502`; each carries the engine's diagnostic code as its
+the engine's diagnostic code, and so is an operation that does not parse. A
+`SERVICE` endpoint or `LOAD` source the host refuses to contact — the catalog
+withholds a capability, or the resolver's own policy refuses — is a `403`, an
+update begun while another update of the dataset is in flight is a `409`, and
+an endpoint or source that was contacted and gave no usable answer is a `502`;
+each carries the engine's diagnostic code as its
 `code` and a fixed `detail`, never the engine's message, which would echo
 the catalog's policy or a resolver's or remote's own words. A `500`'s
 `detail` is the engine's own words for the query's own failures (a parse, an
@@ -310,9 +318,9 @@ caught by counting bytes as the body streams in, so a lying header never
 buys a larger body than an honest one would. Both resolvers fetch with
 `redirect: "manual"`: a `SERVICE` request never follows a redirect (a 3xx is
 a typed transport failure, so a catalogued endpoint's headers and credential
-can never reach a different origin), and a `LOAD` follows one only by
-re-authorizing the redirected IRI against the catalog before every hop, up
-to `maxRedirects` (5 by default). A complete Worker:
+can never reach a different origin), and a `LOAD` resolver hands a redirect
+back to the job, which re-authorizes the location against the catalog before
+every hop, up to five. A complete Worker:
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";
@@ -328,18 +336,15 @@ const dataset = Dataset.parse(
 const catalog = new ServiceCatalog();
 catalog.addService(
   "https://remote.example.org/sparql",
-  JSON.stringify({ capabilities: ["query", "network"] }),
+  JSON.stringify({ capabilities: ["query", "network"], timeoutMs: 5_000 }),
 );
 
 export default {
-  fetch(request, env, ctx) {
+  fetch(request, env) {
     const resolveService = createFetchServiceResolver({
-      catalog,
-      timeoutMs: 5_000,
       bindings: { "https://remote.example.org": env.REMOTE },
       cache: caches.default,
       cacheTtlSeconds: 300,
-      waitUntil: (promise) => ctx.waitUntil(promise),
     });
     return handleSparqlRequest(request, {
       engine,
@@ -362,12 +367,10 @@ so size the ceiling to those solutions. The Cache API does nothing on `workers.d
 hostnames, so caching is effectively off there; on a custom domain it works. A
 runtime started without a cache configured (a locally run workerd, for
 example) rejects `cache.match` and `cache.put` with "No Cache was configured",
-which the resolver treats as an optimisation failure, never the query's
-answer: a rejected `match` is a miss and a rejected `put` never discards an
-answer the remote already returned.
-`onCacheError(error, { operation, endpoint })` reports every such failure (one
-`console.warn` line by default), so it is visible, never silent, while the
-query still answers. On Workers `Date.now()` does not advance during
+and a failed cache call is that request's transport failure — the join
+identity under `SERVICE SILENT`, the query's failure without it — so configure
+no `cache` there. A request carrying a credential never touches the shared
+cache. On Workers `Date.now()` does not advance during
 CPU-bound execution, so a synchronous `deadlineMs` cannot trip during
 CPU-bound work there; the asynchronous lane observes the deadline at every
 yield and every effect.

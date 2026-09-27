@@ -263,6 +263,8 @@ const resolveService: AsyncServiceResolver = async (request, ctx) => {
   const silent: boolean = ctx.silent;
   const cells: bigint | undefined = ctx.maxIntermediateCells;
   const remaining: number | undefined = ctx.remainingDeadlineMs;
+  const cacheable: boolean = request.cacheable;
+  void cacheable;
   void endpoint;
   void headers;
   void silent;
@@ -276,10 +278,20 @@ const resolveService: AsyncServiceResolver = async (request, ctx) => {
     signal: ctx.signal,
   });
 };
-const resolveLoad: AsyncLoadResolver = (request) =>
-  request.iri.endsWith(".ttl")
+const resolveLoad: AsyncLoadResolver = (request) => {
+  const accept: string = request.accept;
+  const loadHeaders: [string, string][] = request.headers;
+  const loadTimeout: number = request.timeoutMs;
+  void accept;
+  void loadHeaders;
+  void loadTimeout;
+  if (request.iri.endsWith(".moved")) return { kind: "redirect", location: "/doc.ttl" };
+  return request.iri.endsWith(".ttl")
     ? { text: "<https://example.org/s> <https://example.org/p> 1 .", mediaType: "text/turtle" }
     : { kind: "denied", message: `not allowed: ${request.iri}` };
+};
+const snapshot: Dataset = matched.snapshot();
+snapshot.free();
 const controller = new AbortController();
 const asyncResult: Promise<QueryResult> = engine.queryAsync(matched, "ASK { ?s ?p ?o }", {
   resolveService,
@@ -391,7 +403,9 @@ engine.queryAsync(matched, "ASK { ?s ?p ?o }", { fuel: 1 });
 engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", { format: "json" });
 asyncResult.catch((error: AsyncJobError) => {
   const evidence: AsyncEvidence = error.evidence.async;
+  const failureCode: string = error.code;
   void evidence;
+  void failureCode;
 });
 
 const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");

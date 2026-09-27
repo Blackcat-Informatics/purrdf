@@ -68,27 +68,27 @@ use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use purrdf::{
-    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan,
-    SerializeGraph, query_with_entailment_governed, serialize_dataset,
-};
+use purrdf::{GovernedEntailment, JsonLdSerializeOptions, SerializeGraph, serialize_dataset};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
-use purrdf_core::{RdfDiagnostic, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{SparqlRequest, SparqlResult};
+use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
-    QueryGovernors, QueryOptions, ResourceDimension, StopCause, StopSignal,
-    TrippedGovernor as TrippedValue, WallDeadline,
+    QueryGovernors, ResourceDimension, StopCause, StopSignal, TrippedGovernor as TrippedValue,
+    WallDeadline,
 };
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
 };
 use wasm_bindgen::prelude::*;
 
+use crate::async_query::AsyncOperationKind;
 use crate::codec::resolve_format;
 use crate::convert::term_value_into_rdf_term;
-use crate::dataset::{Dataset, diag_to_err, serialize_frozen_with_options};
+use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
+use crate::operation::{JobOutcome, OPTIONS_CODE, OperationInput, coded_error, diagnostic_to_js};
 use crate::term::Term;
 
 /// The typed result kind exposed to the package-root JavaScript wrapper.
@@ -205,7 +205,7 @@ impl SelectResult {
 enum QueryResultValue {
     Select(SelectResult),
     Ask(bool),
-    Graph(Dataset),
+    Graph(Box<Dataset>),
 }
 
 /// A typed SPARQL result returned by the raw wasm binding.
@@ -251,7 +251,7 @@ impl QueryResult {
     pub fn take_dataset(&mut self) -> Option<Dataset> {
         let value = self.value.take()?;
         match value {
-            QueryResultValue::Graph(dataset) => Some(dataset),
+            QueryResultValue::Graph(dataset) => Some(*dataset),
             other => {
                 self.value = Some(other);
                 None
@@ -573,9 +573,11 @@ impl GovernorArgs {
         governors
     }
 
-    /// Engage these ceilings, plus the caller's stop sources, as one call's governors.
+    /// The stop signal a synchronous governed call runs under: the caller's wall deadline
+    /// and cancellation token composed into one [`WasmStopWatch`], or `None` when the
+    /// caller supplied neither.
     ///
-    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    /// # Why a governed call's base is `METERED` rather than `UNBOUNDED`
     ///
     /// Two reasons, and both are about what a governed call promises. First, every outcome
     /// — including a complete one — carries evidence a caller can size the next budget
@@ -585,17 +587,16 @@ impl GovernorArgs {
     /// spending a long time inside one operator would notice a deadline or a cancellation
     /// late. Metering costs a saturating add per charge point and buys prompt interruption
     /// on every query shape, which is the trade a caller who asked for governors has
-    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) are
-    /// untouched by any of this and still charge nothing at all.
-    fn engage(self, cancel: Option<&CancellationToken>) -> QueryGovernors {
-        let deadline_ms = self.deadline_ms;
-        let mut governors = self.ceilings();
-        let watch = WasmStopWatch::new(deadline_ms, cancel);
-        if watch.is_armed() {
-            let signal: Arc<dyn StopSignal> = Arc::new(watch);
-            governors = governors.with_stop_signal(signal);
-        }
-        governors
+    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) run on
+    /// the same metered base, with no ceiling and no stop signal, so they can never trip.
+    pub(crate) fn stop_watch(
+        self,
+        cancel: Option<&CancellationToken>,
+    ) -> Option<Arc<dyn StopSignal>> {
+        let watch = WasmStopWatch::new(self.deadline_ms, cancel);
+        watch
+            .is_armed()
+            .then(|| Arc::new(watch) as Arc<dyn StopSignal>)
     }
 }
 
@@ -1284,9 +1285,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<QueryResult, JsError> {
+    ) -> Result<QueryResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        query_result_from_sparql(result)
+        Ok(query_result_from_sparql(result)?)
     }
 
     /// Run a SELECT query and return typed rows.
@@ -1297,9 +1298,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<SelectResult, JsError> {
+    ) -> Result<SelectResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        select_result_from_sparql(result)
+        Ok(select_result_from_sparql(result)?)
     }
 
     /// Run an ASK query and return the boolean result.
@@ -1310,10 +1311,10 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<bool, JsError> {
+    ) -> Result<bool, JsValue> {
         match self.run_query(dataset, sparql, base.as_deref())? {
             SparqlResult::Boolean(value) => Ok(value),
-            other => Err(kind_mismatch("ASK boolean", &other)),
+            other => Err(kind_mismatch("ASK boolean", &other).into()),
         }
     }
 
@@ -1325,8 +1326,12 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<Dataset, JsError> {
-        graph_result_from_sparql(self.run_query(dataset, sparql, base.as_deref())?)
+    ) -> Result<Dataset, JsValue> {
+        Ok(graph_result_from_sparql(self.run_query(
+            dataset,
+            sparql,
+            base.as_deref(),
+        )?)?)
     }
 
     /// Run a DESCRIBE query and return its result dataset.
@@ -1337,8 +1342,12 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<Dataset, JsError> {
-        graph_result_from_sparql(self.run_query(dataset, sparql, base.as_deref())?)
+    ) -> Result<Dataset, JsValue> {
+        Ok(graph_result_from_sparql(self.run_query(
+            dataset,
+            sparql,
+            base.as_deref(),
+        )?)?)
     }
 
     /// Apply a SPARQL UPDATE atomically to the supplied dataset.
@@ -1349,13 +1358,15 @@ impl QueryEngine {
         dataset: &mut Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<(), JsError> {
-        let mut frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        self.inner
-            .update(&mut frozen, sparql_request(sparql, base.as_deref()))
-            .map_err(|e| sync_lane_err(&e))?;
-        dataset.replace(frozen);
-        Ok(())
+    ) -> Result<(), JsValue> {
+        let input = self.input(dataset, AsyncOperationKind::Update, sparql, base.as_deref())?;
+        match input.run_offline(None)? {
+            JobOutcome::Updated(frozen) => {
+                dataset.replace(frozen);
+                Ok(())
+            }
+            other => Err(unexpected_outcome("update", &other)),
+        }
     }
 
     /// Run any SPARQL query and serialize its raw result.
@@ -1369,9 +1380,9 @@ impl QueryEngine {
     /// `provenance_prefix`/`provenance_iri` (both `undefined`, or both a string) anchor
     /// the additive `purrdf` provenance extension on a SELECT/ASK result serialized to
     /// SPARQL-results JSON/XML, under that `PREFIX`/`IRI`. `undefined` (the default)
-    /// leaves the output pure W3C, exactly as before these parameters existed; a
-    /// CONSTRUCT/DESCRIBE graph result and CSV/TSV never carry the extension. Read it
-    /// back with `provenanceFromJson`/`provenanceFromXml` under the SAME namespace.
+    /// leaves the output pure W3C; a CONSTRUCT/DESCRIBE graph result and CSV/TSV never
+    /// carry the extension. Read it back with `provenanceFromJson`/`provenanceFromXml`
+    /// under the SAME namespace.
     ///
     /// # Errors
     ///
@@ -1391,11 +1402,12 @@ impl QueryEngine {
         format: Option<String>,
         provenance_prefix: Option<String>,
         provenance_iri: Option<String>,
-    ) -> Result<String, JsError> {
-        let result = self.run_query(dataset, sparql, base.as_deref())?;
+    ) -> Result<String, JsValue> {
         let namespace = build_provenance_namespace(provenance_prefix, provenance_iri)?;
-        serialize_query_result(&result, format.as_deref(), namespace.as_ref(), sparql)
-            .map_err(|message| JsError::new(&message))
+        let mut input = self.input(dataset, AsyncOperationKind::Raw, sparql, base.as_deref())?;
+        input.format = format;
+        input.provenance = namespace;
+        raw_text(input.run_offline(None)?)
     }
 
     /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD.
@@ -1408,9 +1420,16 @@ impl QueryEngine {
         base: Option<String>,
         format: &str,
         options_json: &str,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         let options = decode_options(options_json)?;
-        self.query_raw_with_options(dataset, sparql, base.as_deref(), format, &options)
+        self.query_raw_with_options(
+            dataset,
+            AsyncOperationKind::Raw,
+            sparql,
+            base.as_deref(),
+            format,
+            options,
+        )
     }
 
     /// Run a SPARQL query under caller-supplied execution governors, returning a
@@ -1458,7 +1477,7 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
-    ) -> Result<QueryOutcome, JsError> {
+    ) -> Result<QueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
             deadline_ms,
@@ -1467,19 +1486,18 @@ impl QueryEngine {
             max_scratch_bytes,
             max_remote_requests,
         )?;
-        let governors = args.engage(cancel.as_ref());
-        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        let aggregates = build_aggregates(aggregate_namespace);
-        let outcome = self
-            .inner
-            .query_governed(
-                &frozen,
-                sparql_request(sparql, base.as_deref()),
-                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
-                &governors,
-            )
-            .map_err(|e| sync_lane_err(&e))?;
-        query_outcome_from_governed(outcome)
+        let mut input = self.input(
+            dataset,
+            AsyncOperationKind::Governed,
+            sparql,
+            base.as_deref(),
+        )?;
+        input.aggregate_namespace = aggregate_namespace;
+        input.ceilings = args;
+        match input.run_offline(args.stop_watch(cancel.as_ref()))? {
+            JobOutcome::Governed(outcome) => Ok(query_outcome_from_governed(*outcome)?),
+            other => Err(unexpected_outcome("queryGoverned", &other)),
+        }
     }
 
     /// Run a governed SPARQL query over a closure produced by `regime`, carrying the
@@ -1517,9 +1535,7 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
-    ) -> Result<EntailmentQueryOutcome, JsError> {
-        let plan = QueryEntailmentPlan::parse(regime, program.as_deref().unwrap_or(""))
-            .map_err(|error| JsError::new(&error))?;
+    ) -> Result<EntailmentQueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
             deadline_ms,
@@ -1528,22 +1544,20 @@ impl QueryEngine {
             max_scratch_bytes,
             max_remote_requests,
         )?;
-        let governors = args.engage(cancel.as_ref());
-        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        let aggregates = build_aggregates(aggregate_namespace);
-        let outcome = query_with_entailment_governed(
-            &self.inner,
-            &frozen,
-            sparql_request(sparql, base.as_deref()),
-            plan.entailment(),
-            QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
-            // This surface registers no relation at all, so there is none to re-derive over
-            // the closure — `NONE` is the accurate claim here, not a default.
-            &ClosureRelations::NONE,
-            &governors,
-        )
-        .map_err(|error| JsError::new(&error.to_string()))?;
-        entailment_query_outcome_from_native(outcome)
+        let mut input = self.input(
+            dataset,
+            AsyncOperationKind::EntailmentGoverned,
+            sparql,
+            base.as_deref(),
+        )?;
+        input.regime = Some(regime.to_owned());
+        input.program = program;
+        input.aggregate_namespace = aggregate_namespace;
+        input.ceilings = args;
+        match input.run_offline(args.stop_watch(cancel.as_ref()))? {
+            JobOutcome::Entailment(outcome) => Ok(entailment_query_outcome_from_native(*outcome)?),
+            other => Err(unexpected_outcome("queryEntailmentGoverned", &other)),
+        }
     }
 
     /// Apply a SPARQL UPDATE under caller-supplied execution governors, returning an
@@ -1588,9 +1602,9 @@ impl QueryEngine {
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
-    ) -> Result<UpdateOutcome, JsError> {
+    ) -> Result<UpdateOutcome, JsValue> {
         if max_answers.is_some() {
-            return Err(JsError::new(UPDATE_REFUSES_MAX_ANSWERS));
+            return Err(coded_error(UPDATE_REFUSES_MAX_ANSWERS, OPTIONS_CODE));
         }
         let args = decode_governor_args(
             fuel,
@@ -1600,24 +1614,25 @@ impl QueryEngine {
             max_scratch_bytes,
             max_remote_requests,
         )?;
-        let governors = args.engage(cancel.as_ref());
-        let mut frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        let aggregates = build_aggregates(aggregate_namespace);
-        let outcome = self
-            .inner
-            .update_governed(
-                &mut frozen,
-                sparql_request(sparql, base.as_deref()),
-                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
-                &governors,
-            )
-            .map_err(|e| sync_lane_err(&e))?;
-        // The engine publishes into its own `Arc` only on the applied path, so adopting
-        // the returned base on a trip would adopt a base nothing was written to.
-        if outcome.is_applied() {
-            dataset.replace(frozen);
+        let mut input = self.input(
+            dataset,
+            AsyncOperationKind::UpdateGoverned,
+            sparql,
+            base.as_deref(),
+        )?;
+        input.aggregate_namespace = aggregate_namespace;
+        input.ceilings = args;
+        match input.run_offline(args.stop_watch(cancel.as_ref()))? {
+            JobOutcome::UpdateGoverned { outcome, frozen } => {
+                // The engine publishes into its own `Arc` only on the applied path, so
+                // there is a base to adopt only then.
+                if let Some(frozen) = frozen {
+                    dataset.replace(frozen);
+                }
+                Ok(update_outcome_from_governed(&outcome))
+            }
+            other => Err(unexpected_outcome("updateGoverned", &other)),
         }
-        Ok(update_outcome_from_governed(&outcome))
     }
 
     /// The engine's charge ledger for a query: the join orders it chose, the plan
@@ -1637,13 +1652,14 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
-    ) -> Result<String, JsError> {
-        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        Ok(self
-            .inner
-            .explain_query(&frozen, sparql, base.as_deref())
-            .map_err(|e| sync_lane_err(&e))?
-            .render())
+    ) -> Result<String, JsValue> {
+        let input = self.input(
+            dataset,
+            AsyncOperationKind::Explain,
+            sparql,
+            base.as_deref(),
+        )?;
+        raw_text(input.run_offline(None)?)
     }
 
     /// Serialize a CONSTRUCT/DESCRIBE result with a reusable compiled context.
@@ -1657,14 +1673,21 @@ impl QueryEngine {
         format: &str,
         context: &CompiledJsonLdContext,
         yaml_schema_url: Option<String>,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         let mut options = context_options(context);
         if let Some(url) = yaml_schema_url {
             options = options
                 .with_yaml_schema_url(&url)
-                .map_err(|error| JsError::new(&error.to_string()))?;
+                .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))?;
         }
-        self.query_raw_with_options(dataset, sparql, base.as_deref(), format, &options)
+        self.query_raw_with_options(
+            dataset,
+            AsyncOperationKind::RawWithContext,
+            sparql,
+            base.as_deref(),
+            format,
+            options,
+        )
     }
 }
 
@@ -1680,60 +1703,64 @@ impl QueryEngine {
         &self.inner
     }
 
+    /// An operation of `kind` over a snapshot of `dataset`.
+    fn input<'a>(
+        &self,
+        dataset: &Dataset,
+        kind: AsyncOperationKind,
+        sparql: &'a str,
+        base: Option<&'a str>,
+    ) -> Result<OperationInput<'a>, JsValue> {
+        let frozen = dataset.view().freeze().map_err(diagnostic_to_js)?;
+        Ok(OperationInput::new(kind, &self.inner, frozen, sparql, base))
+    }
+
     fn run_query(
         &self,
         dataset: &Dataset,
         sparql: &str,
         base: Option<&str>,
-    ) -> Result<SparqlResult, JsError> {
-        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
-        self.inner
-            .query(&frozen, sparql_request(sparql, base))
-            .map_err(|e| sync_lane_err(&e))
+    ) -> Result<SparqlResult, JsValue> {
+        match self
+            .input(dataset, AsyncOperationKind::Query, sparql, base)?
+            .run_offline(None)?
+        {
+            JobOutcome::Query(result) => Ok(result),
+            other => Err(unexpected_outcome("query", &other)),
+        }
     }
 
     fn query_raw_with_options(
         &self,
         dataset: &Dataset,
+        kind: AsyncOperationKind,
         sparql: &str,
         base: Option<&str>,
         format: &str,
-        options: &JsonLdSerializeOptions,
-    ) -> Result<String, JsError> {
-        serialize_configured_graph(self.run_query(dataset, sparql, base)?, format, options)
-            .map_err(|message| JsError::new(&message))
+        options: JsonLdSerializeOptions,
+    ) -> Result<String, JsValue> {
+        let mut input = self.input(dataset, kind, sparql, base)?;
+        input.format = Some(format.to_owned());
+        input.jsonld = Some(options);
+        raw_text(input.run_offline(None)?)
     }
 }
 
-/// What the synchronous lane appends to a stack refusal a larger stack answers: the
-/// remedy. The synchronous lane runs on the instance's own 1 MiB shadow stack, so a
-/// request nested past it answers only on the asynchronous twin of the call
-/// (`selectAsync`, `updateAsync`, …), whose job runs on a stack region of the size its
-/// `stackBytes` option names. The host-stack refusal
-/// (`native-sparql-host-stack-exhausted`) never gains it: the JavaScript engine's call
-/// stack is the same size on both lanes, so the twin refuses the request the same way.
-pub(crate) const SYNC_STACK_HINT: &str = "; the synchronous lane runs on the instance's own \
-     stack — run this request with the asynchronous twin of this call (selectAsync, \
-     queryAsync, updateAsync, …) and a larger stackBytes region";
-
-/// [`diag_to_err`] for an engine call on the synchronous lane: a shadow-stack refusal —
-/// the parser's `SPARQL parse stack exhausted` under the query or update parse code, or
-/// the evaluator's `native-sparql-evaluation-stack-exhausted` — keeps its code and message
-/// and gains [`SYNC_STACK_HINT`], the remedy only this lane has to name. Every other
-/// diagnostic, the host-stack refusal included, is [`diag_to_err`]'s.
-fn sync_lane_err(diag: &RdfDiagnostic) -> JsError {
-    let parse =
-        diag.code == "native-sparql-query-parse" || diag.code == "native-sparql-update-parse";
-    let stack = diag.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-        || (parse
-            && diag
-                .message
-                .starts_with("SPARQL parse stack exhausted at byte "));
-    if stack {
-        JsError::new(&format!("{diag}{SYNC_STACK_HINT}"))
-    } else {
-        diag_to_err(diag)
+/// The text of a serializing operation's outcome.
+fn raw_text(outcome: JobOutcome) -> Result<String, JsValue> {
+    match outcome {
+        JobOutcome::Raw(text) => Ok(text),
+        other => Err(unexpected_outcome("a serialized query", &other)),
     }
+}
+
+/// The error for an operation that answered with an outcome of another kind than its
+/// own — an invariant of [`OperationInput::execute`], reported rather than assumed.
+fn unexpected_outcome(what: &str, outcome: &JobOutcome) -> JsValue {
+    coded_error(
+        &format!("{what} answered with a {outcome:?} outcome"),
+        FailureCode::HostFault.code(),
+    )
 }
 
 /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD options — the
@@ -1780,7 +1807,7 @@ impl Dataset {
     /// requires; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {
+    pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsValue> {
         QueryEngine::new().query_raw(self, sparql, base, None, None, None)
     }
 }
@@ -1815,16 +1842,8 @@ pub(crate) fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> Spar
 ///
 /// # Errors
 ///
-/// A JS error if a registered aggregate's declaration methods panic: deriving the
+/// A message if a registered aggregate's declaration methods panic: deriving the
 /// environment reads every declaration.
-fn aggregate_env(
-    aggregates: Option<&AggregateRegistry>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, JsError> {
-    aggregate_env_message(aggregates).map_err(|message| JsError::new(&message))
-}
-
-/// [`aggregate_env`] with a plain `String` error, for the asynchronous lane, which
-/// records a failure on the job rather than throwing it across a suspended frame.
 pub(crate) fn aggregate_env_message(
     aggregates: Option<&AggregateRegistry>,
 ) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
@@ -1855,7 +1874,9 @@ pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResu
         },
         SparqlResult::Graph(graph) => QueryResult {
             kind: QueryResultKind::Graph,
-            value: Some(QueryResultValue::Graph(Dataset::from_frozen(graph))),
+            value: Some(QueryResultValue::Graph(Box::new(Dataset::from_frozen(
+                graph,
+            )))),
         },
     })
 }
@@ -2480,7 +2501,7 @@ mod tests {
     impl Dataset {
         /// `queryRaw` with an explicit format and no provenance namespace — the
         /// two-argument shape these tests exercise.
-        fn query_with_format(&self, sparql: &str, format: &str) -> Result<String, JsError> {
+        fn query_with_format(&self, sparql: &str, format: &str) -> Result<String, JsValue> {
             QueryEngine::new().query_raw(self, sparql, None, Some(format.to_owned()), None, None)
         }
     }

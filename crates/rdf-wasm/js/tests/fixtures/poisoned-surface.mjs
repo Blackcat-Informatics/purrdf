@@ -36,7 +36,7 @@ export function settleSync(call) {
 
 const isClass = (value) => /^class\b/.test(Function.prototype.toString.call(value));
 const hasConstructor = (value) => /\n\s*constructor\(/.test(Function.prototype.toString.call(value));
-const GLUE_INTERNALS = new Set(["length", "name", "prototype", "__wrap"]);
+const GLUE_INTERNALS = new Set(["length", "name", "prototype", "__wrap", "__unwrap"]);
 
 /**
  * Call the whole package root: every free function called, every class constructed and

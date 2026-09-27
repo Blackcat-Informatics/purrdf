@@ -157,14 +157,17 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   `{ kind: "denied" }`. Either fails the query, and under `SERVICE SILENT` either is the
   join identity, recorded on the evidence's `silenced`. A handler that throws has
   faulted, and a fault fails the job even under `SILENT`. `ctx.silent` is for information only; an empty answer is not the
-  handler's to invent. `resolveLoad` answers `LOAD` the same way, with a document and its
-  media type. A `ServiceCatalog` authorizes every request before the handler is called
-  (deny by default), and `localServices` answers named endpoints in process from a
-  `Dataset`. In a browser, the remote endpoint's CORS policy governs whether `fetch` can
-  read an answer.
-- **Scheduling** — `signal: AbortSignal` cancels a job at its next yield or effect;
-  asynchronous updates on one dataset run one at a time and commit only if the dataset
-  (`id`, `generation`) did not change while they ran;
+  handler's to invent. `resolveLoad` answers each hop of a `LOAD` the same way, with a
+  document and its media type, or a redirect the job follows itself. A `ServiceCatalog`
+  authorizes every request — every `LOAD` source and redirect included — before the
+  handler is called (deny by default) and bounds each by its profile's `timeoutMs`, and
+  `localServices` answers named endpoints in process from a `Dataset`. In a browser, the
+  remote endpoint's CORS policy governs whether `fetch` can read an answer. Every error
+  carries its stable code as `error.code`.
+- **Scheduling** — `signal: AbortSignal` cancels a job at its next yield or effect; one
+  asynchronous update of a dataset may be in flight at a time (another is refused with
+  `native-sparql-update-in-flight`), and it commits only if the dataset (`id`,
+  `generation`) did not change while it ran;
   `configureAsync({ maxConcurrentJobs })` bounds the jobs in flight; `stackBytes` sizes
   each job's shadow-stack region and `evidence.async` reports what the job did, its stack
   high-water mark included. It does not raise the budget kept under V8's own call stack,

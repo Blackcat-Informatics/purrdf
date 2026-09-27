@@ -1,0 +1,817 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! One implementation of every SPARQL operation kind, run by both lanes.
+//!
+//! [`OperationInput::execute`] is the only place a query, a serialized query, a governed
+//! query, a negotiated query, an entailment query, an EXPLAIN, an update and a governed
+//! update are evaluated. The synchronous entry points in [`crate::query`] call it
+//! offline — no `SERVICE` or `LOAD` source, and the caller's own stop signal only on a
+//! governed entry — and an asynchronous job ([`crate::async_query`]) calls it with its
+//! stop watch and its effect sources. The two lanes therefore cannot answer the same
+//! request differently.
+//!
+//! # Errors keep their code
+//!
+//! A failure is a [`JobError`]: how the operation failed ([`JobErrorKind`]) and the
+//! diagnostic that says why, whose `code` is the stable string a host switches on. A
+//! host never reads a failure's class back out of its message: the JavaScript error a
+//! failure is thrown as carries the code as its `code` property ([`coded_error`]), and
+//! that code is the [`FailureCode`] an HTTP host answers it by
+//! ([`FailureCode::from_diagnostic_code`]).
+
+use std::borrow::Cow;
+use std::fmt;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
+use purrdf::{
+    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, RdfDataset,
+    ReasoningError, query_with_entailment_governed,
+};
+use purrdf_core::{RdfDiagnostic, SparqlResult};
+use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
+use purrdf_sparql_eval::{
+    EvalError, GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine,
+    QueryGovernors, QueryOptions, ServiceResolver, StopCause, StopSignal, TrippedGovernor,
+};
+use purrdf_sparql_results::ProvenanceNamespace;
+use wasm_bindgen::prelude::*;
+
+use crate::async_query::{AsyncCounters, AsyncOperationKind, add_ms, now_ms};
+use crate::protocol::not_acceptable_message;
+use crate::query::{
+    GovernorArgs, NegotiatedValue, aggregate_env_message, build_aggregates, negotiable_result_kind,
+    serialize_configured_graph, serialize_query_result, sparql_request,
+};
+use crate::shacl::{ShaclChangeValidation, ShaclProductRefusal};
+
+// ---------------------------------------------------------------------------
+// Codes of the failures that are not an engine diagnostic
+// ---------------------------------------------------------------------------
+
+/// A result the operation reached could not be serialized in the format asked for.
+pub(crate) const SERIALIZE_CODE: &str = "purrdf-wasm-serialize";
+/// The entailment regime or its closure failed.
+pub(crate) const ENTAILMENT_CODE: &str = "purrdf-wasm-entailment";
+/// The extension environment (the aggregate registry) could not be built.
+pub(crate) const EXTENSION_CODE: &str = "purrdf-wasm-extension-environment";
+/// A SHACL surface failed: a shapes or data graph that does not parse, or a validation
+/// that failed.
+pub(crate) const SHACL_CODE: &str = "purrdf-wasm-shacl";
+/// A prepared SHACL product was refused.
+pub(crate) const SHACL_REFUSAL_CODE: &str = "purrdf-wasm-shacl-product-refusal";
+/// An option or argument of an operation was refused before it began.
+pub(crate) const OPTIONS_CODE: &str = "purrdf-wasm-options";
+/// The host asked a job for something out of turn: an outcome of another kind, before
+/// the job finished, or twice.
+pub(crate) const USAGE_CODE: &str = "purrdf-wasm-usage";
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// How an operation failed, for the host to decide what to reject with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobErrorKind {
+    /// A parse or evaluation failure, or a refused result shape.
+    Error,
+    /// An ungoverned operation's cancellation.
+    Cancelled,
+    /// An ungoverned operation's deadline.
+    Deadline,
+    /// A latched fault: the host broke the effect protocol.
+    Fault,
+    /// A negotiated query's result, whose shape (a graph carrying named graphs) no format
+    /// the `Accept` header allows can carry.
+    NotAcceptable,
+}
+
+impl JobErrorKind {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+            Self::Deadline => "deadline",
+            Self::Fault => "fault",
+            Self::NotAcceptable => "not-acceptable",
+        }
+    }
+}
+
+/// How a [`JobError`]'s message is rendered for JavaScript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorText {
+    /// The diagnostic's own rendering, `error <code>: <message>`: an engine diagnostic.
+    Diagnostic,
+    /// The diagnostic's message alone: a failure whose words never carried a code.
+    Message,
+}
+
+/// Which lane a failure is rendered for. A stack refusal names the remedy of the lane
+/// that ran it: a larger stack is reached differently on each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// The synchronous lane, on the instance's own shadow stack.
+    Sync,
+    /// An asynchronous job, on a stack region of `region_bytes`.
+    Async {
+        /// The size of the region the job ran on.
+        region_bytes: usize,
+    },
+}
+
+/// What the synchronous lane appends to a stack refusal a larger stack answers: the
+/// asynchronous twin of the call runs on a region the caller sizes.
+const SYNC_STACK_REMEDY: &str = "; the synchronous lane runs on the instance's own stack — run \
+     this request with the asynchronous twin of this call (selectAsync, queryAsync, \
+     updateAsync, …) and a larger stackBytes region";
+
+/// Why an operation failed: its kind, and the diagnostic whose code says why.
+#[derive(Debug, Clone)]
+pub(crate) struct JobError {
+    kind: JobErrorKind,
+    diagnostic: RdfDiagnostic,
+    text: ErrorText,
+}
+
+impl JobError {
+    /// An engine diagnostic, rendered as the engine renders it.
+    pub(crate) const fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
+        Self {
+            kind: JobErrorKind::Error,
+            diagnostic,
+            text: ErrorText::Diagnostic,
+        }
+    }
+
+    /// A failure reported under `code` in `message`'s own words.
+    pub(crate) fn message(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            kind: JobErrorKind::Error,
+            diagnostic: RdfDiagnostic::error(code, message),
+            text: ErrorText::Message,
+        }
+    }
+
+    /// A negotiated query whose result no acceptable format can carry.
+    pub(crate) fn not_acceptable(message: String) -> Self {
+        Self {
+            kind: JobErrorKind::NotAcceptable,
+            diagnostic: RdfDiagnostic::error(FailureCode::NotAcceptable.code(), message),
+            text: ErrorText::Message,
+        }
+    }
+
+    /// A latched fault: the host broke the effect protocol.
+    pub(crate) fn fault(message: impl Into<String>) -> Self {
+        Self {
+            kind: JobErrorKind::Fault,
+            diagnostic: RdfDiagnostic::error(FailureCode::HostFault.code(), message),
+            text: ErrorText::Message,
+        }
+    }
+
+    /// An ungoverned operation stopped by its signal. It has no outcome to carry a
+    /// truncation in, so the stop is its error.
+    pub(crate) fn stopped(tripped: TrippedGovernor) -> Self {
+        let (kind, failure, message) = match tripped {
+            TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled,
+            } => (
+                JobErrorKind::Cancelled,
+                FailureCode::Cancelled,
+                "the asynchronous operation was cancelled".to_owned(),
+            ),
+            TrippedGovernor::Stopped {
+                cause: StopCause::Deadline,
+            } => (
+                JobErrorKind::Deadline,
+                FailureCode::Deadline,
+                "the asynchronous operation's deadline expired".to_owned(),
+            ),
+            other => (
+                JobErrorKind::Error,
+                FailureCode::Evaluation,
+                format!("the asynchronous operation stopped: {other}"),
+            ),
+        };
+        Self {
+            kind,
+            diagnostic: RdfDiagnostic::error(failure.code(), message),
+            text: ErrorText::Message,
+        }
+    }
+
+    /// An entailment query's failure: a query diagnostic keeps its code, and the closure's
+    /// own failure is reported under [`ENTAILMENT_CODE`]; either reads as the reasoning
+    /// layer renders it.
+    fn reasoning(error: &ReasoningError) -> Self {
+        let code = match error {
+            ReasoningError::Query(diagnostic) => diagnostic.code.as_str(),
+            _ => ENTAILMENT_CODE,
+        };
+        Self::message(code, error.to_string())
+    }
+
+    pub(crate) const fn kind(&self) -> JobErrorKind {
+        self.kind
+    }
+
+    /// The stable code the failure is reported under.
+    pub(crate) fn code(&self) -> &str {
+        &self.diagnostic.code
+    }
+
+    /// Whether this is a shadow-stack refusal a larger stack answers: the evaluator's or
+    /// the parser's, each measured against the stack the lane ran on. The host-stack
+    /// refusal is not one: no lane's stack size changes the JavaScript engine's own.
+    fn is_shadow_stack_refusal(&self) -> bool {
+        self.kind == JobErrorKind::Error
+            && [
+                EvalError::STACK_EXHAUSTED_CODE,
+                EvalError::PARSE_STACK_EXHAUSTED_CODE,
+            ]
+            .contains(&self.code())
+    }
+
+    /// The message a JavaScript caller reads, with `lane`'s remedy appended to a stack
+    /// refusal a larger stack answers.
+    pub(crate) fn rendered(&self, lane: Lane) -> String {
+        let mut text = match self.text {
+            ErrorText::Diagnostic => self.diagnostic.to_string(),
+            ErrorText::Message => self.diagnostic.message.clone(),
+        };
+        if self.is_shadow_stack_refusal() {
+            match lane {
+                Lane::Sync => text.push_str(SYNC_STACK_REMEDY),
+                Lane::Async { region_bytes } => {
+                    // Writing to a `String` cannot fail.
+                    let _ = fmt::Write::write_fmt(
+                        &mut text,
+                        format_args!(
+                            "; this asynchronous job ran on a stack region of {region_bytes} \
+                             bytes — run it with a larger stackBytes"
+                        ),
+                    );
+                }
+            }
+        }
+        text
+    }
+
+    /// The JavaScript error this failure is thrown as on `lane`.
+    pub(crate) fn to_js(&self, lane: Lane) -> JsValue {
+        coded_error(&self.rendered(lane), self.code())
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// The host's `Error` constructor: a failure is a real `Error` carrying its code.
+    #[wasm_bindgen(js_name = Error)]
+    type CodedError;
+
+    #[wasm_bindgen(constructor, js_class = "Error")]
+    fn new(message: &str) -> CodedError;
+
+    #[wasm_bindgen(method, setter = code)]
+    fn set_code(this: &CodedError, code: &str);
+
+    /// The host's `TypeError` constructor, for an argument of the wrong type.
+    #[wasm_bindgen(js_name = TypeError)]
+    type CodedTypeError;
+
+    #[wasm_bindgen(constructor, js_class = "TypeError")]
+    fn new(message: &str) -> CodedTypeError;
+
+    #[wasm_bindgen(method, setter = code)]
+    fn set_code(this: &CodedTypeError, code: &str);
+}
+
+/// An `Error` whose message is `message` and whose `code` property is `code`. Built only
+/// on wasm, where the host constructor exists.
+pub(crate) fn coded_error(message: &str, code: &str) -> JsValue {
+    let error = CodedError::new(message);
+    error.set_code(code);
+    error.into()
+}
+
+/// A `TypeError` whose message is `message` and whose `code` property is `code`.
+pub(crate) fn coded_type_error(message: &str, code: &str) -> JsValue {
+    let error = CodedTypeError::new(message);
+    error.set_code(code);
+    error.into()
+}
+
+/// An engine diagnostic thrown on the synchronous lane, as the error carrying its code.
+pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
+    JobError::diagnostic(diagnostic).to_js(Lane::Sync)
+}
+
+// ---------------------------------------------------------------------------
+// Outcomes and runs
+// ---------------------------------------------------------------------------
+
+/// What a finished operation left for its caller to take.
+pub(crate) enum JobOutcome {
+    Query(SparqlResult),
+    Raw(String),
+    Governed(Box<GovernedOutcome>),
+    Entailment(Box<GovernedEntailment>),
+    Updated(Arc<RdfDataset>),
+    UpdateGoverned {
+        outcome: GovernedUpdateOutcome,
+        frozen: Option<Arc<RdfDataset>>,
+    },
+    Negotiated(Box<NegotiatedValue>),
+    /// A change validation's log beside the scope it describes.
+    ShaclChange(ShaclChangeValidation),
+    /// A prepared-product refusal: the job's error, carried as the class the synchronous
+    /// twin rejects with rather than flattened into a message.
+    Refused(ShaclProductRefusal),
+    Failed(JobError),
+}
+
+impl fmt::Debug for JobOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Query(_) => "Query",
+            Self::Raw(_) => "Raw",
+            Self::Governed(_) => "Governed",
+            Self::Entailment(_) => "Entailment",
+            Self::Updated(_) => "Updated",
+            Self::UpdateGoverned { .. } => "UpdateGoverned",
+            Self::Negotiated(_) => "Negotiated",
+            Self::ShaclChange(_) => "ShaclChange",
+            Self::Refused(_) => "Refused",
+            Self::Failed(_) => "Failed",
+        })
+    }
+}
+
+/// What an operation runs with: a stop signal, effect sources, and the counters an
+/// asynchronous job records its evidence in.
+///
+/// The sources are owned (`Arc`) rather than borrowed so an operation can hand them to
+/// code that reads its sources off an ambient scope rather than off a request — SHACL
+/// validation installs them with [`purrdf_shapes::sparql::enter_execution_scope`]. The
+/// synchronous lane runs with no source at all.
+pub(crate) struct JobRun<'r> {
+    pub(crate) stop: Option<Arc<dyn StopSignal>>,
+    pub(crate) remote: Option<Arc<dyn ServiceResolver + Send + Sync>>,
+    pub(crate) load: Option<Arc<dyn GraphResolver + Send + Sync>>,
+    pub(crate) counters: Option<&'r AsyncCounters>,
+}
+
+impl JobRun<'_> {
+    /// The offline run of the synchronous lane: no source, and `stop` only when the
+    /// caller supplied a stop source.
+    pub(crate) const fn offline(stop: Option<Arc<dyn StopSignal>>) -> Self {
+        Self {
+            stop,
+            remote: None,
+            load: None,
+            counters: None,
+        }
+    }
+
+    /// `ceilings` with the run's stop signal attached, when it has one.
+    pub(crate) fn governors(&self, ceilings: QueryGovernors) -> QueryGovernors {
+        match &self.stop {
+            Some(stop) => ceilings.with_stop_signal(Arc::clone(stop)),
+            None => ceilings,
+        }
+    }
+
+    /// Request options carrying the run's sources and `env`.
+    pub(crate) fn options<'o>(
+        &'o self,
+        env: &'o purrdf_sparql_eval::ExtensionEnv,
+    ) -> QueryOptions<'o> {
+        QueryOptions::new()
+            .with_env(env)
+            .with_remote(
+                self.remote
+                    .as_deref()
+                    .map(|remote| remote as &(dyn ServiceResolver + Sync)),
+            )
+            .with_load(
+                self.load
+                    .as_deref()
+                    .map(|load| load as &(dyn GraphResolver + Sync)),
+            )
+    }
+
+    /// The run's sources, for an ambient execution scope.
+    pub(crate) fn sources(&self) -> purrdf_shapes::sparql::QuerySources {
+        purrdf_shapes::sparql::QuerySources {
+            remote: self.remote.clone(),
+            load: self.load.clone(),
+        }
+    }
+
+    fn timed<T>(&self, cell: impl Fn(&AsyncCounters) -> &AtomicU64, work: impl FnOnce() -> T) -> T {
+        let Some(counters) = self.counters else {
+            return work();
+        };
+        let started = now_ms();
+        let result = work();
+        add_ms(cell(counters), now_ms() - started);
+        result
+    }
+
+    pub(crate) fn evaluate<T>(&self, work: impl FnOnce() -> T) -> T {
+        self.timed(|counters| &counters.evaluate_ms, work)
+    }
+
+    fn serialize<T>(&self, work: impl FnOnce() -> T) -> T {
+        self.timed(|counters| &counters.serialize_ms, work)
+    }
+
+    /// Keep the silenced invocations an evaluation's `evidence` recorded, for the job's
+    /// evidence. The synchronous lane reports them on the governed outcome itself.
+    pub(crate) fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+        if let Some(counters) = self.counters {
+            counters.record_silenced(evidence);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+/// Everything an operation is built from.
+pub(crate) struct OperationInput<'a> {
+    pub(crate) kind: AsyncOperationKind,
+    pub(crate) engine: Rc<NativeSparqlEngine>,
+    pub(crate) frozen: Arc<RdfDataset>,
+    pub(crate) sparql: Cow<'a, str>,
+    pub(crate) base: Option<Cow<'a, str>>,
+    pub(crate) aggregate_namespace: Option<String>,
+    pub(crate) ceilings: GovernorArgs,
+    pub(crate) format: Option<String>,
+    pub(crate) provenance: Option<ProvenanceNamespace>,
+    pub(crate) jsonld: Option<JsonLdSerializeOptions>,
+    pub(crate) regime: Option<String>,
+    pub(crate) program: Option<String>,
+    pub(crate) accept: Option<String>,
+}
+
+impl<'a> OperationInput<'a> {
+    /// An input of `kind` over `frozen` with every optional part unset.
+    pub(crate) fn new(
+        kind: AsyncOperationKind,
+        engine: &Rc<NativeSparqlEngine>,
+        frozen: Arc<RdfDataset>,
+        sparql: impl Into<Cow<'a, str>>,
+        base: Option<&'a str>,
+    ) -> Self {
+        Self {
+            kind,
+            engine: Rc::clone(engine),
+            frozen,
+            sparql: sparql.into(),
+            base: base.map(Cow::Borrowed),
+            aggregate_namespace: None,
+            ceilings: GovernorArgs::default(),
+            format: None,
+            provenance: None,
+            jsonld: None,
+            regime: None,
+            program: None,
+            accept: None,
+        }
+    }
+}
+
+/// Run an ungoverned query under the metered base and the run's signal.
+fn ungoverned_query(
+    run: &JobRun<'_>,
+    engine: &NativeSparqlEngine,
+    frozen: &Arc<RdfDataset>,
+    sparql: &str,
+    base: Option<&str>,
+) -> Result<SparqlResult, JobError> {
+    let governors = run.governors(QueryGovernors::METERED);
+    let options = run.options(QueryOptions::EMPTY.env);
+    let outcome = run.evaluate(|| {
+        engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
+    });
+    if let Ok(outcome) = &outcome {
+        run.record_silenced(outcome.evidence());
+    }
+    match outcome {
+        Err(diagnostic) => Err(JobError::diagnostic(diagnostic)),
+        Ok(GovernedOutcome::Complete { result, .. }) => Ok(result),
+        Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
+            Err(JobError::stopped(exhausted.tripped))
+        }
+    }
+}
+
+/// The aggregate environment a governed operation's `aggregateNamespace` requests.
+fn governed_env(
+    aggregate_namespace: Option<String>,
+) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
+    aggregate_env_message(build_aggregates(aggregate_namespace).as_ref())
+        .map_err(|message| JobError::message(EXTENSION_CODE, message))
+}
+
+impl OperationInput<'_> {
+    /// Evaluate the operation under `run`.
+    pub(crate) fn execute(self, run: &JobRun<'_>) -> Result<JobOutcome, JobError> {
+        let Self {
+            kind,
+            engine,
+            frozen,
+            sparql,
+            base,
+            aggregate_namespace,
+            ceilings,
+            format,
+            provenance,
+            jsonld,
+            regime,
+            program,
+            accept,
+        } = self;
+        let base = base.as_deref();
+        let request = sparql_request(&sparql, base);
+        match kind {
+            AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
+                run, &engine, &frozen, &sparql, base,
+            )?)),
+            AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
+                let result = ungoverned_query(run, &engine, &frozen, &sparql, base)?;
+                let text = run.serialize(|| match (&jsonld, format.as_deref()) {
+                    (Some(options), Some(format)) => {
+                        serialize_configured_graph(result, format, options)
+                    }
+                    _ => serialize_query_result(
+                        &result,
+                        format.as_deref(),
+                        provenance.as_ref(),
+                        &sparql,
+                    ),
+                });
+                Ok(JobOutcome::Raw(text.map_err(|message| {
+                    JobError::message(SERIALIZE_CODE, message)
+                })?))
+            }
+            AsyncOperationKind::Governed => {
+                let env = governed_env(aggregate_namespace)?;
+                let governors = run.governors(ceilings.ceilings());
+                let outcome = run
+                    .evaluate(|| {
+                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                    })
+                    .map_err(JobError::diagnostic)?;
+                run.record_silenced(outcome.evidence());
+                Ok(JobOutcome::Governed(Box::new(outcome)))
+            }
+            AsyncOperationKind::Negotiated => {
+                let env = governed_env(aggregate_namespace)?;
+                let governors = run.governors(ceilings.ceilings());
+                let outcome = run
+                    .evaluate(|| {
+                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                    })
+                    .map_err(JobError::diagnostic)?;
+                run.record_silenced(outcome.evidence());
+                let value = match outcome {
+                    GovernedOutcome::Complete {
+                        result, evidence, ..
+                    } => {
+                        // Negotiated against the result's actual shape: a graph carrying
+                        // named graphs is offered only in the syntaxes that can hold it,
+                        // so no format ever silently drops a graph.
+                        let shape = negotiable_result_kind(&result);
+                        let format = negotiate(accept.as_deref(), shape).ok_or_else(|| {
+                            JobError::not_acceptable(not_acceptable_message(shape))
+                        })?;
+                        let text = run
+                            .serialize(|| {
+                                serialize_query_result(&result, Some(format), None, &sparql)
+                            })
+                            .map_err(|message| JobError::message(SERIALIZE_CODE, message))?;
+                        NegotiatedValue::Complete {
+                            bytes: text.into_bytes(),
+                            format,
+                            evidence,
+                        }
+                    }
+                    GovernedOutcome::BudgetExhausted(exhausted) => {
+                        NegotiatedValue::Exhausted(exhausted)
+                    }
+                };
+                Ok(JobOutcome::Negotiated(Box::new(value)))
+            }
+            AsyncOperationKind::EntailmentGoverned => {
+                let regime = regime.unwrap_or_default();
+                let plan = QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
+                    .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
+                let env = governed_env(aggregate_namespace)?;
+                let governors = run.governors(ceilings.ceilings());
+                let outcome = run
+                    .evaluate(|| {
+                        query_with_entailment_governed(
+                            &engine,
+                            &frozen,
+                            request,
+                            plan.entailment(),
+                            run.options(&env),
+                            // This surface registers no relation, so there is none to
+                            // re-derive over the closure.
+                            &ClosureRelations::NONE,
+                            &governors,
+                        )
+                    })
+                    .map_err(|error| JobError::reasoning(&error))?;
+                if let Some(answered) = outcome.outcome() {
+                    run.record_silenced(answered.evidence());
+                }
+                Ok(JobOutcome::Entailment(Box::new(outcome)))
+            }
+            AsyncOperationKind::Explain => {
+                // The measuring run — metered, never bounded — with the run's sources
+                // installed and its signal, when it has one, polled at every charge point.
+                let options = run.options(QueryOptions::EMPTY.env);
+                let explanation = run
+                    .evaluate(|| match &run.stop {
+                        Some(stop) => engine.explain_query_with_stop_signal(
+                            &frozen,
+                            &sparql,
+                            base,
+                            options,
+                            Arc::clone(stop),
+                        ),
+                        None => engine.explain_query_with_options(&frozen, &sparql, base, options),
+                    })
+                    .map_err(JobError::diagnostic)?;
+                run.record_silenced(explanation.evidence());
+                // A stop cut the measuring run short, so its ledger describes a truncated
+                // run rather than the query: the stop is the operation's error, as it is
+                // for every ungoverned operation. Any other trip is part of the
+                // explanation.
+                if let Some(tripped @ TrippedGovernor::Stopped { .. }) =
+                    explanation.evidence().tripped
+                {
+                    return Err(JobError::stopped(tripped));
+                }
+                Ok(JobOutcome::Raw(explanation.render()))
+            }
+            AsyncOperationKind::Update => {
+                let governors = run.governors(QueryGovernors::METERED);
+                let mut target = Arc::clone(&frozen);
+                let outcome = run
+                    .evaluate(|| {
+                        engine.update_governed(
+                            &mut target,
+                            request,
+                            run.options(QueryOptions::EMPTY.env),
+                            &governors,
+                        )
+                    })
+                    .map_err(JobError::diagnostic)?;
+                run.record_silenced(outcome.evidence());
+                match outcome.tripped() {
+                    None => Ok(JobOutcome::Updated(target)),
+                    Some(tripped) => Err(JobError::stopped(tripped)),
+                }
+            }
+            // A SHACL operation reads no dataset and no SPARQL text; it is built by
+            // `AsyncJob.beginShacl`, never as an input.
+            AsyncOperationKind::Shacl => Err(JobError::message(
+                OPTIONS_CODE,
+                crate::async_query::SHACL_STARTS_ELSEWHERE,
+            )),
+            AsyncOperationKind::UpdateGoverned => {
+                let env = governed_env(aggregate_namespace)?;
+                let governors = run.governors(ceilings.ceilings());
+                let mut target = Arc::clone(&frozen);
+                let outcome = run
+                    .evaluate(|| {
+                        engine.update_governed(&mut target, request, run.options(&env), &governors)
+                    })
+                    .map_err(JobError::diagnostic)?;
+                run.record_silenced(outcome.evidence());
+                // The engine publishes into `target` only on the applied path, so a
+                // tripped request offers nothing to commit.
+                let frozen = outcome.is_applied().then_some(target);
+                Ok(JobOutcome::UpdateGoverned { outcome, frozen })
+            }
+        }
+    }
+
+    /// Run the operation on the synchronous lane: offline, with `stop` only when the
+    /// caller supplied a stop source, and a failure thrown as the error carrying its code.
+    pub(crate) fn run_offline(
+        self,
+        stop: Option<Arc<dyn StopSignal>>,
+    ) -> Result<JobOutcome, JsValue> {
+        self.execute(&JobRun::offline(stop))
+            .map_err(|error| error.to_js(Lane::Sync))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stack refusal gains its lane's remedy by its code; every neighbour — the
+    /// host-stack refusal, another parse failure, an evaluation failure, a fault quoting
+    /// the code — keeps its words.
+    #[test]
+    fn only_the_shadow_stack_refusals_gain_their_lanes_remedy() {
+        let region = Lane::Async {
+            region_bytes: 524_288,
+        };
+        for code in [
+            EvalError::STACK_EXHAUSTED_CODE,
+            EvalError::PARSE_STACK_EXHAUSTED_CODE,
+        ] {
+            let error = JobError::diagnostic(RdfDiagnostic::error(code, "nested too deeply"));
+            assert_eq!(
+                error.rendered(region),
+                format!(
+                    "error {code}: nested too deeply; this asynchronous job ran on a stack \
+                     region of 524288 bytes — run it with a larger stackBytes"
+                )
+            );
+            assert_eq!(
+                error.rendered(Lane::Sync),
+                format!("error {code}: nested too deeply{SYNC_STACK_REMEDY}")
+            );
+        }
+        for error in [
+            JobError::diagnostic(RdfDiagnostic::error(
+                EvalError::HOST_STACK_EXHAUSTED_CODE,
+                "the host stack is the same on both lanes",
+            )),
+            JobError::diagnostic(RdfDiagnostic::error(
+                "native-sparql-query-parse",
+                "SPARQL syntax error at byte 9: SPARQL parse stack exhausted is not a keyword",
+            )),
+            JobError::diagnostic(RdfDiagnostic::error(
+                "native-sparql-query-eval",
+                "the example.org function failed",
+            )),
+            JobError::fault(format!(
+                "error {}: a host fault quoting it",
+                EvalError::STACK_EXHAUSTED_CODE
+            )),
+        ] {
+            let plain = match error.text {
+                ErrorText::Diagnostic => error.diagnostic.to_string(),
+                ErrorText::Message => error.diagnostic.message.clone(),
+            };
+            assert_eq!(error.rendered(region), plain);
+            assert_eq!(error.rendered(Lane::Sync), plain);
+        }
+    }
+
+    /// Each kind of failure carries the code an HTTP host answers it by, read from its
+    /// structure rather than its words.
+    #[test]
+    fn every_error_kind_names_its_failure() {
+        let failure = |error: &JobError| FailureCode::from_diagnostic_code(error.code());
+        let parse = JobError::diagnostic(RdfDiagnostic::error(
+            "native-sparql-query-parse",
+            "SPARQL syntax error at byte 0",
+        ));
+        assert_eq!(failure(&parse), FailureCode::QueryParse);
+        let evaluation = JobError::diagnostic(RdfDiagnostic::error(
+            "native-sparql-query-eval",
+            "evaluation failed",
+        ));
+        assert_eq!(failure(&evaluation), FailureCode::Evaluation);
+        let cancelled = JobError::stopped(TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled,
+        });
+        assert_eq!(cancelled.kind(), JobErrorKind::Cancelled);
+        assert_eq!(failure(&cancelled), FailureCode::Cancelled);
+        assert_eq!(
+            cancelled.rendered(Lane::Sync),
+            "the asynchronous operation was cancelled"
+        );
+        let deadline = JobError::stopped(TrippedGovernor::Stopped {
+            cause: StopCause::Deadline,
+        });
+        assert_eq!(deadline.kind(), JobErrorKind::Deadline);
+        assert_eq!(failure(&deadline), FailureCode::Deadline);
+        let fault = JobError::fault("resolver returned nothing");
+        assert_eq!(fault.kind(), JobErrorKind::Fault);
+        assert_eq!(failure(&fault), FailureCode::HostFault);
+        assert_eq!(fault.rendered(Lane::Sync), "resolver returned nothing");
+        let refused = JobError::not_acceptable("no format".to_owned());
+        assert_eq!(failure(&refused), FailureCode::NotAcceptable);
+        // A failure with its own words keeps its code apart from them.
+        let serialize = JobError::message(SERIALIZE_CODE, "unsupported format");
+        assert_eq!(serialize.rendered(Lane::Sync), "unsupported format");
+        assert_eq!(serialize.code(), SERIALIZE_CODE);
+        assert_eq!(failure(&serialize), FailureCode::Evaluation);
+    }
+}

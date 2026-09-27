@@ -758,3 +758,69 @@ test("inserting a triple term past the dataset's limit is the dataset's typed re
     .map((row) => row.o.value);
   assert.deepEqual(rows, [`${TT}o`], "the 16-deep insert is matched");
 });
+
+// Every error the synchronous lane throws carries its stable code as `error.code`, read
+// from the diagnostic rather than the message: a parse refusal and an evaluation
+// refusal differ in their codes, and the answered neighbour throws nothing.
+test("a synchronous failure carries its code; the well-formed neighbour answers", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  let parse;
+  try {
+    engine.select(ds, "SELECT WHERE {");
+  } catch (error) {
+    parse = error;
+  }
+  assert.ok(parse instanceof Error);
+  assert.equal(parse.code, "native-sparql-query-parse");
+  assert.match(parse.message, /^error native-sparql-query-parse: /);
+  let unconfigured;
+  try {
+    engine.select(ds, "SELECT * WHERE { SERVICE <https://example.org/sparql> { ?s ?p ?o } }");
+  } catch (error) {
+    unconfigured = error;
+  }
+  assert.equal(unconfigured.code, "native-sparql-service-unconfigured");
+  let update;
+  try {
+    engine.update(ds, "INSERT DATA {");
+  } catch (error) {
+    update = error;
+  }
+  assert.equal(update.code, "native-sparql-update-parse");
+  assert.equal(engine.select(ds, "SELECT ?s WHERE { ?s ?p ?o }").rowCount, 3);
+});
+
+// The synchronous and asynchronous lanes run one implementation of each operation, so
+// they answer — and refuse — the same request identically.
+test("the synchronous and asynchronous lanes answer and refuse identically", async () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const query = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+  assert.equal(await engine.queryRawAsync(ds, query), engine.queryRaw(ds, query));
+  const explained = engine.explainQuery(ds, query);
+  assert.equal(await engine.explainQueryAsync(ds, query), explained);
+  let syncError;
+  try {
+    engine.query(ds, "ASK {");
+  } catch (error) {
+    syncError = error;
+  }
+  await assert.rejects(engine.queryAsync(ds, "ASK {"), (error) => {
+    assert.equal(error.message, syncError.message);
+    assert.equal(error.code, syncError.code);
+    return true;
+  });
+});
+
+// `Dataset.snapshot()` is an independent copy: each side changes alone.
+test("a snapshot is an independent dataset with its own identity", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const copy = ds.snapshot();
+  assert.notEqual(copy.id, ds.id);
+  assert.equal(copy.generation, 0);
+  assert.equal(copy.canonicalize(), ds.canonicalize());
+  copy.add(Dataset.parse("<https://example.org/x> <https://example.org/y> <https://example.org/z> .\n", "nquads").quads()[0]);
+  assert.equal(copy.size, ds.size + 1, "the copy changed alone");
+  assert.equal(ds.generation, 0);
+});

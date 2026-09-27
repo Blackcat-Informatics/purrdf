@@ -16,12 +16,17 @@
 //
 // A job is begun in Rust (`QueryEngine.beginAsync`) and run here (`runJob`) through the
 // raw export `purrdf_jspi_run`, wrapped by `WebAssembly.promising`. Every effect the job
-// performs — a `SERVICE` request, a `LOAD` document, a turn of the event loop — posts a
-// ticket in Rust and calls `purrdf_jspi_suspend(job, seq, out)`, which is
-// `suspendImpl` below wrapped in `WebAssembly.Suspending`. `suspendImpl` takes the
-// ticket, awaits the host's answer, delivers it, writes `0` to the `u32` at `out` and
-// returns a status: 0 answered, 1 abandoned on the job's stop signal, 2 a fault is
-// latched on the job.
+// performs — a `SERVICE` request, a wait on another job's identical request, a `LOAD`
+// document, a turn of the event loop — posts a ticket in Rust and calls
+// `purrdf_jspi_suspend(job, seq, out)`, which is `suspendImpl` below wrapped in
+// `WebAssembly.Suspending`. `suspendImpl` takes the ticket, awaits the host's answer,
+// delivers it, writes `0` to the `u32` at `out` and returns a `SuspendStatus`.
+//
+// Every decision is Rust's: which jobs share a `SERVICE` host call, what a job answers
+// from its memo, when an awaited effect is abandoned and whether that is the deadline or
+// the request's own timeout, whether a `LOAD` source (and every redirect it names) is
+// authorized. This module moves an effect to the host's handler and the answer back, and
+// keeps the one table Rust cannot: each open shared call's promise and `AbortController`.
 //
 // # Nothing crosses a suspended frame
 //
@@ -73,29 +78,7 @@ const NO_YIELD_MESSAGE =
 const NOT_INSTALLED_MESSAGE =
   "the asynchronous runtime is not installed; await ready() before any asynchronous call";
 
-// `purrdf_jspi_run`: the job's frames ran past its region's overrun zone; memory
-// outside the job's allocation may be overwritten, so the instance is poisoned.
-const RUN_OVERRAN = 4;
-
-// Statuses of `purrdf_jspi_suspend` (returned to wasm).
-const SUSPEND_ANSWERED = 0;
-const SUSPEND_ABANDONED = 1;
-const SUSPEND_FAULT = 2;
-
-// Statuses of the `AsyncJob` delivery methods (1 stale and 3 finished never answer the
-// outstanding effect, so they are only ever reported, never branched on).
-const DELIVERY_ACCEPTED = 0;
-const DELIVERY_FAULT = 2;
-
-// `AsyncEffectKind`.
-const EFFECT_SERVICE = 1;
-const EFFECT_LOAD = 2;
-const EFFECT_YIELD = 3;
-
 const DEFAULT_MAX_CONCURRENT_JOBS = 16;
-
-/** The longest delay `setTimeout` honours (a signed 32-bit millisecond count). */
-const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const HAS_JSPI =
   typeof WebAssembly === "object" &&
@@ -119,13 +102,17 @@ const UNGUARDED_EXPORTS = new Set(["purrdf_jspi_run"]);
 // ---------------------------------------------------------------------------
 
 let glue = null; // { exports, retarget }: the glue's handle on the instance's exports
-let installed = null; // { exports, promisingRun, addToStackPointer }
+// { exports, promisingRun, addToStackPointer, AsyncJob, RunStatus, SuspendStatus,
+//   DeliveryStatus, EffectKind }: the instance and the protocol's classes and statuses
+let installed = null;
 let idleTop = 0;
 let poisonReason = null;
 let maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS;
 const records = new Map(); // job id -> record
-const singleFlight = new WeakMap(); // resolveService -> Map<key, shared exchange[]>
-const datasetQueues = new Map(); // dataset id -> tail promise
+// Shared SERVICE exchange id -> { promise, controller, settled }: the host call every job
+// waiting on the exchange awaits. Which jobs wait, and when the call is abandoned, is
+// Rust's registry; this is the one table Rust cannot hold.
+const exchanges = new Map();
 
 const encoder = new TextEncoder();
 
@@ -264,11 +251,13 @@ export function purrdf_jspi_panicked(reason, len) {
 
 /**
  * Install the scheduler over the instance's raw exports (the object the glue's `init`
- * returns). Called once by `ready()`. Throws when the exports lack the runtime's entry
- * points — an artifact built without the asynchronous lane is a build defect, not a
- * mode — or when the glue did not bind them to the poison gate.
+ * returns) and the protocol's glue classes — `{ AsyncJob, RunStatus, SuspendStatus,
+ * DeliveryStatus, EffectKind }`, the statuses the Rust side exports. Called once by
+ * `ready()`. Throws when the exports lack the runtime's entry points — an artifact built
+ * without the asynchronous lane is a build defect, not a mode — when the glue did not
+ * bind them to the poison gate, or when a protocol class is missing.
  */
-export function installAsync(exports) {
+export function installAsync(exports, protocol) {
   if (installed !== null) {
     if (installed.exports === exports) return;
     throw new Error("the asynchronous runtime is already installed over another instance");
@@ -287,10 +276,20 @@ export function installAsync(exports) {
       throw new Error(`the wasm instance does not export ${name}; the package artifact is incomplete`);
     }
   }
+  for (const name of ["AsyncJob", "RunStatus", "SuspendStatus", "DeliveryStatus", "EffectKind"]) {
+    if (protocol?.[name] === undefined) {
+      throw new Error(`installAsync needs the protocol's ${name}; the package root passes it`);
+    }
+  }
   installed = {
     exports,
     addToStackPointer: exports.__wbindgen_add_to_stack_pointer,
     promisingRun: HAS_JSPI ? WebAssembly.promising(exports.purrdf_jspi_run) : null,
+    AsyncJob: protocol.AsyncJob,
+    RunStatus: protocol.RunStatus,
+    SuspendStatus: protocol.SuspendStatus,
+    DeliveryStatus: protocol.DeliveryStatus,
+    EffectKind: protocol.EffectKind,
   };
   idleTop = sp();
 }
@@ -355,29 +354,33 @@ export function configureAsync(options) {
 /**
  * Run a begun job (an `AsyncJob` from `QueryEngine.beginAsync`) to completion.
  *
- * `host` carries the job's effect handlers and stop sources:
+ * `host` carries the job's effect handlers and its stop source:
  * - `resolveService(request, ctx)` — answers a `SERVICE` effect. `request` is
  *   `{ kind: "service", endpoint, queryText, accept, contentType, userAgent, timeoutMs,
- *   headers }` (`headers`: `[name, value]` pairs, in sending order); `ctx` is
- *   `{ signal, remainingDeadlineMs, silent, maxIntermediateCells }`. It returns (or
- *   resolves to) SPARQL Results JSON as a `Uint8Array`, `ArrayBuffer` or `string`; a
- *   `Response` (a non-ok status is a transport failure and its body is cancelled); or
+ *   headers, cacheable }` (`headers`: `[name, value]` pairs, in sending order;
+ *   `cacheable`: whether a shared cache may answer it); `ctx` is `{ signal,
+ *   remainingDeadlineMs, silent, maxIntermediateCells }`. It returns (or resolves to)
+ *   SPARQL Results JSON as a `Uint8Array`, `ArrayBuffer` or `string`; a `Response` (a
+ *   non-ok status is a transport failure and its body is cancelled); or
  *   `{ kind: "transport" | "denied", message }`. A throw, a rejection or any other value
- *   is a fault that fails the job. A job asks at most once for a request it repeats
- *   (the same request, `silent` and `maxIntermediateCells`), and concurrent jobs share
- *   one call when the host would see an equivalent context for each (see
- *   `joinSingleFlight`); `ctx.signal` is then the shared call's.
- * - `resolveLoad(request, ctx)` — answers a `LOAD` effect. `request` is
- *   `{ kind: "load", iri }`, `ctx` is `{ signal }`. It returns `{ bytes | text,
- *   mediaType, base? }` (`base` defaults to the IRI), a `Response` (its `Content-Type`
- *   names the media type; its URL, or the IRI, is the base), a `Dataset`, or a typed
- *   failure as above. Every `LOAD` is its own call.
+ *   is a fault that fails the job. The job answers a request it repeats from its own
+ *   memo, and concurrent jobs share one call when Rust says they may; `ctx.signal` is the
+ *   shared call's, which aborts once no job waits on it.
+ * - `resolveLoad(request, ctx)` — answers one hop of a `LOAD`. `request` is
+ *   `{ kind: "load", iri, accept, userAgent, headers, timeoutMs }`, `ctx` is
+ *   `{ signal }`. It returns `{ bytes | text, mediaType, base? }` (`base` defaults to the
+ *   IRI), a `Response` (its `Content-Type` names the media type; its URL, or the IRI, is
+ *   the base), a `Dataset`, `{ kind: "redirect", location }` (the job resolves the
+ *   location, authorizes it and asks again), or a typed failure as above.
  * - `signal` — an `AbortSignal` that cancels the job.
- * - `deadlineMs` — the job's deadline, so an awaited effect is abandoned when it passes
- *   (the job itself reports the trip as a deadline).
  *
- * Resolves to the run's status: 0 an outcome is stored, 1 an error is stored (read
- * `job.errorKind` / `job.takeError()`), 2 the job is unknown, 3 it was already started.
+ * Every `SERVICE` and `LOAD` effect names the instant it is abandoned at if still
+ * unanswered (`effect.abandonAfterMs`, Rust's: the request's timeout or the job's
+ * deadline); the handler's `ctx.signal` aborts then too.
+ *
+ * Resolves to the run's `RunStatus`: an outcome or an error is stored (read
+ * `job.errorKind`, `job.errorCode` and `job.errorMessage`), the job is unknown, or it was
+ * already started.
  * Rejects only when the call cannot run at all (see `assertAsyncQueries`), when
  * `maxConcurrentJobs` jobs are already in flight, for a malformed `host`, or when the
  * instance traps or the job's frames ran past its region's overrun zone — either of
@@ -405,25 +408,6 @@ export async function runJob(job, host = {}) {
     record.dispose();
     records.delete(id);
   }
-}
-
-/**
- * Serialize asynchronous updates on one dataset: `fn` runs once every earlier update
- * queued on `datasetId` has settled, and its result (or rejection) is returned. Queries
- * never take this lock.
- */
-export function withDatasetUpdateLock(datasetId, fn) {
-  const previous = datasetQueues.get(datasetId) ?? Promise.resolve();
-  const current = previous.then(() => fn());
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  datasetQueues.set(datasetId, tail);
-  tail.then(() => {
-    if (datasetQueues.get(datasetId) === tail) datasetQueues.delete(datasetId);
-  });
-  return current;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +461,7 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
 /** Answer effect `seq` of `record`'s job; resolves to the status for wasm. */
 async function answer(record, seq) {
   const { job } = record;
+  const { SuspendStatus, EffectKind } = installed;
   // Rule 2, preceded by the region check, both before any await or wasm call.
   const here = sp();
   const memory = new DataView(installed.exports.memory.buffer);
@@ -494,7 +479,7 @@ async function answer(record, seq) {
     const reason = `asynchronous job ${record.id} overwrote the canary at the base of its stack region`;
     latchFault(record, reason);
     poison(reason);
-    return SUSPEND_FAULT;
+    return SuspendStatus.Fault;
   }
   const effect = job.takeEffect();
   if (effect === undefined) {
@@ -505,12 +490,14 @@ async function answer(record, seq) {
       return latchFault(record, `the posted effect is ${effect.seq}, but the job suspended on ${seq}`);
     }
     switch (effect.kind) {
-      case EFFECT_YIELD:
+      case EffectKind.Yield:
         await yielder.once();
-        return SUSPEND_ANSWERED;
-      case EFFECT_SERVICE:
+        return SuspendStatus.Answered;
+      case EffectKind.Service:
         return await answerService(record, effect);
-      case EFFECT_LOAD:
+      case EffectKind.AwaitExchange:
+        return await answerAwaitExchange(record, effect);
+      case EffectKind.Load:
         return await answerLoad(record, effect);
       default:
         return latchFault(record, `effect ${seq} has unknown kind ${String(effect.kind)}`);
@@ -521,9 +508,29 @@ async function answer(record, seq) {
 }
 
 // ---------------------------------------------------------------------------
+// Abandonment instants
+// ---------------------------------------------------------------------------
+
+const EXPIRED = Symbol("expired");
+
+/**
+ * The instant effect `effect` is abandoned at if still unanswered — Rust's
+ * `abandonAfterMs`, the request's own timeout or the job's deadline — as a signal and a
+ * promise that resolves to `EXPIRED` when it fires.
+ */
+function expiry(effect) {
+  const signal = AbortSignal.timeout(effect.abandonAfterMs);
+  const promise = new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(EXPIRED), { once: true });
+  });
+  return { signal, promise };
+}
+
+// ---------------------------------------------------------------------------
 // SERVICE
 // ---------------------------------------------------------------------------
 
+/** A `SERVICE` effect opens its shared exchange: one host call, awaited by every job Rust joins to it. */
 async function answerService(record, effect) {
   const seq = effect.seq;
   const { resolveService } = record.handlers;
@@ -531,43 +538,89 @@ async function answerService(record, effect) {
     return latchFault(record, `SERVICE effect ${seq} was issued, but no resolveService handler was given`);
   }
   if (record.stop.fired) return abandon(record, seq);
+  const id = effect.exchangeId;
+  if (exchanges.has(id)) {
+    return latchFault(record, `SERVICE effect ${seq} opens exchange ${id}, which is already open`);
+  }
   const request = serviceRequest(effect);
   const ctx = {
     remainingDeadlineMs: effect.remainingDeadlineMs,
     silent: effect.silent,
     maxIntermediateCells: effect.maxIntermediateCells,
   };
-  // Every field the host can observe except the deadline and the signal. The deadline is
-  // matched by `joinSingleFlight`; the per-job memo needs no deadline component, because
-  // one job's deadline is one instant for every request it issues.
-  const key = JSON.stringify([
-    request.endpoint,
-    request.queryText,
-    request.accept,
-    request.contentType,
-    request.userAgent,
-    request.timeoutMs,
-    request.headers,
-    ctx.silent,
-    ctx.maxIntermediateCells === undefined ? null : String(ctx.maxIntermediateCells),
-  ]);
-  let settled = record.memo.get(key);
-  if (settled === undefined) {
-    const shared = joinSingleFlight(resolveService, key, request, ctx);
-    const winner = await Promise.race([shared.promise, record.stop.promise]);
-    leaveSingleFlight(shared);
-    if (winner === STOPPED) return abandon(record, seq);
-    settled = winner;
-    if (settled.type !== "fault") record.memo.set(key, settled);
+  const controller = new AbortController();
+  const entry = { controller, settled: false, promise: undefined };
+  entry.promise = invokeHost(
+    "resolveService",
+    () => resolveService({ ...request, headers: request.headers.map((pair) => [...pair]) }, { ...ctx, signal: controller.signal }),
+    (value) => normalizeService(value, request.endpoint, controller.signal),
+  ).then((settled) => settleExchange(id, entry, settled));
+  exchanges.set(id, entry);
+  return awaitExchange(record, effect, entry);
+}
+
+/** A wait on an exchange another job opened. */
+function answerAwaitExchange(record, effect) {
+  const seq = effect.seq;
+  if (record.stop.fired) return abandon(record, seq);
+  const id = effect.exchangeId;
+  const entry = exchanges.get(id);
+  if (entry === undefined) {
+    return latchFault(record, `effect ${seq} waits on exchange ${id}, which no call is answering`);
   }
-  switch (settled.type) {
-    case "bytes":
-      return delivered(record, seq, record.job.deliverBindings(seq, settled.bytes));
-    case "failure":
-      return delivered(record, seq, record.job.deliverFailure(seq, settled.kind, settled.message));
-    default:
-      return latchFault(record, settled.message);
+  return awaitExchange(record, effect, entry);
+}
+
+/**
+ * Wait for exchange `entry`'s answer, the job's stop, or the effect's abandonment
+ * instant. Rust delivers the answer to every job still waiting and says which status to
+ * resume with; a job that stops or expires leaves, and a call no job waits on any more
+ * is aborted.
+ */
+async function awaitExchange(record, effect, entry) {
+  const seq = effect.seq;
+  const { job } = record;
+  const expired = expiry(effect);
+  const winner = await Promise.race([entry.promise, record.stop.promise, expired.promise]);
+  let status;
+  if (winner === SETTLED) {
+    status = job.settledStatus(seq);
+  } else if (winner === STOPPED) {
+    status = abandon(record, seq);
+  } else {
+    status = job.expireEffect(seq);
   }
+  if (!entry.settled && !installed.AsyncJob.exchangeIsOpen(effect.exchangeId)) {
+    exchanges.delete(effect.exchangeId);
+    entry.controller.abort(abortReason("every job waiting on this request was stopped", "AbortError"));
+  }
+  return status;
+}
+
+const SETTLED = Symbol("settled");
+
+/** Deliver a shared call's normalized answer to every job Rust still has waiting on it. */
+function settleExchange(id, entry, settled) {
+  entry.settled = true;
+  exchanges.delete(id);
+  const { AsyncJob } = installed;
+  try {
+    switch (settled.type) {
+      case "bytes":
+        AsyncJob.deliverExchangeBindings(id, settled.bytes);
+        break;
+      case "failure":
+        AsyncJob.deliverExchangeFailure(id, settled.kind, settled.message);
+        break;
+      default:
+        AsyncJob.faultExchange(id, settled.message);
+        break;
+    }
+  } catch (error) {
+    // A poisoned instance refuses every call; the poisoning already rejected every job.
+    if (poisonReason === null) throw error;
+  }
+  return SETTLED;
 }
 
 function serviceRequest(effect) {
@@ -585,88 +638,8 @@ function serviceRequest(effect) {
     userAgent: effect.userAgent,
     timeoutMs: effect.timeoutMs,
     headers,
+    cacheable: effect.cacheable,
   };
-}
-
-/**
- * One host call shared by every job that issues the same request through the same
- * `resolveService` while it is in flight, when the host would see the same context for
- * each of them.
- *
- * A job joins an open exchange only when its key matches — the request, `silent` and
- * `maxIntermediateCells` — and the exchange's deadline is no earlier than the job's own:
- * the host was told `remainingDeadlineMs` when the exchange started, so the instant it
- * bounds the call by is `start + remainingDeadlineMs` (no bound when the job that started
- * it had no deadline), and the joining job's is `now + its remainingDeadlineMs`. A host
- * that bounds its work by the deadline it was told therefore gives up no earlier than it
- * would on the joining job's own call, so a failure the shared call reports by running
- * out of time is one the job's own call would have reported too. Any other job starts an
- * exchange of its own, called with its own context. A job without a deadline joins only
- * an exchange without one.
- *
- * Because the contexts are equivalent, the answer — rows, a transport or denied failure,
- * or a fault — is delivered to every waiting job as it stands: it is what the same remote
- * answered the same request. The exchange's promise never rejects: the host's answer is
- * normalized, and a host bug becomes a fault every waiting job latches.
- *
- * The host's `signal` belongs to the exchange, not to any one job. A job that is stopped
- * while it waits abandons only its own effect; the signal aborts once every waiting job
- * has abandoned the exchange, and never after it has settled.
- */
-function joinSingleFlight(resolveService, key, request, ctx) {
-  let exchanges = singleFlight.get(resolveService);
-  if (exchanges === undefined) {
-    exchanges = new Map();
-    singleFlight.set(resolveService, exchanges);
-  }
-  const deadline = absoluteDeadline(ctx.remainingDeadlineMs);
-  let open = exchanges.get(key);
-  let shared = open?.find((candidate) => candidate.deadline >= deadline);
-  if (shared === undefined) {
-    const controller = new AbortController();
-    shared = { controller, deadline, waiters: 0, open: true, exchanges, key, promise: undefined };
-    const current = shared;
-    if (open === undefined) {
-      open = [];
-      exchanges.set(key, open);
-    }
-    open.push(shared);
-    shared.promise = invokeHost(
-      "resolveService",
-      () => resolveService({ ...request, headers: request.headers.map((pair) => [...pair]) }, { ...ctx, signal: controller.signal }),
-      (value) => normalizeService(value, request.endpoint, controller.signal),
-    ).finally(() => closeSingleFlight(current));
-  }
-  shared.waiters += 1;
-  return shared;
-}
-
-/** The instant a job's remaining deadline ends at, or `Infinity` when it has none. */
-function absoluteDeadline(remainingDeadlineMs) {
-  if (remainingDeadlineMs === undefined || remainingDeadlineMs === null) return Infinity;
-  return now() + Number(remainingDeadlineMs);
-}
-
-function now() {
-  return typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
-}
-
-function leaveSingleFlight(shared) {
-  shared.waiters -= 1;
-  if (shared.waiters === 0 && shared.open) {
-    closeSingleFlight(shared);
-    shared.controller.abort(abortReason("every job waiting on this request was stopped", "AbortError"));
-  }
-}
-
-function closeSingleFlight(shared) {
-  if (!shared.open) return;
-  shared.open = false;
-  const open = shared.exchanges.get(shared.key);
-  if (open === undefined) return;
-  const index = open.indexOf(shared);
-  if (index !== -1) open.splice(index, 1);
-  if (open.length === 0) shared.exchanges.delete(shared.key);
 }
 
 async function normalizeService(value, endpoint, signal) {
@@ -696,16 +669,19 @@ async function answerLoad(record, effect) {
     return latchFault(record, `LOAD effect ${seq} was issued, but no resolveLoad handler was given`);
   }
   if (record.stop.fired) return abandon(record, seq);
-  const iri = effect.iri;
-  const signal = record.controller.signal;
+  const request = loadRequest(effect);
+  const { iri } = request;
+  const expired = expiry(effect);
+  const signal = AbortSignal.any([record.controller.signal, expired.signal]);
   const pending = invokeHost(
     "resolveLoad",
-    () => resolveLoad({ kind: "load", iri }, { signal }),
+    () => resolveLoad(request, { signal }),
     (value) => normalizeLoad(value, iri, signal),
   );
-  const settled = await Promise.race([pending, record.stop.promise]);
-  if (settled === STOPPED) return abandon(record, seq);
+  const settled = await Promise.race([pending, record.stop.promise, expired.promise]);
   const { job } = record;
+  if (settled === STOPPED) return abandon(record, seq);
+  if (settled === EXPIRED) return job.expireEffect(seq);
   switch (settled.type) {
     case "document":
       return delivered(record, seq, job.deliverGraph(seq, settled.bytes, settled.mediaType, settled.base));
@@ -718,11 +694,29 @@ async function answerLoad(record, effect) {
       }
       return delivered(record, seq, status);
     }
+    case "redirect":
+      return delivered(record, seq, job.deliverRedirect(seq, settled.location));
     case "failure":
       return delivered(record, seq, job.deliverFailure(seq, settled.kind, settled.message));
     default:
       return latchFault(record, settled.message);
   }
+}
+
+function loadRequest(effect) {
+  const flat = effect.headers();
+  const headers = [];
+  for (let index = 0; index + 1 < flat.length; index += 2) {
+    headers.push([flat[index], flat[index + 1]]);
+  }
+  return {
+    kind: "load",
+    iri: effect.iri,
+    accept: effect.accept,
+    userAgent: effect.userAgent,
+    headers,
+    timeoutMs: effect.timeoutMs,
+  };
 }
 
 async function normalizeLoad(value, iri, signal) {
@@ -745,6 +739,12 @@ async function normalizeLoad(value, iri, signal) {
       `resolveLoad answered ${iri} without a media type; return { bytes | text, mediaType } ` +
         "or a Response carrying a Content-Type",
     );
+  }
+  if (value != null && typeof value === "object" && value.kind === "redirect") {
+    if (typeof value.location !== "string") {
+      return fault(`resolveLoad answered ${iri} with a redirect whose location is not a string`);
+    }
+    return { type: "redirect", location: value.location };
   }
   const failure = typedFailure(value, "resolveLoad");
   if (failure !== undefined) return failure;
@@ -870,22 +870,23 @@ function fault(message) {
 
 function latchFault(record, message) {
   record.job.fault(message);
-  return SUSPEND_FAULT;
+  return installed.SuspendStatus.Fault;
 }
 
 function abandon(record, seq) {
   const status = record.job.deliverGoverned(seq);
-  if (status !== DELIVERY_ACCEPTED) {
+  if (status !== installed.DeliveryStatus.Accepted) {
     return latchFault(record, `abandoning effect ${seq} was refused with status ${status}`);
   }
-  return SUSPEND_ABANDONED;
+  return installed.SuspendStatus.Abandoned;
 }
 
 function delivered(record, seq, status) {
-  if (status === DELIVERY_ACCEPTED) return SUSPEND_ANSWERED;
-  // 2: the job latched its own fault naming the cause. 1 or 3 cannot happen for the
-  // outstanding effect and are latched here.
-  if (status === DELIVERY_FAULT) return SUSPEND_FAULT;
+  const { DeliveryStatus, SuspendStatus } = installed;
+  if (status === DeliveryStatus.Accepted) return SuspendStatus.Answered;
+  // The job latched its own fault naming the cause. A stale or finished status cannot
+  // happen for the outstanding effect and is latched here.
+  if (status === DeliveryStatus.Fault) return SuspendStatus.Fault;
   return latchFault(record, `the delivery for effect ${seq} was refused with status ${status}`);
 }
 
@@ -897,7 +898,7 @@ function validateHost(host) {
   if (host == null || typeof host !== "object") {
     throw new TypeError("runJob expects a host object");
   }
-  const { resolveService, resolveLoad, signal, deadlineMs } = host;
+  const { resolveService, resolveLoad, signal } = host;
   for (const [name, value] of [["resolveService", resolveService], ["resolveLoad", resolveLoad]]) {
     if (value !== undefined && typeof value !== "function") {
       throw new TypeError(`${name} must be a function`);
@@ -909,14 +910,7 @@ function validateHost(host) {
   ) {
     throw new TypeError("signal must be an AbortSignal");
   }
-  let deadline;
-  if (deadlineMs !== undefined) {
-    deadline = typeof deadlineMs === "bigint" ? Number(deadlineMs) : deadlineMs;
-    if (typeof deadline !== "number" || !Number.isFinite(deadline) || deadline < 0) {
-      throw new RangeError(`deadlineMs must be a non-negative number, got ${String(deadlineMs)}`);
-    }
-  }
-  return { resolveService, resolveLoad, signal, deadlineMs: deadline };
+  return { resolveService, resolveLoad, signal };
 }
 
 function newRecord(job, handlers) {
@@ -928,7 +922,6 @@ function newRecord(job, handlers) {
     base: job.stackBase,
     canary: job.stackCanary,
     outer: 0,
-    memo: new Map(),
     controller: new AbortController(),
     stop: { fired: false, promise: undefined, resolve: undefined },
     reject: undefined,
@@ -943,7 +936,7 @@ function newRecord(job, handlers) {
     record.stop.resolve(STOPPED);
     record.controller.abort(reason);
   };
-  const { signal, deadlineMs } = handlers;
+  const { signal } = handlers;
   let onAbort;
   if (signal !== undefined) {
     onAbort = () => {
@@ -953,19 +946,7 @@ function newRecord(job, handlers) {
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
   }
-  let timer;
-  // A delay beyond the timer range fires at once in some engines; a deadline that far
-  // off is left to the job's own clock.
-  if (deadlineMs !== undefined && deadlineMs <= MAX_TIMER_MS) {
-    timer = setTimeout(() => {
-      // The deadline is latched before the signal aborts, so the trip reads as a
-      // deadline rather than a cancellation.
-      record.job.tripDeadline();
-      fire(abortReason(`the job's deadline of ${deadlineMs} ms passed`, "TimeoutError"));
-    }, deadlineMs);
-  }
   record.dispose = () => {
-    if (timer !== undefined) clearTimeout(timer);
     if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
     if (!record.stop.fired) {
       record.stop.fired = true;
@@ -993,8 +974,8 @@ function startRun(record) {
     pending.then(
       (status) => {
         leaveRegion(record);
-        if (status >>> 0 === RUN_OVERRAN) {
-          poison(record.job.takeError() ?? `asynchronous job ${record.id} overran its stack region`);
+        if (status >>> 0 === installed.RunStatus.Overran) {
+          poison(record.job.errorMessage ?? `asynchronous job ${record.id} overran its stack region`);
           reject(poisonError());
           return;
         }

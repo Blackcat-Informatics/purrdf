@@ -31,7 +31,7 @@ import {
   hasAsyncQueries,
   ready,
 } from "../index.mjs";
-import { AsyncJobOptions, AsyncOperationKind } from "../pkg/purrdf_wasm.js";
+import { AsyncJobOptions, AsyncOperationKind, DeliveryStatus, RunStatus } from "../pkg/purrdf_wasm.js";
 import { NO_JSPI_MESSAGE, runJob } from "../pkg/purrdf_jspi.mjs";
 import { expectedCrossCount, measureYielding } from "./fixtures/yield-workload.mjs";
 
@@ -432,9 +432,9 @@ test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is 
     `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . VALUES ?e { "x" } OPTIONAL { SERVICE SILENT ?e { ?a ?b ?x } } }`,
   ]) {
     const mock = recordingResolver(answerWithEndpointName);
-    const result = await engine.queryAsync(local(), shape, { resolveService: mock.resolveService });
-    assert.deepEqual(rowsOf(result), [`e=x&s=${EX}a`, `e=x&s=${EX}b`], shape);
-    assert.deepEqual(rowsOf(engine.select(local(), shape)), rowsOf(result), shape);
+    const result = rowsOf(await engine.queryAsync(local(), shape, { resolveService: mock.resolveService }));
+    assert.deepEqual(result, [`e=x&s=${EX}a`, `e=x&s=${EX}b`], shape);
+    assert.deepEqual(rowsOf(engine.select(local(), shape)), result, shape);
     assert.equal(mock.calls.length, 0, `${shape}: nobody is asked`);
     const loud = shape.replace("SILENT ", "");
     const error = await rejection(engine.queryAsync(local(), loud, { resolveService: mock.resolveService }));
@@ -932,10 +932,8 @@ test("a resolver that ignores ctx.signal still cancels promptly", async () => {
   assert.equal(resolverAnswered, false, "the twin settled on the abort, not on the resolver's answer");
 
   // Through the scheduler directly: the late answer, delivered by the mock to the job it
-  // was asked for, is refused — the job has finished (status 3), nothing is resumed.
-  const options = new AsyncJobOptions();
-  options.setFormat("json");
-  options.setHandlers(true, false);
+  // was asked for, is refused — the job has finished, nothing is resumed.
+  const options = AsyncJobOptions.fromJs(AsyncOperationKind.Raw, { format: "json" }, 1, false, undefined);
   const job = engine.beginAsync(local(), AsyncOperationKind.Raw, joinQuery(), options);
   options.free();
   const late = {};
@@ -951,16 +949,17 @@ test("a resolver that ignores ctx.signal still cancels promptly", async () => {
       resolveService: () =>
         new Promise((resolve) =>
           setTimeout(() => {
-            late.status = job.deliverBindings(1, encoder.encode(REMOTE_OX));
+            late.status = job.deliverFailure(1, "transport", "the answer arrived late");
             resolve(REMOTE_OX);
             lateDone();
           }, 500),
         ),
     });
-    assert.equal(status, 1, "the run stored an error");
+    assert.equal(status, RunStatus.Error, "the run stored an error");
     assert.equal(job.errorKind, "cancelled");
+    assert.equal(job.errorCode, "native-sparql-cancelled");
     await lateDelivered;
-    assert.equal(late.status, 3, "a delivery after the job finished is refused");
+    assert.equal(late.status, DeliveryStatus.Finished, "a delivery after the job finished is refused");
     assert.equal(job.isFinished, true);
   } finally {
     job.finish();
@@ -1150,7 +1149,15 @@ test("LOAD resolves through resolveLoad", async () => {
     });
     assert.equal(returned, target);
     assert.equal(requests.length, 1, shape);
-    assert.deepEqual(requests[0].request, { kind: "load", iri: DOC });
+    const { accept, ...request } = requests[0].request;
+    assert.deepEqual(request, {
+      kind: "load",
+      iri: DOC,
+      userAgent: undefined,
+      headers: [],
+      timeoutMs: 30_000,
+    });
+    assert.match(accept, /^text\/turtle, application\/trig, /, "every RDF syntax a LOAD parses");
     assert.ok(requests[0].signal instanceof AbortSignal);
     const loaded = engine.select(target, `SELECT ?o WHERE { GRAPH <${EX}g> { <${EX}s> <${EX}p> ?o } }`);
     assert.deepEqual(rowsOf(loaded), [`o=${expected[shape]}`], shape);
@@ -1181,44 +1188,105 @@ test("LOAD: a host policy denial reads distinctly from a catalog capability deni
   const engine = new QueryEngine();
 
   // A bare host denial: no catalog anywhere, the host's own resolveLoad decides on its
-  // own. Must never invent a catalog-capability cause — see the catalog neighbour below,
-  // which keeps the "withholds the ... capability" wording because a real catalog is
-  // what decided it.
+  // own. It never invents a catalog-capability cause, and carries its own code.
   const hostDenial = { resolveLoad: async () => ({ kind: "denied", message: "tenant may not fetch" }) };
   const error = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, hostDenial));
   assert.match(error.message, /LOAD <http:\/\/example\.org\/doc>: the host denied the request: tenant may not fetch/);
   assert.doesNotMatch(error.message, /withholds the .* capability/);
+  assert.equal(error.code, "native-sparql-load-host-denied");
   // LOAD SILENT succeeds over the denial with nothing loaded.
   const silentTarget = new Dataset();
   assert.equal(await engine.updateAsync(silentTarget, `LOAD SILENT <${DOC}>`, hostDenial), silentTarget);
   assert.equal(silentTarget.size, 0);
 
-  // The neighbour: a real catalog refusal. `resolveLoad` consults
-  // `ServiceCatalog.authorizeLoad` itself (the same pattern the Cloudflare LOAD resolver
-  // uses) — the profile for DOC withholds the network capability, so the catalog's own
-  // wording survives into the message, and LOAD SILENT loads nothing over it too.
+  // The neighbour: a real catalog refusal, decided in Rust before the host is asked —
+  // the profile for DOC withholds the network capability, so the catalog's own wording is
+  // the message, the host is never called, and LOAD SILENT loads nothing over it too.
   const catalog = new ServiceCatalog();
   catalog.addService(DOC, JSON.stringify({ capabilities: ["query"] }));
+  const asked = [];
   const resolveLoad = async (request) => {
-    const authorization = catalog.authorizeLoad(request.iri);
-    const denial = authorization.denial;
-    authorization.free();
-    if (denial !== undefined) return { kind: "denied", message: denial };
-    throw new Error("unreachable: this test only exercises the denial branch");
+    asked.push(request.iri);
+    return { text: `<${EX}s> <${EX}p> "loaded" .`, mediaType: "text/turtle" };
   };
-  const catalogError = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad }));
+  const catalogError = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }));
   assert.match(catalogError.message, /withholds the network capability/);
+  assert.equal(catalogError.code, "native-sparql-load-denied");
   const catalogTarget = new Dataset();
-  assert.equal(await engine.updateAsync(catalogTarget, `LOAD SILENT <${DOC}>`, { resolveLoad }), catalogTarget);
+  assert.equal(await engine.updateAsync(catalogTarget, `LOAD SILENT <${DOC}>`, { resolveLoad, catalog }), catalogTarget);
   assert.equal(catalogTarget.size, 0);
+  assert.deepEqual(asked, [], "a source the catalog refuses is never fetched");
+  // A source the same catalog grants `network` is fetched and loaded.
+  catalog.addService(DOC, JSON.stringify({ capabilities: ["network"], headers: [["X-Tenant", "a"]] }));
+  const loaded = new Dataset();
+  let seen;
+  await engine.updateAsync(loaded, `LOAD <${DOC}>`, {
+    resolveLoad: async (request, ctx) => {
+      seen = request;
+      return resolveLoad(request, ctx);
+    },
+    catalog,
+  });
+  assert.equal(loaded.size, 1);
+  assert.deepEqual(seen.headers, [["X-Tenant", "a"]], "the profile's headers are the fetch's");
 });
 
-test("a LOAD parse error is a LOAD failure", async () => {
+// A redirect is followed by the job, not the host: its location is resolved against the
+// IRI that redirected, authorized against the catalog as a fresh source, and fetched with
+// that source's own headers; a location the catalog refuses is its denial, never fetched,
+// and a loop fails as a transport failure after the job's fixed limit of five hops.
+test("LOAD redirect: every hop is resolved and authorized in Rust, with its own profile's headers", async () => {
+  const engine = new QueryEngine();
+  const catalog = new ServiceCatalog();
+  catalog.addService(DOC, JSON.stringify({ capabilities: ["network", "credentials"], credential: { header: "X-Key", value: "source" } }));
+  catalog.addService(`${EX}moved/doc`, JSON.stringify({ capabilities: ["network"], headers: [["X-Mirror", "m"]] }));
+  const hops = [];
+  const resolveLoad = async (request) => {
+    hops.push({ iri: request.iri, headers: request.headers });
+    if (request.iri === DOC) return { kind: "redirect", location: "moved/doc" };
+    return { text: `<${EX}s> <${EX}p> <rel> .`, mediaType: "text/turtle", base: request.iri };
+  };
+  const target = new Dataset();
+  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  assert.deepEqual(hops, [
+    { iri: DOC, headers: [["X-Key", "source"]] },
+    { iri: `${EX}moved/doc`, headers: [["X-Mirror", "m"]] },
+  ], "the redirected hop sends its own profile's headers, never the source's credential");
+  assert.deepEqual(
+    rowsOf(engine.select(target, `SELECT ?o WHERE { <${EX}s> <${EX}p> ?o }`)),
+    [`o=${EX}moved/rel`],
+    "a relative IRI resolves against the final hop",
+  );
+
+  // A redirect to a location the catalog does not list: the catalog's denial, not fetched.
+  const unlisted = [];
+  const toUnlisted = async (request) => {
+    unlisted.push(request.iri);
+    return { kind: "redirect", location: "https://elsewhere.example.org/doc" };
+  };
+  const denied = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: toUnlisted, catalog }));
+  assert.equal(denied.code, "native-sparql-load-denied");
+  assert.deepEqual(unlisted, [DOC], "the unlisted location is never fetched");
+
+  // A loop: five hops are followed, the sixth redirect fails the LOAD.
+  const loop = [];
+  const looping = async (request) => {
+    loop.push(request.iri);
+    return { kind: "redirect", location: request.iri };
+  };
+  const exceeded = await rejection(engine.updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: looping, catalog }));
+  assert.equal(exceeded.code, "native-sparql-load-failed");
+  assert.match(exceeded.message, /exceeded 5 redirect hops/);
+  assert.equal(loop.length, 6, "the source and five followed hops");
+});
+
+test("a LOAD parse error is the LOAD's decode failure", async () => {
   const engine = new QueryEngine();
   const resolveLoad = async () => ({ text: "this is not turtle", mediaType: "text/turtle" });
   const target = new Dataset();
   const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }));
-  assert.match(error.message, /native-sparql-load-failed: LOAD <http:\/\/example\.org\/doc>: .*native-codec-parse/);
+  assert.match(error.message, /native-sparql-load-decode: LOAD <http:\/\/example\.org\/doc>: .*native-codec-parse/);
+  assert.equal(error.code, "native-sparql-load-decode");
   assert.equal(target.size, 0);
   // The SILENT neighbour: the same unparseable document is swallowed — a no-op.
   const silentTarget = new Dataset();
@@ -1262,6 +1330,7 @@ test("dataset mutation during an async update is refused", async () => {
     error.message,
     "dataset mutated while an asynchronous update was in flight (generation 0 → 1); the update was not applied",
   );
+  assert.equal(error.code, "native-sparql-update-in-flight");
   assert.equal(target.size, 1, "only the synchronous deletion took effect");
 
   // The neighbour: a re-add of a quad already present changes nothing, so the generation
@@ -1285,11 +1354,10 @@ test("commitUpdate refuses a different dataset", async () => {
   const target = local();
   const other = local();
   const run = async () => {
-    const options = new AsyncJobOptions();
-    options.setHandlers(false, false);
+    const options = AsyncJobOptions.fromJs(AsyncOperationKind.Update, {}, undefined, false, undefined);
     const job = engine.beginAsync(target, AsyncOperationKind.Update, `INSERT DATA { <${EX}n> <${EX}p> <${EX}o> }`, options);
     options.free();
-    assert.equal(await runJob(job, {}), 0);
+    assert.equal(await runJob(job, {}), RunStatus.Outcome);
     return job;
   };
   const job = await run();
@@ -1326,26 +1394,36 @@ test("queries see a snapshot; mutation during a query is allowed", async () => {
   assert.deepEqual(rowsOf(after), [...JOINED, `s=${EX}c&x=x1`].sort());
 });
 
-test("concurrent updates on one dataset are serialized", async () => {
+test("refusal pair: an update begun while another update of the dataset is in flight is refused; a sequential one applies", async () => {
   const engine = new QueryEngine();
   const insertAs = (predicate) =>
     `INSERT { ?s <${EX}${predicate}> ?x } WHERE { ?s <${EX}p> ?o . SERVICE <${EX}sparql> { ?o <${EX}q> ?x } }`;
 
-  // One dataset: the second update is not even begun until the first has committed.
+  // One dataset: the second update, begun while the first is in flight, is refused with
+  // its own code and never asks the host anything; the first still applies.
   const shared = local();
   const first = deferredResolver();
   const second = deferredResolver();
-  const both = [
-    engine.updateAsync(shared, insertAs("first"), { resolveService: first.resolveService }),
-    engine.updateAsync(shared, insertAs("second"), { resolveService: second.resolveService }),
-  ];
+  const firstPending = engine.updateAsync(shared, insertAs("first"), { resolveService: first.resolveService });
   await turnUntil(() => first.pending.length === 1, "the first update suspending");
-  for (let turns = 0; turns < 50; turns += 1) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(second.pending.length, 0, "the second update waits for the first");
+  const refused = await rejection(
+    engine.updateGovernedAsync(shared, insertAs("second"), { resolveService: second.resolveService }),
+  );
+  assert.equal(refused.code, "native-sparql-update-in-flight");
+  assert.match(refused.message, /already in flight/);
+  assert.equal(second.pending.length, 0, "the refused update asked nothing");
+  // A query of the same dataset meanwhile claims nothing and answers.
+  assert.deepEqual(rowsOf(await engine.queryAsync(shared, joinQuery(), { resolveService: async () => REMOTE_OX })), JOINED);
   first.pending[0].resolve(REMOTE_OX);
-  await turnUntil(() => second.pending.length === 1, "the second update starting after the first");
+  await firstPending;
+  assert.equal(shared.generation, 1, "only the first applied");
+  assert.equal(shared.size, 4);
+
+  // The neighbour: the same update, begun once the first has finished, applies.
+  const sequential = engine.updateAsync(shared, insertAs("second"), { resolveService: second.resolveService });
+  await turnUntil(() => second.pending.length === 1, "the sequential update suspending");
   second.pending[0].resolve(REMOTE_OX);
-  await Promise.all(both);
+  assert.equal(await sequential, shared);
   assert.equal(shared.generation, 2, "both applied, one generation each");
   assert.equal(shared.size, 6);
 
@@ -1672,13 +1750,16 @@ test("refusal pair: a failure kind \"nope\" is a fault, \"denied\" is a denial",
   const nope = await rejection(
     engine.queryAsync(local(), joinQuery(true), { resolveService: async () => ({ kind: "nope", message: "?" }) }),
   );
+  // A fault is not an answer: SILENT does not absorb it.
   assert.match(nope.message, /^unknown failure kind "nope" for effect 1 \(expected "transport" or "denied"\)$/);
-  const denied = await rejection(
-    engine.queryAsync(local(), joinQuery(true), { resolveService: async () => ({ kind: "denied", message: "policy" }) }),
-  );
+  assert.equal(nope.code, "native-sparql-host-fault");
+  const denying = { resolveService: async () => ({ kind: "denied", message: "policy" }) };
+  const denied = await rejection(engine.queryAsync(local(), joinQuery(false), denying));
   assert.match(denied.message, /SERVICE <.*>: the host denied the request: policy/);
   assert.doesNotMatch(denied.message, /withholds the .* capability/);
-  assert.notEqual(nope.message, denied.message);
+  assert.equal(denied.code, "native-sparql-service-host-denied");
+  // A denial is an answer: SILENT answers it with the join identity.
+  assert.deepEqual(rowsOf(await engine.queryAsync(local(), joinQuery(true), denying)), IDENTITY);
 });
 
 test("refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads", async () => {
@@ -1688,7 +1769,8 @@ test("refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads",
   const refused = await rejection(
     engine.updateAsync(unknownTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/x-unknown" }) }),
   );
-  assert.match(refused.message, /native-sparql-load-failed: LOAD <http:\/\/example\.org\/doc>: unsupported RDF format "text\/x-unknown"/);
+  assert.match(refused.message, /native-sparql-load-decode: LOAD <http:\/\/example\.org\/doc>: unsupported RDF format "text\/x-unknown"/);
+  assert.equal(refused.code, "native-sparql-load-decode");
   assert.equal(unknownTarget.size, 0);
   const turtleTarget = new Dataset();
   await engine.updateAsync(turtleTarget, `LOAD <${DOC}>`, { resolveLoad: async () => ({ text, mediaType: "text/turtle" }) });
@@ -1706,4 +1788,82 @@ test("refusal pair: the cancel option is refused, signal is accepted", async () 
   // An already-aborted signal is honoured before the job begins.
   const already = AbortSignal.abort();
   assert.equal(await rejection(engine.queryAsync(local(), query, { signal: already })), already.reason);
+});
+
+// ---------------------------------------------------------------------------
+// Options are validated in Rust against the operation's own table
+// ---------------------------------------------------------------------------
+
+test("refusal pair: a localServices value that is not a Dataset is refused; a Dataset serves, and stays the caller's", async () => {
+  const engine = new QueryEngine();
+  const refused = await rejection(
+    engine.queryAsync(local(), joinQuery(), { localServices: { [`${EX}sparql`]: { size: 1 } } }),
+  );
+  assert.ok(refused instanceof TypeError);
+  assert.equal(refused.code, "purrdf-wasm-options");
+  assert.match(refused.message, /must map every endpoint to a Dataset/);
+  const remote = Dataset.parse(`<${EX}o1> <${EX}q> "x1" .\n<${EX}o2> <${EX}q> "x2" .\n`, "nquads");
+  const answered = await engine.queryAsync(local(), joinQuery(), { localServices: { [`${EX}sparql`]: remote } });
+  assert.deepEqual(rowsOf(answered), JOINED);
+  // The job served a snapshot: the caller's dataset is untouched and still usable.
+  assert.equal(remote.size, 2);
+  assert.equal(remote.generation, 0);
+});
+
+test("refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable", async () => {
+  const engine = new QueryEngine();
+  const resolveService = async () => REMOTE_OX;
+  const refused = await rejection(
+    engine.queryAsync(local(), joinQuery(), { resolveService, catalog: { addService() {} } }),
+  );
+  assert.ok(refused instanceof TypeError);
+  assert.match(refused.message, /catalog must be a ServiceCatalog/);
+  const catalog = new ServiceCatalog();
+  catalog.addService(`${EX}sparql`, JSON.stringify({ capabilities: ["query", "network"] }));
+  for (let round = 0; round < 2; round += 1) {
+    assert.deepEqual(rowsOf(await engine.queryAsync(local(), joinQuery(), { resolveService, catalog })), JOINED);
+  }
+  // The job took a copy: a change to the caller's catalog governs only later jobs.
+  const copy = catalog.copy();
+  catalog.addService(`${EX}sparql`, JSON.stringify({ capabilities: ["query"] }));
+  const denied = await rejection(engine.queryAsync(local(), joinQuery(), { resolveService, catalog }));
+  assert.equal(denied.code, "native-sparql-service-denied");
+  assert.deepEqual(rowsOf(await engine.queryAsync(local(), joinQuery(), { resolveService, catalog: copy })), JOINED);
+});
+
+test("refusal pair: a profile timeout no JavaScript timer can honour is refused; the longest one is accepted", () => {
+  const catalog = new ServiceCatalog();
+  const error = syncThrow(() =>
+    catalog.addService(`${EX}sparql`, JSON.stringify({ capabilities: ["query"], timeoutMs: 2 ** 31 })),
+  );
+  assert.equal(error.code, "purrdf-wasm-options");
+  assert.match(error.message, /timeoutMs must be an integer from 1 to 2147483647/);
+  catalog.addService(`${EX}sparql`, JSON.stringify({ capabilities: ["query"], timeoutMs: 2 ** 31 - 1 }));
+});
+
+// A job answers a request it repeats from its memo only when the first answer was rows:
+// a failure is asked again, so a transient failure is never replayed.
+test("a job's memo keeps rows only: a repeated request whose first answer failed asks again", async () => {
+  const engine = new QueryEngine();
+  const twice = `SELECT ?o ?x WHERE { { SERVICE SILENT <${EX}sparql> { ?o <${EX}q> ?x } } UNION { SERVICE SILENT <${EX}sparql> { ?o <${EX}q> ?x } } }`;
+  let asked = 0;
+  const flaky = async () => {
+    asked += 1;
+    return asked === 1 ? { kind: "transport", message: "the example.org endpoint blinked" } : REMOTE_OX;
+  };
+  const answered = await engine.queryGovernedAsync(local(), twice, { resolveService: flaky });
+  assert.equal(asked, 2, "the failed request was asked again");
+  // The failed branch is the join identity (one empty row), the second branch the rows.
+  assert.equal(answered.result.rowCount, 3, "the second branch answered with the second answer's rows");
+  assert.equal(answered.evidence.silenced.length, 1, "the first branch's failure was silenced");
+  // The neighbour: rows are reused, so the same shape with a steady endpoint asks once.
+  let steady = 0;
+  const outcome = await engine.queryGovernedAsync(local(), twice, {
+    resolveService: async () => {
+      steady += 1;
+      return REMOTE_OX;
+    },
+  });
+  assert.equal(steady, 1);
+  assert.equal(outcome.result.rowCount, 4);
 });

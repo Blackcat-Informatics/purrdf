@@ -13,7 +13,7 @@ import {
   type AsyncLoadResolver,
   type AsyncNegotiatedQueryOutcome,
   type AsyncServiceResolver,
-  type LoadAuthorization,
+  type FailureProblem,
   type ProtocolFormat,
   type ProtocolResultKind,
   type SparqlProtocolError,
@@ -24,7 +24,6 @@ import {
   handleSparqlRequest,
   type CacheLike,
   type EndpointGovernors,
-  type ExecutionContextLike,
   type FetchLike,
   type ServiceBindingLike,
   type SparqlEndpointOptions,
@@ -33,7 +32,6 @@ import {
 
 declare const wasmModule: WebAssembly.Module;
 declare const cache: CacheLike;
-declare const ctx: ExecutionContextLike;
 declare const remote: ServiceBindingLike;
 
 await ready(wasmModule);
@@ -43,25 +41,19 @@ const dataset = new Dataset();
 const catalog = new ServiceCatalog();
 catalog.addService(
   "https://remote.example.org/sparql",
-  JSON.stringify({ capabilities: ["query", "network"] }),
+  JSON.stringify({ capabilities: ["query", "network"], timeoutMs: 5000 }),
 );
-const carries: boolean = catalog.carriesCredential("https://remote.example.org/sparql");
-const load: LoadAuthorization = catalog.authorizeLoad("https://remote.example.org/doc.ttl");
-const denial: string | undefined = load.denial;
-const accept: string = load.accept;
-load.free();
+const copied: ServiceCatalog = catalog.copy();
+copied.free();
 
 const fetchLike: FetchLike = (input, init) => fetch(input, init);
 const resolveService: AsyncServiceResolver = createFetchServiceResolver({
-  catalog,
-  timeoutMs: 5000,
   fetch: fetchLike,
   bindings: { "https://remote.example.org": remote },
   cache,
   cacheTtlSeconds: 60,
-  waitUntil: (promise) => ctx.waitUntil(promise),
 });
-const resolveLoad: AsyncLoadResolver = createFetchLoadResolver({ catalog, timeoutMs: 5000 });
+const resolveLoad: AsyncLoadResolver = createFetchLoadResolver({ fetch: fetchLike });
 
 const governors: EndpointGovernors = { deadlineMs: 10_000, maxRemoteRequests: 40, fuel: 1_000_000n };
 const options: SparqlEndpointOptions = {
@@ -111,9 +103,15 @@ if (negotiated.isComplete && negotiated.body !== undefined) {
 }
 const serviceWait: number = negotiated.evidence.async.serviceWaitMs;
 
-void carries;
-void denial;
-void accept;
+const problem: FailureProblem = SparqlProtocolRequest.problemFor(new Error("boom"), false);
+const problemStatus: number = problem.status;
+const problemBody: string = problem.body(problem.internal ? "correlation-1" : undefined);
+problem.free();
+const title: string | undefined = SparqlProtocolRequest.statusTitle(409);
+
+void problemStatus;
+void problemBody;
+void title;
 void kind;
 void resultKind;
 void format;

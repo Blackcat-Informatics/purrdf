@@ -731,6 +731,11 @@ export class Dataset implements Iterable<Quad> {
    */
   readonly generation: number;
   /**
+   * An independent dataset holding this one's current content, with an identity of its
+   * own at generation zero. Later changes to either leave the other as it is.
+   */
+  snapshot(): Dataset;
+  /**
    * Canonical N-Quads of the flat assertion projection (RDFC-1.0 over the
    * RDF 1.2 abstract syntax).
    *
@@ -1163,10 +1168,11 @@ export class QueryEngine {
     options?: AsyncQueryOptions | null,
   ): Promise<string>;
   /**
-   * The twin of `update`: resolves to `dataset` once the update is applied. Asynchronous
-   * updates on one dataset run one at a time, in call order. The update reads a snapshot
-   * and is applied only if `dataset` was not mutated while it ran; otherwise it rejects
-   * and applies nothing.
+   * The twin of `update`: resolves to `dataset` once the update is applied. One
+   * asynchronous update of a dataset may be in flight at a time: beginning another while
+   * it runs rejects at once with the code `native-sparql-update-in-flight`, applying and
+   * asking nothing. The update reads a snapshot and is applied only if `dataset` was not
+   * mutated while it ran; otherwise it rejects with the same code and applies nothing.
    */
   updateAsync(
     dataset: Dataset,
@@ -1174,7 +1180,7 @@ export class QueryEngine {
     options?: AsyncUpdateOptions | null,
   ): Promise<Dataset>;
   /**
-   * The twin of `updateGoverned`, serialized and applied as `updateAsync` is. `maxAnswers`
+   * The twin of `updateGoverned`, claiming and applied as `updateAsync` is. `maxAnswers`
    * is refused, exactly as on `updateGoverned`.
    */
   updateGovernedAsync(
@@ -1203,49 +1209,65 @@ export interface ServiceProfileJson {
 }
 
 /**
- * The per-service policy host-resolved `SERVICE` requests are authorized against, before
- * the host is ever called: deny by default, one profile per endpoint, an optional
- * fallback. A denial fails the query; under `SERVICE SILENT` it is the join identity,
- * recorded on the evidence's `silenced`. Pass it to an
- * asynchronous twin as `catalog` (it is copied; the catalog stays usable); it needs a
- * `resolveService` handler to govern.
+ * The per-service policy host-resolved `SERVICE` requests and `LOAD` fetches are
+ * authorized against, before the host is ever called: deny by default, one profile per
+ * endpoint (or `LOAD` source), an optional fallback. A `SERVICE` needs `query` and
+ * `network`; a `LOAD` — and every location it is redirected to — needs `network`. A
+ * profile's `timeoutMs` (1 to 2 147 483 647) bounds each request to it. A denial fails
+ * the request; under `SERVICE SILENT`/`LOAD SILENT` it is the join identity or a success
+ * with nothing loaded, recorded on the evidence's `silenced`. Pass it to an asynchronous
+ * twin as `catalog` (it is copied; the catalog stays usable); it needs a `resolveService`
+ * or `resolveLoad` handler to govern.
  */
 export class ServiceCatalog {
   /** An empty catalog: every service is denied. */
   constructor();
-  /** Register `profileJson` (a `ServiceProfileJson` document) for `endpoint`, replacing any earlier one. */
+  /**
+   * Register `profileJson` (a `ServiceProfileJson` document) for `endpoint`, replacing any
+   * earlier one.
+   *
+   * @throws {PurrdfError} `purrdf-wasm-options`: a profile that is not a valid document.
+   */
   addService(endpoint: string, profileJson: string): void;
   /** Apply `profileJson` to every service with no entry of its own. */
   setFallback(profileJson: string): void;
-  /**
-   * Whether the profile governing `endpoint` (its own, or the fallback) carries a
-   * credential — whether a request to it is one a shared cache must never answer.
-   */
-  carriesCredential(endpoint: string): boolean;
-  /**
-   * Authorize a `LOAD` of `iri` against this catalog: a document fetch needs the
-   * `network` capability (and a credential `credentials`), exactly as a `SERVICE` request
-   * is authorized.
-   */
-  authorizeLoad(iri: string): LoadAuthorization;
+  /** An independent copy of this catalog: later changes to either leave the other as it is. */
+  copy(): ServiceCatalog;
   free(): void;
 }
 
-/** What `ServiceCatalog.authorizeLoad` decided for one `LOAD` IRI (a wasm handle: `free()` it). */
-export interface LoadAuthorization {
-  /** Why the catalog refuses the `LOAD`, or `undefined` when it allows it. */
-  readonly denial: string | undefined;
+/**
+ * Every error the package throws for a failure it classifies carries the stable code it
+ * is reported under: an engine diagnostic's own (`native-sparql-query-parse`,
+ * `native-sparql-load-denied`, …), a stop's or a fault's (`native-sparql-cancelled`,
+ * `native-sparql-host-fault`, …), or one of the package's own refusals
+ * (`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on `message`.
+ */
+export interface PurrdfError extends Error {
+  readonly code: string;
+}
+
+/**
+ * The HTTP problem (RFC 9457) a failed operation is answered with, as
+ * `SparqlProtocolRequest.problemFor` decides it (a wasm handle: `free()` it).
+ */
+export interface FailureProblem {
+  /** The response status. */
+  readonly status: number;
+  /** `application/problem+json`. */
+  readonly contentType: string;
   /**
-   * The profile's headers, then its credential header, as flattened `[name, value, …]`
-   * pairs in sending order. Empty on a denial.
+   * Whether the failure is the host's own: its real error belongs in the host's log under
+   * a correlation id, which `body` must be given.
    */
-  readonly headers: string[];
-  /** The `Accept` header a `LOAD` fetch sends: every RDF syntax the engine parses. */
-  readonly accept: string;
-  /** The profile's `User-Agent`, when it names one. */
-  readonly userAgent: string | undefined;
-  /** The profile's per-request timeout in milliseconds, when it sets one. */
-  readonly timeoutMs: number | undefined;
+  readonly internal: boolean;
+  /**
+   * The problem document: `type`, `title`, `status`, `detail` and `code`, plus
+   * `correlationId` for an internal failure and `offered` for a `406`.
+   *
+   * @throws {Error} An internal failure without a `correlationId`.
+   */
+  body(correlationId?: string | null): string;
   free(): void;
 }
 
@@ -1302,6 +1324,15 @@ export class SparqlProtocolRequest {
   static offeredMediaTypes(kind: ProtocolResultKind): string[];
   /** The `detail` of a `406` for a result of `kind`, naming the formats that can carry it. */
   static notAcceptableDetail(kind: ProtocolResultKind): string;
+  /**
+   * The HTTP problem a failed operation is answered with: `error` is what it rejected
+   * with, read for its `code` and `message`; `cancelled` says the request's own signal
+   * stopped it. An error without a string `code` is an exception nothing classified — the
+   * host's own fault.
+   */
+  static problemFor(error: unknown, cancelled: boolean): FailureProblem;
+  /** The reason phrase of an HTTP `status` — an `about:blank` problem's `title`. */
+  static statusTitle(status: number): string | undefined;
   readonly kind: "query" | "update";
   /** The operation text as the request carried it. */
   readonly text: string;
@@ -1351,12 +1382,24 @@ export interface AsyncServiceRequest {
   /** The profile's per-request timeout (or the default), in milliseconds. */
   readonly timeoutMs: number;
   readonly headers: [string, string][];
+  /** Whether a shared cache may answer the request or keep its answer: `false` when it carries a credential. */
+  readonly cacheable: boolean;
 }
 
-/** A `LOAD` effect, as `resolveLoad` receives it. */
+/**
+ * One hop of a `LOAD`, as `resolveLoad` receives it: the `GET` to issue. The job has
+ * authorized `iri` against its catalog; `userAgent`, `headers` and `timeoutMs` are that
+ * source's profile's (none, and the default timeout, without a catalog).
+ */
 export interface AsyncLoadRequest {
   readonly kind: "load";
+  /** The source, or the location a redirect named, resolved. */
   readonly iri: string;
+  /** Every RDF syntax a `LOAD` parses, as an `Accept` header value. */
+  readonly accept: string;
+  readonly userAgent: string | undefined;
+  readonly headers: [string, string][];
+  readonly timeoutMs: number;
 }
 
 /** Either effect a host handler can receive. */
@@ -1366,7 +1409,8 @@ export type AsyncEffectRequest = AsyncServiceRequest | AsyncLoadRequest;
  * What `resolveService` is told beside the request.
  *
  * One job asks once for a request it repeats with the same `silent` and
- * `maxIntermediateCells`, and reuses that answer, a failure included but never a fault.
+ * `maxIntermediateCells` when the first answer was rows; a failure or a fault is asked
+ * again.
  * Concurrent jobs share one call through the same `resolveService` only when the request,
  * `silent` and `maxIntermediateCells` are identical and the joining job's deadline falls
  * no later than the call's own. The call's own deadline is its start plus the
@@ -1376,9 +1420,9 @@ export type AsyncEffectRequest = AsyncServiceRequest | AsyncLoadRequest;
  */
 export interface AsyncResolverContext {
   /**
-   * Aborts when the job is cancelled or its deadline passes; the job does not wait for
-   * the handler after that. For a call several jobs share, it aborts only once every one
-   * of them has stopped waiting.
+   * Aborts once no job waits on the call: every waiting job was cancelled, or reached its
+   * request's timeout or its deadline. For a call several jobs share, it aborts only once
+   * every one of them has stopped waiting.
    */
   readonly signal: AbortSignal;
   /** Milliseconds left before the job's deadline, when it has one. For a shared call, the deadline of the job that started it. */
@@ -1395,7 +1439,18 @@ export interface AsyncResolverContext {
 
 /** What `resolveLoad` is told beside the request. */
 export interface AsyncLoadContext {
+  /** Aborts when the job is cancelled, or at the request's timeout or the job's deadline. */
   readonly signal: AbortSignal;
+}
+
+/**
+ * A redirect `resolveLoad` answers with (`location` as the response sent it): the job
+ * resolves it against the hop's IRI, authorizes the target against its catalog and asks
+ * for it as a fresh hop, up to five hops.
+ */
+export interface LoadRedirect {
+  readonly kind: "redirect";
+  readonly location: string;
 }
 
 /**
@@ -1423,11 +1478,11 @@ export type AsyncLoadDocument =
 
 /**
  * `resolveLoad`'s answer: a document (its `base` defaults to the IRI), a `Response` (its
- * `Content-Type` names the media type), a `Dataset`, or a typed failure. A bare string
- * or bytes carry no media type and are a fault. A document that does not parse is the
- * `LOAD`'s failure.
+ * `Content-Type` names the media type), a `Dataset`, a redirect, or a typed failure. A
+ * bare string or bytes carry no media type and are a fault. A document that does not
+ * parse is the `LOAD`'s decode failure (`native-sparql-load-decode`).
  */
-export type AsyncLoadAnswer = AsyncLoadDocument | Response | Dataset | ServiceFailure;
+export type AsyncLoadAnswer = AsyncLoadDocument | Response | Dataset | LoadRedirect | ServiceFailure;
 
 export type AsyncServiceResolver = (
   request: AsyncServiceRequest,
@@ -1454,7 +1509,7 @@ export interface AsyncHostOptions {
    * It does not raise the host-stack budget (`native-sparql-host-stack-exhausted`).
    */
   readonly stackBytes?: number | null;
-  /** The policy host-resolved `SERVICE` requests are authorized against. Needs `resolveService`. */
+  /** The policy host-resolved `SERVICE` requests and `LOAD` fetches are authorized against. Needs a handler to govern. */
   readonly catalog?: ServiceCatalog | null;
   /** Endpoints answered in process from a snapshot of a dataset, with no host call. */
   readonly localServices?: Readonly<Record<string, Dataset>> | null;
@@ -1570,8 +1625,9 @@ export interface AsyncUpdateOutcome extends UpdateOutcome {
  * `signal.reason`, `"TimeoutError"` for an ungoverned job's deadline, and
  * `"NotAcceptableError"` for a negotiated query whose result no acceptable format can carry.
  * A cancellation with a `signal.reason` rejects with that reason itself, untouched.
+ * `code` is the stable code the failure is reported under (see `PurrdfError`).
  */
-export interface AsyncJobError extends Error {
+export interface AsyncJobError extends PurrdfError {
   readonly evidence: { readonly async: AsyncEvidence };
 }
 

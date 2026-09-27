@@ -16,7 +16,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { Dataset, QueryEngine, ready } from "../index.mjs";
+import { Dataset, QueryEngine, ServiceCatalog, ready } from "../index.mjs";
 
 await ready();
 
@@ -282,4 +282,36 @@ test("one job asks the host once for a request it repeats; sequential jobs each 
   const second = await engine.queryAsync(local(), TWICE, { resolveService });
   assert.equal(asked, 2, "a later job does not reuse an earlier job's answer");
   assert.deepEqual(rowsOf(second), [...ONCE, ...ONCE].sort());
+});
+
+// ---------------------------------------------------------------------------
+// Abandonment instants are the job's
+// ---------------------------------------------------------------------------
+
+// Each waiting job abandons the shared call at its own instant — here the catalog
+// profile's 20 ms timeout, a transport failure — and the call's signal aborts once the
+// last one has left. The neighbour, answered inside the timeout, is joined by both.
+test("jobs sharing a call each abandon it at their request's timeout, and the call aborts when the last leaves", async () => {
+  const engine = new QueryEngine();
+  const catalog = new ServiceCatalog();
+  catalog.addService(`${EX}sparql`, JSON.stringify({ capabilities: ["query", "network"], timeoutMs: 20 }));
+  const host = handAnswered();
+  const first = engine.queryAsync(local(), join(true), { resolveService: host.resolveService, catalog });
+  const second = engine.queryAsync(local(), join(true), { resolveService: host.resolveService, catalog });
+  assert.equal(host.calls.length, 1, "the second job joined the first job's call");
+  assert.deepEqual(rowsOf(await first), IDENTITY, "SILENT absorbs the timeout");
+  assert.deepEqual(rowsOf(await second), IDENTITY);
+  assert.equal(host.calls[0].ctx.signal.aborted, true, "no job waits, so the call is aborted");
+  host.calls[0].answer(remote("late"));
+
+  const prompt = handAnswered();
+  const answered = [
+    engine.queryAsync(local(), join(true), { resolveService: prompt.resolveService, catalog }),
+    engine.queryAsync(local(), join(true), { resolveService: prompt.resolveService, catalog }),
+  ];
+  assert.equal(prompt.calls.length, 1);
+  prompt.calls[0].answer(remote("prompt"));
+  for (const result of await Promise.all(answered)) {
+    assert.deepEqual(rowsOf(result), joined("prompt"));
+  }
 });

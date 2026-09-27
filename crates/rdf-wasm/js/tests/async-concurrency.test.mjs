@@ -509,7 +509,8 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on every 
     await assert.rejects(
       engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes: SMALL_REGION }),
       (error) => {
-        assert.match(error.message, /^error native-sparql-query-parse: SPARQL parse stack exhausted .*bracketted expression/);
+        assert.match(error.message, /^error native-sparql-parse-stack-exhausted: SPARQL parse stack exhausted .*bracketted expression/);
+        assert.equal(error.code, "native-sparql-parse-stack-exhausted");
         assert.ok(error.message.endsWith(SMALL_REGION_HINT), error.message);
         return true;
       },

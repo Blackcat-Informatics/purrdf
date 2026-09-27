@@ -28,31 +28,6 @@ export interface CacheLike {
   put(request: Request, response: Response): Promise<void>;
 }
 
-/** A Workers `ExecutionContext`: `waitUntil` keeps a promise alive past the response. */
-export interface ExecutionContextLike {
-  waitUntil(promise: Promise<unknown>): void;
-}
-
-/** Which Cache API call failed, and the `SERVICE` endpoint whose answer it was for. */
-export interface CacheErrorContext {
-  readonly operation: "match" | "put";
-  readonly endpoint: string;
-}
-
-/**
- * Reports a Cache API failure. The cache is an optimisation: a `match` rejection is
- * treated as a miss (the request still goes to the remote) and a `put` failure never
- * discards an answer the remote already returned — this is called either way, so a
- * failure is never silent. Defaults to one `console.warn` line (Workers routes it to
- * logs). The reporter cannot change the answer either: if it throws, or returns a promise
- * that rejects, the request still proceeds exactly as above, and the reporter's failure
- * goes to `console.error` together with the cache error it was handed.
- */
-export type CacheErrorReporter = (
-  error: unknown,
-  context: CacheErrorContext,
-) => void | PromiseLike<unknown>;
-
 /** The correlation id a `500` response carries, and the request it was answering. */
 export interface InternalErrorContext {
   readonly correlationId: string;
@@ -78,55 +53,42 @@ export type InternalErrorReporter = (
 export type ServiceBindings = Readonly<Record<string, ServiceBindingLike>>;
 
 export interface FetchServiceResolverOptions {
-  /** The policy every request is authorized against (required; the same catalog the query runs with). */
-  readonly catalog: ServiceCatalog;
-  /** Each request's own bound, in milliseconds (a positive integer; required). */
-  readonly timeoutMs: number;
   /** Defaults to `globalThis.fetch`. */
   readonly fetch?: FetchLike;
   /** A service binding per origin; a request to that origin goes through it instead of `fetch`. */
   readonly bindings?: ServiceBindings;
-  /** Reuse answers through this cache. Needs `cacheTtlSeconds`. */
+  /**
+   * Reuse the answer of every request the job marks `cacheable` through this cache. Needs
+   * `cacheTtlSeconds`. A failed `match` or `put` is the request's transport failure.
+   */
   readonly cache?: CacheLike;
   /** How long a cached answer may be reused, in seconds (a positive integer). */
   readonly cacheTtlSeconds?: number;
-  /** Defers cache writes past the response, e.g. `(p) => ctx.waitUntil(p)`. Needs `cache`. */
-  readonly waitUntil?: ExecutionContextLike["waitUntil"];
-  /**
-   * Reports a `cache.match` or `cache.put` failure. Needs `cache`. Defaults to one
-   * `console.warn` line; a cache failure never fails the request or discards an answer.
-   */
-  readonly onCacheError?: CacheErrorReporter;
 }
 
 export interface FetchLoadResolverOptions {
-  /** The policy every `LOAD` is authorized against — the initial IRI, and every redirect hop (required). */
-  readonly catalog: ServiceCatalog;
-  /** Each hop's own bound, in milliseconds (a positive integer; required). */
-  readonly timeoutMs: number;
   readonly fetch?: FetchLike;
   readonly bindings?: ServiceBindings;
-  /** Redirect hops a `LOAD` follows before failing typed transport. Defaults to 5. */
-  readonly maxRedirects?: number;
 }
 
 /**
- * A `resolveService` handler that sends each `SERVICE` request with `fetch`, with
- * `redirect: "manual"`: a 3xx is a `{ kind: "transport" }` failure, never followed, so a
- * catalogued endpoint's headers and credential can never reach an origin the catalog did
- * not authorize.
+ * A `resolveService` handler that sends each `SERVICE` request with `fetch`, bounded by
+ * `ctx.signal`, with `redirect: "manual"`: a 3xx is a `{ kind: "transport" }` failure,
+ * never followed, so a catalogued endpoint's headers and credential can never reach an
+ * origin the catalog did not authorize.
  */
 export function createFetchServiceResolver(
-  options: FetchServiceResolverOptions,
+  options?: FetchServiceResolverOptions,
 ): AsyncServiceResolver;
 
 /**
- * A `resolveLoad` handler that fetches each `LOAD` document with `redirect: "manual"`,
- * following a redirect by hand — re-authorizing every hop against `catalog` and
- * re-deriving that hop's own headers, up to `maxRedirects` hops — rather than letting
- * `fetch` carry headers or a credential across an origin change on its own.
+ * A `resolveLoad` handler that fetches each `LOAD` hop the job asks for with
+ * `redirect: "manual"`, and answers a redirect `{ kind: "redirect", location }` for the
+ * job to resolve, re-authorize against its catalog and ask for with that hop's own
+ * headers — rather than letting `fetch` carry headers or a credential across an origin
+ * change on its own.
  */
-export function createFetchLoadResolver(options: FetchLoadResolverOptions): AsyncLoadResolver;
+export function createFetchLoadResolver(options?: FetchLoadResolverOptions): AsyncLoadResolver;
 
 /** The ceilings every request runs under. `deadlineMs` is required. */
 export interface EndpointGovernors {
@@ -152,7 +114,7 @@ export interface SparqlEndpointOptions {
   readonly governors: EndpointGovernors;
   readonly resolveService?: AsyncServiceResolver | null;
   readonly resolveLoad?: AsyncLoadResolver | null;
-  /** Authorizes host-resolved `SERVICE` requests; needs `resolveService`. */
+  /** Authorizes host-resolved `SERVICE` requests and `LOAD` fetches, and bounds each by its profile's `timeoutMs`. */
   readonly catalog?: ServiceCatalog | null;
   readonly localServices?: Readonly<Record<string, Dataset>> | null;
   /** Without it, no CORS header is sent and `OPTIONS` is a `405`. */
@@ -188,20 +150,23 @@ export interface SparqlEndpointOptions {
  * and `correlationId` is the only lead, shared with the matching `onInternalError` call),
  * or the engine's own diagnostic code:
  *
- * - `400`, a request it refuses to evaluate as written (`detail` is the engine's
- *   message): `"native-sparql-unsupported"`, `"native-sparql-custom-function"`,
+ * - `400`, an operation that does not parse or that the engine refuses to evaluate as
+ *   written (`detail` is the engine's message): `"native-sparql-query-parse"`,
+ *   `"native-sparql-update-parse"`, `"native-sparql-parse-stack-exhausted"`,
+ *   `"native-sparql-unsupported"`, `"native-sparql-custom-function"`,
  *   `"native-sparql-quoted-triple-term-variable"`, `"native-sparql-host-stack-exhausted"`;
  * - `403`, the host refused to contact a `SERVICE` endpoint or `LOAD` source the request
- *   named: `"native-sparql-service-denied"` (the catalog withheld a capability),
- *   `"native-sparql-service-host-denied"` (the resolver's own policy),
- *   `"native-sparql-load-denied"`;
+ *   named: `"native-sparql-service-denied"` and `"native-sparql-load-denied"` (the catalog
+ *   withheld a capability), `"native-sparql-service-host-denied"` and
+ *   `"native-sparql-load-host-denied"` (the resolver's own policy);
+ * - `409`, another update of the dataset is in flight: `"native-sparql-update-in-flight"`;
  * - `502`, the endpoint or source was contacted and gave no usable answer (a network
- *   error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body):
- *   `"native-sparql-service-failed"`, `"native-sparql-load-failed"`;
+ *   error, its timeout, an HTTP error status, a redirect, an undecodable body):
+ *   `"native-sparql-service-failed"`, `"native-sparql-load-failed"`,
+ *   `"native-sparql-load-decode"`;
  * - `500` with a `correlationId`, this endpoint's own fault:
  *   `"native-sparql-service-unconfigured"` and `"native-sparql-load-no-resolver"` (no
- *   resolver reaches the named endpoint or source), `"native-sparql-load-fault"`
- *   (`resolveLoad` answered with something that is not an answer);
+ *   resolver reaches the named endpoint or source);
  * - `500`, the query's own evaluation failed (`detail` is the engine's message): any other
  *   engine code, such as `"native-sparql-query-eval"` or
  *   `"native-sparql-evaluation-stack-exhausted"`.
@@ -213,7 +178,7 @@ export interface SparqlEndpointOptions {
 export interface SparqlProblem {
   readonly type: "about:blank";
   readonly title: string;
-  readonly status: 400 | 403 | 405 | 406 | 413 | 415 | 422 | 500 | 502 | 503;
+  readonly status: 400 | 403 | 405 | 406 | 409 | 413 | 415 | 422 | 500 | 502 | 503;
   readonly detail: string;
   readonly code: string;
   readonly parameter?: string;
@@ -225,8 +190,8 @@ export interface SparqlProblem {
   readonly offered?: string[];
   /**
    * On a `500` this endpoint answers for its own fault (`code: "InternalError"`,
-   * `"native-sparql-service-unconfigured"`, `"native-sparql-load-no-resolver"`,
-   * `"native-sparql-load-fault"`): the id `onInternalError` was also handed.
+   * `"native-sparql-service-unconfigured"`, `"native-sparql-load-no-resolver"`): the id
+   * `onInternalError` was also handed.
    */
   readonly correlationId?: string;
 }

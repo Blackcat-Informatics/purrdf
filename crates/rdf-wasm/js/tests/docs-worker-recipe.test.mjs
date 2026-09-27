@@ -9,8 +9,8 @@
 // Worker's `.wasm` import becomes the compiled `WebAssembly.Module` workerd hands it.
 // A missing fence fails the test, so the README cannot lose a recipe silently.
 //
-// No network is touched: `fetch`, the Worker's service binding, `caches.default` and
-// `ctx` are deterministic doubles that RECORD what they were handed, so the assertions
+// No network is touched: `fetch`, the Worker's service binding and `caches.default`
+// are deterministic doubles that RECORD what they were handed, so the assertions
 // observe the request the recipe actually sent. The book's JavaScript chapter carries the
 // same recipes; any tagged fence there must be byte-identical to the README's, so the
 // execution here covers both.
@@ -225,16 +225,13 @@ test("the Worker recipe answers a SPARQL Protocol request with the joined result
         },
       },
     };
-    const pending = [];
-    const ctx = { waitUntil: (promise) => pending.push(promise) };
     const request = () =>
       new Request(`https://worker.example.org/sparql?query=${encodeURIComponent(QUERY)}`, {
         headers: { Accept: "application/sparql-results+json" },
       });
 
     for (const round of [1, 2]) {
-      const response = await worker.fetch(request(), env, ctx);
-      await Promise.all(pending.splice(0));
+      const response = await worker.fetch(request(), env);
       assert.equal(response.status, 200, `round ${round}`);
       assert.match(response.headers.get("Content-Type"), /^application\/sparql-results\+json/);
       assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
