@@ -323,9 +323,9 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
         (
             "purrdf_shacl_entail_to_ntriples",
             // `0.8.0` (unshipped) inserted the shapes graph's `owl:imports` table
-            // before the out-parameters.
+            // before the out-parameters, and the nullable shapes-graph IRI after the base.
             "int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, \
-             const char *shapes_base_iri, const char *data_nt, \
+             const char *shapes_base_iri, const char *shapes_graph_iri, const char *data_nt, \
              const char *const *import_iris, const char *const *import_documents, \
              size_t import_count, PurrdfBuffer **out_buffer, PurrdfError **out_error)"
                 .to_owned(),

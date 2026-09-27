@@ -391,14 +391,18 @@ Every host takes the IRI:
 
 | Host | Spelling |
 |---|---|
-| CLI | `--shapes-graph IRI` on `validate`, `shapes lint` and `shacl pack` |
-| Python | `shapes_graph=` on `validate`, `Shapes(...)`, `pack_product` and `lint_shapes` |
-| WebAssembly | a trailing `shapesGraph` on `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and `shaclLintShapes` |
-| C | `shapes_graph_iri` after `shapes_base_iri` on `purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shapes_product_encode` and `purrdf_shacl_lint_shapes` |
-| Rust | `engine::parse_shapes_with_graph`, `engine::validate_graphs_with_shapes_graph` and the `purrdf-validate` `*_with_shapes_graph` entry points |
+| CLI | `--shapes-graph IRI` on `validate`, `shapes lint`, `shacl pack` and `rules` |
+| Python | `shapes_graph=` on `validate`, `Shapes(...)`, `pack_product`, `lint_shapes`, `apply_rules` and `entail` |
+| WebAssembly | a trailing `shapesGraph` on `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct`, `shaclLintShapes`, `shaclApplyRules` and `shaclEntail` |
+| C | `shapes_graph_iri` after `shapes_base_iri` on `purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shapes_product_encode`, `purrdf_shacl_lint_shapes`, `purrdf_shacl_apply_rules` and `purrdf_shacl_entail_to_ntriples` |
+| Rust | `engine::parse_shapes_with_graph`, `engine::validate_graphs_with_shapes_graph`, `engine::entail_graphs_with_shapes_graph`, `RulesRequest::shapes_graph` and the `purrdf-validate` `*_with_shapes_graph` entry points |
 
 A `Shapes` parsed under the IRI carries it into every validation, every
 `PreparedShapes` binding and every prepared product, whose identity binds it.
+SHACL-AF SPARQL rules run in the same shapes-graph context: a `sh:SPARQLRule`'s
+`$shapesGraph` is pre-bound to the IRI a rules run names, and is an ordinary
+variable when it names none. A SPARQL 1.2 RL rule set has no shapes graph, so an
+IRI named beside one is refused rather than ignored.
 The W3C SHACL 1.0 test `sparql/pre-binding/shapesGraph-001` shows the difference.
 With the IRI named, it reports the one approved result. With none, `$shapesGraph`
 is unbound, the query selects nothing, and the data graph conforms.

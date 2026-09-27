@@ -1846,7 +1846,9 @@ class shapes:
     # each iteration running the rules in sh:order groups (one group's inferences
     # visible to the next, same-order rules concurrent); derived and temporary
     # triples deleted at the end of their layer — and return the base graph plus
-    # every inferred triple as a canonical N-Triples string.
+    # every inferred triple as a canonical N-Triples string. `shapes_graph` is the
+    # shapes-graph IRI a sh:SPARQLRule's $shapesGraph is pre-bound to, as
+    # apply_rules(shapes_graph=...) takes it; None leaves it an ordinary variable.
     @staticmethod
     def entail(
         shapes_ttl: str,
@@ -1854,6 +1856,7 @@ class shapes:
         *,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> str: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
@@ -1877,6 +1880,12 @@ class shapes:
     # graph's owl:imports table (Turtle) for `shapes_ttl`, the rule set's IMPORTS table
     # (SPARQL 1.2 RL texts) for `srl`, followed transitively. An import no entry
     # supplies, and an entry the import closure never names, raise ValueError.
+    #
+    # `shapes_graph` is the shapes-graph IRI the SHACL rules see the shapes graph
+    # under, as `purrdf rules --shapes-graph` names it: a sh:SPARQLRule's $shapesGraph
+    # is pre-bound to it and GRAPH $shapesGraph { ... } reads the shapes graph. A
+    # relative one resolves against `shapes_base`; None leaves $shapesGraph an
+    # ordinary variable. Naming one beside `srl` raises ValueError.
     @staticmethod
     def apply_rules(
         data_nt: str,
@@ -1891,6 +1900,7 @@ class shapes:
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        shapes_graph: str | None = None,
     ) -> dict[str, str | None]: ...
     # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
     # closure resolved from `imports`, well-formedness and stratification — every

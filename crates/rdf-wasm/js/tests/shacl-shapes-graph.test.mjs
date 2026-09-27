@@ -19,6 +19,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ready,
   Dataset,
+  shaclApplyRules,
+  shaclEntail,
   shaclLintShapes,
   shaclPackProduct,
   shaclProductValidateToSarif,
@@ -115,4 +117,81 @@ test("wasm_shacl_shapes_graph: a relative shapes graph with no base is refused",
   );
   assert.equal(conforms, false);
   assert.equal(results.length, 1);
+});
+
+// The rules entry points take the same argument: a SHACL-AF SPARQL rule runs in the
+// shapes-graph context, so named, its `$shapesGraph` is the IRI and `GRAPH $shapesGraph`
+// reads the shapes graph; omitted, `$shapesGraph` is an ordinary, unbound variable. The
+// rule infers `COALESCE($shapesGraph, ex:none)`, so both answers are observed.
+test("wasm_rules_shapes_graph: shaclApplyRules and shaclEntail pre-bind $shapesGraph", () => {
+  const rules = `@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#shapesGraph> ?g }
+    WHERE { BIND (COALESCE($shapesGraph, <http://example.org/ns#none>) AS ?g) }""" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#marked> ?m }
+    WHERE { GRAPH $shapesGraph { $currentShape <http://example.org/ns#marker> ?m } }""" ] .
+`;
+  const data =
+    "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
+  const graph = "http://example.org/shapes-graph";
+  const named =
+    "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> <http://example.org/shapes-graph> .";
+  const unnamed =
+    "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> <http://example.org/ns#none> .";
+  const marked =
+    "<http://example.org/ns#alice> <http://example.org/ns#marked> <http://example.org/ns#secret> .";
+  const apply = (shapesGraph) => {
+    const out = shaclApplyRules(
+      data,
+      rules,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      shapesGraph,
+    );
+    const inferred = out.inferred;
+    out.free();
+    return inferred;
+  };
+  const withGraph = apply(graph);
+  assert.ok(withGraph.includes(named) && withGraph.includes(marked), withGraph);
+  const without = apply(undefined);
+  assert.ok(without.includes(unnamed) && !without.includes(marked), without);
+
+  const entailed = shaclEntail(rules, data, undefined, undefined, undefined, graph);
+  assert.ok(entailed.includes(named) && entailed.includes(marked), entailed);
+  const plain = shaclEntail(rules, data);
+  assert.ok(plain.includes(unnamed) && !plain.includes(marked), plain);
+
+  const srl = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n";
+  const srlRun = (shapesGraph) =>
+    shaclApplyRules(
+      data,
+      undefined,
+      srl,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      shapesGraph,
+    );
+  assert.throws(() => srlRun(graph), /has no shapes graph/);
+  const ran = srlRun(undefined);
+  assert.ok(ran.inferred.includes("<http://example.org/ns#tagged>"), ran.inferred);
+  ran.free();
 });

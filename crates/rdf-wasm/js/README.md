@@ -230,7 +230,10 @@ ownership, and all limits. Complete examples are in
   1.2 removed); omitted, `$shapesGraph` is an ordinary variable. A relative IRI
   resolves against `shapesBase`, and one with no base throws.
   `shaclValidateChangesToSarif`, `shaclPackProduct` (which records it in the
-  product) and `shaclLintShapes` take the same trailing `shapesGraph?`.
+  product), `shaclLintShapes`, `shaclApplyRules` and `shaclEntail` take the same
+  trailing `shapesGraph?`; on the two rules entry points a `sh:SPARQLRule`'s
+  `$shapesGraph` is pre-bound to it, and `shaclApplyRules` throws when it is named
+  beside `srl`, which has no shapes graph.
   `shaclValidateToSarif` takes one more, `subClassOfInShapesGraph?`: SHACL 1.2
   Core §6.3's parameter of that name. `true` reads the shapes graph's
   `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL type
@@ -248,7 +251,7 @@ ownership, and all limits. Complete examples are in
   `free()` when done.
 - `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
   maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
-  maxStoredFacts?, maxJoinSteps?)` —
+  maxStoredFacts?, maxJoinSteps?, shapesGraph?)` —
   runs exactly one rule source, the SHACL 1.2 rules of `shapesTtl` or the SPARQL 1.2
   RL rule set `srl`, and returns a `ShaclRulesInference`: `inferred` is the
   inference graph (the inferred triples only) as N-Triples, and `proof` is the proof

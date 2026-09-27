@@ -122,6 +122,111 @@ fn expected_inference() -> String {
     out
 }
 
+/// `rules --shapes-graph` exposes the shapes graph to a `sh:SPARQLRule` under the named
+/// IRI, as `validate --shapes-graph` does: `$shapesGraph` is pre-bound to it, so the rule
+/// infers the IRI and reads the shapes graph through `GRAPH $shapesGraph`. Without the flag
+/// `$shapesGraph` is an ordinary, unbound variable: the rule infers `ex:none` and reads
+/// nothing. A relative value resolves against `--shapes-base`. Beside `--srl`, which has no
+/// shapes graph, the flag is a usage error, and the same rule set without it runs.
+#[test]
+fn cli_rules_shapes_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "graph-rules.ttl",
+        &format!(
+            "{PREFIXES}ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct \"\"\"
+    CONSTRUCT {{ $this <http://example.org/ns#shapesGraph> ?g }}
+    WHERE {{ BIND (COALESCE($shapesGraph, <http://example.org/ns#none>) AS ?g) }}\"\"\" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct \"\"\"
+    CONSTRUCT {{ $this <http://example.org/ns#marked> ?m }}
+    WHERE {{ GRAPH $shapesGraph {{ $currentShape <http://example.org/ns#marker> ?m }} }}\"\"\" ] .
+"
+        ),
+    );
+    let data = write_file(
+        dir.path(),
+        "person.nt",
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.org/ns#Person> .\n",
+    );
+    let named = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+                 <http://example.org/shapes-graph> .";
+    let marked = "<http://example.org/ns#alice> <http://example.org/ns#marked> \
+                  <http://example.org/ns#secret> .";
+    let unnamed = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+                   <http://example.org/ns#none> .";
+
+    let with = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        "http://example.org/shapes-graph",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&with), 0, "{}", stderr(&with));
+    assert!(stdout(&with).contains(named), "{}", stdout(&with));
+    assert!(stdout(&with).contains(marked), "{}", stdout(&with));
+
+    let without = run(&["rules", "--shapes", &shapes, "--to", "ntriples", &data]);
+    assert_eq!(code(&without), 0, "{}", stderr(&without));
+    assert!(stdout(&without).contains(unnamed), "{}", stdout(&without));
+    assert!(!stdout(&without).contains(marked), "{}", stdout(&without));
+
+    let relative = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        "--shapes-base",
+        "http://example.org/doc",
+        "--shapes-graph",
+        "shapes-graph",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&relative), 0, "{}", stderr(&relative));
+    assert!(stdout(&relative).contains(named), "{}", stdout(&relative));
+
+    let srl = write_file(
+        dir.path(),
+        "tag.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n",
+    );
+    let refused = run(&[
+        "rules",
+        "--srl",
+        &srl,
+        "--shapes-graph",
+        "http://example.org/shapes-graph",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("--shapes-graph"),
+        "{}",
+        stderr(&refused)
+    );
+    let checked = run(&[
+        "rules",
+        "--srl",
+        &srl,
+        "--check",
+        "--shapes-graph",
+        "http://example.org/shapes-graph",
+    ]);
+    assert_eq!(code(&checked), 2, "{}", stderr(&checked));
+    let ran = run(&["rules", "--srl", &srl, "--to", "ntriples", &data]);
+    assert_eq!(code(&ran), 0, "{}", stderr(&ran));
+    assert!(stdout(&ran).contains("<http://example.org/ns#tagged>"));
+}
+
 /// `rules` writes the inference graph — the base triples excluded — deterministically,
 /// with the proof under `--explain` (bare to stderr, `=PATH` to a file); the round limit
 /// refuses at 3 and completes at 4 and at the default; and a SPARQL 1.2 RL rule set runs

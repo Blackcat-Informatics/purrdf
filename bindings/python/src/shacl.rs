@@ -261,8 +261,13 @@ fn messages_list<'py>(
 /// not.
 ///
 /// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self).
+///
+/// `shapes_graph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+/// `apply_rules(shapes_graph=...)` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is
+/// pre-bound to it. A relative one resolves against `shapes_base`; `None` leaves
+/// `$shapesGraph` an ordinary variable.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn entail(
     py: Python<'_>,
@@ -270,11 +275,18 @@ fn entail(
     data_nt: &str,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
+    shapes_graph: Option<&str>,
 ) -> PyResult<String> {
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
     py.detach(|| {
-        purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt, &pairs)
+        purrdf_validate::entail_to_ntriples_string_with_shapes_graph(
+            shapes_ttl,
+            shapes_base,
+            shapes_graph,
+            data_nt,
+            &pairs,
+        )
     })
     .map_err(|error| shapes_error(py, error))
 }
@@ -309,6 +321,12 @@ fn entail(
 /// texts), followed transitively. An imported document's rules run. An import no entry
 /// supplies, and an entry the import closure never names, raise `ValueError`.
 ///
+/// `shapes_graph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+/// `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+/// to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+/// against `shapes_base`; `None` leaves `$shapesGraph` an ordinary variable. Naming one
+/// beside `srl` raises `ValueError`: a SPARQL 1.2 RL rule set has no shapes graph.
+///
 /// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
 /// C-ABI bindings call.
 #[pyfunction]
@@ -325,6 +343,7 @@ fn entail(
     max_stored_facts=None,
     max_join_steps=None,
     imports=Vec::new(),
+    shapes_graph=None,
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -341,6 +360,7 @@ fn apply_rules(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     imports: Vec<(String, String)>,
+    shapes_graph: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
@@ -349,6 +369,7 @@ fn apply_rules(
                 data_nt,
                 shapes_ttl,
                 shapes_base,
+                shapes_graph,
                 imports: &pairs,
                 srl,
                 srl_base,

@@ -1263,6 +1263,15 @@ pub(crate) enum Command {
             requires = "shapes"
         )]
         shapes_base: Option<String>,
+        /// Expose the shapes graph to the SHACL-SPARQL rules as a named graph under this
+        /// IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s `$shapesGraph` is
+        /// pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. PurRDF
+        /// mints no vocabulary IRIs, so there is no default: without this flag
+        /// `$shapesGraph` is an ordinary variable. A relative value resolves against the
+        /// shapes document's base and is refused when it has none. A SPARQL 1.2 RL rule set
+        /// has no shapes graph, so the flag requires `--shapes`.
+        #[arg(long = "shapes-graph", value_name = "IRI", requires = "shapes")]
+        shapes_graph: Option<String>,
         /// The SPARQL 1.2 RL rule-set `FILE`, or `-` for stdin.
         #[arg(long, value_name = "FILE")]
         srl: Option<String>,

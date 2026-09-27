@@ -3550,9 +3550,29 @@ pub fn entail_graphs(
     shapes_base: Option<&str>,
     imports: &ShapesImports,
 ) -> Result<Arc<RdfDataset>, ShapesError> {
+    entail_graphs_with_shapes_graph(data_nt, shapes_ttl, shapes_base, None, imports)
+}
+
+/// [`entail_graphs`] with the shapes-graph IRI the SHACL-SPARQL rules see the shapes graph
+/// under: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it and
+/// `GRAPH $shapesGraph { … }` reads the shapes graph, as [`validate_graphs_with_shapes_graph`]
+/// exposes it to validation. A relative `shapes_graph` resolves against `shapes_base`
+/// ([`resolve_shapes_graph_iri`]); `None` is [`entail_graphs`].
+///
+/// # Errors
+///
+/// Everything [`entail_graphs`] refuses, and [`ShapesError::Invalid`] for a `shapes_graph`
+/// that names no graph.
+pub fn entail_graphs_with_shapes_graph(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImports,
+) -> Result<Arc<RdfDataset>, ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, None, imports)?;
+    let shapes = parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, imports)?;
     Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
 }
 

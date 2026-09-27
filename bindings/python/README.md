@@ -182,6 +182,9 @@ the shapes graph under, as `purrdf validate --shapes-graph` does: `$shapesGraph`
 is pre-bound to it and `GRAPH $shapesGraph { ... }` reads the shapes graph
 (SHACL 1.0's pre-binding, which SHACL 1.2 removed). Omitted, `$shapesGraph` is
 an ordinary variable. A `Shapes` carries it into `prepare()` and its products.
+`shapes.apply_rules` and `shapes.entail` take the same keyword, pre-binding a
+`sh:SPARQLRule`'s `$shapesGraph`; `apply_rules` raises `ValueError` when it is
+named beside `srl`, which has no shapes graph.
 `subclass_of_in_shapes_graph=True` on `shapes.validate` and `shapes.Shapes` is
 SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: the shapes graph's
 `rdfs:subClassOf` triples are read, in addition to the data graph's, wherever

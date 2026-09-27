@@ -138,7 +138,11 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `purrdf validate --shapes-graph` names and no C host could until now. Incompatible (a
 /// `0.7.0` host passes its data or import table into the new slot); it rides this bump
 /// for the reason the others do, and sits beside the base it resolves against for the
-/// reason `shapes_base_iri` sits beside the document it qualifies.
+/// reason `shapes_base_iri` sits beside the document it qualifies. The two rules entry
+/// points gained the same nullable `shapes_graph_iri` in the same place —
+/// `purrdf_shacl_apply_rules` after `shapes_base_iri` and before `srl`, and
+/// `purrdf_shacl_entail_to_ntriples` after `shapes_base_iri` and before `data_nt` — so a
+/// `sh:SPARQLRule`'s `$shapesGraph` is pre-bound as `purrdf rules --shapes-graph` binds it.
 ///
 /// The same unshipped bump carries SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
 /// `purrdf_shacl_validate_to_sarif` gained `bool subclass_of_in_shapes_graph` between

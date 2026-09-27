@@ -153,7 +153,11 @@
  * `purrdf validate --shapes-graph` names and no C host could until now. Incompatible (a
  * `0.7.0` host passes its data or import table into the new slot); it rides this bump
  * for the reason the others do, and sits beside the base it resolves against for the
- * reason `shapes_base_iri` sits beside the document it qualifies.
+ * reason `shapes_base_iri` sits beside the document it qualifies. The two rules entry
+ * points gained the same nullable `shapes_graph_iri` in the same place —
+ * `purrdf_shacl_apply_rules` after `shapes_base_iri` and before `srl`, and
+ * `purrdf_shacl_entail_to_ntriples` after `shapes_base_iri` and before `data_nt` — so a
+ * `sh:SPARQLRule`'s `$shapesGraph` is pre-bound as `purrdf rules --shapes-graph` binds it.
  *
  * The same unshipped bump carries SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
  * `purrdf_shacl_validate_to_sarif` gained `bool subclass_of_in_shapes_graph` between
@@ -2845,7 +2849,10 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
  *
  * `shapes_base_iri` carries the same meaning it does on
  * `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
- * and read rather than accepted-and-dropped.
+ * and read rather than accepted-and-dropped. `shapes_graph_iri` is the nullable
+ * shapes-graph IRI the SHACL rules see the shapes graph under, as on
+ * `purrdf_shacl_apply_rules`: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it; NULL
+ * leaves `$shapesGraph` an ordinary variable.
  *
  * Nothing is dropped on the way out: the underlying writer is the graph-carrying
  * canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
@@ -2857,12 +2864,14 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
  *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
+ * when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *shapes_base_iri,
+                                        const char *shapes_graph_iri,
                                         const char *data_nt,
                                         const char *const *import_iris,
                                         const char *const *import_documents,
@@ -2879,6 +2888,12 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; both NULL, or both
  * non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
  * IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
+ *
+ * `shapes_graph_iri` is the nullable shapes-graph IRI the SHACL rules see the shapes graph
+ * under, as `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is
+ * pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one
+ * resolves against `shapes_base_iri`; NULL leaves `$shapesGraph` an ordinary variable.
+ * Non-NULL beside `srl` is a `ParseError`: a SPARQL 1.2 RL rule set has no shapes graph.
  *
  * `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
  * did not hold, and `max_generated_terms` the terms inferred beyond the input's. Each may
@@ -2908,7 +2923,8 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  *
  * # Safety
  * `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
- * `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
+ * `shapes_graph_iri`, `srl` and `srl_base_iri` must each be null or a NUL-terminated C
+ * string;
  * `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
  * `max_join_steps` must each be null or readable; when `import_count` is non-zero,
  * `import_iris` and `import_documents` must each
@@ -2918,6 +2934,7 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
 int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *shapes_ttl,
                                  const char *shapes_base_iri,
+                                 const char *shapes_graph_iri,
                                  const char *srl,
                                  const char *srl_base_iri,
                                  const uint64_t *max_term_generating_rounds,

@@ -85,8 +85,8 @@ use std::os::raw::c_char;
 use purrdf_validate::{
     ChangeScope, ConformanceDisallows, ExprSelector, LintReport, NodeExprRequest, RulesOutcome,
     RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal, ValidationOptions,
-    apply_rules_to_ntriples, check_rules, entail_to_ntriples_string, eval_node_expr_to_terms,
-    lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
+    apply_rules_to_ntriples, check_rules, entail_to_ntriples_string_with_shapes_graph,
+    eval_node_expr_to_terms, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
     validate_changes_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_shapes_graph,
 };
 
@@ -468,10 +468,18 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
 fn entail_to_ntriples_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
     data_nt: &str,
     imports: &[(&str, &str)],
 ) -> Result<Vec<u8>, ShapesError> {
-    Ok(entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt, imports)?.into_bytes())
+    Ok(entail_to_ntriples_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        imports,
+    )?
+    .into_bytes())
 }
 
 /// Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
@@ -480,7 +488,10 @@ fn entail_to_ntriples_bytes(
 ///
 /// `shapes_base_iri` carries the same meaning it does on
 /// `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
-/// and read rather than accepted-and-dropped.
+/// and read rather than accepted-and-dropped. `shapes_graph_iri` is the nullable
+/// shapes-graph IRI the SHACL rules see the shapes graph under, as on
+/// `purrdf_shacl_apply_rules`: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it; NULL
+/// leaves `$shapesGraph` an ordinary variable.
 ///
 /// Nothing is dropped on the way out: the underlying writer is the graph-carrying
 /// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
@@ -492,13 +503,15 @@ fn entail_to_ntriples_bytes(
 ///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
-/// `shapes_base_iri` must be null or a NUL-terminated C string; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+/// `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
+/// when `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     shapes_ttl: *const c_char,
     shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
     data_nt: *const c_char,
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
@@ -516,6 +529,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
             }
             let shapes = cstr_to_str(shapes_ttl)?;
             let base = opt_cstr_to_str(shapes_base_iri)?;
+            let shapes_graph = opt_cstr_to_str(shapes_graph_iri)?;
             let data = cstr_to_str(data_nt)?;
             let imports = import_pairs(
                 import_iris,
@@ -523,7 +537,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                 import_count,
                 "purrdf_shacl_entail_to_ntriples",
             )?;
-            let bytes = entail_to_ntriples_bytes(shapes, base, data, &imports)
+            let bytes = entail_to_ntriples_bytes(shapes, base, shapes_graph, data, &imports)
                 .map_err(PurrdfError::shapes)?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
@@ -549,6 +563,12 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; both NULL, or both
 /// non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
 /// IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
+///
+/// `shapes_graph_iri` is the nullable shapes-graph IRI the SHACL rules see the shapes graph
+/// under, as `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is
+/// pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one
+/// resolves against `shapes_base_iri`; NULL leaves `$shapesGraph` an ordinary variable.
+/// Non-NULL beside `srl` is a `ParseError`: a SPARQL 1.2 RL rule set has no shapes graph.
 ///
 /// `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
 /// did not hold, and `max_generated_terms` the terms inferred beyond the input's. Each may
@@ -578,7 +598,8 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 ///
 /// # Safety
 /// `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
-/// `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
+/// `shapes_graph_iri`, `srl` and `srl_base_iri` must each be null or a NUL-terminated C
+/// string;
 /// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
 /// `max_join_steps` must each be null or readable; when `import_count` is non-zero,
 /// `import_iris` and `import_documents` must each
@@ -589,6 +610,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     data_nt: *const c_char,
     shapes_ttl: *const c_char,
     shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
     srl: *const c_char,
     srl_base_iri: *const c_char,
     max_term_generating_rounds: *const u64,
@@ -620,6 +642,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 data_nt: cstr_to_str(data_nt)?,
                 shapes_ttl: opt_cstr_to_str(shapes_ttl)?,
                 shapes_base: opt_cstr_to_str(shapes_base_iri)?,
+                shapes_graph: opt_cstr_to_str(shapes_graph_iri)?,
                 imports: &imports,
                 srl: opt_cstr_to_str(srl)?,
                 srl_base: opt_cstr_to_str(srl_base_iri)?,
@@ -2016,7 +2039,7 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn entail_emits_materialized_ntriples() {
-        let bytes = entail_to_ntriples_bytes(RULE_SHAPES, None, RULE_DATA, &[])
+        let bytes = entail_to_ntriples_bytes(RULE_SHAPES, None, None, RULE_DATA, &[])
             .expect("entailment produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains(
@@ -2029,7 +2052,7 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_bytes("@@@ not turtle", None, RULE_DATA, &[]).is_err());
+        assert!(entail_to_ntriples_bytes("@@@ not turtle", None, None, RULE_DATA, &[]).is_err());
     }
 
     #[test]
@@ -2432,6 +2455,121 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         }
     }
 
+    /// `shapes_graph_iri` on the two rules entry points: named, a SPARQL rule's
+    /// `$shapesGraph` is the IRI and `GRAPH $shapesGraph` reads the shapes graph; NULL, it
+    /// is an ordinary variable. Beside `srl` it is a `ParseError`, and the rule set alone
+    /// runs.
+    #[test]
+    fn capi_rules_shapes_graph() {
+        use std::ffi::CString;
+
+        let shapes = CString::new(
+            r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#shapesGraph> ?g }
+    WHERE { BIND (COALESCE($shapesGraph, <http://example.org/ns#none>) AS ?g) }""" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#marked> ?m }
+    WHERE { GRAPH $shapesGraph { $currentShape <http://example.org/ns#marker> ?m } }""" ] .
+"#,
+        )
+        .expect("no NUL");
+        let data = CString::new(
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/ns#Person> .\n",
+        )
+        .expect("no NUL");
+        let srl = CString::new(
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n",
+        )
+        .expect("no NUL");
+        let graph = CString::new("http://example.org/shapes-graph").expect("no NUL");
+        let named = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/shapes-graph> .";
+        let unnamed = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/ns#none> .";
+        let marked = "<http://example.org/ns#alice> <http://example.org/ns#marked> \
+            <http://example.org/ns#secret> .";
+        let rules = |shapes_ttl: *const c_char, srl: *const c_char, graph: *const c_char| {
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, or a writable local.
+            unsafe {
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes_ttl,
+                    std::ptr::null(),
+                    graph,
+                    srl,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut inferred,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                if status == PurrdfStatus::Ok as i32 {
+                    Ok(take_text(inferred))
+                } else {
+                    Err((status, take_error(error)))
+                }
+            }
+        };
+        let entail = |graph: *const c_char| {
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, or a writable local.
+            unsafe {
+                let status = purrdf_shacl_entail_to_ntriples(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    graph,
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
+                take_text(buffer)
+            }
+        };
+        let with = rules(shapes.as_ptr(), std::ptr::null(), graph.as_ptr()).expect("runs");
+        assert!(with.contains(named) && with.contains(marked), "{with}");
+        let without = rules(shapes.as_ptr(), std::ptr::null(), std::ptr::null()).expect("runs");
+        assert!(
+            without.contains(unnamed) && !without.contains(marked),
+            "{without}"
+        );
+        let entailed = entail(graph.as_ptr());
+        assert!(
+            entailed.contains(named) && entailed.contains(marked),
+            "{entailed}"
+        );
+        let plain = entail(std::ptr::null());
+        assert!(
+            plain.contains(unnamed) && !plain.contains(marked),
+            "{plain}"
+        );
+        let (status, refused) = rules(std::ptr::null(), srl.as_ptr(), graph.as_ptr())
+            .expect_err("no shapes graph beside srl");
+        assert_eq!(status, PurrdfStatus::ParseError as i32, "{refused}");
+        assert!(refused.contains("has no shapes graph"), "{refused}");
+        let tagged = rules(std::ptr::null(), srl.as_ptr(), std::ptr::null()).expect("runs");
+        assert!(
+            tagged.contains("<http://example.org/ns#tagged>"),
+            "{tagged}"
+        );
+    }
+
     /// `purrdf_shacl_apply_rules` across the boundary: the inference graph alone, the
     /// proof exactly when `out_proof` is non-NULL, the round limit refusing at 3 and
     /// completing at 4 (and at the NULL default), and SPARQL 1.2 RL text.
@@ -2456,6 +2594,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
                     shapes,
+                    std::ptr::null(),
                     std::ptr::null(),
                     srl,
                     std::ptr::null(),
@@ -2538,6 +2677,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw const budget,
                     std::ptr::null(),
                     std::ptr::null(),
@@ -2588,6 +2728,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
                     shapes.as_ptr(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
@@ -2672,6 +2813,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             unsafe {
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     srl.as_ptr(),
@@ -3474,6 +3616,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_entail_to_ntriples(
                     shapes.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     data.as_ptr(),
                     import_iris,
                     import_documents,
@@ -3491,6 +3634,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
                     shapes.as_ptr(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),

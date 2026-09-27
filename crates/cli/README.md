@@ -768,6 +768,7 @@ purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
 
 ```text
 purrdf rules (--shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
+                       [--shapes-graph <IRI>]
               | --srl <FILE> [--srl-base <IRI>])
              [--import <IRI>=<FILE>]... [--explain[=<PATH>]]
              [--max-term-generating-rounds <N>] [--max-generated-terms <N>]
@@ -788,6 +789,14 @@ only what the rules added. SHACL 1.2 Inference Rules calls these "the inferred
 triples", and SPARQL 1.2 RL's `infer` outputs exactly that graph. The graph is
 serialized in `--to` in one canonical order, so two runs over the same inputs
 write the same bytes. `rules inferred N` goes to stderr.
+
+**`--shapes-graph <IRI>`** exposes the shapes graph to the SHACL-AF SPARQL rules
+under that IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s
+`$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes
+graph. Without it `$shapesGraph` is an ordinary variable; there is no default IRI,
+because PurRDF mints no vocabulary. A relative value resolves against the shapes
+document's base. A `--srl` rule set has no shapes graph, so the flag beside
+`--srl` is a usage error (exit `2`).
 
 **`--explain`** writes the proof of every inferred triple, to stderr (bare) or
 to `PATH` (`--explain=PATH`), in the output's order:

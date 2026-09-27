@@ -98,10 +98,34 @@ pub fn entail_to_ntriples_string(
     data_nt: &str,
     imports: &ShapesImportList<'_>,
 ) -> Result<String, ShapesError> {
-    let dataset = engine::entail_graphs(
+    entail_to_ntriples_string_with_shapes_graph(shapes_ttl, shapes_base, None, data_nt, imports)
+}
+
+/// [`entail_to_ntriples_string`] with the shapes-graph IRI the SHACL-SPARQL rules see the
+/// shapes graph under: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it and
+/// `GRAPH $shapesGraph { … }` reads the shapes graph, exactly as
+/// [`crate::validate_to_sarif_string_with_shapes_graph`] exposes it to validation. A
+/// relative `shapes_graph` resolves against `shapes_base`
+/// ([`engine::resolve_shapes_graph_iri`]); `None` is [`entail_to_ntriples_string`], where
+/// `$shapesGraph` is an ordinary variable. Python's `shapes_graph=`, WebAssembly's
+/// `shapesGraph` and C's `shapes_graph_iri` all reach here.
+///
+/// # Errors
+///
+/// Everything [`entail_to_ntriples_string`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` that names no graph.
+pub fn entail_to_ntriples_string_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
+    let dataset = engine::entail_graphs_with_shapes_graph(
         data_nt,
         shapes_ttl,
         shapes_base,
+        shapes_graph,
         &ShapesImports::from_turtle(imports)?,
     )?;
     // The materialized dataset is wholly caller-supplied (both `data_nt` and

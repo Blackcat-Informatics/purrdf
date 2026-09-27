@@ -70,6 +70,15 @@ pub struct RulesRequest<'a> {
     pub shapes_ttl: Option<&'a str>,
     /// The base IRI the shapes document's relative references resolve against.
     pub shapes_base: Option<&'a str>,
+    /// The shapes-graph IRI the SHACL rules see the shapes graph under: a `sh:SPARQLRule`'s
+    /// `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes
+    /// graph, exactly as [`crate::validate_to_sarif_string_with_shapes_graph`] exposes it
+    /// to validation. A relative one resolves against [`Self::shapes_base`]
+    /// ([`engine::resolve_shapes_graph_iri`]); `None` leaves `$shapesGraph` an ordinary
+    /// variable. A SPARQL 1.2 RL rule set has no shapes graph, so naming one beside
+    /// [`Self::srl`] is refused. Python's `shapes_graph=`, WebAssembly's `shapesGraph` and
+    /// C's `shapes_graph_iri` all reach here.
+    pub shapes_graph: Option<&'a str>,
     /// The rule source's import table, `(IRI, document text)` pairs: the shapes graph's
     /// `owl:imports` table (Turtle documents), or the SPARQL 1.2 RL rule set's `IMPORTS`
     /// table (rule-set texts). Empty is the ordinary case, and still refuses a rule source
@@ -170,7 +179,8 @@ pub struct RulesOutcome {
 ///
 /// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
 /// or its import table cannot be used. Otherwise [`ShapesError::Invalid`]: neither or
-/// both rule sources named; a document that does not parse; a rule set that is
+/// both rule sources named; a shapes-graph IRI that names no graph, or one named beside a
+/// SPARQL 1.2 RL rule set; a document that does not parse; a rule set that is
 /// ill-formed, unstratifiable or fails during execution; a rule-evaluation limit
 /// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
@@ -178,10 +188,11 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
     let inference: Inference = match (request.shapes_ttl, request.srl) {
         (Some(shapes_ttl), None) => {
-            let shapes = engine::parse_shapes_with_config(
+            let shapes = engine::parse_shapes_with_graph(
                 shapes_ttl,
                 request.shapes_base,
                 None,
+                request.shapes_graph,
                 &ShapesImports::from_turtle(request.imports)?,
             )?;
             let projected = engine::project_dataset(data.as_ref())?;
@@ -200,6 +211,14 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                 options = options.with_max_join_steps(steps);
             }
             purrdf_shapes::infer(&holder, &shapes, &options)?
+        }
+        (None, Some(_)) if request.shapes_graph.is_some() => {
+            return Err(ShapesError::Invalid(
+                "a shapes-graph IRI names the graph a SHACL shapes graph's rules see the shapes \
+                 graph under, and a SPARQL 1.2 RL rule set has no shapes graph; drop it, or run \
+                 a SHACL shapes graph"
+                    .to_owned(),
+            ));
         }
         (None, Some(text)) => {
             let document = check_rules(

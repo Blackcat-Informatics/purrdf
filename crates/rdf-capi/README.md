@@ -153,7 +153,9 @@ executes that example against the generated shared library and committed header.
   `PurrdfSrlCheckLevel` discriminant, and gives `purrdf_shacl_validate_to_sarif`,
   `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
   `purrdf_shapes_product_encode` a nullable `shapes_graph_iri` immediately after
-  `shapes_base_iri` (see [The shapes-graph IRI](#the-shapes-graph-iri)), and
+  `shapes_base_iri` (see [The shapes-graph IRI](#the-shapes-graph-iri)), as it does
+  the two rules entry points `purrdf_shacl_apply_rules` and
+  `purrdf_shacl_entail_to_ntriples`, and
   `purrdf_shacl_validate_to_sarif` a `bool subclass_of_in_shapes_graph` between
   `import_count` and `out_buffer` (see
   [`subClassOfInShapesGraph`](#subclassofinshapesgraph)).
@@ -168,7 +170,7 @@ executes that example against the generated shared library and committed header.
 Beside validation, four entry points reach the same engine every other PurRDF host
 does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 
-- `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
+- `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, shapes_graph_iri, srl, srl_base_iri,
   max_term_generating_rounds, max_generated_terms, max_stored_facts, max_join_steps,
   import_iris, import_documents, import_count, out_inferred, out_proof, out_error)`
   runs exactly one
@@ -256,9 +258,12 @@ importing document's do, and a prepared product carries the merged closure.
 ## The shapes-graph IRI
 
 `purrdf_shacl_validate_to_sarif`, `purrdf_shacl_validate_changes_to_sarif`,
-`purrdf_shacl_lint_shapes` and `purrdf_shapes_product_encode` take a nullable
-`shapes_graph_iri` right after `shapes_base_iri`: the IRI SHACL-SPARQL sees the
-shapes graph under, which `purrdf validate --shapes-graph` names. `$shapesGraph` is
+`purrdf_shacl_lint_shapes`, `purrdf_shapes_product_encode` and the two rules entry
+points, `purrdf_shacl_apply_rules` and `purrdf_shacl_entail_to_ntriples`, take a
+nullable `shapes_graph_iri` right after `shapes_base_iri`: the IRI SHACL-SPARQL sees
+the shapes graph under, which `purrdf validate --shapes-graph` and `purrdf rules
+--shapes-graph` name. A `sh:SPARQLRule` sees it too. On `purrdf_shacl_apply_rules`
+it is a `ParseError` beside `srl`: a SPARQL 1.2 RL rule set has no shapes graph. `$shapesGraph` is
 pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. That is SHACL
 1.0's pre-binding, which SHACL 1.2 removed. NULL names no graph, and `$shapesGraph`
 is then an ordinary variable. A relative IRI resolves against `shapes_base_iri`; one

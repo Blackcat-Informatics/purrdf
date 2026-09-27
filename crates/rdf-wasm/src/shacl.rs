@@ -476,12 +476,20 @@ pub(crate) fn entail_to_ntriples_impl(
     data_nt: &str,
     import_iris: &[String],
     import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<String, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt, &imports)
+    purrdf_validate::entail_to_ntriples_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        &imports,
+    )
 }
 
-/// `shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?)` → the
+/// `shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?,
+/// shapesGraph?)` → the
 /// materialized dataset as an N-Triples string (the base graph plus every inferred
 /// triple).
 ///
@@ -498,6 +506,11 @@ pub(crate) fn entail_to_ntriples_impl(
 ///
 /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
 /// [`ShaclImportError`]): an imported document's rules run.
+///
+/// `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+/// [`shacl_apply_rules`] takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it.
+/// A relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
+/// variable.
 #[wasm_bindgen(js_name = shaclEntail)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_entail(
@@ -506,6 +519,7 @@ pub fn shacl_entail(
     shapes_base: Option<String>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
 ) -> Result<String, JsValue> {
     entail_to_ntriples_impl(
         shapes_ttl,
@@ -513,6 +527,7 @@ pub fn shacl_entail(
         data_nt,
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
     )
     .map_err(shapes_rejection)
 }
@@ -565,7 +580,7 @@ pub(crate) fn apply_rules_impl(
 
 /// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
 /// maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
-/// maxStoredFacts?, maxJoinSteps?)` → a `ShaclRulesInference`.
+/// maxStoredFacts?, maxJoinSteps?, shapesGraph?)` → a `ShaclRulesInference`.
 ///
 /// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
 /// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
@@ -591,6 +606,12 @@ pub(crate) fn apply_rules_impl(
 /// imported document's rules run. An import no entry supplies, and an entry the import
 /// closure never names, throw.
 ///
+/// `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+/// `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+/// to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+/// against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
+/// `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
+///
 /// Throws on a document that does not parse, an ill-formed or unstratifiable rule set, a
 /// rule failing during execution, and a passed evaluation limit; rejects with a
 /// [`ShaclImportError`] when the shapes graph's `owl:imports` closure is not in hand. Call
@@ -614,6 +635,7 @@ pub fn shacl_apply_rules(
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    shapes_graph: Option<String>,
 ) -> Result<ShaclRulesInference, JsValue> {
     let imports = shapes_import_pairs(
         import_iris.as_deref().unwrap_or_default(),
@@ -624,6 +646,7 @@ pub fn shacl_apply_rules(
         data_nt,
         shapes_ttl: shapes_ttl.as_deref(),
         shapes_base: shapes_base.as_deref(),
+        shapes_graph: shapes_graph.as_deref(),
         imports: &imports,
         srl: srl.as_deref(),
         srl_base: srl_base.as_deref(),
@@ -1611,7 +1634,7 @@ mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt = entail_to_ntriples_impl(RULE_SHAPES, None, RULE_DATA, &[], &[])
+        let nt = entail_to_ntriples_impl(RULE_SHAPES, None, RULE_DATA, &[], &[], None)
             .expect("entailment produced");
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
@@ -1625,7 +1648,9 @@ mod tests {
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_impl("@@@ not turtle", None, RULE_DATA, &[], &[]).is_err());
+        assert!(
+            entail_to_ntriples_impl("@@@ not turtle", None, RULE_DATA, &[], &[], None).is_err()
+        );
     }
 
     #[test]
@@ -1922,6 +1947,89 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             steps.ends_with("raise it with shaclApplyRules's maxJoinSteps"),
             "{steps}"
         );
+    }
+
+    /// A shapes graph whose `sh:SPARQLRule` infers `COALESCE($shapesGraph, ex:none)` and
+    /// reads the shapes graph through `GRAPH $shapesGraph`.
+    const SHAPES_GRAPH_RULES: &str = r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#shapesGraph> ?g }
+    WHERE { BIND (COALESCE($shapesGraph, <http://example.org/ns#none>) AS ?g) }""" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#marked> ?m }
+    WHERE { GRAPH $shapesGraph { $currentShape <http://example.org/ns#marker> ?m } }""" ] .
+"#;
+
+    /// `shaclApplyRules`' and `shaclEntail`'s `shapesGraph`: named, a SPARQL rule's
+    /// `$shapesGraph` is the IRI and `GRAPH $shapesGraph` reads the shapes graph; omitted,
+    /// it is an ordinary variable. Beside `srl` it throws, and the rule set alone runs.
+    #[test]
+    fn wasm_rules_shapes_graph() {
+        let data = "<http://example.org/ns#alice> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
+        let named = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/shapes-graph> .";
+        let unnamed = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/ns#none> .";
+        let marked = "<http://example.org/ns#alice> <http://example.org/ns#marked> \
+            <http://example.org/ns#secret> .";
+        let request = purrdf_validate::RulesRequest {
+            data_nt: data,
+            shapes_ttl: Some(SHAPES_GRAPH_RULES),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let with = apply_rules_impl(&purrdf_validate::RulesRequest {
+            shapes_graph: Some("http://example.org/shapes-graph"),
+            ..request
+        })
+        .expect("rules run")
+        .inferred_ntriples;
+        assert!(with.contains(named) && with.contains(marked), "{with}");
+        let without = apply_rules_impl(&request)
+            .expect("rules run")
+            .inferred_ntriples;
+        assert!(
+            without.contains(unnamed) && !without.contains(marked),
+            "{without}"
+        );
+
+        let entailed = entail_to_ntriples_impl(
+            SHAPES_GRAPH_RULES,
+            None,
+            data,
+            &[],
+            &[],
+            Some("http://example.org/shapes-graph"),
+        )
+        .expect("entails");
+        assert!(
+            entailed.contains(named) && entailed.contains(marked),
+            "{entailed}"
+        );
+        let plain = entail_to_ntriples_impl(SHAPES_GRAPH_RULES, None, data, &[], &[], None)
+            .expect("entails");
+        assert!(
+            plain.contains(unnamed) && !plain.contains(marked),
+            "{plain}"
+        );
+
+        let srl = purrdf_validate::RulesRequest {
+            data_nt: data,
+            srl: Some(
+                "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n",
+            ),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        assert!(
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                shapes_graph: Some("http://example.org/shapes-graph"),
+                ..srl
+            })
+            .is_err()
+        );
+        assert!(apply_rules_impl(&srl).is_ok());
     }
 
     /// The rules entry point: the inference graph alone, the proof on request, the

@@ -1464,6 +1464,11 @@ export class ShaclImportError {
  *
  * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
  * `ShaclImportError`): an imported document's rules run.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `shaclApplyRules` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it. A
+ * relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
+ * variable.
  */
 export function shaclEntail(
   shapesTtl: string,
@@ -1471,6 +1476,7 @@ export function shaclEntail(
   shapesBase?: string,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  shapesGraph?: string,
 ): string;
 
 /**
@@ -1516,6 +1522,12 @@ export class ShaclRulesInference {
  * rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
  * imported document's rules run. An import no entry supplies, and an entry the import
  * closure never names, throw.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+ * to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+ * against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
+ * `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
  */
 export function shaclApplyRules(
   dataNt: string,
@@ -1530,6 +1542,7 @@ export function shaclApplyRules(
   maxGeneratedTerms?: bigint,
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  shapesGraph?: string,
 ): ShaclRulesInference;
 
 /**

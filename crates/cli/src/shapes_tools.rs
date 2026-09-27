@@ -52,6 +52,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) shapes_from: Option<CliRdfFormat>,
     /// `--shapes-base`.
     pub(crate) shapes_base: Option<&'a str>,
+    /// `--shapes-graph`: the IRI the shapes graph is exposed under to SPARQL rules.
+    pub(crate) shapes_graph: Option<&'a str>,
     /// `--srl`: the SPARQL 1.2 RL rule set, or `-`.
     pub(crate) srl: Option<&'a str>,
     /// `--srl-base`.
@@ -86,11 +88,12 @@ pub(crate) struct RulesOptions<'a> {
 
 /// The rule source `rules` runs, decided from the command line before anything is read.
 enum RuleSource<'a> {
-    /// A SHACL shapes graph.
+    /// A SHACL shapes graph, and the IRI `--shapes-graph` exposes it under.
     Shapes {
         path: &'a str,
         format: SourceFormat,
         base: Option<String>,
+        shapes_graph: Option<String>,
     },
     /// A SPARQL 1.2 RL rule set.
     Srl { path: &'a str, base: Option<String> },
@@ -118,6 +121,14 @@ pub(crate) fn run_rules(
     options: &RulesOptions<'_>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
+    if options.shapes_graph.is_some() && options.shapes.is_none() {
+        return Err(CliError::Usage(
+            "--shapes-graph names the graph a SHACL shapes graph's rules see the shapes graph \
+             under, and a --srl rule set has no shapes graph: drop --shapes-graph, or run a \
+             --shapes graph"
+                .to_owned(),
+        ));
+    }
     if let Some(level) = options.check {
         return run_srl_check(options, level, ledger_target);
     }
@@ -140,7 +151,13 @@ pub(crate) fn run_rules(
         (Some(path), None) => {
             let format = format::resolve(options.shapes_from, path)?;
             let base = crate::validate::shapes_document_base(path, format, options.shapes_base)?;
-            RuleSource::Shapes { path, format, base }
+            let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
+            RuleSource::Shapes {
+                path,
+                format,
+                base,
+                shapes_graph,
+            }
         }
         (None, Some(path)) => RuleSource::Srl {
             path,
@@ -163,7 +180,12 @@ pub(crate) fn run_rules(
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
     let inference: Inference = match &rule_source {
-        RuleSource::Shapes { path, format, base } => {
+        RuleSource::Shapes {
+            path,
+            format,
+            base,
+            shapes_graph,
+        } => {
             let root = read_shapes_document(path, *format, base.as_deref(), "--shapes")?;
             let table = shapes_imports(&root, options.imports)?;
             let shapes = purrdf::shapes::shapes::from_dataset_with_base(
@@ -171,7 +193,7 @@ pub(crate) fn run_rules(
                 None,
                 &root.prefixes,
                 None,
-                None,
+                shapes_graph.clone(),
                 &table,
             )
             .map_err(|error| {

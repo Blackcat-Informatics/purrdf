@@ -47,6 +47,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   shapes-graph refusals (Python `ValueError`, WebAssembly `Error`, C
   `PURRDF_STATUS_PARSE_ERROR`, CLI exit `1`).
 
+- **shapes, validate, cli, python, wasm, capi (BREAKING for C):** the shapes-graph IRI
+  reaches the RULES entry points on every host, as it already reached validation.
+  SHACL-AF SPARQL rules run in the shapes-graph context: a `sh:SPARQLRule`'s
+  `$shapesGraph` is pre-bound to the named IRI and `GRAPH $shapesGraph { … }` reads the
+  shapes graph; with none named it is an ordinary variable. `purrdf rules
+  --shapes-graph IRI`; Python `shapes_graph=` on `shapes.apply_rules` and
+  `shapes.entail`; WebAssembly a trailing `shapesGraph` on `shaclApplyRules` and
+  `shaclEntail`; C a nullable `shapes_graph_iri` after `shapes_base_iri` on
+  `purrdf_shacl_apply_rules` and `purrdf_shacl_entail_to_ntriples` (riding the
+  unshipped 0.8.0 ABI bump); Rust `RulesRequest::shapes_graph`,
+  `entail_to_ntriples_string_with_shapes_graph` and
+  `engine::entail_graphs_with_shapes_graph`. A relative IRI resolves against the shapes
+  document's base. A SPARQL 1.2 RL rule set has no shapes graph, so an IRI named beside
+  one is refused (CLI exit `2`, `ValueError`, a thrown `Error`, `ParseError`).
+
 - **shapes (BREAKING):** a `sh:SPARQLTarget` may carry one `sh:ask`, which used to be
   refused. SHACL Advanced Features §3.1: "SPARQL-based targets have at most one value for
   the property sh:ask"; "A SHACL engine can then determine whether a given shape applies
