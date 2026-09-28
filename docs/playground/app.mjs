@@ -607,7 +607,11 @@ async function doEntail() {
     const shapes = $("shapes-text").value;
     const res = await call("shaclEntail", { shapes });
     $("entail-output").textContent = res.ntriples;
-    showStatus("Materialized SHACL-AF entailments.");
+    showStatus(
+      res.diagnostics.length === 0
+        ? "Materialized SHACL-AF entailments."
+        : `Materialized SHACL-AF entailments; shapes graph diagnostics: ${res.diagnostics.join("; ")}.`,
+    );
   });
 }
 

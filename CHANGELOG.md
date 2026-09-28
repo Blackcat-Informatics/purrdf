@@ -10,6 +10,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** the empty `sh:in` / `sh:xone`
+  mandatory diagnostic is reported by EVERY run, not only by the lint (maintainer
+  decision, "Every run reports it"). Appendix A's `in-minListLength` and
+  `xone-minListLength` ("Each such list SHOULD have at least one member") leave the
+  shapes graph well-formed, so a diagnostic is never a `sh:ValidationResult`: it changes
+  neither `sh:conforms` nor any result, the W3C grading is unchanged, and the RDF report
+  graph does not carry it (SHACL defines no report term for it and PurRDF mints none).
+  Rust: `Shapes::mandatory_diagnostics`, `ValidationReport::diagnostics` (a new public
+  field), `RulesOutcome::diagnostics`, `EntailOutcome::diagnostics`; `MandatoryDiagnostic`
+  displays as `RULE SHAPE`. SARIF: each is a `level: "note"` notification in
+  `invocations[0].toolExecutionNotifications` whose `descriptor` names the rule in
+  `tool.driver.notifications` (SARIF 2.1.0 §3.20.21, §3.58). Command line: a `shacl
+  diagnostic RULE SHAPE` stderr line after `validate`'s verdict and after `rules
+  inferred N`. Python: a `diagnostics` list of `{"rule", "shape"}` on the `validate`
+  dict, `ValidationReport`, and the `apply_rules` dict; `shapes.entail` now returns
+  `{"ntriples", "diagnostics"}` instead of a string. WebAssembly: `shaclEntail` now
+  returns a `ShaclEntailment` (`ntriples`, `diagnostics`) instead of a string, and
+  `ShaclRulesInference` gains `diagnostics`. C: `purrdf_shacl_apply_rules` and
+  `purrdf_shacl_entail_to_ntriples` gain a nullable `out_diagnostics` buffer before
+  `out_error` (riding the unshipped 0.8.0 ABI bump). The diagnostics are computed once
+  per shapes graph, from its retained dataset, so a parse and a prepared-product
+  restore agree (the product stage id moves; existing products must be rebuilt), and a
+  graph with no empty list allocates nothing more per validation.
+
 - **entail, validate, cli, python, wasm, capi (BREAKING):** every entailment entry point
   closes the premise's `owl:imports` closure and refuses what it cannot use. `purrdf
   reason` and `purrdf convert --entailment` take `--import IRI=FILE` (they used to ignore

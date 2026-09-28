@@ -169,7 +169,12 @@ print(report["conforms"])
 ```
 
 SHACL 1.2 Core, SPARQL Extensions and Node Expressions, and SHACL rules
-entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
+entailment via `shapes.entail(...)`, which returns `{"ntriples", "diagnostics"}`.
+A shape whose `sh:in` or `sh:xone` list is empty is a mandatory diagnostic every
+run reports, beside the verdict and never among the results: `shapes.validate`'s
+dict, `ValidationReport.diagnostics`, and the `apply_rules` and `entail` dicts
+carry a `diagnostics` list of `{"rule", "shape"}` dicts, and `to_sarif()` carries
+each as a note-level `toolExecutionNotifications` entry. Reusable parsed shapes are available as
 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)`. Each result dict carries
 `messages`: every `sh:resultMessage` as a dict with `text` and, when present,
 `language`, `direction` and `datatype`. `shapes.validate(...,

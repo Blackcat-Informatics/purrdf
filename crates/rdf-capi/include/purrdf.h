@@ -145,7 +145,11 @@
  * `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
  * `max_join_steps`, each a nullable `const uint64_t *` — between `import_count` and
  * `out_buffer`, so an entailment run is bounded exactly as a rules run is. Incompatible
- * for the same reason, riding the same bump.
+ * for the same reason, riding the same bump. Both rules entry points also gained a nullable
+ * `PurrdfBuffer **out_diagnostics` immediately before `out_error` — the shapes graph's
+ * mandatory diagnostics (one `diagnostic RULE SHAPE` line per empty `sh:in` / `sh:xone`
+ * list), which every run reports — incompatible for the same reason (a `0.7.0` host passes
+ * its `PurrdfError **` into the new slot), riding the same bump.
  *
  * The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
  * entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
@@ -2878,14 +2882,19 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
  * the numbers and the parameter that raises it
  * (`purrdf_shacl_entail_to_ntriples's max_stored_facts`, …).
  *
+ * `out_diagnostics` asks for the shapes graph's mandatory diagnostics: NULL skips them;
+ * non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
+ * SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is none
+ * — which every run reports beside its outcome.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
  * `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
  * when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `max_term_generating_rounds`,
  * `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
- * readable;
- * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+ * readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
+ * must each be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *shapes_base_iri,
@@ -2899,6 +2908,7 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
                                         PurrdfBuffer **out_buffer,
+                                        PurrdfBuffer **out_diagnostics,
                                         PurrdfError **out_error);
 
 /**
@@ -2951,7 +2961,13 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * `max_join_steps` must each be null or readable; when `import_count` is non-zero,
  * `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_inferred`
- * must be writable; `out_proof` and `out_error` must each be null or writable.
+ * must be writable; `out_proof`, `out_diagnostics` and `out_error` must each be null or
+ * writable.
+ *
+ * `out_diagnostics` asks for the shapes graph's mandatory diagnostics: NULL skips them;
+ * non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
+ * SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is
+ * none, and always for an `srl` rule set, which has no shapes graph.
  */
 int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *shapes_ttl,
@@ -2968,6 +2984,7 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  size_t import_count,
                                  PurrdfBuffer **out_inferred,
                                  PurrdfBuffer **out_proof,
+                                 PurrdfBuffer **out_diagnostics,
                                  PurrdfError **out_error);
 
 /**

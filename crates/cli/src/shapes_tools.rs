@@ -179,6 +179,7 @@ pub(crate) fn run_rules(
     };
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
+    let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
     let inference: Inference = match &rule_source {
         RuleSource::Shapes {
             path,
@@ -199,6 +200,7 @@ pub(crate) fn run_rules(
             .map_err(|error| {
                 shapes_error(error, &format!("--shapes {path}"), &root, "--shapes-base")
             })?;
+            diagnostics = shapes.mandatory_diagnostics().to_vec();
             let projected = engine::project_dataset(data.as_ref()).map_err(CliError::Runtime)?;
             let holder = ShaclData::new(Arc::clone(&projected), projected, None);
             let mut rule_options = RuleOptions::default().with_limit_knobs(cli_limit_knobs());
@@ -253,6 +255,12 @@ pub(crate) fn run_rules(
         options.jsonld_options,
     )?;
     eprintln!("rules inferred {}", inference.inferred().len());
+    // A shapes graph's mandatory diagnostics — every empty `sh:in` / `sh:xone` list — as
+    // every run reports them (`validate` writes the same lines); a SPARQL 1.2 RL rule set
+    // has no shapes graph and none.
+    for diagnostic in &diagnostics {
+        eprintln!("shacl diagnostic {diagnostic}");
+    }
     if options.explain.is_requested() {
         report::surface_rendered(&options.explain, &inference.proof_text())?;
     }

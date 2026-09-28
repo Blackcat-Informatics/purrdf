@@ -1267,3 +1267,68 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         "the same closure either way"
     );
 }
+
+/// Maintainer decision, "Every run reports it": the approved W3C test `core/node/in-002`'s
+/// shapes graph (an empty `sh:in` list), with a rule. `validate` writes the verdict and the
+/// result count the specification gives and then `shacl diagnostic in-minListLength
+/// <shape>`; `rules` writes the same line after its inference count; SARIF carries it as a
+/// note-level tool-execution notification. The neighbour whose list has a member writes
+/// no diagnostic line and no notification, and its verdict is the conforming one.
+#[test]
+fn every_run_reports_an_empty_in_list() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = |members: &str| {
+        format!(
+            "@prefix ex: <http://example.com/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             ex:TestShape rdf:type rdfs:Class , sh:NodeShape ; sh:in {members} ;\n\
+               sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:seen ; \
+               sh:object ex:yes ] .\n"
+        )
+    };
+    let data = write_file(
+        dir.path(),
+        "data.nt",
+        "<http://example.com/ns#Instance> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.com/ns#TestShape> .\n",
+    );
+    let line = "shacl diagnostic in-minListLength <http://example.com/ns#TestShape>\n";
+    for (name, members, conforms, results) in [
+        ("empty.ttl", "()", "false", "1"),
+        (
+            "filled.ttl",
+            "( <http://example.com/ns#Instance> )",
+            "true",
+            "0",
+        ),
+    ] {
+        let flagged = members == "()";
+        let path = write_file(dir.path(), name, &shapes(members));
+        let validated = run(&["validate", "--shapes", &path, &data]);
+        let err = stderr(&validated);
+        assert_eq!(code(&validated), 0, "{err}");
+        assert!(
+            err.contains(&format!(
+                "shacl conforms {conforms}\nshacl results {results}\n"
+            )),
+            "{err}"
+        );
+        assert_eq!(err.contains(line), flagged, "{name}: {err}");
+
+        let sarif = run(&["validate", "--shapes", &path, "--format", "sarif", &data]);
+        let log: serde_json::Value = serde_json::from_str(&stdout(&sarif))
+            .unwrap_or_else(|error| panic!("{name}: SARIF on stdout: {error}: {}", stderr(&sarif)));
+        let notified = log["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]["descriptor"]
+            ["id"]
+            == "in-minListLength";
+        assert_eq!(notified, flagged, "{name}: {log:#}");
+
+        let rules = run(&["rules", "--shapes", &path, "--to", "ntriples", &data]);
+        let err = stderr(&rules);
+        assert_eq!(code(&rules), 0, "{err}");
+        assert!(err.contains("rules inferred 1\n"), "{err}");
+        assert_eq!(err.contains(line), flagged, "{name}: {err}");
+    }
+}

@@ -172,9 +172,15 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
   const without = apply(undefined);
   assert.ok(without.includes(unnamed) && !without.includes(marked), without);
 
-  const entailed = shaclEntail(rules, data, undefined, undefined, undefined, graph);
+  const entail = (shapesGraph) => {
+    const out = shaclEntail(rules, data, undefined, undefined, undefined, shapesGraph);
+    const ntriples = out.ntriples;
+    out.free();
+    return ntriples;
+  };
+  const entailed = entail(graph);
   assert.ok(entailed.includes(named) && entailed.includes(marked), entailed);
-  const plain = shaclEntail(rules, data);
+  const plain = entail(undefined);
   assert.ok(plain.includes(unnamed) && !plain.includes(marked), plain);
 
   const srl = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n";

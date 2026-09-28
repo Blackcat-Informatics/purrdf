@@ -217,7 +217,13 @@ ownership, and all limits. Complete examples are in
   cost) and the engine's dimension vocabulary, which keys every `evidence` map.
 - `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` /
   `shaclEntail(shapesTtl, dataNt, shapesBase?)` — SHACL validation to a SARIF
-  2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples. `shapesBase` is
+  2.1.0 report and SHACL-AF `sh:rule` entailment, returned as a
+  `ShaclEntailment` (`ntriples`, `diagnostics`; call `free()`). A shape whose
+  `sh:in` or `sh:xone` list is empty is a mandatory diagnostic every run reports,
+  beside the verdict and never among the results: the SARIF log carries each as a
+  `level: "note"` notification in `invocations[0].toolExecutionNotifications`,
+  and `ShaclEntailment.diagnostics` and `ShaclRulesInference.diagnostics` carry
+  `RULE SHAPE` strings (`in-minListLength <…>`). `shapesBase` is
   the base the shapes document's relative IRI references resolve against; a
   browser or Node host has no retrieval IRI of its own, so omit it and a
   relative reference throws rather than being mis-parsed (`dataNt` needs no

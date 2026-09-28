@@ -1562,11 +1562,17 @@ class _ValidationReport:
     @property
     def conforms(self) -> bool: ...
     # The report's sh:shapesGraphWellFormed (SHACL 1.2 Core section 6.7.1.4): True
-    # when the shapes graph is certainly well-formed, False for the one ill-formedness
-    # validated anyway (an empty sh:in or sh:xone list, which the approved W3C tests
-    # require validating), None for a report no validation produced.
+    # for every report a validation produced (an ill-formed shapes graph is refused, and
+    # an empty sh:in or sh:xone list is a mandatory diagnostic, not an ill-formedness),
+    # None for a report no validation produced.
     @property
     def shapes_graph_well_formed(self) -> bool | None: ...
+    # The shapes graph's mandatory diagnostics: one {"rule", "shape"} dict per shape
+    # with an empty sh:in or sh:xone list ("in-minListLength", "xone-minListLength").
+    # Every run reports them, beside the results and never among them: they change
+    # neither `conforms` nor the report graph.
+    @property
+    def diagnostics(self) -> list[dict[str, str]]: ...
     # Each result dict carries "messages": every sh:resultMessage, as
     # {"text": str, "language"?: str, "direction"?: "ltr" | "rtl", "datatype"?: str}.
     @property
@@ -1793,8 +1799,9 @@ class shapes:
     # (sh:Violation, sh:Warning, sh:Info); an empty sequence or a non-IRI raises
     # ValueError. The dict carries "conforms", "conformance_disallows" (the set the
     # report was judged against), "shapes_graph_well_formed" (the report's
-    # sh:shapesGraphWellFormed, as `ValidationReport.shapes_graph_well_formed`) and
-    # "results", each result's "severity" being its
+    # sh:shapesGraphWellFormed, as `ValidationReport.shapes_graph_well_formed`),
+    # "diagnostics" (the shapes graph's mandatory diagnostics, as
+    # `ValidationReport.diagnostics`) and "results", each result's "severity" being its
     # IRI — sh:Debug and sh:Trace included, which the default set does not block —
     # and its "messages" EVERY sh:resultMessage, each {"text", and "language" /
     # "direction" / "datatype" when present}; a result carrying SHACL-SPARQL result
@@ -1846,7 +1853,9 @@ class shapes:
     # each iteration running the rules in sh:order groups (one group's inferences
     # visible to the next, same-order rules concurrent); derived and temporary
     # triples deleted at the end of their layer — and return the base graph plus
-    # every inferred triple as a canonical N-Triples string. `shapes_graph` is the
+    # every inferred triple, as {"ntriples": the canonical N-Triples string,
+    # "diagnostics": the shapes graph's mandatory diagnostics, one {"rule", "shape"}
+    # dict per empty sh:in or sh:xone list}. `shapes_graph` is the
     # shapes-graph IRI a sh:SPARQLRule's $shapesGraph is pre-bound to, as
     # apply_rules(shapes_graph=...) takes it; None leaves it an ordinary variable.
     # `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
@@ -1865,10 +1874,12 @@ class shapes:
         max_generated_terms: int | None = None,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
-    ) -> str: ...
+    ) -> dict[str, builtins.object]: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
-    # canonical order, "proof": the proof text when explain=True, else None}. The rule
+    # canonical order, "proof": the proof text when explain=True, else None,
+    # "diagnostics": the shapes graph's mandatory diagnostics, one {"rule", "shape"}
+    # dict per empty sh:in or sh:xone list, empty for an `srl` rule set}. The rule
     # source is exactly one of `shapes_ttl` (a SHACL shapes graph's default rule set)
     # and `srl` (a SPARQL 1.2 RL rule set); neither or both raises ValueError.
     #
@@ -1909,7 +1920,7 @@ class shapes:
         max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
-    ) -> dict[str, str | None]: ...
+    ) -> dict[str, builtins.object]: ...
     # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
     # closure resolved from `imports`, well-formedness and stratification — every
     # static check apply_rules(srl=...) applies before it runs — with no data graph

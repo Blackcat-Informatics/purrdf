@@ -891,9 +891,25 @@ pub struct Shapes {
     /// at the construction site. The visibility is identical from outside the
     /// crate, where `Shapes` has been unconstructible by struct literal all along.
     pub(crate) parse_provenance: ParseProvenance,
+    /// Every empty `sh:in` / `sh:xone` list of the shapes graph's whole import closure —
+    /// the mandatory diagnostics [`crate::lint`] reports — derived from
+    /// [`Self::shapes_dataset`] once, when the shapes are assembled, so every run reports
+    /// them without re-reading the graph ([`Self::mandatory_diagnostics`]). Derived from the
+    /// retained dataset rather than carried by a prepared product, so a parse and a product
+    /// restore cannot disagree about them.
+    pub(crate) mandatory_diagnostics: Vec<crate::lint::MandatoryDiagnostic>,
 }
 
 impl Shapes {
+    /// Every mandatory diagnostic of this shapes graph — one per shape with an empty
+    /// `sh:in` or `sh:xone` list, ordered by rule id and then shape — which every
+    /// validation, rules and entailment run reports beside its outcome. See
+    /// [`crate::lint::MandatoryDiagnostic`].
+    #[must_use]
+    pub fn mandatory_diagnostics(&self) -> &[crate::lint::MandatoryDiagnostic] {
+        &self.mandatory_diagnostics
+    }
+
     /// The validation-request options every validation of these shapes answers
     /// under (see [`crate::engine::ValidationOptions`]).
     #[must_use]
@@ -951,6 +967,7 @@ impl Default for Shapes {
                 .freeze()
                 .expect("empty shapes dataset"),
             parse_provenance: ParseProvenance::default(),
+            mandatory_diagnostics: Vec::new(),
         }
     }
 }
@@ -1830,6 +1847,7 @@ impl<'s> Parser<'s> {
                 self.box_role_vocab.clone(),
                 self.shapes_graph.clone(),
             ),
+            mandatory_diagnostics: crate::lint::mandatory_diagnostics(&self.shapes_dataset),
         };
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;

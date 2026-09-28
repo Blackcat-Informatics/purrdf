@@ -51,10 +51,10 @@ def test_py_apply_rules_sees_the_shapes_graph_iri() -> None:
 
 
 def test_py_entail_sees_the_shapes_graph_iri() -> None:
-    named = purrdf.shapes.entail(_SHAPES, _DATA, shapes_graph=_GRAPH)
+    named = purrdf.shapes.entail(_SHAPES, _DATA, shapes_graph=_GRAPH)["ntriples"]
     assert _NAMED in named
     assert _MARKED in named
-    unnamed = purrdf.shapes.entail(_SHAPES, _DATA)
+    unnamed = purrdf.shapes.entail(_SHAPES, _DATA)["ntriples"]
     assert _UNNAMED in unnamed
     assert _MARKED not in unnamed
 

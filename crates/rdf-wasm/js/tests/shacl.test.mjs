@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 
 import {
   ready,
+  shaclApplyRules,
   shaclEntail,
   shaclLintShapes,
   shaclValidateChangesToSarif,
@@ -219,7 +220,10 @@ const RULE_DATA = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-
 `;
 
 test("shaclEntail materializes the inferred triple and keeps the base fact", () => {
-  const nt = shaclEntail(RULE_SHAPES, RULE_DATA);
+  const out = shaclEntail(RULE_SHAPES, RULE_DATA);
+  const nt = out.ntriples;
+  assert.deepEqual(out.diagnostics, []);
+  out.free();
   assert.match(
     nt,
     /<http:\/\/example\.org\/alice> <http:\/\/example\.org\/adult> <http:\/\/example\.org\/yes> \./,
@@ -228,6 +232,55 @@ test("shaclEntail materializes the inferred triple and keeps the base fact", () 
     nt,
     /<http:\/\/example\.org\/alice> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/Person> \./,
   );
+});
+
+// The approved W3C test core/node/in-002: a shape whose sh:in list is empty. Every run
+// reports the in-minListLength mandatory diagnostic — SARIF validation as a note-level
+// tool-execution notification, rules and entailment in their `diagnostics` — while the
+// verdict and the results are those of the specification; the neighbour whose list has a
+// member carries no diagnostic, so the notification is about the empty list.
+const IN_002 = (members) => `@prefix ex: <http://example.com/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:Instance rdf:type ex:TestShape .
+ex:TestShape rdf:type rdfs:Class , sh:NodeShape ; sh:in ${members} ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:seen ; sh:object ex:yes ] .
+`;
+const IN_002_DATA =
+  "<http://example.com/ns#Instance> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.com/ns#TestShape> .\n";
+
+test("wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict", () => {
+  const run = (members) => JSON.parse(shaclValidateToSarif(IN_002(members), IN_002_DATA)).runs[0];
+  const empty = run("()");
+  assert.equal(empty.properties.shaclConforms, false);
+  assert.equal(empty.results.length, 1);
+  assert.equal(empty.results[0].ruleId, "http://www.w3.org/ns/shacl#InConstraintComponent");
+  const [notification] = empty.invocations[0].toolExecutionNotifications;
+  assert.equal(empty.invocations[0].executionSuccessful, true);
+  assert.equal(notification.level, "note");
+  assert.equal(notification.descriptor.id, "in-minListLength");
+  assert.equal(empty.tool.driver.notifications[notification.descriptor.index].id, "in-minListLength");
+  assert.equal(notification.locations[0].logicalLocations[0].name, "<http://example.com/ns#TestShape>");
+  assert.equal(empty.invocations[0].toolExecutionNotifications.length, 1);
+
+  const filled = run("( <http://example.com/ns#Instance> )");
+  assert.equal(filled.properties.shaclConforms, true);
+  assert.deepEqual(filled.results, []);
+  assert.equal(filled.invocations, undefined, JSON.stringify(filled));
+  assert.equal(filled.tool.driver.notifications, undefined);
+
+  const expected = ["in-minListLength <http://example.com/ns#TestShape>"];
+  const rules = shaclApplyRules(IN_002_DATA, IN_002("()"));
+  assert.deepEqual(rules.diagnostics, expected);
+  rules.free();
+  const entailed = shaclEntail(IN_002("()"), IN_002_DATA);
+  assert.deepEqual(entailed.diagnostics, expected);
+  assert.ok(entailed.ntriples.includes("<http://example.com/ns#seen>"), entailed.ntriples);
+  entailed.free();
+  const quiet = shaclEntail(IN_002("( <http://example.com/ns#Instance> )"), IN_002_DATA);
+  assert.deepEqual(quiet.diagnostics, []);
+  quiet.free();
 });
 
 // A conforming base, so every violation below is the CHANGE's doing.

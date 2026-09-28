@@ -24,9 +24,12 @@ use purrdf_shapes::engine::ValidationOptions;
 use purrdf_shapes::report::{ReportBlankLabels, Severity, ValidationReport, ValidationResult};
 use purrdf_shapes::term::{Literal, Term};
 
+use purrdf_shapes::lint::MandatoryDiagnostic;
+
 use crate::model::{
-    ArtifactLocation, Driver, Level, Location, LogicalLocation, Message, PhysicalLocation,
-    PropertyBag, Region, ReportingDescriptor, ResultKind, Run, SarifLog, SarifResult, Tool,
+    ArtifactLocation, Driver, Level, Location, LogicalLocation, Message, Notification,
+    PhysicalLocation, PropertyBag, Region, ReportingConfiguration, ReportingDescriptor,
+    ReportingDescriptorReference, ResultKind, Run, SarifLog, SarifResult, Tool,
 };
 use crate::path_syntax::render_path;
 
@@ -228,7 +231,73 @@ pub fn build_report_sarif_with(
             serde_json::Value::Bool(well_formed),
         );
     }
+    attach_diagnostics(&mut run, &labelled.diagnostics);
     SarifLog::single_run(run)
+}
+
+/// State the shapes graph's mandatory diagnostics as tool-execution notifications
+/// (SARIF 2.1.0 §3.20.21), never as results: an empty `sh:in` / `sh:xone` list leaves the
+/// shapes graph well-formed and the verdict unchanged, so it is a condition the run met,
+/// not a finding about the data graph. Each is level `note` — §3.58.6: "The notification
+/// is purely informational. There is no required action" — so the run did not fail, and
+/// each names its descriptor in `driver.notifications` (§3.58.2) by id and index. The
+/// invocation that carries them is the caller-timed one when there is one, else one
+/// stating only `executionSuccessful`.
+fn attach_diagnostics(run: &mut Run, diagnostics: &[MandatoryDiagnostic]) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    let mut notifications = Vec::with_capacity(diagnostics.len());
+    for diagnostic in diagnostics {
+        let descriptors = &mut run.tool.driver.notifications;
+        let index = descriptors
+            .iter()
+            .position(|descriptor| descriptor.id == diagnostic.rule)
+            .unwrap_or_else(|| {
+                descriptors.push(ReportingDescriptor {
+                    id: diagnostic.rule.to_owned(),
+                    name: None,
+                    short_description: Some(Message::text(format!(
+                        "An empty {} list: SHACL 1.2 Core, Appendix A, \"Each such list SHOULD \
+                         have at least one member\"",
+                        diagnostic
+                            .parameter()
+                            .replace("http://www.w3.org/ns/shacl#", "sh:")
+                    ))),
+                    full_description: None,
+                    help: None,
+                    help_uri: None,
+                    default_configuration: Some(ReportingConfiguration { level: Level::Note }),
+                });
+                descriptors.len() - 1
+            });
+        notifications.push(Notification {
+            descriptor: ReportingDescriptorReference {
+                id: diagnostic.rule.to_owned(),
+                index,
+            },
+            level: Level::Note,
+            message: Message::text(diagnostic.message()),
+            locations: vec![Location {
+                physical_location: None,
+                logical_locations: vec![LogicalLocation {
+                    name: diagnostic.shape.to_string(),
+                    fully_qualified_name: None,
+                    kind: Some("shape".to_owned()),
+                }],
+                message: None,
+            }],
+        });
+    }
+    match run.invocations.first_mut() {
+        Some(invocation) => invocation.tool_execution_notifications = notifications,
+        None => run.invocations.push(crate::model::Invocation {
+            execution_successful: true,
+            start_time_utc: None,
+            end_time_utc: None,
+            tool_execution_notifications: notifications,
+        }),
+    }
 }
 
 /// The deterministic result ordering: severity, then physical location (artifact
@@ -723,6 +792,7 @@ fn assemble_run(
                 execution_successful: true,
                 start_time_utc: Some(start.clone()),
                 end_time_utc: Some(end.clone()),
+                tool_execution_notifications: Vec::new(),
             }]
         });
 
@@ -733,6 +803,7 @@ fn assemble_run(
                 version: options.tool_version.clone(),
                 information_uri: options.information_uri.clone(),
                 rules,
+                notifications: Vec::new(),
             },
         },
         results,
@@ -782,6 +853,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let r = &log.runs[0].results[0];
@@ -1039,6 +1111,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let text = &log.runs[0].results[0].message.text;
@@ -1081,6 +1154,7 @@ mod tests {
             ],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let run = &log.runs[0];
@@ -1122,6 +1196,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -1164,6 +1239,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -1195,6 +1271,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let related = &log.runs[0].results[0].related_locations;
@@ -1225,6 +1302,7 @@ mod tests {
             results: vec![r],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let path_loc = log.runs[0].results[0].locations[0]
@@ -1275,6 +1353,7 @@ mod tests {
             ],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let json = report_to_sarif_string(&report, &SarifOptions::default());
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -1311,6 +1390,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let rule = &log.runs[0].tool.driver.rules[0];
@@ -1347,6 +1427,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -1404,6 +1485,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -1472,6 +1554,7 @@ mod tests {
             results: vec![],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: Some(true),
+            diagnostics: Vec::new(),
         };
         let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
             &conforming,
@@ -1502,6 +1585,7 @@ mod tests {
             )],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: Some(true),
+            diagnostics: Vec::new(),
         };
         let json: serde_json::Value = serde_json::from_str(&report_to_sarif_string(
             &violating,
@@ -1522,6 +1606,7 @@ mod tests {
             results: vec![],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let none = build_report_sarif(&report, &SarifOptions::default());
         assert_eq!(none.runs[0].invocations, [] as [_; 0]);
@@ -1568,6 +1653,7 @@ mod tests {
             results: vec![vr],
             conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         // The numeric id's Display form is the interner ordinal (`unit` + index) —

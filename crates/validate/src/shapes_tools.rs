@@ -234,6 +234,11 @@ pub struct RulesOutcome {
     pub inferred_ntriples: String,
     /// The proof text ([`Inference::proof_text`]) when the request asked for it.
     pub proof: Option<String>,
+    /// The shapes graph's mandatory diagnostics
+    /// ([`purrdf_shapes::shapes::Shapes::mandatory_diagnostics`]): every shape with an empty
+    /// `sh:in` or `sh:xone` list, which every run reports. Empty for a SPARQL 1.2 RL rule
+    /// set, which has no shapes graph.
+    pub diagnostics: Vec<lint::MandatoryDiagnostic>,
 }
 
 /// Run a rule set over a data graph and return the inference graph.
@@ -256,6 +261,7 @@ pub struct RulesOutcome {
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let mut diagnostics = Vec::new();
     let inference: Inference = match (request.shapes_ttl, request.srl) {
         (Some(shapes_ttl), None) => {
             let shapes = engine::parse_shapes_with_graph(
@@ -274,6 +280,7 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                 max_join_steps: request.max_join_steps,
             }
             .rule_options(request.host.limit_knobs());
+            diagnostics = shapes.mandatory_diagnostics().to_vec();
             purrdf_shapes::infer(&holder, &shapes, &options)?
         }
         (None, Some(_)) if request.shapes_graph.is_some() => {
@@ -323,6 +330,7 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
     Ok(RulesOutcome {
         inferred_ntriples: inference.inferred_ntriples(),
         proof: request.explain.then(|| inference.proof_text()),
+        diagnostics,
     })
 }
 

@@ -323,6 +323,104 @@ mod tests {
         assert!(sarif.contains("DatatypeConstraintComponent"));
     }
 
+    /// The approved W3C test `core/node/xone-002`'s shape (an empty `sh:xone` list): the
+    /// SARIF log states the `xone-minListLength` mandatory diagnostic as a note-level
+    /// tool-execution notification whose descriptor, by id and index, is in
+    /// `driver.notifications` — never as a result — while the verdict and the one result
+    /// are the specification's; caller-supplied times ride the same invocation. The
+    /// neighbour whose list has a member emits no invocation and no descriptor.
+    #[test]
+    fn a_mandatory_diagnostic_is_a_note_level_tool_execution_notification() {
+        let shapes = |list: &str| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/> .\n\
+                 ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:xone {list} .\n"
+            )
+        };
+        let data = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+        let log = |list: &str, options: &SarifOptions| -> Value {
+            serde_json::from_str(
+                &validate_to_sarif_string(&shapes(list), None, data, options, &[]).expect("SARIF"),
+            )
+            .expect("JSON")
+        };
+        let flagged = log("()", &SarifOptions::default());
+        let run = &flagged["runs"][0];
+        assert_eq!(run["properties"]["shaclConforms"], json!(false));
+        assert_eq!(
+            run["results"].as_array().map(Vec::len),
+            Some(1),
+            "{flagged:#}"
+        );
+        assert_eq!(
+            run["results"][0]["ruleId"],
+            json!("http://www.w3.org/ns/shacl#XoneConstraintComponent")
+        );
+        assert_eq!(
+            run["invocations"],
+            json!([{
+                "executionSuccessful": true,
+                "toolExecutionNotifications": [{
+                    "descriptor": { "id": "xone-minListLength", "index": 0 },
+                    "level": "note",
+                    "message": { "text": purrdf_shapes::lint::MandatoryDiagnostic {
+                        rule: "xone-minListLength",
+                        shape: purrdf_shapes::term::Term::NamedNode(
+                            "http://example.org/S".into()
+                        ),
+                    }.message() },
+                    "locations": [{ "logicalLocations": [{
+                        "name": "<http://example.org/S>", "kind": "shape"
+                    }] }]
+                }]
+            }]),
+            "{flagged:#}"
+        );
+        assert_eq!(
+            run["tool"]["driver"]["notifications"][0]["id"],
+            json!("xone-minListLength")
+        );
+        assert_eq!(
+            run["tool"]["driver"]["notifications"][0]["defaultConfiguration"]["level"],
+            json!("note")
+        );
+
+        let timed = log(
+            "()",
+            &SarifOptions {
+                invocation_times: Some((
+                    "2026-01-01T00:00:00Z".into(),
+                    "2026-01-01T00:00:01Z".into(),
+                )),
+                ..SarifOptions::default()
+            },
+        );
+        let invocations = timed["runs"][0]["invocations"]
+            .as_array()
+            .expect("invocations");
+        assert_eq!(invocations.len(), 1, "{timed:#}");
+        assert_eq!(
+            invocations[0]["startTimeUtc"],
+            json!("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            invocations[0]["toolExecutionNotifications"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let filled = log("( [ sh:nodeKind sh:IRI ] )", &SarifOptions::default());
+        let run = &filled["runs"][0];
+        assert_eq!(run["properties"]["shaclConforms"], json!(true));
+        assert!(run.get("invocations").is_none(), "{filled:#}");
+        assert!(
+            run["tool"]["driver"].get("notifications").is_none(),
+            "{filled:#}"
+        );
+    }
+
     /// The request's conformance-disallow set reaches the validation: a
     /// Warning-only report does not conform under the default set and conforms
     /// under {Violation}, and the log says which set it was judged against.

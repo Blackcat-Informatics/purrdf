@@ -63,6 +63,9 @@ use crate::py_store::PyStore;
 ///
 /// Returns a dict with keys:
 /// - `"conforms"` — bool
+/// - `"diagnostics"` — the shapes graph's mandatory diagnostics, one dict per shape with an
+///   empty `sh:in` or `sh:xone` list (`"rule"`, `"shape"`), which every run reports beside
+///   the results and never among them: they change neither `"conforms"` nor the report
 /// - `"results"` — list of dicts, each with keys:
 ///   `"focus"`, `"path"`, `"value"`, `"severity"`, `"component"`,
 ///   `"source_shape"`, `"messages"` (every `sh:resultMessage`, each a dict with
@@ -184,8 +187,26 @@ fn validate(
         results.append(d)?;
     }
     out.set_item("results", results)?;
+    out.set_item("diagnostics", diagnostics_list(py, &report.diagnostics)?)?;
 
     Ok(out.into_any().unbind())
+}
+
+/// Mandatory diagnostics as Python: one dict per shape with an empty `sh:in` or `sh:xone`
+/// list, `"rule"` (`in-minListLength`, `xone-minListLength`) and `"shape"` — the shape
+/// `lint_shapes` lists them in.
+fn diagnostics_list<'py>(
+    py: Python<'py>,
+    diagnostics: &[purrdf_validate::MandatoryDiagnostic],
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for diagnostic in diagnostics {
+        let d = PyDict::new(py);
+        d.set_item("rule", diagnostic.rule)?;
+        d.set_item("shape", diagnostic.shape.to_string())?;
+        list.append(d)?;
+    }
+    Ok(list)
 }
 
 /// A result's SHACL-SPARQL result annotations as `(property IRI, value)` pairs,
@@ -234,8 +255,11 @@ fn messages_list<'py>(
     Ok(list)
 }
 
-/// Entail a data graph (N-Triples) under a shapes graph (Turtle), returning the
-/// materialized dataset as a canonical N-Triples string.
+/// Entail a data graph (N-Triples) under a shapes graph (Turtle), returning a dict:
+///
+/// - `"ntriples"` — the materialized dataset as a canonical N-Triples string;
+/// - `"diagnostics"` — the shapes graph's mandatory diagnostics, one dict per shape with an
+///   empty `sh:in` or `sh:xone` list (`"rule"`, `"shape"`), which every run reports.
 ///
 /// The entailment twin of [`validate`]: it runs the shapes graph's default rule
 /// set (`sh:TripleRule` / `sh:SPARQLRule`) as SHACL 1.2 Inference Rules executes
@@ -298,25 +322,29 @@ fn entail(
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> PyResult<String> {
+) -> PyResult<Py<PyAny>> {
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
-    py.detach(|| {
-        purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
-            shapes_ttl,
-            shapes_base,
-            shapes_graph,
-            data_nt,
-            imports: &pairs,
-            max_term_generating_rounds,
-            max_generated_terms,
-            max_stored_facts,
-            max_join_steps,
-            host: purrdf_validate::RulesHost::Python,
+    let outcome = py
+        .detach(|| {
+            purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
+                shapes_ttl,
+                shapes_base,
+                shapes_graph,
+                data_nt,
+                imports: &pairs,
+                max_term_generating_rounds,
+                max_generated_terms,
+                max_stored_facts,
+                max_join_steps,
+                host: purrdf_validate::RulesHost::Python,
+            })
         })
-        .map(|outcome| outcome.ntriples)
-    })
-    .map_err(|error| shapes_error(py, error))
+        .map_err(|error| shapes_error(py, error))?;
+    let out = PyDict::new(py);
+    out.set_item("ntriples", outcome.ntriples)?;
+    out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
+    Ok(out.into_any().unbind())
 }
 
 /// Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH — the
@@ -325,7 +353,10 @@ fn entail(
 /// - `"inferred"` — N-Triples 1.2, one triple per line, in canonical order;
 /// - `"proof"` — when `explain` is true, the proof of every inferred triple
 ///   (`derived S P O .`, then `  rule R` and one `  premise S P O .` per matched fact,
-///   or `  data-block` for a SPARQL 1.2 RL data-block triple); otherwise `None`.
+///   or `  data-block` for a SPARQL 1.2 RL data-block triple); otherwise `None`;
+/// - `"diagnostics"` — the shapes graph's mandatory diagnostics, one dict per shape with an
+///   empty `sh:in` or `sh:xone` list (`"rule"`, `"shape"`); empty for a SPARQL 1.2 RL rule
+///   set, which has no shapes graph.
 ///
 /// The rule source is exactly one of `shapes_ttl` — a SHACL shapes graph (Turtle), whose
 /// default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; naming neither or both
@@ -413,6 +444,7 @@ fn apply_rules(
     let out = PyDict::new(py);
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
+    out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
     Ok(out.into_any().unbind())
 }
 
@@ -939,13 +971,23 @@ impl PyValidationReport {
         self.inner.conforms
     }
 
-    /// The report's `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4): `True` when the
-    /// processor is certain the shapes graph is well-formed, `False` for the one
-    /// ill-formedness it validates anyway (an empty `sh:in` or `sh:xone` list, which the
-    /// approved W3C tests require validating), `None` for a report no validation produced.
+    /// The report's `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4): `True` for every
+    /// report a validation produced — PurRDF refuses an ill-formed shapes graph, and an
+    /// empty `sh:in` or `sh:xone` list is a mandatory diagnostic ([`Self::diagnostics`]),
+    /// not an ill-formedness — and `None` for a report no validation produced.
     #[getter]
     const fn shapes_graph_well_formed(&self) -> Option<bool> {
         self.inner.shapes_graph_well_formed
+    }
+
+    /// The shapes graph's mandatory diagnostics: one dict per shape with an empty `sh:in`
+    /// or `sh:xone` list, `"rule"` and `"shape"`. Every run reports them, beside the
+    /// results and never among them — they change neither `conforms` nor the report graph.
+    #[getter]
+    fn diagnostics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(diagnostics_list(py, &self.inner.diagnostics)?
+            .into_any()
+            .unbind())
     }
 
     #[getter]

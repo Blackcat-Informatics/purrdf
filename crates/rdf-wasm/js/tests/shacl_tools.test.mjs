@@ -399,7 +399,9 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
       knob,
     );
   }
-  const closed = entail(64n, 64n, 64n, 4096n);
+  const out = entail(64n, 64n, 64n, 4096n);
+  const closed = out.ntriples;
+  out.free();
   assert.ok(
     closed.includes(
       '<http://example.org/ns#a> <http://example.org/ns#n> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .',

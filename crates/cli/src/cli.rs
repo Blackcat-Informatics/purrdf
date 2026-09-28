@@ -851,7 +851,9 @@ pub(crate) enum Command {
     /// stdout carries NOTHING and stderr carries the governor report.
     ///
     /// The one-line verdict (`shacl conforms true|false`) and the result count are ALWAYS
-    /// written to stderr, so a shell learns the answer without parsing the artifact on
+    /// written to stderr, followed by one `shacl diagnostic RULE SHAPE` line per shape with
+    /// an empty `sh:in` or `sh:xone` list (a mandatory diagnostic that changes neither the
+    /// verdict nor the report), so a shell learns the answer without parsing the artifact on
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {

@@ -130,7 +130,11 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
 /// `max_join_steps`, each a nullable `const uint64_t *` — between `import_count` and
 /// `out_buffer`, so an entailment run is bounded exactly as a rules run is. Incompatible
-/// for the same reason, riding the same bump.
+/// for the same reason, riding the same bump. Both rules entry points also gained a nullable
+/// `PurrdfBuffer **out_diagnostics` immediately before `out_error` — the shapes graph's
+/// mandatory diagnostics (one `diagnostic RULE SHAPE` line per empty `sh:in` / `sh:xone`
+/// list), which every run reports — incompatible for the same reason (a `0.7.0` host passes
+/// its `PurrdfError **` into the new slot), riding the same bump.
 ///
 /// The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
 /// entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for

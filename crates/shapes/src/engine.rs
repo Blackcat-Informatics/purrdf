@@ -1342,7 +1342,12 @@ fn finish_report(
     // Every shapes graph a validation runs over met every syntax rule the loader
     // enforces; an empty `sh:in` / `sh:xone` list is a mandatory lint diagnostic, not an
     // ill-formedness (see `ValidationReport::shapes_graph_well_formed`).
-    ValidationReport::from_results(results, disallows.clone()).with_shapes_graph_well_formed(true)
+    //
+    // The diagnostics ride beside the results, never among them: a clone of the shapes'
+    // list, which allocates nothing for a graph with no empty list.
+    ValidationReport::from_results(results, disallows.clone())
+        .with_shapes_graph_well_formed(true)
+        .with_diagnostics(shapes.mandatory_diagnostics.clone())
 }
 
 fn validate_with_plan_and_focus_filter<F>(

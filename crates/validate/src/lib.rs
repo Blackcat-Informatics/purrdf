@@ -114,7 +114,7 @@ pub use purrdf_shapes::engine::ChangeScope;
 pub use purrdf_shapes::engine::ValidationOptions;
 /// The cold-certify report [`lint_shapes_ttl`] returns, re-exported so a host binding names
 /// it without depending on the engine crate.
-pub use purrdf_shapes::lint::LintReport;
+pub use purrdf_shapes::lint::{LintReport, MandatoryDiagnostic};
 pub use purrdf_shapes::report::ConformanceDisallows;
 /// The shapes-graph error every entry point on this boundary returns, and the typed
 /// `owl:imports` refusal it carries, re-exported so a host binding names them without

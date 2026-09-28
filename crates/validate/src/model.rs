@@ -154,6 +154,11 @@ pub struct Driver {
     /// The rule metadata referenced by `result.ruleId` / `result.ruleIndex`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<ReportingDescriptor>,
+    /// The notification metadata a [`Notification::descriptor`] refers to (SARIF 2.1.0
+    /// §3.19.24): for a SHACL report log, one descriptor per mandatory-diagnostic rule a
+    /// notification states.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<ReportingDescriptor>,
 }
 
 /// Metadata for one rule (`reportingDescriptor`).
@@ -203,6 +208,38 @@ pub struct Invocation {
     /// Caller-supplied end time (ISO-8601 UTC).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_time_utc: Option<String>,
+    /// Conditions the run detected that are not results (SARIF 2.1.0 §3.20.21): for a
+    /// SHACL report log, the shapes graph's mandatory diagnostics, each at level `note`
+    /// ("The notification is purely informational"), so the run did not fail.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tool_execution_notifications: Vec<Notification>,
+}
+
+/// A SARIF notification (§3.58): a condition met during the run that is not a result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notification {
+    /// The descriptor in `driver.notifications` that identifies this notification
+    /// (§3.58.2: "SHOULD contain a property named descriptor").
+    pub descriptor: ReportingDescriptorReference,
+    /// The notification's severity level.
+    pub level: Level,
+    /// What was encountered (§3.58.5: "SHALL contain a property named message").
+    pub message: Message,
+    /// The locations the condition is relevant to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<Location>,
+}
+
+/// A reference to a `reportingDescriptor` (§3.52), by id and by index into the array
+/// that holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportingDescriptorReference {
+    /// The descriptor's id.
+    pub id: String,
+    /// The descriptor's index in its array.
+    pub index: usize,
 }
 
 /// A single SARIF result.
@@ -399,6 +436,7 @@ mod tests {
                             level: Level::Error,
                         }),
                     }],
+                    notifications: vec![],
                 },
             },
             results: vec![SarifResult {

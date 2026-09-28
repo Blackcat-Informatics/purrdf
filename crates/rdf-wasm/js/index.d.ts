@@ -1458,6 +1458,10 @@ export class ShaclImportError {
 }
 
 /**
+ * Entail `dataNt` under `shapesTtl`, returning a `ShaclEntailment`: `ntriples`, the
+ * materialized dataset (the base graph plus every SHACL-AF `sh:rule` inference), and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
+ *
  * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
  * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
  * invent one: omit it and a relative reference throws rather than being mis-parsed.
@@ -1489,7 +1493,25 @@ export function shaclEntail(
   maxGeneratedTerms?: bigint,
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
-): string;
+): ShaclEntailment;
+
+/**
+ * The outcome of `shaclEntail`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclEntailment {
+  free(): void;
+  /**
+   * The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
+   * N-Triples.
+   */
+  readonly ntriples: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `RULE SHAPE` string per shape with an
+   * empty `sh:in` or `sh:xone` list, which every run reports.
+   */
+  readonly diagnostics: string[];
+}
 
 /**
  * The outcome of `shaclApplyRules`. Like every other class in this package it owns
@@ -1508,6 +1530,12 @@ export class ShaclRulesInference {
    * body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
    */
   readonly proof?: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `RULE SHAPE` string per shape with an
+   * empty `sh:in` or `sh:xone` list (`in-minListLength <…>`, `xone-minListLength <…>`),
+   * which every run reports. Empty for an `srl` rule set, which has no shapes graph.
+   */
+  readonly diagnostics: string[];
 }
 
 /**
@@ -1730,8 +1758,7 @@ export interface ShaclSarifMessage {
  * throws. The log's run carries `properties.shaclConforms` (boolean),
  * `properties.shaclConformanceDisallows` (the set the report was judged against) and
  * `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`:
- * `true`, or `false` for a shapes graph with an empty `sh:in` / `sh:xone` list, which
- * the approved W3C tests require validating),
+ * `true` for every report a validation produced),
  * because the results alone cannot say whether the data conforms: an `sh:Debug` or
  * `sh:Trace` result is SARIF `kind: "informational"` with `level: "none"` and appears in
  * the log of a conforming report, its IRI kept in `properties.shaclSeverity`.
@@ -1739,6 +1766,13 @@ export interface ShaclSarifMessage {
  * the first in canonical order); whenever that text alone would lose something —
  * several messages, a language tag, a direction, an `rdf:HTML` message — the result's
  * `properties.shaclMessages` lists EVERY message as `ShaclSarifMessage`.
+ *
+ * The shapes graph's mandatory diagnostics — one per shape with an empty `sh:in` or
+ * `sh:xone` list — ride in `invocations[0].toolExecutionNotifications`, never among the
+ * results: each a SARIF notification at `level: "note"` whose `descriptor` names the rule
+ * (`in-minListLength`, `xone-minListLength`) in `tool.driver.notifications` and whose one
+ * logical location (`kind: "shape"`) is the shape. They change neither the verdict nor
+ * the results.
  *
  * `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
  * --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {

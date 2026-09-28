@@ -152,7 +152,8 @@ executes that example against the generated shared library and committed header.
   `out_nquads`, and gives `purrdf_shacl_entail_to_ntriples` all four of
   `purrdf_shacl_apply_rules`' limits (`max_term_generating_rounds`,
   `max_generated_terms`, `max_stored_facts`, `max_join_steps`) between
-  `import_count` and `out_buffer`. It also adds `purrdf_shacl_check_rules` and its
+  `import_count` and `out_buffer`, and both rules entry points a nullable
+  `out_diagnostics` before `out_error`. It also adds `purrdf_shacl_check_rules` and its
   `PurrdfSrlCheckLevel` discriminant, and gives `purrdf_shacl_validate_to_sarif`,
   `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
   `purrdf_shapes_product_encode` a nullable `shapes_graph_iri` immediately after
@@ -175,7 +176,8 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 
 - `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, shapes_graph_iri, srl, srl_base_iri,
   max_term_generating_rounds, max_generated_terms, max_stored_facts, max_join_steps,
-  import_iris, import_documents, import_count, out_inferred, out_proof, out_error)`
+  import_iris, import_documents, import_count, out_inferred, out_proof, out_diagnostics,
+  out_error)`
   runs exactly one
   rule source — the SHACL 1.2 rules of `shapes_ttl`, or the SPARQL 1.2 RL rule set
   `srl` — and writes the **inference graph** (the inferred triples only, never the
@@ -194,9 +196,20 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   same two limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes.
   `purrdf_shacl_entail_to_ntriples(shapes_ttl, shapes_base_iri, shapes_graph_iri,
   data_nt, import_iris, import_documents, import_count, max_term_generating_rounds,
-  max_generated_terms, max_stored_facts, max_join_steps, out_buffer, out_error)` —
-  SHACL-AF entailment, the base graph plus every inference — takes all four, with the
-  same defaults, and a refusal names `purrdf_shacl_entail_to_ntriples`' own parameter.
+  max_generated_terms, max_stored_facts, max_join_steps, out_buffer, out_diagnostics,
+  out_error)` — SHACL-AF entailment, the base graph plus every inference — takes all
+  four, with the same defaults, and a refusal names `purrdf_shacl_entail_to_ntriples`'
+  own parameter.
+- **Mandatory diagnostics on every run.** A shape whose `sh:in` or `sh:xone` list is
+  empty (SHACL 1.2 Core Appendix A, "Each such list SHOULD have at least one member")
+  is reported by every run, beside its outcome and never inside it: the SARIF log of
+  `purrdf_shacl_validate_to_sarif` and its change and product twins carries each as a
+  `level: "note"` notification in `invocations[0].toolExecutionNotifications`, whose
+  `descriptor` names the rule (`in-minListLength`, `xone-minListLength`) in
+  `tool.driver.notifications`; `purrdf_shacl_apply_rules` and
+  `purrdf_shacl_entail_to_ntriples` write one `diagnostic RULE SHAPE` line per
+  diagnostic to a non-NULL `out_diagnostics` (an empty buffer when there is none).
+  The verdict, the results and the report graph are unchanged.
 - `purrdf_shacl_check_rules(srl, srl_base_iri, level, import_iris,
   import_documents, import_count, out_summary, out_error)` checks a SPARQL 1.2 RL
   rule set WITHOUT evaluating it — the grammar, the `IMPORTS` closure resolved

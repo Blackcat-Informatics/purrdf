@@ -89,12 +89,12 @@
 //! certify a shapes graph nobody asked about, and would say `clean` about a graph that
 //! validation refuses.
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
 
-use crate::data::{GraphFilter, native_quads};
+use crate::data::GraphFilter;
 use crate::engine::validate_dataset_as_document;
 use crate::error::{PrebindingViolation, ShapesError};
 use crate::function_resolution::FunctionResolution;
@@ -294,12 +294,50 @@ pub const MANDATORY_DIAGNOSTIC_RULES: &[(&str, &str)] = &[
 
 /// One mandatory diagnostic: a shape whose `sh:in` or `sh:xone` list is empty. See the
 /// [module docs](self).
+///
+/// Every run reports it, not only [`lint`]: a loaded shapes graph carries its diagnostics
+/// ([`Shapes::mandatory_diagnostics`]) and every validation report states them
+/// ([`crate::report::ValidationReport::diagnostics`]) beside its results, never as a
+/// `sh:ValidationResult` — the shapes graph is well-formed and the verdict is unchanged —
+/// and a rules or entailment run surfaces them the same way. Its [`fmt::Display`] is
+/// `RULE SHAPE`, the text every host renders after `diagnostic `.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MandatoryDiagnostic {
     /// The syntax rule's id, `in-minListLength` or `xone-minListLength`.
     pub rule: &'static str,
     /// The shape whose list is empty.
     pub shape: Term,
+}
+
+impl MandatoryDiagnostic {
+    /// The list parameter whose list is empty: `sh:in` or `sh:xone`.
+    #[must_use]
+    pub fn parameter(&self) -> &'static str {
+        MANDATORY_DIAGNOSTIC_RULES
+            .iter()
+            .find(|(rule, _)| *rule == self.rule)
+            .map_or("", |(_, parameter)| *parameter)
+    }
+
+    /// The diagnostic as a sentence naming the shape, the rule and the specification's
+    /// text — the message a SARIF notification carries.
+    #[must_use]
+    pub fn message(&self) -> String {
+        let local = self.parameter().rsplit('#').next().unwrap_or_default();
+        format!(
+            "shape {} has an empty sh:{local} list; SHACL 1.2 Core, Appendix A, syntax rule \
+             {}: \"Each such list SHOULD have at least one member\". The shapes graph is \
+             well-formed and the report is unaffected: the diagnostic is the shapes graph \
+             author's, not the data graph's",
+            self.shape, self.rule
+        )
+    }
+}
+
+impl fmt::Display for MandatoryDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.rule, self.shape)
+    }
 }
 
 /// The whole cold-certify report for one shapes graph. See the [module docs](self).
@@ -512,7 +550,7 @@ impl LintReport {
         }
         let _ = writeln!(out, "diagnostics {}", self.diagnostics.len());
         for diagnostic in &self.diagnostics {
-            let _ = writeln!(out, "diagnostic {} {}", diagnostic.rule, diagnostic.shape);
+            let _ = writeln!(out, "diagnostic {diagnostic}");
         }
         let _ = writeln!(out, "unanchored-imports {}", self.unanchored_imports.len());
         for entry in &self.unanchored_imports {
@@ -683,20 +721,28 @@ const SH_MIN_LIST_LENGTH_COMPONENT: &str =
 /// empty `sh:in` or `sh:xone` list, ordered by rule id and then canonically by shape.
 /// Any subject of either predicate is a shape (the predicate is a parameter), so the
 /// subject is reported as it stands.
-fn mandatory_diagnostics(dataset: &RdfDataset) -> Vec<MandatoryDiagnostic> {
-    let nil = Term::NamedNode(crate::term::NamedNode::new_unchecked(rdf::NIL));
+pub(crate) fn mandatory_diagnostics(dataset: &RdfDataset) -> Vec<MandatoryDiagnostic> {
+    // Allocation-free for a graph with no empty list: the parameters and `rdf:nil` are
+    // resolved by id rather than as owned terms, and nothing is collected until a triple
+    // matches. Every shapes-graph assembly — a parse and a product admission alike — pays
+    // this, so it must not charge admission a constant for the common case.
+    let Some(nil) = dataset.term_id_by_iri(rdf::NIL) else {
+        return Vec::new();
+    };
     let mut diagnostics = Vec::new();
     for &(rule, parameter) in MANDATORY_DIAGNOSTIC_RULES {
-        let parameter = Term::NamedNode(crate::term::NamedNode::new_unchecked(parameter));
-        let mut shapes: Vec<Term> = native_quads(
+        let Some(parameter) = dataset.term_id_by_iri(parameter) else {
+            continue;
+        };
+        let mut shapes: Vec<Term> = crate::data::quads_for_pattern_ids(
             dataset,
             None,
-            Some(&parameter),
-            Some(&nil),
+            Some(parameter),
+            Some(nil),
             GraphFilter::AnyGraph,
         )
-        .into_iter()
-        .map(|(shape, _, _)| shape)
+        .map(|quad| crate::term::term_id_to_native(dataset, quad.s))
+        .filter(Term::is_subject)
         .collect();
         crate::term::sort_terms_canonical(&mut shapes);
         shapes.dedup();

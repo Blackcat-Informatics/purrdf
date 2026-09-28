@@ -75,6 +75,10 @@ pub struct EntailOutcome {
     /// The materialized dataset — the base graph plus every inferred triple — as canonical
     /// N-Triples.
     pub ntriples: String,
+    /// The shapes graph's mandatory diagnostics
+    /// ([`purrdf_shapes::shapes::Shapes::mandatory_diagnostics`]): every shape with an empty
+    /// `sh:in` or `sh:xone` list, which every run reports.
+    pub diagnostics: Vec<purrdf_shapes::lint::MandatoryDiagnostic>,
 }
 
 /// Entail `request.data_nt` under `request.shapes_ttl` and serialize the materialized
@@ -113,6 +117,7 @@ pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, 
     let inference = purrdf_shapes::infer(&holder, &shapes, &options)?;
     Ok(EntailOutcome {
         ntriples: canonical_ntriples(inference.dataset())?,
+        diagnostics: shapes.mandatory_diagnostics().to_vec(),
     })
 }
 

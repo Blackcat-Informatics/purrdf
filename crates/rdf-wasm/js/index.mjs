@@ -5,7 +5,8 @@
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
 // RegimeClosure, ReasoningAnswer, SerializeLoss, ShaclImportError,
-// ShaclProductRefusal, ShaclRulesInference, ShaclRulesCheck, ShaclLintReport) and the free
+// ShaclProductRefusal, ShaclEntailment, ShaclRulesInference, ShaclRulesCheck,
+// ShaclLintReport) and the free
 // functions (version, shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
 // shaclApplyRules, shaclCheckRules, shaclEvalNodeExpr, shaclLintShapes,
 // shaclPackProduct, shaclProductExplain,
@@ -87,6 +88,7 @@ import init, {
   ShaclChangeValidation,
   shaclCheckRules,
   shaclEntail,
+  ShaclEntailment,
   shaclEvalNodeExpr,
   ShaclImportError,
   ShaclLintReport,
@@ -868,6 +870,7 @@ export {
   ShaclChangeValidation,
   shaclCheckRules,
   shaclEntail,
+  ShaclEntailment,
   shaclEvalNodeExpr,
   ShaclImportError,
   ShaclLintReport,

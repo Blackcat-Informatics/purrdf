@@ -478,6 +478,18 @@ pub struct ValidationReport {
     /// `None` — a report assembled by [`Self::from_results`] rather than by a
     /// validation — states nothing.
     pub shapes_graph_well_formed: Option<bool>,
+    /// The shapes graph's mandatory diagnostics — every shape with an empty `sh:in` or
+    /// `sh:xone` list ([`crate::lint::MandatoryDiagnostic`]) — which every run reports.
+    ///
+    /// Beside the results, never among them: an empty list leaves the shapes graph
+    /// well-formed and every verdict unchanged, so a diagnostic is not a
+    /// `sh:ValidationResult`, does not affect [`Self::conforms`], and is not written into
+    /// the report graph ([`Self::to_dataset`]) — SHACL defines no report term for a
+    /// diagnostic about the shapes graph, and PurRDF mints no vocabulary. Hosts carry it in
+    /// their own slot: SARIF `invocations[].toolExecutionNotifications`, a `diagnostics`
+    /// list on the Python, WebAssembly and C report objects, and a `shacl diagnostic` line
+    /// on the command line. Empty for a report assembled by [`Self::from_results`].
+    pub diagnostics: Vec<crate::lint::MandatoryDiagnostic>,
 }
 
 /// The graph a blank node a validation report carries was read from.
@@ -609,7 +621,15 @@ impl ValidationReport {
             results,
             conformance_disallows: disallows,
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         }
+    }
+
+    /// This report stating `diagnostics` (see [`Self::diagnostics`]).
+    #[must_use]
+    pub fn with_diagnostics(mut self, diagnostics: Vec<crate::lint::MandatoryDiagnostic>) -> Self {
+        self.diagnostics = diagnostics;
+        self
     }
 
     /// This report stating `sh:shapesGraphWellFormed` as `well_formed` (see
@@ -689,12 +709,23 @@ impl ValidationReport {
             .iter()
             .map(|result| labels.relabel_result(result))
             .collect();
+        // A diagnostic names a shapes-graph node, labelled AFTER every result so the
+        // results' labels do not depend on whether the shapes graph has a diagnostic.
+        let diagnostics = self
+            .diagnostics
+            .iter()
+            .map(|diagnostic| crate::lint::MandatoryDiagnostic {
+                rule: diagnostic.rule,
+                shape: labels.term(BlankOrigin::ShapesGraph, &diagnostic.shape),
+            })
+            .collect();
         (
             Self {
                 conforms: self.conforms,
                 results,
                 conformance_disallows: self.conformance_disallows.clone(),
                 shapes_graph_well_formed: self.shapes_graph_well_formed,
+                diagnostics,
             },
             labels,
         )
@@ -1460,6 +1491,7 @@ mod tests {
             results: vec![make_result()],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: Some(true),
+            diagnostics: Vec::new(),
         };
 
         let nt = report.to_ntriples();
@@ -1495,6 +1527,7 @@ mod tests {
             results: vec![parent],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         let nt = report.to_ntriples();
@@ -1509,6 +1542,7 @@ mod tests {
             results: vec![detail],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         assert!(
             parsed.is_disjoint(&as_report.result_tuples()),
@@ -1716,6 +1750,7 @@ mod tests {
             results,
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -1795,6 +1830,7 @@ mod tests {
             results: vec![],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         let direct = report.to_dataset();
@@ -1858,6 +1894,7 @@ mod tests {
                 results: vec![make_result()],
                 conformance_disallows: ConformanceDisallows::default(),
                 shapes_graph_well_formed: None,
+                diagnostics: Vec::new(),
             };
             report.results[0].focus_node = Term::blank(hostile);
 
@@ -1924,6 +1961,7 @@ mod tests {
             results: vec![make_result()],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         // `r1` is one past the last result index, and `reports` is not `report`:
         // neither is a label this report mints.
@@ -1993,6 +2031,7 @@ mod tests {
             results: vec![first, second],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         let (labelled, labels) = report.with_report_blank_labels();
         assert_eq!(labelled.results[0].focus_node, Term::blank("dg0"));
@@ -2034,6 +2073,7 @@ mod tests {
             results: vec![],
             conformance_disallows: ConformanceDisallows::default(),
             shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         let nt = report.to_ntriples();

@@ -116,7 +116,9 @@ test("wasm_shacl_import_supplied: every entry point applies a supplied import", 
   assert.match(change.sarif, /MinCountConstraintComponent/);
   change.free();
 
-  assert.ok(ENTRY_POINTS.shaclEntail(iris, documents).includes(INFERRED));
+  const entailed = ENTRY_POINTS.shaclEntail(iris, documents);
+  assert.ok(entailed.ntriples.includes(INFERRED));
+  entailed.free();
 
   const rules = ENTRY_POINTS.shaclApplyRules(iris, documents);
   assert.equal(rules.inferred.trim(), INFERRED);

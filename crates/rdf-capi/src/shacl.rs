@@ -83,11 +83,12 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    ChangeScope, ConformanceDisallows, EntailRequest, ExprSelector, LintReport, NodeExprRequest,
-    RuleLimits, RulesOutcome, RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal,
-    ValidationOptions, apply_rules_to_ntriples, check_rules, entail_to_ntriples,
-    eval_node_expr_to_terms, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
-    validate_changes_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_shapes_graph,
+    ChangeScope, ConformanceDisallows, EntailOutcome, EntailRequest, ExprSelector, LintReport,
+    NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, ShapesError,
+    ShapesProductRefusal, ValidationOptions, apply_rules_to_ntriples, check_rules,
+    entail_to_ntriples, eval_node_expr_to_terms, lint_shapes_ttl_with_shapes_graph,
+    parse_scope_binding, validate_changes_to_sarif_string_with_shapes_graph,
+    validate_to_sarif_string_with_shapes_graph,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -459,21 +460,21 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
     }
 }
 
-/// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle) and serialize the
-/// materialized dataset (base graph plus every SHACL-AF rule inference) to
-/// canonical N-Triples bytes. Native-testable, pointer-free core.
+/// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle): the materialized dataset
+/// (base graph plus every SHACL-AF rule inference) as canonical N-Triples, and the shapes
+/// graph's mandatory diagnostics. Native-testable, pointer-free core.
 ///
-/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_string`];
-/// this only adds the C-ABI byte framing.
-fn entail_to_ntriples_bytes(
+/// The parse→entail→serialize sequence lives in [`entail_to_ntriples`]; the exported
+/// symbol only adds the C-ABI buffer framing.
+fn entail_outcome(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     shapes_graph: Option<&str>,
     data_nt: &str,
     imports: &[(&str, &str)],
     limits: RuleLimits,
-) -> Result<Vec<u8>, ShapesError> {
-    Ok(entail_to_ntriples(&EntailRequest {
+) -> Result<EntailOutcome, ShapesError> {
+    entail_to_ntriples(&EntailRequest {
         shapes_ttl,
         shapes_base,
         shapes_graph,
@@ -484,9 +485,19 @@ fn entail_to_ntriples_bytes(
         max_stored_facts: limits.max_stored_facts,
         max_join_steps: limits.max_join_steps,
         host: purrdf_validate::RulesHost::CAbi,
-    })?
-    .ntriples
-    .into_bytes())
+    })
+}
+
+/// The shapes graph's mandatory diagnostics as the text every host renders: one
+/// `diagnostic RULE SHAPE` line per shape with an empty `sh:in` or `sh:xone` list, in the
+/// engine's order — the lines `purrdf_shacl_lint_shapes`' report carries.
+fn diagnostic_text(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for diagnostic in diagnostics {
+        let _ = writeln!(out, "diagnostic {diagnostic}");
+    }
+    out
 }
 
 /// Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
@@ -517,14 +528,19 @@ fn entail_to_ntriples_bytes(
 /// the numbers and the parameter that raises it
 /// (`purrdf_shacl_entail_to_ntriples's max_stored_facts`, …).
 ///
+/// `out_diagnostics` asks for the shapes graph's mandatory diagnostics: NULL skips them;
+/// non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
+/// SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is none
+/// — which every run reports beside its outcome.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
 /// when `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings; `max_term_generating_rounds`,
 /// `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
-/// readable;
-/// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+/// readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
+/// must each be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     shapes_ttl: *const c_char,
@@ -539,6 +555,7 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
     out_buffer: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
@@ -569,10 +586,13 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                 // SAFETY: the caller's contract — null or readable.
                 max_join_steps: max_join_steps.as_ref().copied(),
             };
-            let bytes =
-                entail_to_ntriples_bytes(shapes, base, shapes_graph, data, &imports, limits)
-                    .map_err(PurrdfError::shapes)?;
-            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits)
+                .map_err(PurrdfError::shapes)?;
+            if !out_diagnostics.is_null() {
+                *out_diagnostics =
+                    PurrdfBuffer::into_raw(diagnostic_text(&outcome.diagnostics).into_bytes());
+            }
+            *out_buffer = PurrdfBuffer::into_raw(outcome.ntriples.into_bytes());
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -637,7 +657,13 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// `max_join_steps` must each be null or readable; when `import_count` is non-zero,
 /// `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings; `out_inferred`
-/// must be writable; `out_proof` and `out_error` must each be null or writable.
+/// must be writable; `out_proof`, `out_diagnostics` and `out_error` must each be null or
+/// writable.
+///
+/// `out_diagnostics` asks for the shapes graph's mandatory diagnostics: NULL skips them;
+/// non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
+/// SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is
+/// none, and always for an `srl` rule set, which has no shapes graph.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     data_nt: *const c_char,
@@ -655,6 +681,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     import_count: usize,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
@@ -693,6 +720,10 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
             let outcome = apply_rules_outcome(&request).map_err(PurrdfError::shapes)?;
             if let Some(proof) = outcome.proof {
                 *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
+            }
+            if !out_diagnostics.is_null() {
+                *out_diagnostics =
+                    PurrdfBuffer::into_raw(diagnostic_text(&outcome.diagnostics).into_bytes());
             }
             *out_inferred = PurrdfBuffer::into_raw(outcome.inferred_ntriples.into_bytes());
             Ok(PurrdfStatus::Ok)
@@ -2072,7 +2103,7 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn entail_emits_materialized_ntriples() {
-        let bytes = entail_to_ntriples_bytes(
+        let bytes = entail_outcome(
             RULE_SHAPES,
             None,
             None,
@@ -2081,7 +2112,8 @@ ex:StatusShape a sh:NodeShape ;
             RuleLimits::default(),
         )
         .expect("entailment produced");
-        let text = String::from_utf8(bytes).expect("utf8");
+        let text = bytes.ntriples;
+        assert_eq!(bytes.diagnostics, []);
         assert!(text.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -2093,7 +2125,7 @@ ex:StatusShape a sh:NodeShape ;
     #[test]
     fn entail_malformed_shapes_is_an_error() {
         assert!(
-            entail_to_ntriples_bytes(
+            entail_outcome(
                 "@@@ not turtle",
                 None,
                 None,
@@ -2505,6 +2537,129 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         }
     }
 
+    /// The approved W3C test `core/node/in-002`'s shapes (an empty `sh:in` list) through
+    /// the three C entry points: every run reports the `in-minListLength` diagnostic — the
+    /// SARIF log as a note-level tool-execution notification, the rules and entailment
+    /// runs in `out_diagnostics` — while the verdict and the results are the
+    /// specification's. The neighbour whose list has a member reports none.
+    #[test]
+    fn capi_mandatory_diagnostics() {
+        let shapes = |members: &str| {
+            std::ffi::CString::new(format!(
+                "@prefix ex: <http://example.com/ns#> .\n\
+                 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+                 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+                 @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 ex:TestShape rdf:type rdfs:Class , sh:NodeShape ; sh:in {members} ;\n\
+                   sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:seen ; \
+                   sh:object ex:yes ] .\n"
+            ))
+            .expect("no NUL")
+        };
+        let data = std::ffi::CString::new(
+            "<http://example.com/ns#Instance> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.com/ns#TestShape> .\n",
+        )
+        .expect("no NUL");
+        let expected = "diagnostic in-minListLength <http://example.com/ns#TestShape>\n";
+        for (members, diagnostics) in [
+            ("()", expected),
+            ("( <http://example.com/ns#Instance> )", ""),
+        ] {
+            let shapes = shapes(members);
+            let mut sarif: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut entailed: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut entail_diagnostics: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut rules_diagnostics: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, or a writable local.
+            let (log, closure, from_entail, from_rules) = unsafe {
+                let status = purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    false,
+                    &raw mut sarif,
+                    &raw mut error,
+                );
+                assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
+                let status = purrdf_shacl_entail_to_ntriples(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &raw mut entailed,
+                    &raw mut entail_diagnostics,
+                    &raw mut error,
+                );
+                assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut inferred,
+                    std::ptr::null_mut(),
+                    &raw mut rules_diagnostics,
+                    &raw mut error,
+                );
+                assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
+                let _ = take_text(inferred);
+                (
+                    take_text(sarif),
+                    take_text(entailed),
+                    take_text(entail_diagnostics),
+                    take_text(rules_diagnostics),
+                )
+            };
+            assert_eq!(from_entail, diagnostics, "{members}");
+            assert_eq!(from_rules, diagnostics, "{members}");
+            assert!(
+                closure.contains("<http://example.com/ns#seen>"),
+                "{closure}"
+            );
+            let log: serde_json::Value = serde_json::from_str(&log).expect("SARIF JSON");
+            let run = &log["runs"][0];
+            let notifications = &run["invocations"][0]["toolExecutionNotifications"];
+            if diagnostics.is_empty() {
+                assert_eq!(run["properties"]["shaclConforms"], true, "{log:#}");
+                assert!(run.get("invocations").is_none(), "{log:#}");
+            } else {
+                assert_eq!(run["properties"]["shaclConforms"], false, "{log:#}");
+                assert_eq!(run["results"].as_array().map(Vec::len), Some(1), "{log:#}");
+                assert_eq!(notifications[0]["level"], "note", "{log:#}");
+                assert_eq!(notifications[0]["descriptor"]["id"], "in-minListLength");
+                assert_eq!(
+                    notifications[0]["locations"][0]["logicalLocations"][0]["name"],
+                    "<http://example.com/ns#TestShape>"
+                );
+            }
+        }
+    }
+
     /// `purrdf_shacl_entail_to_ntriples`' four rule-evaluation limits reach the engine
     /// through the exported symbol, and each refusal names THIS host's parameter; the same
     /// call with every limit raised materializes the whole closure.
@@ -2541,6 +2696,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     pointer(&limits[2]),
                     pointer(&limits[3]),
                     &raw mut buffer,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status == PurrdfStatus::Ok as i32 {
@@ -2633,6 +2789,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status == PurrdfStatus::Ok as i32 {
@@ -2660,6 +2817,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut buffer,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
@@ -2735,6 +2893,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     } else {
                         std::ptr::null_mut()
                     },
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status != PurrdfStatus::Ok as i32 {
@@ -2810,6 +2969,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status != PurrdfStatus::Ok as i32 {
@@ -2864,6 +3024,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     0,
                     &raw mut inferred,
+                    std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     &raw mut error,
                 );
@@ -2950,6 +3111,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     documents.as_ptr(),
                     count,
                     &raw mut inferred,
+                    std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     &raw mut error,
                 );
@@ -3753,6 +3915,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut buffer,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if supplied {
@@ -3777,6 +3940,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_documents,
                     import_count,
                     &raw mut buffer,
+                    std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     &raw mut error,
                 );

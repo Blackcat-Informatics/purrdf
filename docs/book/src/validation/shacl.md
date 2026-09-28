@@ -1327,6 +1327,27 @@ entry point) always reports each empty list as a finding naming the rule id.
 `ValidationReport::shapes_graph_well_formed` carries the value, and the SARIF run
 carries it as `properties.shaclShapesGraphWellFormed`.
 
+Every run reports the same diagnostics, not only the lint. A validation report
+carries them in `ValidationReport::diagnostics` — one `MandatoryDiagnostic` per
+empty list, the rule id and the shape — beside the results and never among them:
+a diagnostic is not a `sh:ValidationResult`, it changes neither `sh:conforms` nor
+any result, and the W3C grading is unaffected. It is not written into the report
+graph either. SHACL defines no report term for a statement about the shapes graph,
+and PurRDF mints no vocabulary, so the RDF report is exactly what it would be
+without the diagnostic. Each host carries it in its own slot instead. The SARIF
+log puts each in `invocations[0].toolExecutionNotifications` as a notification at
+level `note` ("The notification is purely informational. There is no required
+action", SARIF 2.1.0 §3.58.6), whose `descriptor` names the rule in
+`tool.driver.notifications`. The command line writes `shacl diagnostic RULE
+SHAPE` to stderr after the verdict lines. Python's `validate` dict and
+`ValidationReport` object have a `diagnostics` list of `{"rule", "shape"}`
+dicts. A rules or entailment run reports the same diagnostics: `purrdf rules`
+writes the same stderr line, Python's `apply_rules` and `entail` dicts carry
+`"diagnostics"`, WebAssembly's `ShaclRulesInference` and `ShaclEntailment` have a
+`diagnostics` array of `RULE SHAPE` strings, and C's `purrdf_shacl_apply_rules` and
+`purrdf_shacl_entail_to_ntriples` write `diagnostic RULE SHAPE` lines to a
+non-NULL `out_diagnostics`.
+
 ## SARIF output
 
 Validation reports stay structured in the engine; the SARIF 2.1.0 boundary is

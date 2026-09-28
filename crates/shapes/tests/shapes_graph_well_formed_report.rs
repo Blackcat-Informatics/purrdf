@@ -197,3 +197,87 @@ fn a_report_no_validation_produced_states_nothing() {
     assert_eq!(report.shapes_graph_well_formed, None);
     assert!(!report.to_ntriples().contains("shapesGraphWellFormed"));
 }
+
+/// Maintainer decision, "Every run reports it": the approved W3C tests `core/node/in-002`
+/// and `xone-002`, VALIDATED — each file is its own data and shapes graph — carry the
+/// mandatory diagnostic on the report, beside the results and never among them. The
+/// verdict and the results are the approved ones (the focus node violates the empty
+/// list), the report graph is byte-identical to the same report with no diagnostic (SHACL
+/// defines no report term for it and PurRDF mints none), and a whole validation, a
+/// prepared binding, a candidate check and a prepared product restore all agree. The
+/// neighbour whose list has a member carries none, so the diagnostic is about the list.
+#[test]
+fn every_validation_reports_the_mandatory_diagnostic_beside_its_results() {
+    use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+    for (path, shape, rule, empty, filled) in [
+        (
+            "core/node/in-002.ttl",
+            "TestShape",
+            "in-minListLength",
+            "sh:in () ;",
+            "sh:in ( ex:Instance ) ;",
+        ),
+        (
+            "core/node/xone-002.ttl",
+            "TestXoneUnsatisfiableShape",
+            "xone-minListLength",
+            "sh:xone () ;",
+            "sh:xone ( [ sh:nodeKind sh:IRI ] ) ;",
+        ),
+    ] {
+        let run = |text: &str| {
+            let base = Some("http://example.org/w3c-test");
+            let shapes = parse_shapes(text, base).expect("the test file loads");
+            let data = parse_turtle_to_dataset(text, base).expect("the test file parses");
+            let whole = validate_dataset_with_shapes_graph(&data, &shapes, None).expect("valid");
+            let prepared = PreparedShapes::new(Arc::new(shapes));
+            let bound = prepared.bind_dataset(&data).expect("binds");
+            let again = bound.validate().expect("validates");
+            assert_eq!(again.diagnostics, whole.diagnostics, "{path}");
+            assert_eq!(again.to_ntriples(), whole.to_ntriples(), "{path}");
+            let focus = Term::NamedNode("http://example.com/ns#Instance".into());
+            let candidate = bound
+                .validate_focus_nodes(&[focus])
+                .expect("a candidate check");
+            assert_eq!(candidate.diagnostics, whole.diagnostics, "{path}");
+            let product = prepared.to_product(&ShapesProfile::CORE).expect("encodes");
+            let restored = ShapesProduct::open(&product)
+                .expect("opens")
+                .admit(&ShapesProfile::CORE, &HostBindings::empty())
+                .expect("admits")
+                .bind_dataset(&data)
+                .expect("binds")
+                .validate()
+                .expect("validates");
+            assert_eq!(restored.diagnostics, whole.diagnostics, "{path}");
+            whole
+        };
+        let text = w3c_test(path);
+        let flagged = run(&text);
+        let shape_term = Term::NamedNode(format!("http://example.com/ns#{shape}").as_str().into());
+        assert_eq!(
+            flagged
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.rule, diagnostic.shape.clone()))
+                .collect::<Vec<_>>(),
+            vec![(rule, shape_term)],
+            "{path}"
+        );
+        assert_eq!(
+            flagged.diagnostics[0].to_string(),
+            format!("{rule} <http://example.com/ns#{shape}>")
+        );
+        assert!(!flagged.conforms, "{path}: the approved verdict");
+        assert_eq!(flagged.results.len(), 1, "{path}");
+        let without = flagged.clone().with_diagnostics(Vec::new());
+        assert_eq!(
+            flagged.to_ntriples(),
+            without.to_ntriples(),
+            "{path}: the report graph carries no diagnostic"
+        );
+
+        let neighbour = run(&text.replace(empty, filled));
+        assert!(neighbour.diagnostics.is_empty(), "{path}");
+    }
+}

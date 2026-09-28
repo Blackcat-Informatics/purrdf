@@ -479,7 +479,7 @@ pub(crate) fn entail_to_ntriples_impl(
     import_documents: &[String],
     shapes_graph: Option<&str>,
     limits: purrdf_validate::RuleLimits,
-) -> Result<String, ShapesError> {
+) -> Result<purrdf_validate::EntailOutcome, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
         shapes_ttl,
@@ -493,14 +493,53 @@ pub(crate) fn entail_to_ntriples_impl(
         max_join_steps: limits.max_join_steps,
         host: purrdf_validate::RulesHost::Wasm,
     })
-    .map(|outcome| outcome.ntriples)
+}
+
+/// The shapes graph's mandatory diagnostics as the `RULE SHAPE` lines every host renders
+/// after `diagnostic ` (see [`purrdf_validate::MandatoryDiagnostic`]).
+fn diagnostic_lines(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Vec<String> {
+    diagnostics.iter().map(ToString::to_string).collect()
+}
+
+/// The outcome of `shaclEntail`: the materialized dataset and the shapes graph's
+/// mandatory diagnostics.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclEntailment {
+    /// The materialized dataset as N-Triples.
+    ntriples: String,
+    /// The mandatory diagnostics, `RULE SHAPE` each.
+    diagnostics: Vec<String>,
+}
+
+#[wasm_bindgen]
+impl ShaclEntailment {
+    /// The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
+    /// N-Triples.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn ntriples(&self) -> String {
+        self.ntriples.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics, one `RULE SHAPE` string per shape with an
+    /// empty `sh:in` or `sh:xone` list (`in-minListLength <…>`), which every run reports.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<String> {
+        self.diagnostics.clone()
+    }
 }
 
 /// `shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?,
 /// shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?,
-/// maxJoinSteps?)` → the
-/// materialized dataset as an N-Triples string (the base graph plus every inferred
-/// triple).
+/// maxJoinSteps?)` → a `ShaclEntailment`: `ntriples`, the materialized dataset as an
+/// N-Triples string (the base graph plus every inferred triple), and `diagnostics`, the
+/// shapes graph's mandatory diagnostics (`RULE SHAPE` per shape with an empty `sh:in` or
+/// `sh:xone` list). Call `.free()` on the result.
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse or if rule application fails.
@@ -546,8 +585,8 @@ pub fn shacl_entail(
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<String, JsValue> {
-    entail_to_ntriples_impl(
+) -> Result<ShaclEntailment, JsValue> {
+    let outcome = entail_to_ntriples_impl(
         shapes_ttl,
         shapes_base.as_deref(),
         data_nt,
@@ -561,7 +600,11 @@ pub fn shacl_entail(
             max_join_steps,
         },
     )
-    .map_err(shapes_rejection)
+    .map_err(shapes_rejection)?;
+    Ok(ShaclEntailment {
+        diagnostics: diagnostic_lines(&outcome.diagnostics),
+        ntriples: outcome.ntriples,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +623,8 @@ pub struct ShaclRulesInference {
     inferred: String,
     /// The proof text, when `explain` was set.
     proof: Option<String>,
+    /// The mandatory diagnostics, `RULE SHAPE` each.
+    diagnostics: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -599,6 +644,15 @@ impl ShaclRulesInference {
     #[must_use]
     pub fn proof(&self) -> Option<String> {
         self.proof.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics, one `RULE SHAPE` string per shape with an
+    /// empty `sh:in` or `sh:xone` list, which every run reports; empty for an `srl` rule
+    /// set, which has no shapes graph.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<String> {
+        self.diagnostics.clone()
     }
 }
 
@@ -691,6 +745,7 @@ pub fn shacl_apply_rules(
     })
     .map_err(shapes_rejection)?;
     Ok(ShaclRulesInference {
+        diagnostics: diagnostic_lines(&outcome.diagnostics),
         inferred: outcome.inferred_ntriples,
         proof: outcome.proof,
     })
@@ -1675,7 +1730,8 @@ mod tests {
             None,
             purrdf_validate::RuleLimits::default(),
         )
-        .expect("entailment produced");
+        .expect("entailment produced")
+        .ntriples;
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -2045,7 +2101,8 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             max_stored_facts: Some(64),
             max_join_steps: Some(4_096),
         })
-        .expect("raised limits admit the counter");
+        .expect("raised limits admit the counter")
+        .ntriples;
         assert!(
             raised.contains(
                 "<http://example.org/ns#a> <http://example.org/ns#n> \
@@ -2110,7 +2167,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             Some("http://example.org/shapes-graph"),
             purrdf_validate::RuleLimits::default(),
         )
-        .expect("entails");
+        .expect("entails")
+        .ntriples;
         assert!(
             entailed.contains(named) && entailed.contains(marked),
             "{entailed}"
@@ -2124,7 +2182,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             None,
             purrdf_validate::RuleLimits::default(),
         )
-        .expect("entails");
+        .expect("entails")
+        .ntriples;
         assert!(
             plain.contains(unnamed) && !plain.contains(marked),
             "{plain}"

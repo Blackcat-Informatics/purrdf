@@ -225,7 +225,11 @@ test("SHACL validate → SARIF 2.1.0 with a violation (SHACL pane)", () => {
 test("shaclEntail materializes the sh:rule inference", () => {
   const ds = Dataset.parse(PERSON_DATA, "turtle");
   const dataNt = ds.serialize("ntriples");
-  const entailed = shaclEntail(SHAPES, dataNt);
+  const entailment = shaclEntail(SHAPES, dataNt);
+  const entailed = entailment.ntriples;
+  // The fixture's shapes graph has no empty sh:in / sh:xone list, so no diagnostic.
+  assert.deepEqual(entailment.diagnostics, []);
+  entailment.free();
   // Assert the exact triple the sh:rule produces (ex:dave ex:adult ex:yes) by a
   // structural match on the parsed N-Triples — not a bare-URL substring check.
   const out = Dataset.parse(entailed, "ntriples");

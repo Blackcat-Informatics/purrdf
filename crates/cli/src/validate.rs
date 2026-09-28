@@ -44,7 +44,9 @@
 //!
 //! Because stdout carries a well-formed RDF or SARIF document, the verdict cannot be
 //! interleaved into it — so it is written to **stderr**, always, as two `key value` lines
-//! (`shacl conforms true|false`, `shacl results N`). Unconditional rather than behind a flag,
+//! (`shacl conforms true|false`, `shacl results N`), followed by one `shacl diagnostic RULE
+//! SHAPE` line per mandatory diagnostic of the shapes graph (an empty `sh:in` / `sh:xone`
+//! list, which leaves the verdict and the report unchanged). Unconditional rather than behind a flag,
 //! for the reason `consistency` prints its certificate unconditionally: an operator running
 //! this by hand needs the answer in hand, and a shell that wants to branch on conformance
 //! should not have to parse the artifact to find it.
@@ -454,6 +456,12 @@ pub(crate) fn run(
     // time the operator reads the line that describes it.
     eprintln!("shacl conforms {}", report.conforms);
     eprintln!("shacl results {}", report.results.len());
+    // The shapes graph's mandatory diagnostics — every empty `sh:in` / `sh:xone` list —
+    // after the verdict, one line each: every run reports them, beside the results and
+    // never among them, since they change neither the verdict nor the report graph.
+    for diagnostic in &report.diagnostics {
+        eprintln!("shacl diagnostic {diagnostic}");
+    }
     Ok(CliOutcome::Complete)
 }
 

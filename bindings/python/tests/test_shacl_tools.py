@@ -88,7 +88,7 @@ _INFERRED = "".join(
 
 def test_py_apply_rules() -> None:
     out = purrdf.shapes.apply_rules(_DATA, _SHAPES)
-    assert out == {"inferred": _INFERRED, "proof": None}
+    assert out == {"inferred": _INFERRED, "proof": None, "diagnostics": []}
 
     explained = purrdf.shapes.apply_rules(_DATA, _SHAPES, explain=True)
     assert explained["inferred"] == _INFERRED
@@ -186,7 +186,7 @@ def test_py_entail_limits() -> None:
         max_join_steps=4096,
     )
     for line in _INFERRED.splitlines():
-        assert line in closed, closed
+        assert line in closed["ntriples"], closed
     assert closed == purrdf.shapes.entail(_SHAPES, _DATA)
 
 

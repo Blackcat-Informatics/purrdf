@@ -89,9 +89,14 @@ const reparsed = Dataset.parse(nq, "nquads");
   nodes it can move — and returns the report beside the scope it describes, because
   a shapes graph whose constraints read through SPARQL query text has no bounded
   footprint and falls back to validating everything;
-  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
-  N-Triples, bounded by the same four rule-evaluation limits `shaclApplyRules` takes
-  (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
+  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences,
+  bounded by the same four rule-evaluation limits `shaclApplyRules` takes
+  (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`),
+  and returns a `ShaclEntailment` (`ntriples`, and `diagnostics`: the shapes graph's
+  mandatory diagnostics, one `RULE SHAPE` string per empty `sh:in` / `sh:xone`
+  list, which every run reports — `ShaclRulesInference` carries the same array, and
+  a validation's SARIF log carries them as note-level
+  `invocations[0].toolExecutionNotifications`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
   SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
   on request, its proof), `shaclCheckRules(srl, srlBase?, importIris?,
   importDocuments?, level?)` checks a SPARQL 1.2 RL rule set to a level (`syntax`,

@@ -673,6 +673,14 @@ same one the WASM and C-ABI hosts use), so they can never disagree.
 document, which it could not if the verdict were interleaved into it, so two
 `key value` lines — `shacl conforms true|false` and `shacl results N` — go to
 stderr on every run. A shell branches on those without parsing the artifact.
+They are followed by one `shacl diagnostic RULE SHAPE` line per shape whose
+`sh:in` or `sh:xone` list is empty (`in-minListLength`, `xone-minListLength`;
+SHACL 1.2 Core Appendix A, "Each such list SHOULD have at least one member").
+The diagnostic is reported on every run, beside the verdict and never inside it:
+it changes neither the verdict nor the report. The SARIF format carries it as a
+note-level notification in `invocations[0].toolExecutionNotifications`, and the
+RDF report graph does not carry it, because SHACL defines no term for it.
+`purrdf rules` writes the same lines after `rules inferred N`.
 
 **Exit codes.** `0` whether the data conforms **or not** — both are decided
 verdicts, exactly like `consistency true|false` and a `false` ASK; `1` for a
