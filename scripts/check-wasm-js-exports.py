@@ -62,6 +62,14 @@ _JS_NAME_RE = re.compile(r"js_name\s*=\s*(\w+)")
 # deliberately NOT re-exported from the package root, and this gate does not demand it.
 _START_RE = re.compile(r"^#\[wasm_bindgen\(\s*start\s*\)\]$")
 _PUB_FN_RE = re.compile(r"^pub fn (\w+)")
+# Declarative macros that expand each of their entries into a `#[wasm_bindgen(js_name =
+# JS)] pub fn RUST` free function. An entry line inside an invocation reads
+# `JS: fn RUST(` — `crates/rdf-wasm/src/shacl.rs`'s `shacl_entries!` declares every SHACL
+# entry point that way, once, and derives its synchronous binding, its job request and
+# its asynchronous twin from that one declaration. The expansion is exactly the
+# attribute this scanner reads elsewhere, so the entry line is the export.
+_EXPORT_MACROS = ("shacl_entries",)
+_MACRO_ENTRY_RE = re.compile(r"^\s+(\w+): fn (\w+)\(")
 
 
 def _read(path: Path) -> str:
@@ -117,6 +125,23 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                     name = js_name or rust_name
                     exports[name] = (path, attr_line, rust_name)
             i = j
+    for path in sorted(_WASM_SRC.glob("*.rs")):
+        lines = _read(path).splitlines()
+        for macro in _EXPORT_MACROS:
+            opener = f"{macro}! {{"
+            inside = False
+            depth = 0
+            for number, line in enumerate(lines, start=1):
+                if not inside:
+                    if line.startswith(opener):
+                        inside, depth = True, 1
+                    continue
+                entry = _MACRO_ENTRY_RE.match(line) if depth == 1 else None
+                if entry:
+                    exports[entry.group(1)] = (path, number, entry.group(2))
+                depth += line.count("{") - line.count("}")
+                if depth <= 0:
+                    inside = False
     if not exports:
         raise SystemExit(
             f"check-wasm-js-exports: found no `#[wasm_bindgen]` free function under "
