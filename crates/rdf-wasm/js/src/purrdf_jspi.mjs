@@ -295,8 +295,19 @@ export function assertAsyncQueries() {
  * the reason names the gate.
  */
 export function assertNotPoisoned() {
+  if (isPoisoned()) throw poisonError();
+}
+
+/**
+ * Whether the instance is poisoned. The gate's globals are read here as in
+ * `assertNotPoisoned`, so a closed gate no JavaScript of this module saw poisons the
+ * instance first. The package root asks before a call it makes on its own behalf after a
+ * job settled — finishing the job — which on a poisoned instance would trap at the gate
+ * and replace the poison error the job rejected with.
+ */
+export function isPoisoned() {
   if (poisonReason === null && gateClosed()) poison(GATE_CLOSED_REASON);
-  if (poisonReason !== null) throw poisonError();
+  return poisonReason !== null;
 }
 
 /**

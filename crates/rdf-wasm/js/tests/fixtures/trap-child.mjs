@@ -4,12 +4,13 @@
 // Child process for the trap-poisoning test. Run with
 // `--wasm-stack-switching-stack-size=32`: V8 runs every JSPI-promised call on a
 // secondary native stack of that many KiB (984 by default), while synchronous calls keep
-// the full main stack. The parser recurses once per nested `{ … }` and, on wasm32,
-// refuses a group past its host-stack budget (283 groups inside the WHERE group) with its
-// own typed error; 300 nested groups recurse through far more native stack than 32 KiB
-// before reaching that refusal, so the asynchronous run overflows V8's stack — a genuine
+// the full main stack. The evaluator recurses once per nested `OPTIONAL`, and 50 of them
+// are far inside the host-stack budget it admits (284 nested graph patterns, budgeted
+// against V8's default stack), so both lanes admit the query; evaluating it needs more
+// than 32 KiB of native stack, so the asynchronous run overflows V8's stack — a genuine
 // `RangeError` trap out of the promising call — while the synchronous run of the very
-// same query, on the full main stack, reports the parser's own refusal.
+// same query, on the full main stack, answers it. (Measured on the shipped artifact: 20
+// nested `OPTIONAL`s still answer on the 32 KiB stack, and 50 overflow it.)
 //
 // Before the trap, the same objects serve every lane through jobs that finish, jobs
 // whose host rejects and jobs whose host reports a typed failure — none of which may
@@ -22,6 +23,7 @@
 // Prints one JSON line; the parent test asserts on it.
 
 import * as purrdf from "../../index.mjs";
+import init from "../../pkg/purrdf_wasm.js";
 import { enumerateSurface, settle, settleSync } from "./poisoned-surface.mjs";
 
 const { DataFactory, Dataset, QueryEngine, ready, version } = purrdf;
@@ -36,12 +38,11 @@ const extra = factory.quad(factory.namedNode(`${EX}e`), factory.namedNode(`${EX}
 const SHALLOW = `SELECT ?s WHERE { ?s <${EX}p> ?o }`;
 const SERVICE_QUERY = `SELECT ?x WHERE { SERVICE <${EX}sparql> { ?s ?p ?x } }`;
 
-function nested(depth) {
-  let pattern = `?s <${EX}p> ?o`;
-  for (let level = 0; level < depth; level += 1) pattern = `{ ${pattern} }`;
-  return `SELECT ?s WHERE ${pattern}`;
+/** `depth` nested `OPTIONAL`s, each matching the triple the level above matched. */
+function nestedOptional(depth) {
+  return `SELECT ?s WHERE { ?s <${EX}p> ?o ${`OPTIONAL { ?s <${EX}p> ?o `.repeat(depth)}${"}".repeat(depth)} }`;
 }
-const TOO_DEEP = nested(300);
+const TOO_DEEP = nestedOptional(50);
 
 const report = {};
 
@@ -70,12 +71,11 @@ report.syncBefore = await settle(() => engine.query(data, SHALLOW));
 report.asyncAfterFaults = await settle(() => engine.queryAsync(data, SHALLOW));
 report.newEngineBefore = await settle(() => new QueryEngine().query(Dataset.parse(`<${EX}c> <${EX}p> <${EX}o> .\n`, "nquads"), SHALLOW));
 report.sizeBefore = settleSync(() => data.size);
-// The synchronous lane's stack context is its own after those jobs: the deep query is
-// the parser's own typed refusal (300 nested groups, past the host-stack budget) — twice,
-// so it is an error and not a trap that poisoned anything — never a stack exhaustion read
-// off a job's freed region.
-report.syncDeep = await settle(() => engine.query(data, TOO_DEEP));
-report.syncDeepAgain = await settle(() => engine.query(data, TOO_DEEP));
+// The synchronous lane's stack context is its own after those jobs: the query that traps
+// on a job's 32 KiB native stack answers on the main stack — twice, so the first run
+// poisoned nothing — never a stack exhaustion read off a job's freed region.
+report.syncDeep = await settle(() => engine.select(data, TOO_DEEP));
+report.syncDeepAgain = await settle(() => engine.select(data, TOO_DEEP));
 
 // A job in flight — suspended on a SERVICE the host never answers — when another traps.
 let serviceAsked;

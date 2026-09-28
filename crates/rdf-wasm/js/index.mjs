@@ -126,6 +126,7 @@ import {
   configureAsync as jspiConfigureAsync,
   hasAsyncQueries as jspiHasAsyncQueries,
   installAsync,
+  isPoisoned,
   runJob,
 } from "./pkg/purrdf_jspi.mjs";
 
@@ -841,7 +842,9 @@ async function driveAsyncJob(kind, options, argument, begin, settle, fail = jobF
       `asynchronous job ${job.id} could not run (scheduler status ${status})`,
     );
   } finally {
-    job.finish();
+    // On a poisoned instance `finish()` traps at the poison gate, and that trap would
+    // replace the poison error the job rejected with; `free()`'s gate is inert there.
+    if (!isPoisoned()) job.finish();
     job.free();
   }
 }

@@ -41,8 +41,13 @@ extern "C" {
 
     /// `catch`, so a host that throws aborts the serialization instead of having its
     /// exception cross the wasm boundary as a trap.
+    ///
+    /// The chunk is passed by value, so the glue hands the sink a `Uint8Array` it owns
+    /// rather than a view of linear memory: a sink may keep the chunk (a Node `Writable`
+    /// or a stream writer queues it), and a call it makes back into the instance may grow
+    /// the memory, which detaches every view of it.
     #[wasm_bindgen(method, catch, js_name = write)]
-    fn write(this: &ChunkSink, chunk: &[u8]) -> Result<(), JsValue>;
+    fn write(this: &ChunkSink, chunk: Vec<u8>) -> Result<(), JsValue>;
 }
 
 /// Adapts a duck-typed JS sink to the writer the streaming serializer expects.
@@ -55,7 +60,7 @@ struct SinkWriter<'a> {
 
 impl std::io::Write for SinkWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self.sink.write(buf) {
+        match self.sink.write(buf.to_vec()) {
             Ok(()) => Ok(buf.len()),
             Err(error) => {
                 self.thrown = Some(error);

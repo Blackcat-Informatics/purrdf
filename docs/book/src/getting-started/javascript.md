@@ -157,9 +157,11 @@ transport failure), `{ kind: "transport", message }` or
 `{ kind: "denied", message }`. Either fails the query; under `SERVICE SILENT`
 either is the join identity, and the evidence's `silenced` records the endpoint
 and the failure's `kind`. A handler that throws, rejects or returns
-anything else has faulted, and a fault fails the job even under `SERVICE
-SILENT`, because it is not an answer. `ctx.silent` is for information only: an
-empty answer is not the handler's to invent.
+anything else has failed the invocation it was answering, which is delivered as
+`{ kind: "fault" }`: the query fails with `native-sparql-host-fault`, and under
+`SERVICE SILENT` the invocation is the join identity like any other failure.
+`ctx.silent` is for information only: an empty answer is not the handler's to
+invent.
 
 ```js resolve-service-recipe
 import { ready, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
@@ -183,7 +185,8 @@ async function resolveService(request, { signal }) {
       signal,
     });
   } catch (error) {
-    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    // A network error is the endpoint's failure; a throw would be reported as this
+    // handler's own fault instead.
     return { kind: "transport", message: String(error) };
   }
 }
