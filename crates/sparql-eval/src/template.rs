@@ -587,16 +587,16 @@ mod term_walk_tests {
     }
 
     /// The recursive reference for [`resolve_term`].
-    fn resolve_reference(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+    fn resolve_term_by_recursion(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
         match term {
             TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
                 TermOrdinal::Ground
             }
             TermPattern::Variable(v) => TermOrdinal::Variable(schema.index_of(v)),
             TermPattern::Triple(t) => TermOrdinal::Triple(Box::new(TripleOrdinal {
-                subject: resolve_reference(&t.subject, schema),
+                subject: resolve_term_by_recursion(&t.subject, schema),
                 predicate: resolve_predicate(&t.predicate, schema),
-                object: resolve_reference(&t.object, schema),
+                object: resolve_term_by_recursion(&t.object, schema),
             })),
         }
     }
@@ -741,7 +741,7 @@ mod term_walk_tests {
             let mut budget = 5;
             let pattern = pattern(&mut choices, &mut budget);
             let ordinal_walk = resolve_term(&pattern, &schema);
-            let ordinal_ref = resolve_reference(&pattern, &schema);
+            let ordinal_ref = resolve_term_by_recursion(&pattern, &schema);
             assert_eq!(spell(&ordinal_walk), spell(&ordinal_ref), "seed {seed}");
 
             let mut ctx_walk = EvalCtx::new(&*dataset);

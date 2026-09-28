@@ -959,7 +959,7 @@ mod term_walk_tests {
     }
 
     /// The recursive reference for [`term_id_to_value`].
-    fn resolve_reference(dataset: &RdfDataset, id: TermId) -> TermValue {
+    fn term_id_to_value_by_recursion(dataset: &RdfDataset, id: TermId) -> TermValue {
         match dataset.resolve(id) {
             TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
             TermRef::Blank { label, scope } => TermValue::Blank {
@@ -983,9 +983,9 @@ mod term_walk_tests {
                 }
             }
             TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: TermBox::new(resolve_reference(dataset, s)),
-                p: TermBox::new(resolve_reference(dataset, p)),
-                o: TermBox::new(resolve_reference(dataset, o)),
+                s: TermBox::new(term_id_to_value_by_recursion(dataset, s)),
+                p: TermBox::new(term_id_to_value_by_recursion(dataset, p)),
+                o: TermBox::new(term_id_to_value_by_recursion(dataset, o)),
             },
         }
     }
@@ -1056,7 +1056,7 @@ mod term_walk_tests {
         let (dataset, ids) = dataset_of(&values);
         for (value, id) in values.iter().zip(ids) {
             let resolved = term_id_to_value(&*dataset, id);
-            assert_eq!(resolved, resolve_reference(&dataset, id));
+            assert_eq!(resolved, term_id_to_value_by_recursion(&dataset, id));
             assert_eq!(resolved, *value);
         }
     }
