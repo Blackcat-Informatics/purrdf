@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -224,6 +224,47 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 
 test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
+
+# `make test` as six parallel CI jobs. As one job it compiled for 25 minutes before
+# running anything, against a 30-minute job budget. The compile is almost all
+# first-party test targets, so caching dependencies cannot fix it; splitting the
+# targets across runners does.
+#
+# EVERY SHARD SELECTS `--workspace`, and that is the load-bearing choice. Cargo
+# unifies dependency features across the packages SELECTED on the command line, so
+# sharding by package (`-p purrdf-shapes`, ...) would compile several dependencies
+# (clap, regex-automata, ahash, smallvec, insta) with different features from the
+# ones `cargo test --workspace` uses — a different build, not a split of the same one.
+# Target-kind flags change which targets are built, never how features resolve.
+#
+# THE SHARDS PARTITION `cargo test --workspace`'s default target selection exactly:
+#   lib            every library's unit tests, and every binary's. purrdf-python is
+#                  excluded because its library is `test = false` (a PyO3 extension
+#                  cannot link a test harness), and the default selection skips it for
+#                  the same reason; the explicit `--lib` flag would not. Excluding it
+#                  changes no other package's features (only pyo3 leaves the graph).
+#   doc            every library's doc tests (purrdf-python's included, as before),
+#                  and the examples, which the default selection builds but does not
+#                  run; `cargo build --profile test` is that same build.
+#   integration-N  the integration-test targets, split by the first character of the
+#                  target name: [a-d] [e-o] [p-r], and [!a-r] for everything else, so
+#                  the four globs are disjoint and cover every name by construction.
+# No bench target sets `test = true`, so the default selection has none to run.
+#
+# c_abi_smoke is skipped in integration-1 because `make capi-check` runs that same
+# `cargo test -p purrdf-capi --test c_smoke`, and the capi CI job runs capi-check.
+# `make test` locally still runs everything in one invocation.
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
+	@case "$(SHARD)" in \
+		lib) set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
+		doc) set -x; cargo test --workspace --locked --doc \
+			&& cargo build --workspace --locked --examples --profile test ;; \
+		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
+		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
+		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
+		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
+	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
 	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
