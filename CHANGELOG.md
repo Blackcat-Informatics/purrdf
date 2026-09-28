@@ -1540,6 +1540,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   failed lookup — and a well-formed `"1"^^<…>` still decodes. A caller that sent either
   malformed form writes the datatype IRI in angle brackets.
 
+- **sparql-results:** a deeply nested SPARQL Results JSON document, such as a hostile
+  `SERVICE` endpoint's answer, overflowed the stack while the reader parsed, decoded or
+  dropped it, trapping a Wasm instance even under `SILENT`. The reader, its triple-term
+  decoding and its value drop now keep their state on the heap, so such an answer is
+  read, or refused with the reader's format error, however deep it nests.
+
 - **sparql-eval:** `ServiceCatalog::authorize` named the `query` capability as the one
   withheld when no profile covered the endpoint, whatever the request needed; it now
   names the first capability the request needs, so a `LOAD` fetch refused by an empty

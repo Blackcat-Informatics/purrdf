@@ -400,11 +400,10 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
                     obj_get(triple.inner, "object").ok_or_else(|| fmt("triple has no object"))?;
                 break;
             }
+            let innermost = open.pop();
             let OpenTriple {
                 subject, predicate, ..
-            } = open
-                .pop()
-                .expect("the innermost open triple term was just read");
+            } = innermost.expect("the innermost open triple term was just read");
             let (Some(s), Some(p)) = (subject, predicate) else {
                 unreachable!(
                     "an open triple term holding its object holds its subject and predicate"

@@ -699,13 +699,14 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
     assert.match(walkAnswer(engine, ds, refused).refused ?? "", /native-sparql-evaluation-stack-exhausted/);
   }
   assert.equal(refused, deepest + 1);
-  // Measured on this build: 77 levels answer and 78 are refused. The bound is the
-  // evaluator's shadow-stack guard on the synchronous lane — the module's 1 MiB shadow
-  // stack, less the 64 KiB reserve the guard refuses inside, over the frames one level of
-  // this shape takes on the synchronous lane's evaluation path (no stop source, so the
-  // ungoverned dispatch), which the compiler sizes — so a compiler or evaluator change
-  // that resizes those frames moves the pair, and this pin is re-measured with it.
-  assert.equal(deepest, 77, `${deepest} levels answer`);
+  // The depth is the evaluator's shadow-stack guard on the synchronous lane: the module's
+  // 1 MiB shadow stack, less the 64 KiB reserve the guard refuses inside, over the frames
+  // one level of this shape takes on the synchronous lane's evaluation path (no stop
+  // source, so the ungoverned dispatch). The compiler sizes those frames, so the exact
+  // pair moves between toolchains (77 levels on one build, 78 on CI's); a floor at the
+  // smallest measured depth fails when a change grows the frames, and not when a
+  // toolchain shrinks them.
+  assert.ok(deepest >= 77, `${deepest} levels answer; 77 did on the smallest build measured`);
   // Not poisoned: the same engine answers an ordinary query exactly.
   assert.deepEqual(
     engine

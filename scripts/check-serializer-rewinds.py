@@ -94,6 +94,14 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "held",
     ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
     (
+        "crates/sparql-results/src/json_read.rs",
+        "open",
+    ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
+    (
+        "crates/sparql-results/src/json_read.rs",
+        "pending",
+    ): "The SPARQL-JSON READER's work list of parsed values still to drop, so a deep document is freed without recursion. The reader emits nothing.",
+    (
         "crates/sparql-results/src/xml.rs",
         "held",
     ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
