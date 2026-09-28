@@ -170,7 +170,7 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
     // stack, so a value of any nesting costs no more machine stack; saturating addition
     // of unsigned terms is associative, so the total is the same in any visit order.
     let mut total: u64 = 0;
-    let mut pending: Vec<&TermValue> = vec![value];
+    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
     while let Some(term) = pending.pop() {
         let payload = match term {
             TermValue::Iri(iri) => iri.len() as u64,
@@ -239,7 +239,7 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// before the next, over a work list rather than the call stack; the first tag that
 /// fails the grammar ends the walk.
 pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
-    let mut pending: Vec<&TermValue> = vec![value];
+    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
     while let Some(term) = pending.pop() {
         match term {
             TermValue::Iri(_) | TermValue::Blank { .. } => {}
@@ -568,8 +568,10 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
         Resolve(I),
         Assemble,
     }
-    let mut steps: Vec<Step<D::Id>> = vec![Step::Resolve(id)];
-    let mut values: Vec<TermValue> = Vec::new();
+    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
+    // plain term costs only its own value.
+    let mut steps: smallvec::SmallVec<[Step<D::Id>; 8]> = smallvec::smallvec![Step::Resolve(id)];
+    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Resolve(id) => match dataset.resolve(id) {

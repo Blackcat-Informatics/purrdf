@@ -39,7 +39,8 @@ use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
     EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome, StandpointPredicates,
-    evaluate_query, evaluate_query_evaluated, query_pattern,
+    evaluate_query, evaluate_query_evaluated, evaluate_query_evaluated_over, evaluate_query_over,
+    query_pattern,
 };
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
@@ -87,6 +88,9 @@ pub struct PreparedQuery {
     /// [`Self::relations`].
     aggregates: String,
     memory: PlanCharge,
+    /// The numbered tree of [`Self::query`], built on the first evaluation of this plan
+    /// and shared by every later one. See [`crate::plan::PlanCache`].
+    pub(crate) plan: crate::plan::PlanCache,
 }
 
 impl PreparedQuery {
@@ -186,6 +190,7 @@ impl PreparedQuery {
             relations,
             aggregates,
             memory: PlanCharge::new(memory, bytes),
+            plan: crate::plan::PlanCache::default(),
         }
     }
 
@@ -209,7 +214,8 @@ impl PreparedQuery {
 
     /// Conservative current payload charge for this admitted plan. Shared strings
     /// are charged per occurrence. Excludes allocator overhead, the outer plan's
-    /// `Arc` header, and shared accounting storage.
+    /// `Arc` header, shared accounting storage, and the numbered plan tree the first
+    /// evaluation builds and later evaluations share.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
         plan_payload_bytes(
@@ -2167,12 +2173,14 @@ impl NativeSparqlEngine {
         if let Some(source) = remote {
             ctx = ctx.with_remote(source);
         }
-        evaluate_query_evaluated(&prepared.query, &mut ctx).map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-explain"),
-                e.to_string(),
-            )
-        })?;
+        evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), &mut ctx).map_err(
+            |e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-query-explain"),
+                    e.to_string(),
+                )
+            },
+        )?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
         // was registered and not of the order it was registered in. The full descriptor
         // travels, not just the IRI: arity, declared modes, and volatility are all part of
@@ -2626,12 +2634,16 @@ impl NativeSparqlEngine {
             // sites. Scoped so its borrow of `execution` ends before the workspace
             // goes back.
             match execution.substituted(options.prebinding) {
-                Ok(substituted) => evaluate_query(substituted.query(), &mut ctx).map_err(|e| {
-                    RdfDiagnostic::error(
-                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                        e.to_string(),
+                Ok(substituted) => {
+                    evaluate_query_over(substituted.query(), substituted.plan(), &mut ctx).map_err(
+                        |e| {
+                            RdfDiagnostic::error(
+                                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                                e.to_string(),
+                            )
+                        },
                     )
-                }),
+                }
                 Err(refused) => Err(refused),
             }
         };
@@ -2703,12 +2715,13 @@ impl NativeSparqlEngine {
         ctx.scratch = execution.check_out_workspace();
         let evaluated = match execution.substituted(options.prebinding) {
             Ok(substituted) => {
-                evaluate_query_evaluated(substituted.query(), &mut ctx).map_err(|e| {
-                    RdfDiagnostic::error(
-                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                        e.to_string(),
-                    )
-                })
+                evaluate_query_evaluated_over(substituted.query(), substituted.plan(), &mut ctx)
+                    .map_err(|e| {
+                        RdfDiagnostic::error(
+                            eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                            e.to_string(),
+                        )
+                    })
             }
             Err(refused) => Err(refused),
         };
@@ -3040,7 +3053,7 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
         )
     };
     if substitutions.is_empty() {
-        return evaluate_query(&prepared.query, ctx).map_err(eval_err);
+        return evaluate_query_over(&prepared.query, Some(&prepared.plan), ctx).map_err(eval_err);
     }
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
@@ -3064,7 +3077,8 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
         )
     };
     if substitutions.is_empty() {
-        return evaluate_query_evaluated(&prepared.query, ctx).map_err(eval_err);
+        return evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), ctx)
+            .map_err(eval_err);
     }
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;

@@ -537,7 +537,7 @@ fn term_value_mentions_withheld_blank(
     term: &TermValue,
     withhold: &mut impl FnMut(&str) -> bool,
 ) -> bool {
-    let mut pending: Vec<&TermValue> = vec![term];
+    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermValue::Blank { label, .. } => {

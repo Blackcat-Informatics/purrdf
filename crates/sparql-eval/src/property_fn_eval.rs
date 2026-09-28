@@ -2886,7 +2886,7 @@ fn call_variables<'q>(
             visible.push((variable, Some(variable)));
         }
     }
-    let mut pending = vec![term];
+    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::Variable(variable) => record(variable, visible),
@@ -3312,7 +3312,7 @@ fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
     use crate::governor::soundness::{
         ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
     };
-    let mut pending = vec![root];
+    let mut pending: smallvec::SmallVec<[ReachNode<'_>; 16]> = smallvec::smallvec![root];
     while let Some(node) = pending.pop() {
         match node {
             ReachNode::Pattern(pattern) => {

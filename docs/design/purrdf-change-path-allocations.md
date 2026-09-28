@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 47 |
-| custom `sh:ask` component | 106 |
-| custom `sh:select` component | 60 |
-| `sh:expression` function call | 119 |
+| `sh:sparql` constraint | 42 |
+| custom `sh:ask` component | 90 |
+| custom `sh:select` component | 50 |
+| `sh:expression` function call | 105 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 64 |
-| custom `sh:ask` component, governed | 128 |
-| custom `sh:select` component, governed | 77 |
-| `sh:expression` function call, governed | 144 |
+| `sh:sparql` constraint, governed | 63 |
+| custom `sh:ask` component, governed | 118 |
+| custom `sh:select` component, governed | 71 |
+| `sh:expression` function call, governed | 130 |
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in

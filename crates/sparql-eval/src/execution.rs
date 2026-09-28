@@ -323,8 +323,9 @@ struct PendingShape {
 /// from starting while the first is reading it.
 pub(crate) enum Substituted<'a> {
     /// The retained substituted tree, or the admitted plan itself when this
-    /// execution declares no parameters and there is nothing to substitute.
-    Retained(&'a Query),
+    /// execution declares no parameters and there is nothing to substitute, with the
+    /// plan cache its owner keeps for it.
+    Retained(&'a Query, &'a crate::plan::PlanCache),
     /// A tree rewritten for this run alone, exactly as the `&str` doors build one.
     ///
     /// Boxed so this variant is one pointer wide instead of a whole [`Query`]:
@@ -338,8 +339,17 @@ impl Substituted<'_> {
     /// The algebra to evaluate.
     pub(crate) fn query(&self) -> &Query {
         match self {
-            Self::Retained(query) => query,
+            Self::Retained(query, _) => query,
             Self::Fresh(query) => query.as_ref(),
+        }
+    }
+
+    /// The plan cache kept for [`Self::query`], when its owner keeps one: a retained
+    /// tree is evaluated unchanged on every run that reads it, a fresh one once.
+    pub(crate) const fn plan(&self) -> Option<&crate::plan::PlanCache> {
+        match self {
+            Self::Retained(_, plan) => Some(plan),
+            Self::Fresh(_) => None,
         }
     }
 }
@@ -712,7 +722,7 @@ impl PreparedExecution {
             crate::substitute::Prebindings::Paired(parameters, values),
         )?;
         if probes.is_empty() {
-            return Ok(Substituted::Retained(prepared.query()));
+            return Ok(Substituted::Retained(prepared.query(), &prepared.plan));
         }
         // Every mutation of `memo` and `pending` happens FIRST, and the borrow that
         // leaves this function is taken LAST, once nothing after it touches either.
@@ -753,11 +763,11 @@ impl PreparedExecution {
             // Built FROM these probes, so its tree already carries these values and
             // re-binding them would write what is already there.
             let memo = memo.as_ref().expect("a memo was just inserted");
-            return Ok(Substituted::Retained(memo.query()));
+            return Ok(Substituted::Retained(memo.query(), memo.plan()));
         }
         if already_matches {
             let memo = memo.as_mut().expect("a memo matched just above");
-            let bound = memo.bind(probes);
+            let (bound, plan) = memo.bind(probes);
             // The differential oracle: in a debug build, every memo hit is checked
             // against the rewrite it stands in for, not just trusted because
             // `matches` said yes. `PrebindMemo::build` already proves this once, at
@@ -788,7 +798,7 @@ impl PreparedExecution {
                      a query nobody asked for"
                 );
             }
-            return Ok(Substituted::Retained(bound));
+            return Ok(Substituted::Retained(bound, plan));
         }
         Ok(Substituted::Fresh(Box::new(crate::prebind_memo::rewrite(
             prepared.query().clone(),

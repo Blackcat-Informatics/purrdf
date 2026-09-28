@@ -512,7 +512,7 @@ fn reaches_unsafe_builtin(
     registries: SafetyRegistries<'_>,
     verdict: ExistsVerdict<'_>,
 ) -> bool {
-    let mut pending = vec![root];
+    let mut pending: smallvec::SmallVec<[Reach<'_>; 16]> = smallvec::smallvec![root];
     while let Some(item) = pending.pop() {
         match item {
             Reach::Expression(expr) => {

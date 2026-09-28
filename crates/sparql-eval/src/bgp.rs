@@ -428,7 +428,7 @@ fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize
     /// Whether every slot reachable from `pos` is already bound, over a work list of
     /// the nested positions in `(s, p, o)` order, stopping at the first unbound slot.
     fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-        let mut pending = vec![pos];
+        let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
         while let Some(pos) = pending.pop() {
             match pos {
                 Pos::Bound(_) => {}
@@ -604,7 +604,7 @@ fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphSc
 /// machine stack to the same value.
 fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     use std::hash::Hash;
-    let mut pending = vec![pos];
+    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Slot(c) => {
@@ -974,7 +974,7 @@ fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> 
 /// Whether a position contains an already-bound slot anywhere, over a work list of
 /// the nested positions in `(s, p, o)` order, stopping at the first bound slot.
 fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-    let mut pending = vec![pos];
+    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Bound(_) => {}
@@ -1000,7 +1000,7 @@ fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
 /// Visit every slot column reachable from a position (itself, or the inner positions
 /// of a nested quoted triple), in `(s, p, o)` pre-order over a work list.
 fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
-    let mut pending = vec![pos];
+    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Bound(_) => {}
@@ -1013,17 +1013,20 @@ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
 /// The slot variables a triple pattern introduces, in `(s, p, o)` order — descending
 /// into any nested quoted-triple position so its inner variables become columns too. A
 /// ground position yields nothing; a blank node yields a synthetic slot variable.
-fn slot_keys(pattern: &TriplePattern) -> Vec<Variable> {
-    let mut keys = Vec::new();
+///
+/// Inline for a pattern of up to four slots, which every pattern without a quoted
+/// triple is.
+fn slot_keys(pattern: &TriplePattern) -> smallvec::SmallVec<[Variable; 4]> {
+    let mut keys = smallvec::SmallVec::new();
     collect_triple_slot_keys(pattern, &mut keys);
     keys
 }
 
 /// Append a triple pattern's slot variables, through nested quoted triples, in
 /// `(s, p, o)` order.
-fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut Vec<Variable>) {
+fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
     collect_slot_keys(
-        vec![
+        smallvec::smallvec![
             SlotPosition::Term(&pattern.object),
             SlotPosition::Predicate(&pattern.predicate),
             SlotPosition::Term(&pattern.subject),
@@ -1042,12 +1045,17 @@ enum SlotPosition<'a> {
 /// the next position in `(s, p, o)` order — to `keys`: a real variable, a synthetic
 /// blank-node variable, or, for a quoted triple, its inner positions in the same
 /// order. Ground terms yield nothing.
-fn collect_slot_keys(mut pending: Vec<SlotPosition<'_>>, keys: &mut Vec<Variable>) {
+fn collect_slot_keys(
+    mut pending: smallvec::SmallVec<[SlotPosition<'_>; 8]>,
+    keys: &mut impl Extend<Variable>,
+) {
     while let Some(position) = pending.pop() {
         match position {
             SlotPosition::Predicate(NamedNodePattern::Variable(v))
-            | SlotPosition::Term(TermPattern::Variable(v)) => keys.push(v.clone()),
-            SlotPosition::Term(TermPattern::BlankNode(b)) => keys.push(blank_var(b.as_str())),
+            | SlotPosition::Term(TermPattern::Variable(v)) => keys.extend([v.clone()]),
+            SlotPosition::Term(TermPattern::BlankNode(b)) => {
+                keys.extend([blank_var(b.as_str())]);
+            }
             SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
                 SlotPosition::Term(&t.object),
                 SlotPosition::Predicate(&t.predicate),
@@ -1386,6 +1394,9 @@ fn bind_row<D: DatasetView>(
     Some(out)
 }
 
+/// [`bind_pos`]'s work list: positions still to unify, each with its candidate id.
+type PosWork<'p, I> = smallvec::SmallVec<[(&'p Pos<I>, I); 4]>;
+
 /// Unify one compiled position against a candidate term id, mutating `out` with any
 /// newly bound slots. Returns `false` (caller rejects the row) on any disagreement:
 /// - a `Pos::Bound` constant that does not equal the candidate id;
@@ -1403,7 +1414,9 @@ fn bind_pos<D: DatasetView>(
     id: D::Id,
     dataset: &D,
 ) -> bool {
-    let mut pending = vec![(pos, id)];
+    // Inline for a plain position and for a quoted triple of plain positions, so
+    // binding a row allocates nothing beyond the row it writes.
+    let mut pending: PosWork<'_, D::Id> = smallvec::smallvec![(pos, id)];
     while let Some((pos, id)) = pending.pop() {
         match pos {
             Pos::Bound(want) => {
@@ -2001,7 +2014,7 @@ fn project_out_blanks<I: ViewTermId>(
     rows: Vec<Solution<I>>,
 ) -> SolutionSeq<I> {
     // The working columns that survive, in order.
-    let keep: Vec<usize> = working
+    let keep: smallvec::SmallVec<[usize; 8]> = working
         .vars()
         .iter()
         .enumerate()
@@ -3301,7 +3314,9 @@ mod term_walk_tests {
 
     /// A dataset holding IRIs `a`..`d`, predicates `p`/`q`, a literal of each shape and
     /// quoted triples nested three deep, so a generated pattern's ground positions
-    /// sometimes name a term the dataset holds and sometimes one it does not.
+    /// sometimes name a term the dataset holds and sometimes one it does not. Every
+    /// triple term nests only in the OBJECT of another triple term and every asserted
+    /// subject is an IRI, the RDF 1.2 term model the freeze gate enforces.
     fn dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let a = b.intern_iri(&format!("{EX}a"));
@@ -3315,15 +3330,16 @@ mod term_walk_tests {
             "http://www.w3.org/2001/XMLSchema#integer",
         ));
         let t1 = b.intern_triple(a, p, bb);
-        let t2 = b.intern_triple(t1, q, c);
+        let t2 = b.intern_triple(c, q, t1);
         let t3 = b.intern_triple(a, p, t2);
-        let t4 = b.intern_triple(t1, p, t1);
+        let t4 = b.intern_triple(bb, p, t1);
         b.push_quad(a, p, bb, None);
         b.push_quad(bb, q, plain, None);
         b.push_quad(c, p, one, None);
         b.push_quad(a, q, t1, None);
-        b.push_quad(t2, p, c, None);
-        b.push_quad(t3, q, t4, None);
+        b.push_quad(c, p, t2, None);
+        b.push_quad(a, q, t3, None);
+        b.push_quad(bb, q, t4, None);
         b.freeze().expect("freeze")
     }
 
@@ -3376,13 +3392,37 @@ mod term_walk_tests {
         }
     }
 
+    /// A ground quoted triple spelling one of the four triple terms `dataset` interns,
+    /// so a generated ground quoted triple is sometimes one the dataset holds whole —
+    /// an arbitrary ground triple over the vocabulary almost never is.
+    fn held_triple(which: usize) -> TermPattern {
+        let triple = |s: TermPattern, p: &str, o: TermPattern| {
+            TermPattern::Triple(Child::new(TriplePattern {
+                subject: s,
+                predicate: NamedNodePattern::NamedNode(iri(p)),
+                object: o,
+            }))
+        };
+        let node = |local: &str| TermPattern::NamedNode(iri(local));
+        let t1 = || triple(node("a"), "p", node("b"));
+        let t2 = || triple(node("c"), "q", t1());
+        match which {
+            0 => t1(),
+            1 => t2(),
+            2 => triple(node("a"), "p", t2()),
+            _ => triple(node("b"), "p", t1()),
+        }
+    }
+
     /// A term pattern over the fixture's vocabulary: variables, blank nodes, IRIs the
-    /// dataset holds or lacks, literals of every shape, and nested quoted triples.
+    /// dataset holds or lacks, literals of every shape, nested quoted triples, and the
+    /// quoted triples the dataset holds.
     fn term_pattern(choices: &mut Choices) -> TermPattern {
         if !choices.spend() {
             return TermPattern::Variable(Variable::new(format!("v{}", choices.choose(3))));
         }
-        match choices.choose(9) {
+        match choices.choose(10) {
+            9 => held_triple(choices.choose(4)),
             0 => TermPattern::Variable(Variable::new(format!("v{}", choices.choose(3)))),
             1 => TermPattern::BlankNode(BlankNode::new(format!("b{}", choices.choose(2)))),
             2 | 3 => TermPattern::NamedNode(iri(["a", "b", "c", "d"][choices.choose(4)])),
@@ -3585,7 +3625,7 @@ mod term_walk_tests {
             let mut expected = Vec::new();
             reference_collect_triple_slot_keys(&pattern, &mut expected);
             assert_eq!(keys, expected, "seed {seed}: {pattern:?}");
-            assert_eq!(slot_keys(&pattern), expected, "seed {seed}");
+            assert_eq!(slot_keys(&pattern).to_vec(), expected, "seed {seed}");
             for term in [&pattern.subject, &pattern.object] {
                 assert_eq!(
                     term_pattern_to_string(term),

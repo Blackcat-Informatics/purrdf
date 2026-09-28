@@ -1364,6 +1364,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self.plan = Some(tree.handle());
     }
 
+    /// Install the tree `plan` is the handle of, as [`Self::install_plan`] does.
+    pub(crate) fn install_plan_handle(&mut self, plan: crate::plan::PlanHandle) {
+        self.plan = Some(plan);
+    }
+
     /// The id of `pattern` in the installed tree, when it is one of its nodes.
     pub(crate) fn plan_node(&self, pattern: &GraphPattern) -> Option<crate::plan::NodeId> {
         self.plan.as_ref()?.node_of(pattern)
@@ -3151,7 +3156,7 @@ pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
 /// non-sequitur. Their semantic slices are still planned locally.
 fn install_answer_cap_pushdown<D: DatasetView + Sync>(
     query: &Query,
-    tree: &crate::plan::Tree<'_>,
+    plan: &crate::plan::PlanHandle,
     ctx: &mut EvalCtx<'_, D>,
 ) {
     ctx.cap_pushdown = None;
@@ -3167,8 +3172,7 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(
         // No root cap: semantic slices install their local pushdown only if reached.
         _ => return,
     };
-    let pushdown =
-        CapPushdown::over_plan(&tree.handle(), tree.pattern(crate::plan::NodeId::ROOT), cap);
+    let pushdown = CapPushdown::over_plan(plan, query_pattern(query), cap);
     ctx.cap_pushdown = pushdown.map(Arc::new);
 }
 
@@ -3287,6 +3291,17 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
+    prepare_query_context_over(query, None, ctx)
+}
+
+/// [`prepare_query_context`], numbering `query` through `kept` — the plan cache of the
+/// owner holding `query` unchanged across evaluations — when there is one, and afresh
+/// when there is not.
+pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
@@ -3294,11 +3309,14 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    // The tree every node of this evaluation is numbered in, built once here with its
-    // variable-endpoint analysis and `EXISTS` sites.
-    let tree = crate::plan::Tree::build(query_pattern(query));
-    ctx.install_plan(&tree);
-    install_answer_cap_pushdown(query, &tree, ctx);
+    // The tree every node of this evaluation is numbered in, with its variable-endpoint
+    // analysis and `EXISTS` sites: the kept one, or one built here.
+    let plan = match kept {
+        Some(cache) => cache.handle(query_pattern(query)),
+        None => crate::plan::Tree::build(query_pattern(query)).handle(),
+    };
+    ctx.install_plan_handle(plan.clone());
+    install_answer_cap_pushdown(query, &plan, ctx);
     Ok(())
 }
 
@@ -3319,10 +3337,20 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    evaluate_query_evaluated_over(query, None, ctx)
+}
+
+/// [`evaluate_query_evaluated`], numbering `query` through `kept` when its owner keeps a
+/// plan cache for it (see [`prepare_query_context_over`]).
+pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
     // Criterion and differential tests can hold the operation on the sequential branch
     // (`EvalOptions::force_sequential`, read by every fork gate through
     // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
-    prepare_query_context(query, ctx)?;
+    prepare_query_context_over(query, kept, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column
@@ -3397,11 +3425,25 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
+    evaluate_query_over(query, None, ctx)
+}
+
+/// [`evaluate_query`], numbering `query` through `kept` when its owner keeps a plan
+/// cache for it (see [`prepare_query_context_over`]). A query whose shared blank labels
+/// are joined here is a new tree, and is numbered afresh.
+pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Outcome<D::Id>, EvalError> {
     // As [`eval`]: a query handed in here has not passed admission, so the shared
     // blank labels admission joins are joined here.
     let joined = crate::blank_scope::join_shared_blanks_in_query(query);
-    let query = joined.as_ref().unwrap_or(query);
-    match evaluate_query_evaluated(query, ctx)? {
+    let (query, kept) = match joined.as_ref() {
+        Some(joined) => (joined, None),
+        None => (query, kept),
+    };
+    match evaluate_query_evaluated_over(query, kept, ctx)? {
         EvaluatedOutcome::Complete(outcome) => Ok(outcome),
         EvaluatedOutcome::Truncated {
             outcome,
@@ -3497,8 +3539,10 @@ fn memoized_term_value<D: DatasetView>(
         Resolve(I),
         Assemble,
     }
-    let mut steps: Vec<Step<D::Id>> = vec![Step::Resolve(id)];
-    let mut values: Vec<TermValue> = Vec::new();
+    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
+    // plain cell costs only its own value.
+    let mut steps: smallvec::SmallVec<[Step<D::Id>; 8]> = smallvec::smallvec![Step::Resolve(id)];
+    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Resolve(id) => match dataset.resolve(id) {

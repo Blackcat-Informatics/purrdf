@@ -858,6 +858,11 @@ pub(crate) struct PrebindMemo {
     /// ordinal after it would shift and the replay would write into the wrong cells.
     /// This turns that into a panic instead of a wrong answer.
     cells: u32,
+    /// The numbered tree of [`Self::query`], shared by every run that reads it. A run
+    /// only rewrites cells, in place, so the tree's nodes keep their addresses; an
+    /// attached expression or `EXISTS` body holding a cell is compiled or prepared per
+    /// run, since its constants are the run's values.
+    plan: crate::plan::PlanCache,
 }
 
 impl PrebindMemo {
@@ -892,7 +897,7 @@ impl PrebindMemo {
     /// different number of positions than it did when they were recorded. Both mean
     /// the retained tree holds cells from an earlier run that this run's values were
     /// meant to replace, which is a wrong answer rather than a slow one.
-    pub(crate) fn bind(&mut self, probes: &Probes) -> &Query {
+    pub(crate) fn bind(&mut self, probes: &Probes) -> (&Query, &crate::plan::PlanCache) {
         debug_assert!(
             Self::shapes_match(&self.shapes, probes),
             "a memo is only ever bound after `matches` agreed to it"
@@ -905,12 +910,17 @@ impl PrebindMemo {
              than only its cells, so every position after it is misnumbered",
             self.cells
         );
-        &self.query
+        (&self.query, &self.plan)
     }
 
     /// The tree as it stands, for the run that built it.
     pub(crate) fn query(&self) -> &Query {
         &self.query
+    }
+
+    /// The plan cache kept for [`Self::query`].
+    pub(crate) const fn plan(&self) -> &crate::plan::PlanCache {
+        &self.plan
     }
 
     /// Build a memo for `prepared` under `lane` and the shapes of `probes`, or `None`
@@ -993,12 +1003,19 @@ impl PrebindMemo {
         if replayed != rewrite(prepared.clone(), lane, moved_probes) {
             return None;
         }
+        // `replayed` holds a different value in every cell `base` does, so an attached
+        // expression or `EXISTS` body the two disagree on is one a run rewrites.
+        let plan = crate::plan::PlanCache::varying(
+            crate::eval::query_pattern(&base),
+            crate::eval::query_pattern(&replayed),
+        );
         Some(Self {
             lane,
             shapes,
             query: base,
             targets: targets.into_boxed_slice(),
             cells,
+            plan,
         })
     }
 }

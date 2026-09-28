@@ -157,12 +157,27 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// setup (a fresh solution buffer, the interned egress) is not free. What this pin
 /// claims is narrower and achievable — that the cost is a FIXED constant, independent
 /// of how many times the execution has already run — which is what
-/// `re_running_a_prepared_execution_costs_25_allocations` asserts against it, at every
+/// `re_running_a_prepared_execution_costs_23_allocations` asserts against it, at every
 /// one of [`MEASURED_RUNS`] consecutive steady-state runs. If this ever moves,
 /// re-measure with `without_memo_verification` bracketing the window exactly as the
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 25;
+///
+/// The 23, read off the calling thread's ledger one allocation at a time:
+///
+/// * **3** grounding the bound IRI into the probe list — the IRI's own string and
+///   its validation;
+/// * **1** the evaluation context;
+/// * **2** the one-row `VALUES` seed the parameter rides — its row and its term;
+/// * **8** the basic graph pattern — its compiled pattern and constant, its working
+///   and projected schemas, and the row buffer it fills;
+/// * **7** the seed's join onto it — the hash index, the joined schema, the column
+///   map and the joined rows;
+/// * **2** the projection's column map and rows.
+///
+/// None of it is the plan: the numbered tree and its compiled expressions are the
+/// retained substituted tree's, built once and shared by every run.
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 23;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
@@ -213,7 +228,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
 }
 
 #[test]
-fn re_running_a_prepared_execution_costs_25_allocations() {
+fn re_running_a_prepared_execution_costs_23_allocations() {
     let ds = dataset(8);
     assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
@@ -243,7 +258,7 @@ fn re_running_a_prepared_execution_costs_25_allocations() {
     // `purrdf_sparql_eval::prebind_memo` BUILDS the retained tree and pays for the
     // several extra rewrites that costs. Only from the third run on is the handle
     // in the steady state the pin is stated over. Measured on the calling thread's
-    // ledger these three phases are 48, 73 and 27 allocations, deterministically,
+    // ledger these three phases are 54, 89 and 23 allocations, deterministically,
     // which is how the boundary was read rather than assumed.
     let _warm = (run(0), run(1));
 
@@ -472,20 +487,27 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 ///   per IRI in the query and now asks `purrdf_iri::is_absolute`, which runs the
 ///   identical grammar over a borrow — one heap `String` per IRI per call, gone.
 ///
-/// Measured on this revision at **56**, against **65** without the three changes below,
-/// over [`PREPARED_PLAN_QUERY`]'s three distinct IRIs — and the nine decompose exactly,
-/// each part isolated by reverting one change at a time and re-measuring:
+/// The IRI admission owns no string per IRI occurrence, which is why this fixture's
+/// query carries three distinct IRIs rather than one: a per-occurrence cost would show
+/// here as a multiple of three.
 ///
-/// * 65 → 62 when the IRI admission stopped owning: **three**, one `String` per IRI
-///   occurrence in the algebra, which is why this fixture's query carries three
-///   distinct IRIs rather than one;
-/// * 62 → 59 when the duplicate nesting walk went: **three**, the traversal stack
-///   that second walk allocated and grew on every call.
-/// * 59 → 56 with the height admission (`stack::height`) keeping a shallow plan's
-///   pending nodes inline, for the per-call admission beside `Query::validate` and the
-///   per-evaluation one alike: **three**, the traversal stack the per-evaluation walk
-///   grew, and neither admission allocates for this fixture.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 56;
+/// The **51**, read off the calling thread's ledger one allocation at a time:
+///
+/// * **2** the per-call `Query::validate` walk's traversal stack;
+/// * **1** the evaluation context;
+/// * **11** the two basic graph patterns — their compiled patterns, working schemas
+///   and row buffers;
+/// * **12** the `FILTER` over the eight joined rows — its output rows and receipts,
+///   the value stack its program runs on, the constant it interns and the terms the
+///   comparison types;
+/// * **3** the XSD parse cache the comparison fills;
+/// * **2** the projection's column map and rows;
+/// * **20** the materialized egress — the eight answer rows and their IRI strings,
+///   the variable list and the empty constructed graph.
+///
+/// None of it is the plan: the numbered tree and the `FILTER`'s compiled program are
+/// the admitted plan's, built on its first evaluation and shared by every later one.
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 51;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

@@ -708,7 +708,7 @@ pub(crate) fn invocation_mode(
 /// A blank node is a non-distinguished variable and is never bound; a quoted triple is
 /// bound only when every component is, its nested triples walked over a work list.
 fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
-    let mut pending = vec![term];
+    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}

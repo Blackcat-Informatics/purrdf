@@ -533,9 +533,18 @@ fn assert_same(expr: &Expression, context: &str) {
 
 #[test]
 fn the_vm_matches_the_tree_walk_over_every_suite_expression() {
-    let suites = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sparql-conformance");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let suites = manifest.join("../sparql-conformance");
+    let vectors = manifest.join("../../vectors");
     let mut files = Vec::new();
-    let mut dirs = vec![suites.join("suite"), suites.join("corpus")];
+    // The conformance suites and corpus, and the vendored SEP-0009 and governor
+    // vectors, whose queries are the ones dense in composite-datatype function calls.
+    let mut dirs = vec![
+        suites.join("suite"),
+        suites.join("corpus"),
+        vectors.join("sparql-cdt"),
+        vectors.join("sparql-governors"),
+    ];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("the conformance suites are present") {
             let path = entry.expect("a directory entry").path();

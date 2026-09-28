@@ -28,7 +28,9 @@
 //! compiles on heap, never on the machine stack.
 
 use purrdf_core::TermValue;
-use purrdf_sparql_algebra::{ArithmeticOperator, Expression, Function, Variable};
+use purrdf_sparql_algebra::{
+    ArithmeticOperator, Expression, Function, Literal, NamedNode, Variable,
+};
 
 use crate::DetHashMap;
 
@@ -160,17 +162,38 @@ pub(crate) enum Op {
     LangMatches,
 }
 
+/// A term constant of a program: the expression's own leaf, shared rather than
+/// converted, so compiling costs no term value per constant. [`Self::value`] is the
+/// term value a read of it interns.
+#[derive(Debug, Clone)]
+pub(crate) enum Constant {
+    /// An IRI constant.
+    Iri(NamedNode),
+    /// A literal constant.
+    Literal(Literal),
+}
+
+impl Constant {
+    /// The constant as the term value the evaluator interns.
+    pub(crate) fn value(&self) -> TermValue {
+        match self {
+            Self::Iri(node) => TermValue::Iri(node.as_str().to_owned()),
+            Self::Literal(literal) => crate::convert::literal_to_value(literal),
+        }
+    }
+}
+
 /// A compiled expression: a flat instruction array and the tables it indexes. Holds no
 /// reference into the expression it was compiled from and no evaluation state, so one
 /// program is shared by every evaluation of its site.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct ExprProgram {
     /// The instructions.
     pub(super) ops: Vec<Op>,
     /// The variables the program reads, one slot each.
     pub(super) vars: Vec<Variable>,
-    /// The term constants, as values, one per occurrence.
-    pub(super) consts: Vec<TermValue>,
+    /// The term constants, one per occurrence.
+    pub(super) consts: Vec<Constant>,
     /// The string-argument constants.
     pub(super) strs: Vec<(String, Option<String>)>,
     /// The functions called.
@@ -206,31 +229,59 @@ enum Task<'x> {
     Skip(&'x [Expression]),
 }
 
+/// A list of pending compilation units, inline until an expression is wide or deep
+/// enough to need more.
+type Tasks<'x> = smallvec::SmallVec<[Task<'x>; 16]>;
+
+/// How many variables a program finds by scanning its variable table before the
+/// compiler indexes them.
+const SCANNED_VARIABLES: usize = 8;
+
 /// The compiler's state.
-struct Compiler<'x> {
+struct Compiler {
     program: ExprProgram,
-    slots: DetHashMap<&'x Variable, u32>,
-    labels: Vec<u32>,
+    /// Each variable's slot, once the program reads more than [`SCANNED_VARIABLES`];
+    /// until then a slot is found by scanning [`ExprProgram::vars`].
+    slots: DetHashMap<Variable, u32>,
+    labels: smallvec::SmallVec<[u32; 8]>,
 }
 
 impl ExprProgram {
     /// Compile `expr`, evaluated as a term.
     pub(crate) fn compile(expr: &Expression) -> Self {
+        let mut program = Self::default();
+        program.recompile(expr);
+        program
+    }
+
+    /// Compile `expr` into this program, replacing everything it held. The program's
+    /// tables keep their capacity, so compiling an expression of the shape this one was
+    /// compiled from allocates nothing for them.
+    pub(crate) fn recompile(&mut self, expr: &Expression) {
+        let mut program = std::mem::take(self);
+        let Self {
+            ops,
+            vars,
+            consts,
+            strs,
+            calls,
+            regexes,
+            exists,
+        } = &mut program;
+        ops.clear();
+        vars.clear();
+        consts.clear();
+        strs.clear();
+        calls.clear();
+        regexes.clear();
+        *exists = 0;
         let mut compiler = Compiler {
-            program: Self {
-                ops: Vec::new(),
-                vars: Vec::new(),
-                consts: Vec::new(),
-                strs: Vec::new(),
-                calls: Vec::new(),
-                regexes: Vec::new(),
-                exists: 0,
-            },
+            program,
             slots: DetHashMap::default(),
-            labels: Vec::new(),
+            labels: smallvec::SmallVec::new(),
         };
-        let mut work: Vec<Task<'_>> = vec![Task::Compile(expr, Mode::Term)];
-        let mut next: Vec<Task<'_>> = Vec::new();
+        let mut work: Tasks<'_> = smallvec::smallvec![Task::Compile(expr, Mode::Term)];
+        let mut next: Tasks<'_> = smallvec::SmallVec::new();
         while let Some(task) = work.pop() {
             match task {
                 Task::Compile(expr, mode) => {
@@ -250,7 +301,7 @@ impl ExprProgram {
             }
         }
         compiler.resolve_labels();
-        compiler.program
+        *self = compiler.program;
     }
 
     /// Whether the program reaches an `EXISTS`.
@@ -259,26 +310,42 @@ impl ExprProgram {
     }
 }
 
-impl<'x> Compiler<'x> {
+impl Compiler {
     /// A fresh label.
     fn label(&mut self) -> u32 {
         self.labels.push(u32::MAX);
         (self.labels.len() - 1) as u32
     }
 
-    /// The slot of `var`.
-    fn slot(&mut self, var: &'x Variable) -> u32 {
-        if let Some(slot) = self.slots.get(var) {
-            return *slot;
+    /// The slot of `var`: the position of its first occurrence among the variables the
+    /// program reads.
+    fn slot(&mut self, var: &Variable) -> u32 {
+        let found = if self.slots.is_empty() {
+            self.program
+                .vars
+                .iter()
+                .position(|known| known == var)
+                .map(|index| index as u32)
+        } else {
+            self.slots.get(var).copied()
+        };
+        if let Some(slot) = found {
+            return slot;
         }
         let slot = self.program.vars.len() as u32;
         self.program.vars.push(var.clone());
-        self.slots.insert(var, slot);
+        if !self.slots.is_empty() {
+            self.slots.insert(var.clone(), slot);
+        } else if self.program.vars.len() > SCANNED_VARIABLES {
+            for (index, known) in self.program.vars.iter().enumerate() {
+                self.slots.insert(known.clone(), index as u32);
+            }
+        }
         slot
     }
 
     /// A new term constant.
-    fn constant(&mut self, value: TermValue) -> Op {
+    fn constant(&mut self, value: Constant) -> Op {
         self.program.consts.push(value);
         Op::Const((self.program.consts.len() - 1) as u32)
     }
@@ -304,7 +371,7 @@ impl<'x> Compiler<'x> {
     /// Lay out `expr` read in `mode` as tasks, in evaluation order. Leaves are emitted
     /// here, which is where the pre-order visits them; composite nodes become their
     /// operands' tasks followed by their own instruction.
-    fn expand(&mut self, expr: &'x Expression, mode: Mode, out: &mut Vec<Task<'x>>) {
+    fn expand<'x>(&mut self, expr: &'x Expression, mode: Mode, out: &mut Tasks<'x>) {
         match mode {
             Mode::Term => self.expand_term(expr, out),
             Mode::StringArg => match expr {
@@ -358,14 +425,14 @@ impl<'x> Compiler<'x> {
     }
 
     /// [`Self::expand`] for [`Mode::Term`].
-    fn expand_term(&mut self, expr: &'x Expression, out: &mut Vec<Task<'x>>) {
+    fn expand_term<'x>(&mut self, expr: &'x Expression, out: &mut Tasks<'x>) {
         match expr {
             Expression::NamedNode(node) => {
-                let op = self.constant(TermValue::Iri(node.as_str().to_owned()));
+                let op = self.constant(Constant::Iri(node.clone()));
                 out.push(Task::Emit(op));
             }
             Expression::Literal(lit) => {
-                let op = self.constant(crate::convert::literal_to_value(lit));
+                let op = self.constant(Constant::Literal(lit.clone()));
                 out.push(Task::Emit(op));
             }
             Expression::Variable(var) => {
@@ -472,13 +539,13 @@ impl<'x> Compiler<'x> {
     /// A function call in [`Mode::Term`]. The string predicates read their arguments
     /// as string arguments and ignore any past the ones they take; every other call
     /// evaluates every argument as a term, then calls.
-    fn expand_call(
+    fn expand_call<'x>(
         &mut self,
         function: &'x Function,
         args: &'x [Expression],
-        out: &mut Vec<Task<'x>>,
+        out: &mut Tasks<'x>,
     ) {
-        let string_args = |count: usize, out: &mut Vec<Task<'x>>| {
+        let string_args = |count: usize, out: &mut Tasks<'x>| {
             for index in 0..count {
                 out.push(args.get(index).map_or(Task::AbsentStringArg, |arg| {
                     Task::Compile(arg, Mode::StringArg)

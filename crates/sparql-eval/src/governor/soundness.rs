@@ -704,7 +704,8 @@ pub(crate) fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) 
 where
     F: FnMut(&'a GraphPattern) -> bool,
 {
-    let mut pending = vec![ExpressionPart::Sub(expr)];
+    let mut pending: smallvec::SmallVec<[ExpressionPart<'a>; 16]> =
+        smallvec::smallvec![ExpressionPart::Sub(expr)];
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(sub) => {
@@ -799,7 +800,8 @@ pub(crate) fn walk_spine<'a, F>(root: &'a GraphPattern, visit: &mut F)
 where
     F: FnMut(&'a GraphPattern, SpineContext, usize),
 {
-    let mut stack = vec![(root, SpineContext::ROOT, 0_usize)];
+    let mut stack: smallvec::SmallVec<[(&'a GraphPattern, SpineContext, usize); 16]> =
+        smallvec::smallvec![(root, SpineContext::ROOT, 0_usize)];
     while let Some((node, context, depth)) = stack.pop() {
         visit(node, context, depth);
         let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();

@@ -454,9 +454,9 @@ enum Switch {
 /// A stop signal that stands in for a host suspending the evaluation at every poll — as
 /// the wasm package's asynchronous lane does under `yieldEveryPolls: 0` — and running
 /// another computation while it waits: one whose stack is nearly gone (a floor 1 KiB
-/// below the poll's frame), and which asks an unscoped walk whether to stop. A property
-/// path's traversal polls inside its walk scope, so some of these suspensions happen
-/// with that scope open.
+/// below the poll's frame), and which asks an unscoped walk whether to stop. It records
+/// whether that walk latched a refusal and whether the waiting computation was left with
+/// a floor other than the one it was given.
 #[derive(Debug)]
 struct SuspendingHost {
     switch: Switch,
@@ -562,15 +562,15 @@ fn path_under(host: Arc<SuspendingHost>) -> (Result<GovernedOutcome, RdfDiagnost
     })
 }
 
-/// A suspension inside a property path's walk scope leaves the scope with the suspended
-/// evaluation: the computation that runs while it waits has no scope of its own open, so
-/// its low walk carries on and latches nothing, the evaluation it interrupted answers
-/// exactly, and every context keeps the floor it had. The control switches the floor
-/// alone: the waiting walk then latches its refusal in the suspended scope, the waiting
-/// computation is left with the exhausted floor, and the evaluation — which never ran low
-/// — is refused for the waiting walk, and leaves the thread refusing the next query too.
+/// A property path is traversed as a flat program over explicit work lists, with no
+/// walk scope open, so a host that suspends the traversal at its polls suspends no
+/// scope: the computation that runs while it waits latches nothing whether the host
+/// swaps the whole [`purrdf_stack::Context`] or the floor alone, the evaluation it
+/// interrupted answers exactly, and the waiting computation keeps the floor it was
+/// given. (That a scope a suspension DOES interrupt stays with its own context is
+/// `purrdf-stack`'s `a_suspended_scope_stays_with_its_context`.)
 #[test]
-fn a_suspension_inside_a_path_s_walk_scope_leaves_the_scope_with_the_evaluation() {
+fn a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_computation_intact() {
     let engine = NativeSparqlEngine::new();
     let baseline = engine
         .query_with_options_view(
@@ -585,43 +585,35 @@ fn a_suspension_inside_a_path_s_walk_scope_leaves_the_scope_with_the_evaluation(
         .expect("the ungoverned path answers");
     assert_eq!(pairs(&baseline), ["s1|o1", "s2|o2", "s3|o3", "s4|o4"]);
 
-    let host = SuspendingHost::new(Switch::Context);
-    let (outcome, after) = path_under(Arc::clone(&host));
-    let GovernedOutcome::Complete { result, .. } = outcome.expect("a suspended evaluation answers")
-    else {
-        panic!("no governor trips");
-    };
-    assert_eq!(
-        pairs(&result),
-        pairs(&baseline),
-        "the suspended evaluation's answer"
-    );
-    assert!(after, "the thread answers the next query");
-    assert!(
-        host.polls.load(Ordering::Relaxed) > 0,
-        "the traversal polled"
-    );
-    assert_eq!(host.waiting_refused.load(Ordering::Relaxed), 0);
-    assert_eq!(host.waiting_disturbed.load(Ordering::Relaxed), 0);
-
-    let control = SuspendingHost::new(Switch::FloorOnly);
-    let (outcome, after) = path_under(Arc::clone(&control));
-    assert!(
-        control.waiting_refused.load(Ordering::Relaxed) > 0,
-        "a suspension happened inside the path's walk scope"
-    );
-    assert_eq!(
-        *control
-            .disturbed_floor
-            .lock()
-            .expect("the observation lock"),
-        Some(purrdf_stack::EXHAUSTED),
-        "the waiting computation was left exhausted"
-    );
-    let refused = outcome.expect_err("the evaluation is refused for the waiting walk");
-    assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE, "{refused:?}");
-    assert!(refused.message.contains("the waiting walk"), "{refused:?}");
-    assert!(!after, "and the thread refuses the next query");
+    for switch in [Switch::Context, Switch::FloorOnly] {
+        let host = SuspendingHost::new(switch);
+        let (outcome, after) = path_under(Arc::clone(&host));
+        let GovernedOutcome::Complete { result, .. } =
+            outcome.expect("a suspended evaluation answers")
+        else {
+            panic!("no governor trips");
+        };
+        assert_eq!(
+            pairs(&result),
+            pairs(&baseline),
+            "{switch:?}: the suspended evaluation's answer"
+        );
+        assert!(after, "{switch:?}: the thread answers the next query");
+        assert!(
+            host.polls.load(Ordering::Relaxed) > 0,
+            "{switch:?}: the traversal polled"
+        );
+        assert_eq!(
+            host.waiting_refused.load(Ordering::Relaxed),
+            0,
+            "{switch:?}: no scope was open for the waiting walk to latch in"
+        );
+        assert_eq!(
+            host.waiting_disturbed.load(Ordering::Relaxed),
+            0,
+            "{switch:?}: the waiting computation keeps its floor"
+        );
+    }
 }
 
 /// A relation `<rel:tag>` binding `<s1>` to `<t>`, for a request whose property-function

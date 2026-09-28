@@ -663,7 +663,7 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
 /// always an IRI, so only the two nested positions are inspected, subject before
 /// object, over a work list that ends at the first blank node found.
 fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
-    let mut pending = vec![term];
+    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => {}

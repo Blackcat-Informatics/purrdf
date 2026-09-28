@@ -153,8 +153,10 @@ pub(crate) fn ground_term_pattern_to_value(
             format!("{what} in {site}"),
         )
     };
-    let mut steps = vec![Step::Term(pattern)];
-    let mut values: Vec<TermValue> = Vec::with_capacity(3);
+    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
+    // plain term costs only its own value.
+    let mut steps: smallvec::SmallVec<[Step<'_>; 8]> = smallvec::smallvec![Step::Term(pattern)];
+    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Term(TermPattern::NamedNode(n)) => values.push(named_node_to_value(n)),
@@ -211,8 +213,10 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
         Predicate(&'a NamedNode),
         Assemble,
     }
-    let mut steps = vec![Step::Term(term)];
-    let mut values: Vec<TermValue> = Vec::with_capacity(3);
+    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
+    // plain term costs only its own value.
+    let mut steps: smallvec::SmallVec<[Step<'_>; 8]> = smallvec::smallvec![Step::Term(term)];
+    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Term(GroundTerm::NamedNode(n)) | Step::Predicate(n) => {

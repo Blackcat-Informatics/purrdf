@@ -190,7 +190,7 @@ fn memo_agrees_with_rewrite(parsed: &Query, text: &str) {
                 }
                 let expected = rewrite(parsed.clone(), lane, run_probes.clone());
                 assert_eq!(
-                    memo.bind(&run_probes),
+                    memo.bind(&run_probes).0,
                     &expected,
                     "memo built from {built_from:?} and bound to {bound_to:?} disagrees with \
                      the rewrite\n  lane: {lane:?}\n  query: {text}"

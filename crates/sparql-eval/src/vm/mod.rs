@@ -70,9 +70,7 @@ pub(crate) fn program_at<D: DatasetView + Sync>(
         && let Some(id) = plan.node_of(node)
         && let Some(position) = attached_position(node, expr)
     {
-        return plan
-            .shape()
-            .program(id, position, || ExprProgram::compile(expr));
+        return plan.shape().program(id, position, expr);
     }
     Arc::new(ExprProgram::compile(expr))
 }
@@ -104,6 +102,8 @@ enum Val<I: Copy> {
     Ebv(Option<bool>),
     /// A string argument (lexical form and lower-cased tag), or absent.
     Str(Option<(String, Option<String>)>),
+    /// The program's string constant at this index, read in place rather than copied.
+    StrConst(u32),
     /// An `IN` in progress: the needle, its value, and whether a candidate raised.
     In {
         target: SolutionTerm<I>,
@@ -111,6 +111,12 @@ enum Val<I: Copy> {
         saw_error: bool,
     },
 }
+
+/// The value stack. On the heap rather than inline: a link lives in the frame of the
+/// operator it evaluates for, and an `EXISTS` it runs, or an `OPTIONAL` whose join it
+/// decides, recurses through the plan with that frame live, so inline slots here would
+/// be paid once per nesting level of the plan.
+type ValStack<I> = Vec<Val<I>>;
 
 /// One constant of a link's pool.
 #[derive(Clone, Copy)]
@@ -170,14 +176,22 @@ pub(crate) enum Suspend<'e, 'd> {
 pub(crate) struct Linked<'e, I: Copy> {
     program: Arc<ExprProgram>,
     /// Each variable slot's schema column.
-    slots: Vec<Option<usize>>,
+    ///
+    /// Held inline for a program reading few variables, so linking one allocates
+    /// nothing for its slots; likewise the constant pool below. Four slots each: these
+    /// are in the frame of the operator the link evaluates for, which may be live while
+    /// the plan recurses beneath it.
+    slots: smallvec::SmallVec<[Option<usize>; 4]>,
     /// Each constant's term, once a row has read it.
-    consts: Vec<ConstCell<I>>,
+    consts: smallvec::SmallVec<[ConstCell<I>; 4]>,
     /// Each regex slot's pattern.
     regexes: Vec<RegexSlot>,
     /// Each `EXISTS`'s pattern, in the expression's pre-order.
     exists: Vec<&'e GraphPattern>,
-    stack: Vec<Val<I>>,
+    stack: ValStack<I>,
+    /// A function call's argument values, refilled by every call instruction, so a row
+    /// that calls a function reuses one buffer instead of allocating its own.
+    args: Vec<Option<TermValue>>,
 }
 
 impl<'e, I: Copy + PartialEq> Linked<'e, I> {
@@ -233,11 +247,12 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             })
             .collect();
         Self {
-            consts: vec![ConstCell::Unread; program.consts.len()],
+            consts: smallvec::smallvec![ConstCell::Unread; program.consts.len()],
             slots,
             regexes,
             exists,
             stack: Vec::new(),
+            args: Vec::new(),
             program,
         }
     }
@@ -248,10 +263,11 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         Self {
             program: Arc::clone(&self.program),
             slots: self.slots.clone(),
-            consts: vec![ConstCell::Unread; self.consts.len()],
+            consts: smallvec::smallvec![ConstCell::Unread; self.consts.len()],
             regexes: self.regexes.clone(),
             exists: self.exists.clone(),
             stack: Vec::new(),
+            args: Vec::new(),
         }
     }
 
@@ -284,6 +300,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             regexes,
             exists,
             stack,
+            args,
         } = self;
         stack.clear();
         let ops = &program.ops;
@@ -296,7 +313,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let term = match consts[k] {
                         ConstCell::Read(term) => term,
                         ConstCell::Unread => {
-                            let term = helpers::intern_leaf(ctx, program.consts[k].clone());
+                            let term = helpers::intern_leaf(ctx, program.consts[k].value());
                             consts[k] = ConstCell::Read(term);
                             term
                         }
@@ -459,26 +476,26 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(value));
                 }
                 Op::Call { call, argc, regex } => {
-                    let vals = pop_values(stack, argc, ctx)?;
+                    pop_values(stack, argc, ctx, args)?;
                     let compiled = regex.and_then(|slot| regexes[slot as usize].linked());
                     let value = helpers::apply_function(
                         &program.calls[call as usize],
-                        &vals,
+                        args,
                         ctx,
                         compiled,
                     )?;
                     stack.push(Val::Term(value));
                 }
                 Op::CallCustom { call, argc } => {
-                    let vals = pop_values(stack, argc, ctx)?;
-                    let value = match call_custom(program, call, vals, ctx)? {
+                    pop_values(stack, argc, ctx, args)?;
+                    let value = match call_custom(program, call, args, ctx)? {
                         VmStep::Value(value) => value,
                         VmStep::Suspend(suspend) => resolve(suspend, program, row, schema, ctx)?,
                     };
                     stack.push(Val::Term(value));
                 }
                 Op::StrConst(k) => {
-                    stack.push(Val::Str(Some(program.strs[k as usize].clone())));
+                    stack.push(Val::StrConst(k));
                 }
                 Op::StrNone => stack.push(Val::Str(None)),
                 Op::ToStrArg => {
@@ -502,14 +519,15 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     ));
                 }
                 Op::StrPred(pred) => {
-                    let needle = pop_str(stack)?;
-                    let haystack = pop_str(stack)?;
+                    let needle = pop_str(stack, &program.strs)?;
+                    let haystack = pop_str(stack, &program.strs)?;
                     let value = match (haystack, needle) {
-                        (Some((h, _)), Some((n, _))) => {
+                        (Some(h), Some(n)) => {
+                            let (h, n) = (h.0.as_str(), n.0.as_str());
                             let holds = match pred {
-                                StrPred::Contains => h.contains(n.as_str()),
-                                StrPred::StrStarts => h.starts_with(n.as_str()),
-                                StrPred::StrEnds => h.ends_with(n.as_str()),
+                                StrPred::Contains => h.contains(n),
+                                StrPred::StrStarts => h.starts_with(n),
+                                StrPred::StrEnds => h.ends_with(n),
                             };
                             Some(helpers::bool_term(ctx, holds))
                         }
@@ -518,30 +536,31 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(value));
                 }
                 Op::Regex(slot) => {
-                    let flags = pop_str(stack)?;
-                    let pattern = pop_str(stack)?;
-                    let text = pop_str(stack)?;
+                    let flags = pop_str(stack, &program.strs)?;
+                    let pattern = pop_str(stack, &program.strs)?;
+                    let text = pop_str(stack, &program.strs)?;
                     let value = match (text, pattern) {
-                        (Some((text, _)), Some((pattern, _))) => {
-                            let flags = flags.map_or_default(|(f, _)| f);
+                        (Some(text), Some(pattern)) => {
+                            let flags = flags.as_ref().map_or("", |f| f.0.as_str());
                             let compiled = match &regexes[slot as usize] {
                                 RegexSlot::Linked(compiled) => compiled.clone(),
-                                RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern, &flags),
+                                RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
                             };
                             compiled
-                                .map(|re| helpers::bool_term(ctx, re.as_regex().is_match(&text)))
+                                .map(|re| helpers::bool_term(ctx, re.as_regex().is_match(&text.0)))
                         }
                         _ => None,
                     };
                     stack.push(Val::Term(value));
                 }
                 Op::LangMatches => {
-                    let range = pop_str(stack)?;
-                    let tag = pop_str(stack)?;
+                    let range = pop_str(stack, &program.strs)?;
+                    let tag = pop_str(stack, &program.strs)?;
                     let value = match (tag, range) {
-                        (Some((tag, _)), Some((range, _))) => {
-                            Some(helpers::bool_term(ctx, helpers::lang_matches(&tag, &range)))
-                        }
+                        (Some(tag), Some(range)) => Some(helpers::bool_term(
+                            ctx,
+                            helpers::lang_matches(&tag.0, &range.0),
+                        )),
                         _ => None,
                     };
                     stack.push(Val::Term(value));
@@ -589,7 +608,7 @@ fn compare<D: DatasetView + Sync>(
 fn call_custom<'e, 'd, D: DatasetView + Sync>(
     program: &ExprProgram,
     call: u32,
-    vals: Vec<Option<TermValue>>,
+    vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'d, D>,
 ) -> Result<VmStep<'e, 'd, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
@@ -603,10 +622,10 @@ fn call_custom<'e, 'd, D: DatasetView + Sync>(
             func,
             body,
             call,
-            vals,
+            vals: vals.to_vec(),
         }));
     }
-    helpers::apply_custom_host(iri.as_str(), &vals, ctx).map(VmStep::Value)
+    helpers::apply_custom_host(iri.as_str(), vals, ctx).map(VmStep::Value)
 }
 
 /// Resolve a suspension by running the pattern evaluation it waits on, now.
@@ -639,27 +658,29 @@ fn resolve<D: DatasetView + Sync>(
     }
 }
 
-/// Pop `argc` terms and materialize their values, in argument order.
+/// Pop `argc` terms and materialize their values into `vals`, in argument order,
+/// replacing what it held.
 fn pop_values<D: DatasetView + Sync>(
-    stack: &mut Vec<Val<D::Id>>,
+    stack: &mut ValStack<D::Id>,
     argc: u32,
     ctx: &EvalCtx<'_, D>,
-) -> Result<Vec<Option<TermValue>>, EvalError> {
+    vals: &mut Vec<Option<TermValue>>,
+) -> Result<(), EvalError> {
     let start = stack
         .len()
         .checked_sub(argc as usize)
         .ok_or_else(underflow)?;
-    let mut vals = Vec::with_capacity(argc as usize);
+    vals.clear();
     for entry in stack.drain(start..) {
         let Val::Term(term) = entry else {
             return Err(mistyped("a term"));
         };
         vals.push(term.map(|t| helpers::value_of(ctx, t)));
     }
-    Ok(vals)
+    Ok(())
 }
 
-fn pop_term<I: Copy>(stack: &mut Vec<Val<I>>) -> Result<Option<SolutionTerm<I>>, EvalError> {
+fn pop_term<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<SolutionTerm<I>>, EvalError> {
     match stack.pop() {
         Some(Val::Term(term)) => Ok(term),
         Some(_) => Err(mistyped("a term")),
@@ -667,7 +688,7 @@ fn pop_term<I: Copy>(stack: &mut Vec<Val<I>>) -> Result<Option<SolutionTerm<I>>,
     }
 }
 
-fn pop_ebv<I: Copy>(stack: &mut Vec<Val<I>>) -> Result<Option<bool>, EvalError> {
+fn pop_ebv<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<bool>, EvalError> {
     match stack.pop() {
         Some(Val::Ebv(value)) => Ok(value),
         Some(_) => Err(mistyped("an effective boolean value")),
@@ -675,11 +696,20 @@ fn pop_ebv<I: Copy>(stack: &mut Vec<Val<I>>) -> Result<Option<bool>, EvalError> 
     }
 }
 
-fn pop_str<I: Copy>(
-    stack: &mut Vec<Val<I>>,
-) -> Result<Option<(String, Option<String>)>, EvalError> {
+/// A string argument as an instruction reads it: its lexical form and lower-cased tag,
+/// owned when the program computed it and borrowed when it is one of the program's
+/// constants.
+type StrArg<'p> = std::borrow::Cow<'p, (String, Option<String>)>;
+
+/// Pop a string argument: one the program computed, or one of its constants `strs`,
+/// borrowed where it stands.
+fn pop_str<'p, I: Copy>(
+    stack: &mut ValStack<I>,
+    strs: &'p [(String, Option<String>)],
+) -> Result<Option<StrArg<'p>>, EvalError> {
     match stack.pop() {
-        Some(Val::Str(value)) => Ok(value),
+        Some(Val::Str(value)) => Ok(value.map(std::borrow::Cow::Owned)),
+        Some(Val::StrConst(k)) => Ok(Some(std::borrow::Cow::Borrowed(&strs[k as usize]))),
         Some(_) => Err(mistyped("a string argument")),
         None => Err(underflow()),
     }

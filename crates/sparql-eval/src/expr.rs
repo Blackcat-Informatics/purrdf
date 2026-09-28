@@ -1078,7 +1078,7 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
 fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
 
-    let mut pending = vec![term];
+    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::Variable(variable) => {

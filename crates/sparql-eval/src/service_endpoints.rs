@@ -3292,12 +3292,14 @@ mod endpoint_text_tests {
                 let level = "<<( <http://example.org/s> <http://example.org/p> ";
                 let close = " )>>";
                 let innermost = "<http://example.org/o>";
+                // Every level's opening, then the innermost object, then every level's
+                // closing: the innermost object is followed by all `DEPTH` closings.
+                let expected = format!("{}{innermost}{}", level.repeat(DEPTH), close.repeat(DEPTH));
                 assert_eq!(
                     text.len(),
                     DEPTH * (level.len() + close.len()) + innermost.len()
                 );
-                assert!(text.starts_with(&level.repeat(2)));
-                assert!(text.ends_with(&format!("{innermost}{}", close.repeat(2))));
+                assert!(text == expected, "the spelling of every level, in order");
                 drop(value);
             })
             .expect("spawn")

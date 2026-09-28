@@ -166,6 +166,57 @@ impl<'a> Prebindings<'a> {
         }
     }
 
+    /// [`Self::ground`], sharing what it can of `previous` — the term this position
+    /// held when the list was last grounded: the whole term when the value is the same
+    /// IRI or the same typed literal, and a typed literal's datatype IRI when only the
+    /// datatype is the same. An IRI already validated and wrapped is shared rather than
+    /// validated and copied again; the term is equal to the one [`Self::ground`] builds.
+    fn ground_reusing(
+        self,
+        index: usize,
+        previous: Option<&GroundTerm>,
+    ) -> Result<GroundTerm, RdfDiagnostic> {
+        match (previous, self.value(index)) {
+            (Some(GroundTerm::NamedNode(before)), Some(TermValue::Iri(iri)))
+                if before.as_str() == iri =>
+            {
+                return Ok(GroundTerm::NamedNode(before.clone()));
+            }
+            (
+                Some(GroundTerm::Literal(before)),
+                Some(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language: None,
+                    ..
+                }),
+            ) if before.language().is_none() && before.datatype().as_str() == datatype => {
+                if before.value() == lexical_form {
+                    return Ok(GroundTerm::Literal(before.clone()));
+                }
+                return Ok(GroundTerm::Literal(Literal::new_typed(
+                    lexical_form.as_str(),
+                    before.datatype().clone(),
+                )));
+            }
+            _ => {}
+        }
+        self.ground(index)
+    }
+
+    /// The `index`-th pre-binding's value, when it arrived as a [`TermValue`] rather
+    /// than already grounded.
+    fn value(self, index: usize) -> Option<&'a TermValue> {
+        match self {
+            Self::Owned(list) => Some(&list[index].1),
+            Self::Borrowed(list) => Some(&list[index].value),
+            Self::Paired(_, values) => match values[index].as_ref()? {
+                ParameterValue::Value(value) => Some(value),
+                ParameterValue::Ground(_) => None,
+            },
+        }
+    }
+
     /// The `index`-th pre-binding's [`Variable`].
     ///
     /// A prepared execution already holds one, so it is cloned — an `Arc` refcount
@@ -318,21 +369,35 @@ fn build_probes(
 /// run, where `build_probes`' fresh `Vec` charged one per run — on a path whose whole
 /// purpose is to stop allocating per run.
 ///
+/// Each cell is overwritten in place, and a typed literal whose datatype is the one its
+/// cell held before shares that datatype IRI ([`Prebindings::ground_reusing`]).
+///
 /// # Errors
 ///
 /// As [`build_probes`]: a datatype IRI that is not a valid IRI, or a language tag the
-/// concrete syntaxes would not have lexed. The buffer is cleared before the first
-/// value is grounded, so a refused pre-binding leaves no earlier run's terms behind
-/// for a caller that ignores the error to read.
+/// concrete syntaxes would not have lexed. The buffer is cleared when a value is
+/// refused, so a refused pre-binding leaves no earlier run's terms behind for a caller
+/// that ignores the error to read.
 pub(crate) fn build_probes_into(
     probes: &mut Vec<(Variable, GroundTerm)>,
     substitutions: Prebindings<'_>,
 ) -> Result<(), RdfDiagnostic> {
-    probes.clear();
     for index in 0..substitutions.len() {
-        let ground = substitutions.ground(index)?;
-        probes.push((substitutions.variable(index), ground));
+        let previous = probes.get(index).map(|(_, ground)| ground);
+        let ground = match substitutions.ground_reusing(index, previous) {
+            Ok(ground) => ground,
+            Err(refused) => {
+                probes.clear();
+                return Err(refused);
+            }
+        };
+        let entry = (substitutions.variable(index), ground);
+        match probes.get_mut(index) {
+            Some(cell) => *cell = entry,
+            None => probes.push(entry),
+        }
     }
+    probes.truncate(substitutions.len());
     Ok(())
 }
 
@@ -4724,7 +4789,9 @@ mod walk_tests {
     }
 
     /// The id door over a dataset holding every kind of term, quoted triples nested
-    /// as deep as a dataset holds them.
+    /// as deep as a dataset holds them. RDF 1.2 nests a triple term only in the OBJECT
+    /// of another, so each level nests the previous one as its object and alternates an
+    /// IRI subject with a blank-node subject.
     #[test]
     fn ground_term_from_id_agrees_with_its_recursive_reference() {
         let mut builder = RdfDatasetBuilder::new();
@@ -4739,12 +4806,12 @@ mod walk_tests {
         let mut nested = builder.intern_iri("http://example.org/leaf");
         ids.push(nested);
         for level in 0..8 {
-            let subject = builder.intern_iri(&format!("http://example.org/s{level}"));
-            nested = if level % 2 == 0 {
-                builder.intern_triple(subject, p, nested)
+            let subject = if level % 2 == 0 {
+                builder.intern_iri(&format!("http://example.org/s{level}"))
             } else {
-                builder.intern_triple(nested, p, subject)
+                builder.intern_blank(&format!("s{level}"), BlankScope::DEFAULT)
             };
+            nested = builder.intern_triple(subject, p, nested);
             ids.push(nested);
         }
         let graph_subject = builder.intern_iri("http://example.org/g");
@@ -4762,7 +4829,7 @@ mod walk_tests {
     #[test]
     fn substitute_in_term_pattern_agrees_with_its_recursive_reference() {
         let mut rewritten = 0;
-        for seed in 0..600_u64 {
+        for seed in 0..3_000_u64 {
             let mut choices = Choices::new(seed, 10);
             let term = term_pattern(&mut choices);
             let values = probes(&mut choices);
@@ -4779,7 +4846,7 @@ mod walk_tests {
     #[test]
     fn probe_term_pattern_agrees_with_its_recursive_reference() {
         let mut probed_any = 0;
-        for seed in 0..600_u64 {
+        for seed in 0..2_000_u64 {
             let mut choices = Choices::new(seed, 10);
             let term = term_pattern(&mut choices);
             let values = probes(&mut choices);
@@ -5002,7 +5069,7 @@ mod walk_tests {
     #[test]
     fn push_probes_agrees_with_its_recursive_reference_on_generated_shapes() {
         let mut rewritten = 0;
-        for seed in 0..500_u64 {
+        for seed in 0..1_000_u64 {
             let mut choices = Choices::new(seed, 40);
             let shape = pattern(&mut choices);
             let values = probes(&mut choices);
@@ -5277,13 +5344,15 @@ mod walk_tests {
             }
         });
         // Beneath the seed, every `FILTER` reads `?this` through its `EXISTS` body, so
-        // each is driven with the value under a projection onto the variables it names.
+        // each is driven with the value under a projection onto the variables it names
+        // other than the driven `?this`: `carried_columns` leaves a variable driven for an
+        // `EXISTS` out of the projection, which keeps the driven binding inside the node.
         let mut levels = 0;
         let mut node = &rewritten;
         loop {
             match node {
                 GraphPattern::Project { inner, variables } => {
-                    assert_eq!(variables, &vec![Variable::new("o"), this.clone()]);
+                    assert_eq!(variables, &vec![Variable::new("o")]);
                     node = inner;
                 }
                 GraphPattern::Filter { expr, inner } => {

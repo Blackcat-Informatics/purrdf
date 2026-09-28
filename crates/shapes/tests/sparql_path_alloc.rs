@@ -55,14 +55,28 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 47 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 106 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 60 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 119 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 42 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 90 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 50 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 105 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
+//!
+//! # What a run does not pay for
+//!
+//! None of these figures carries the evaluated plan. A prepared execution's retained
+//! substituted tree keeps its numbered plan — node ids, `EXISTS` sites, the
+//! variable-endpoint analysis — and the compiled program of every attached expression
+//! that holds no bound value, built once and shared by every later run; an expression
+//! that does hold one (the `sh:ask` validator's `isLiteral($value) && $askParam`) is
+//! compiled on each run into the tables of the program it compiled last. A parameter
+//! that is bound to the same term on consecutive runs (the shape and shapes-graph
+//! context a validator binds per focus node) is grounded once and shared. What each
+//! figure is made of is the query's evaluation itself: grounding the focus node, the
+//! seed row, the basic graph pattern and its join onto the seed, the `FILTER`'s link
+//! and rows, and the SHACL side's binding and result materialization.
 //!
 //! # The evaluation's height check
 //!
@@ -548,8 +562,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 47,
-        governed_per_focus_node: 64,
+        per_focus_node: 42,
+        governed_per_focus_node: 63,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -568,12 +582,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 106,
+        per_focus_node: 90,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 128,
+        governed_per_focus_node: 118,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -596,8 +610,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 60,
-        governed_per_focus_node: 77,
+        per_focus_node: 50,
+        governed_per_focus_node: 71,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -614,8 +628,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 119,
-        governed_per_focus_node: 144,
+        per_focus_node: 105,
+        governed_per_focus_node: 130,
         governed_entry: 39,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -1391,7 +1405,7 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `106` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `90` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared

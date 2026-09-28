@@ -827,7 +827,7 @@ impl MintTracker {
 /// A triple term's components are visited subject, predicate, object, each fully
 /// before the next, over a work list rather than the call stack.
 fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
-    let mut pending: Vec<&TermValue> = vec![value];
+    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
     while let Some(value) = pending.pop() {
         match value {
             TermValue::Blank { label, .. } => {
