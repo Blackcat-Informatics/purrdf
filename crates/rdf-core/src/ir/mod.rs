@@ -56,6 +56,7 @@ pub mod pack;
 // `canon::canonical_relabel` shares. Never a serializer mode.
 pub mod skolem;
 pub mod term;
+mod term_walk;
 pub mod validate;
 
 pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
@@ -98,6 +99,7 @@ pub use pipeline_bundle::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
+pub use term_walk::{Nested, TermBox, TermVisit, fold_term, try_fold_nested, visit_nested};
 
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,

@@ -20,6 +20,7 @@
 //! halves, because a gate that refused `x-purrdf-afrikaans` or `en-fr-jura`
 //! would be a worse bug than the one it closes.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -107,10 +108,7 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &functions,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates whatever the function returned");
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -185,10 +183,7 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &functions,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_functions(&functions),
         )
         .expect("the query evaluates");
     let SparqlResult::Solutions {
@@ -278,10 +273,7 @@ fn prebind_purr_tagged_via(tag: &str, prebinding: ShaclPrebinding) -> Result<usi
             base_iri: None,
             substitutions: &substitutions,
         },
-        QueryOptions {
-            prebinding,
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_prebinding(prebinding),
     );
     match result {
         Ok(SparqlResult::Solutions { rows, .. }) => Ok(rows.len()),
@@ -392,9 +384,9 @@ fn a_hand_built_algebra_is_judged_at_admission() {
         let subject = Variable::new("s".to_owned());
         let query = Query::Select {
             pattern: GraphPattern::Project {
-                inner: Box::new(GraphPattern::Path {
+                inner: Child::new(GraphPattern::Path {
                     subject: TermPattern::Variable(subject.clone()),
-                    path: PropertyPathExpression::ZeroOrMore(Box::new(
+                    path: PropertyPathExpression::ZeroOrMore(Child::new(
                         PropertyPathExpression::NamedNode(
                             NamedNode::new(format!("{EX}p")).expect("a valid predicate IRI"),
                         ),

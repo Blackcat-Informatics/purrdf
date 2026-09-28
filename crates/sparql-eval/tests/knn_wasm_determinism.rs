@@ -305,10 +305,7 @@ fn answer(space: EmbeddingSpace, query: &str) -> Vec<(String, String)> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .expect("the call resolves and evaluates");
 

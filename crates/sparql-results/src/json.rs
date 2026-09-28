@@ -393,65 +393,87 @@ fn json_string_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 /// Returns [`crate::error::Error::MalformedTerm`] if a [`TermValue::Triple`]
 /// arm's predicate is not an IRI. RDF predicates must be IRIs; emitting a
 /// non-IRI predicate would produce structurally invalid SRJ output.
+///
+/// A triple term is written over a work list: its predicate is checked and its opening
+/// written at once, then its subject next, with the predicate key, the predicate, the
+/// object key, the object and the closing held back in that order until the subject's
+/// whole nesting is written.
 fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
-    match value {
-        TermValue::Iri(iri) => {
-            out.push_str("{\"type\":\"uri\",\"value\":");
-            json_string(iri, out);
-            out.push('}');
-        }
-        TermValue::Blank { label, scope } => {
-            // A SPARQL-results JSON bnode `value` is a blank-node LABEL, not
-            // free text, so the `(label, scope)` pair is encoded into the W3C
-            // BLANK_NODE_LABEL alphabet — the same alphabet the CSV/TSV writers
-            // emit, so one result never disagrees with itself across formats.
-            out.push_str("{\"type\":\"bnode\",\"value\":");
-            json_string(
-                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
-                out,
-            );
-            out.push('}');
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            out.push_str("{\"type\":\"literal\",\"value\":");
-            json_string(lexical_form, out);
-            if let Some(language) = language {
-                out.push_str(",\"xml:lang\":");
-                json_string(language, out);
-            } else if datatype != XSD_STRING {
-                // A simple literal (no language, `xsd:string` datatype)
-                // serializes BARE per the spec's own encoding table — see the
-                // module docs.
-                out.push_str(",\"datatype\":");
-                json_string(datatype, out);
+    enum Piece<'t> {
+        Term(&'t TermValue),
+        Text(&'static str),
+    }
+    let mut held: Vec<Piece<'_>> = Vec::new();
+    let mut next = Some(Piece::Term(value));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let value = match piece {
+            Piece::Text(text) => {
+                out.push_str(text);
+                continue;
             }
-            if let Some(direction) = direction {
-                out.push_str(",\"its:dir\":\"");
-                out.push_str(direction.as_str());
-                out.push('"');
+            Piece::Term(value) => value,
+        };
+        match value {
+            TermValue::Iri(iri) => {
+                out.push_str("{\"type\":\"uri\",\"value\":");
+                json_string(iri, out);
+                out.push('}');
             }
-            out.push('}');
-        }
-        TermValue::Triple { s, p, o } => {
-            // RDF predicates must be IRIs; a non-IRI predicate has no valid SRJ
-            // "predicate" form → hard-fail per the serializer contract.
-            if !matches!(p.as_ref(), TermValue::Iri(_)) {
-                return Err(Error::MalformedTerm(
-                    "triple-term predicate is not an IRI".to_string(),
-                ));
+            TermValue::Blank { label, scope } => {
+                // A SPARQL-results JSON bnode `value` is a blank-node LABEL, not
+                // free text, so the `(label, scope)` pair is encoded into the W3C
+                // BLANK_NODE_LABEL alphabet — the same alphabet the CSV/TSV writers
+                // emit, so one result never disagrees with itself across formats.
+                out.push_str("{\"type\":\"bnode\",\"value\":");
+                json_string(
+                    &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
+                    out,
+                );
+                out.push('}');
             }
-            out.push_str("{\"type\":\"triple\",\"value\":{\"subject\":");
-            json_binding(s, out)?;
-            out.push_str(",\"predicate\":");
-            json_binding(p, out)?;
-            out.push_str(",\"object\":");
-            json_binding(o, out)?;
-            out.push_str("}}");
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push_str("{\"type\":\"literal\",\"value\":");
+                json_string(lexical_form, out);
+                if let Some(language) = language {
+                    out.push_str(",\"xml:lang\":");
+                    json_string(language, out);
+                } else if datatype != XSD_STRING {
+                    // A simple literal (no language, `xsd:string` datatype)
+                    // serializes BARE per the spec's own encoding table — see the
+                    // module docs.
+                    out.push_str(",\"datatype\":");
+                    json_string(datatype, out);
+                }
+                if let Some(direction) = direction {
+                    out.push_str(",\"its:dir\":\"");
+                    out.push_str(direction.as_str());
+                    out.push('"');
+                }
+                out.push('}');
+            }
+            TermValue::Triple { s, p, o } => {
+                // RDF predicates must be IRIs; a non-IRI predicate has no valid SRJ
+                // "predicate" form → hard-fail per the serializer contract.
+                if !matches!(p.as_ref(), TermValue::Iri(_)) {
+                    return Err(Error::MalformedTerm(
+                        "triple-term predicate is not an IRI".to_string(),
+                    ));
+                }
+                out.push_str("{\"type\":\"triple\",\"value\":{\"subject\":");
+                held.extend([
+                    Piece::Text("}}"),
+                    Piece::Term(o),
+                    Piece::Text(",\"object\":"),
+                    Piece::Term(p),
+                    Piece::Text(",\"predicate\":"),
+                ]);
+                next = Some(Piece::Term(s));
+            }
         }
     }
     Ok(())
@@ -462,6 +484,7 @@ mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
     use pretty_assertions::assert_eq;
+    use purrdf_core::TermBox;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
@@ -690,9 +713,9 @@ mod tests {
     #[test]
     fn triple_term_binding_shape() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -718,9 +741,9 @@ mod tests {
     #[test]
     fn triple_term_document_exact_bytes() {
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -746,9 +769,9 @@ mod tests {
         // hard-fail with MalformedTerm rather than emitting structurally invalid
         // SRJ output.
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(lit("not-an-iri", XSD_STRING)),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(lit("not-an-iri", XSD_STRING)),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -767,12 +790,12 @@ mod tests {
     fn non_iri_bnode_triple_predicate_is_malformed_error() {
         // A blank-node predicate is equally invalid.
         let triple = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
@@ -1022,5 +1045,76 @@ mod tests {
             }
         }
         depth == 0 && !in_string
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The binding writer against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::json_binding;
+    use crate::error::Error;
+
+    fn reference(value: &TermValue, out: &mut String) -> Result<(), Error> {
+        let TermValue::Triple { s, p, o } = value else {
+            return json_binding(value, out);
+        };
+        if !matches!(p.as_ref(), TermValue::Iri(_)) {
+            return Err(Error::MalformedTerm(
+                "triple-term predicate is not an IRI".to_string(),
+            ));
+        }
+        out.push_str("{\"type\":\"triple\",\"value\":{\"subject\":");
+        reference(s, out)?;
+        out.push_str(",\"predicate\":");
+        reference(p, out)?;
+        out.push_str(",\"object\":");
+        reference(o, out)?;
+        out.push_str("}}");
+        Ok(())
+    }
+
+    /// Every generated term writes exactly the text — and, on a non-IRI predicate, the
+    /// partial text and the refusal — the recursive reference writes.
+    #[test]
+    fn the_writer_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut refused = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            let (mut written, mut expected) = (String::new(), String::new());
+            let result = json_binding(&value, &mut written);
+            assert_eq!(result, reference(&value, &mut expected), "seed {seed}");
+            assert_eq!(written, expected, "seed {seed}");
+            refused += usize::from(result.is_err());
+        }
+        assert!(refused > 0, "some generated term has a non-IRI predicate");
+    }
+
+    /// A triple term a hundred thousand levels deep is written on a thread whose whole
+    /// stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut written = String::new();
+                json_binding(&purrdf_core::test_rng::triple_chain(LEVELS), &mut written)
+                    .expect("every predicate is an IRI");
+                assert_eq!(written.matches("\"type\":\"triple\"").count(), LEVELS);
+                assert!(written.ends_with(&"}}".repeat(LEVELS)));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the writer did not overflow the thread's stack");
     }
 }

@@ -36,6 +36,10 @@ name = "purrdf_sparql_eval"
 purrdf-core = { workspace = true }
 # The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
 purrdf-sparql-algebra = { workspace = true }
+# How much stack is left: the measurement the evaluator's stack-headroom guard
+# (`src/stack.rs`) refuses against, shared with the parser and with the hosts that
+# install the floors of the stacks they switch onto.
+purrdf-stack = { workspace = true }
 # The SEP-0009 composite value space (`cdt:List` / `cdt:Map`): the lexical
 # scanner, the canonical form, the fifteen spec functions, and the two comparison
 # relations. `crate::cdt_fn` is the bridge between it and the evaluator's terms,
@@ -154,6 +158,13 @@ name = "prepared_reuse"
 harness = false
 
 [[bench]]
+# Parse and cold evaluation of flat `||`, arithmetic, `UNION` and property-path
+# `/` and `|` chains of 2, 100 and 10 000 terms, each one n-ary algebra node.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "flat_operator_chains"
+harness = false
+
+[[bench]]
 name = "prepared_admission"
 harness = false
 
@@ -167,9 +178,11 @@ harness = false
 
 [[bench]]
 # Execution-governor cost envelope: the ordinary fast path, the governed carrier,
-# metered receipts through ordered parallel and forced-sequential folds, and
-# logarithmic-exponent property-path scaling. Report-only; `make bench` lane only
-# — excluded from `make check`.
+# metered receipts through ordered parallel and forced-sequential folds,
+# logarithmic-exponent property-path scaling, and the FILTER / BIND / UNFOLD row
+# loops ungoverned, under a stop signal, and under fuel plus a stop signal, on
+# forced-sequential and forking engines. Report-only; `make bench` lane only —
+# excluded from `make check`.
 name = "governed_eval"
 harness = false
 
@@ -246,4 +259,30 @@ harness = false
 # metric at 384, 768 and 1536 dimensions. Report-only -- no timing/speedup assertions.
 # `make bench` lane only -- excluded from `make check`.
 name = "knn_relation"
+harness = false
+
+[[bench]]
+# Per-row FILTER and BIND expression cost over a 100k-row single-pattern scan:
+# numeric compare, `&&` chains of 2/4/8 terms, arithmetic, IF, COALESCE, a 10-item
+# IN, constant REGEX, BNODE(STR), STR + CONCAT, and sameTerm / `=` on IRIs, beside
+# a no-expression scan control. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "expr_vm"
+harness = false
+
+[[bench]]
+# The fixed per-query cost over an eight-person dataset: a one-pattern SELECT and
+# a 3-join + OPTIONAL + FILTER query, each cold (fresh engine), warm (plan cache)
+# and prepared once and reused. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "pattern_dispatch"
+harness = false
+
+[[bench]]
+# Parse and cold evaluation of nested FILTER EXISTS, OPTIONAL spines, LATERAL,
+# brackets, `!` chains, property-path groups and expression triple terms at fixed
+# depths and at the deepest level the bench thread's stack answers today, found
+# by bisection before sampling. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "deep_nesting"
 harness = false

@@ -71,16 +71,18 @@
 //! through the canonical form. As with triple terms, refusing an `rdf:dirLangString`
 //! is not an admissible outcome for either direction.
 //!
-//! # Termination, and the three bounds
+//! # Termination, and the two bounds
 //!
 //! A CDT lexical form is attacker-controlled data inside a literal, and exhausting
 //! the stack in Rust is an `abort` that no caller can catch. **Every** walk in this
-//! crate — the scanner, the renderer, equality, ordering and the canonical mapping —
-//! is therefore iterative over an explicit heap worklist; nothing recurses. On top
-//! of that the crate owns three bounds: [`MAX_NESTING_DEPTH`], [`MAX_ELEMENTS`] and
-//! [`MAX_LEXICAL_BYTES`], each with its governor justification in the [`limits`]
-//! module. Exceeding one is a typed [`CdtError`] carrying a byte offset, never a
-//! panic and never an abort.
+//! crate — the scanner, the renderer, equality, ordering, the canonical mapping, and
+//! the value tree's own `Drop`, `Clone` and `Debug` ([`tree`]) — is therefore
+//! iterative over an explicit heap worklist; nothing recurses, so nesting depth costs
+//! heap and has no bound of its own. On top of that the crate owns two bounds:
+//! [`MAX_ELEMENTS`] and [`MAX_LEXICAL_BYTES`], each with its governor justification
+//! in the [`limits`] module; a level of nesting is one element, so the first bounds
+//! depth as a consequence. Exceeding one is a typed [`CdtError`] carrying a byte
+//! offset, never a panic and never an abort.
 //!
 //! # The function library
 //!
@@ -89,7 +91,7 @@
 //! the closed registry ([`CdtFn`], with each member's spec IRI and arity) and the
 //! pure value-space operation behind each one, written against SEP-0009's own
 //! conformance corpus with the pinning test named in every rustdoc. Functions that
-//! *mint* a composite check all three bounds against the prospective result before
+//! *mint* a composite check both bounds against the prospective result before
 //! allocating any of it.
 //!
 //! # The canonical lexical form
@@ -130,6 +132,8 @@
 #![forbid(unsafe_code)]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 pub mod conformance;
 pub mod datatype;
@@ -141,6 +145,7 @@ pub mod ops;
 pub mod parse;
 pub mod render;
 pub mod term;
+pub mod tree;
 pub mod value;
 
 pub use conformance::{
@@ -158,7 +163,7 @@ pub use functions::{
     map_get, map_keys, map_merge, map_put, map_remove, map_size, merge, put, remove, reverse, size,
     subseq, tail,
 };
-pub use limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH};
+pub use limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES};
 pub use literal::{LiteralValue, parse_literal};
 pub use ops::{
     list_equal, list_less_than, map_equal, map_less_than, term_equal, term_less_than,

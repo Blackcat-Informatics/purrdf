@@ -6,9 +6,11 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
+use core::fmt;
 
 use crate::datatype::CdtDatatype;
 use crate::error::CdtError;
+use crate::limits::Extent;
 use crate::term::{CdtEntry, CdtKey, CdtTerm, CdtTripleTerm};
 
 /// The owned contents of a [`CdtValue`], as [`CdtValue::into_parts`] hands them back.
@@ -39,21 +41,26 @@ pub enum CdtContents<'a> {
 
 /// A composite value: a `cdt:List` or a `cdt:Map`.
 ///
-/// # The three bounds are an invariant of this type
+/// # The two bounds are an invariant of this type
 ///
 /// The contents are **private**, and every constructor — [`CdtValue::list`],
 /// [`CdtValue::map`], [`crate::parse_cdt`] and each minting function in
-/// [`crate::functions`] — checks [`crate::MAX_NESTING_DEPTH`],
-/// [`crate::MAX_ELEMENTS`] and [`crate::MAX_LEXICAL_BYTES`] before it will hand one
-/// back. A public tuple variant would have made those checks a property of whichever
-/// code path happened to run rather than of the value, and any consumer could then
-/// have built an arbitrarily deep composite whose `Drop` glue overflows the stack —
-/// an `abort` in Rust, catchable by nobody. See [`crate::limits`] for the full
-/// argument.
+/// [`crate::functions`] — checks [`crate::MAX_ELEMENTS`] and
+/// [`crate::MAX_LEXICAL_BYTES`] before it will hand one back. A public tuple variant
+/// would have made those checks a property of whichever code path happened to run
+/// rather than of the value. See [`crate::limits`] for the full argument.
 ///
-/// Reading the contents costs nothing: [`CdtValue::contents`] borrows,
-/// [`CdtValue::as_list`] / [`CdtValue::as_map`] borrow one arm, and
-/// [`CdtValue::into_parts`] moves them out.
+/// Nesting depth is bounded by those two and by nothing else: a level is one element
+/// of its container, so a value is never deeper than its element count plus one, and
+/// every walk over the tree — the scanner, the renderer, equality, ordering, and this
+/// type's own `Drop`, `Clone` and `Debug` — is iterative over a heap worklist, so a
+/// level costs heap and never stack (see [`crate::tree`]).
+///
+/// Every value also carries the measure it was built with — its element count at every
+/// level and the byte length of its canonical form — so a composite that holds it is
+/// measured in constant time rather than by a walk. Reading the contents costs nothing:
+/// [`CdtValue::contents`] borrows, [`CdtValue::as_list`] / [`CdtValue::as_map`] borrow
+/// one arm, and [`CdtValue::into_parts`] moves them out.
 ///
 /// # The map representation, and why rendering is a pure function of the value
 ///
@@ -75,10 +82,13 @@ pub enum CdtContents<'a> {
 ///   entry sequences and render byte-identically, on every host and in every process.
 ///
 /// [`CdtValue::map`] establishes the invariant for programmatically built maps.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CdtValue {
     /// Private: the only way to put contents here is through a bounded constructor.
     parts: CdtParts,
+    /// The measure of `parts`, fixed when they were: exact by construction, and an
+    /// invariant because nothing can change `parts` underneath it.
+    extent: Extent,
 }
 
 impl CdtValue {
@@ -87,6 +97,7 @@ impl CdtValue {
     pub const fn empty_list() -> Self {
         Self {
             parts: CdtParts::List(Vec::new()),
+            extent: Extent::EMPTY,
         }
     }
 
@@ -95,46 +106,50 @@ impl CdtValue {
     pub const fn empty_map() -> Self {
         Self {
             parts: CdtParts::Map(Vec::new()),
+            extent: Extent::EMPTY,
         }
     }
 
     /// Build a list from elements, in the given order.
     ///
     /// Refuses — before the value is handed back — anything that would break one of
-    /// the crate's three bounds: nesting deeper than [`crate::MAX_NESTING_DEPTH`],
-    /// more than [`crate::MAX_ELEMENTS`] elements at every level together, or a
-    /// canonical form longer than [`crate::MAX_LEXICAL_BYTES`].
+    /// the crate's two bounds: more than [`crate::MAX_ELEMENTS`] elements at every
+    /// level together, or a canonical form longer than [`crate::MAX_LEXICAL_BYTES`].
+    /// Nesting has no bound of its own, and measuring the prospective list costs its
+    /// direct children rather than a walk of the whole tree, so building a value one
+    /// level at a time is linear in its depth.
     ///
     /// # Errors
     ///
-    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
-    /// [`CdtError::InputTooLarge`], whichever bound the prospective list crosses first.
+    /// [`CdtError::TooManyElements`] or [`CdtError::InputTooLarge`], whichever bound
+    /// the prospective list crosses first.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use purrdf_cdt::{CdtError, CdtTerm, CdtValue, MAX_NESTING_DEPTH};
+    /// use purrdf_cdt::{CdtTerm, CdtValue};
     ///
     /// let list = CdtValue::list(vec![CdtTerm::Null])?;
     /// assert_eq!(list.canonical_lexical(), "[null]");
     ///
-    /// // Nesting one level at a time is refused at the bound, not at the stack.
+    /// // Nesting one level at a time has no depth to run out of: ten thousand levels
+    /// // build, measure, compare and drop on this thread's own stack.
     /// let mut deep = CdtValue::empty_list();
-    /// for _ in 1..MAX_NESTING_DEPTH {
+    /// for _ in 1..10_000 {
     ///     deep = CdtValue::list(vec![CdtTerm::composite(deep)?])?;
     /// }
-    /// assert_eq!(deep.depth(), MAX_NESTING_DEPTH);
-    /// // A value at the bound cannot become an element: there is nowhere to put it.
-    /// assert!(matches!(
-    ///     CdtTerm::composite(deep),
-    ///     Err(CdtError::DepthExceeded { .. })
-    /// ));
+    /// assert_eq!(deep.depth(), 10_000);
+    /// assert_eq!(deep.element_count(), 9_999);
+    /// assert_eq!(deep.canonical_lexical().len(), 20_000);
+    /// assert_eq!(deep.clone(), deep);
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
     pub fn list(items: Vec<CdtTerm>) -> Result<Self, CdtError> {
-        crate::limits::check_extent(&crate::limits::list_extent(items.iter()))?;
+        let extent = crate::limits::list_extent(items.iter());
+        crate::limits::check_extent(&extent)?;
         Ok(Self {
             parts: CdtParts::List(items),
+            extent,
         })
     }
 
@@ -193,38 +208,54 @@ impl CdtValue {
                 });
             }
         }
-        crate::limits::check_extent(&crate::limits::map_extent(
-            entries.iter().map(|entry| (&entry.key, &entry.value)),
-        ))?;
+        let extent =
+            crate::limits::map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)));
+        crate::limits::check_extent(&extent)?;
         Ok(Self {
             parts: CdtParts::Map(entries),
+            extent,
         })
     }
 
-    /// Build a list whose bounds the caller has **just** checked.
+    /// Build a list whose bounds the caller has **just** checked against `extent`,
+    /// the measure of exactly these items.
     ///
-    /// The two callers are the lexical scanner — which enforces the depth and element
-    /// bounds as it scans, before the offending element is allocated, and the byte
-    /// bound on both the input and the finished canonical form — and
-    /// [`crate::functions`], which measures every prospective result from borrowed
-    /// parts and refuses before cloning. Re-measuring here would make the scanner
-    /// quadratic in nesting depth, since every enclosing frame would re-walk the
-    /// element it just closed.
-    pub(crate) const fn from_checked_items(items: Vec<CdtTerm>) -> Self {
+    /// The callers are the lexical scanner — which enforces the element bound as it
+    /// scans, before the offending element is allocated, and the byte bound on both
+    /// the input and the finished canonical form — and [`crate::functions`], which
+    /// measures every prospective result from borrowed parts and refuses before
+    /// cloning. The extent they measured for the check is the one the value keeps.
+    pub(crate) const fn from_checked_items(items: Vec<CdtTerm>, extent: Extent) -> Self {
         Self {
             parts: CdtParts::List(items),
+            extent,
         }
     }
 
-    /// Build a map whose bounds the caller has **just** checked, and whose entries are
-    /// already sorted into [`crate::total_key_cmp`] order with pairwise distinct keys.
+    /// Build a map whose bounds the caller has **just** checked against `extent`, and
+    /// whose entries are already sorted into [`crate::total_key_cmp`] order with
+    /// pairwise distinct keys.
     ///
     /// See [`CdtValue::from_checked_items`] for who is allowed to call this and why it
     /// exists.
-    pub(crate) const fn from_checked_entries(entries: Vec<CdtEntry>) -> Self {
+    pub(crate) const fn from_checked_entries(entries: Vec<CdtEntry>, extent: Extent) -> Self {
         Self {
             parts: CdtParts::Map(entries),
+            extent,
         }
+    }
+
+    /// The measure this value was built with: its element count at every level and
+    /// the byte length of its canonical form.
+    pub(crate) const fn extent(&self) -> Extent {
+        self.extent
+    }
+
+    /// Move the contents out, leaving the empty list behind. The iterative `Drop` in
+    /// [`crate::tree`] uses this to dismantle a value without recursing into it.
+    pub(crate) fn take_parts(&mut self) -> CdtParts {
+        self.extent = Extent::EMPTY;
+        core::mem::replace(&mut self.parts, CdtParts::List(Vec::new()))
     }
 
     /// A borrowed view of the contents, for matching on which datatype this is.
@@ -291,7 +322,7 @@ impl CdtValue {
     /// ```
     #[must_use]
     pub fn into_list(self) -> Option<Vec<CdtTerm>> {
-        match self.parts {
+        match self.into_parts() {
             CdtParts::List(items) => Some(items),
             CdtParts::Map(_) => None,
         }
@@ -300,7 +331,7 @@ impl CdtValue {
     /// Move the entries out, when this value is a `cdt:Map`.
     #[must_use]
     pub fn into_map(self) -> Option<Vec<CdtEntry>> {
-        match self.parts {
+        match self.into_parts() {
             CdtParts::Map(entries) => Some(entries),
             CdtParts::List(_) => None,
         }
@@ -325,8 +356,10 @@ impl CdtValue {
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
     #[must_use]
-    pub fn into_parts(self) -> CdtParts {
-        self.parts
+    pub fn into_parts(mut self) -> CdtParts {
+        // A type with a `Drop` cannot give a field away by destructuring; the empty
+        // list left behind is what the drop then sees.
+        self.take_parts()
     }
 
     /// The composite datatype of this value.
@@ -357,8 +390,9 @@ impl CdtValue {
     /// 2 for one containing a composite, and so on.
     ///
     /// Computed **iteratively** with an explicit heap worklist — it never recurses,
-    /// so it is safe to call on a value of unknown provenance in order to check it
-    /// against [`crate::MAX_NESTING_DEPTH`].
+    /// so it answers for a value of any depth. Depth has no bound of its own; it is
+    /// at most one more than [`CdtValue::element_count`], which
+    /// [`crate::MAX_ELEMENTS`] bounds.
     ///
     /// # Examples
     ///
@@ -402,7 +436,10 @@ impl CdtValue {
     }
 
     /// The total number of elements at every level (list items plus map entries),
-    /// counted **iteratively**.
+    /// counted **iteratively** by a walk over the tree.
+    ///
+    /// Always equal to the element count the value carries from its construction; the
+    /// walk is kept as the independent measure of that count.
     #[must_use]
     pub fn element_count(&self) -> usize {
         let mut total = 0usize;
@@ -468,6 +505,23 @@ impl CdtValue {
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
         crate::render::canonical_lexical(self)
+    }
+}
+
+/// Written as `CdtValue { parts: … }`: the contents and nothing else. The measure the
+/// value carries is a function of those contents, so printing it would say nothing
+/// twice. Each element is written by [`CdtTerm`]'s iterative `Debug`
+/// ([`crate::tree`]), so this never recurses however deep the value.
+#[allow(
+    clippy::missing_fields_in_debug,
+    reason = "the extent is a function of the printed parts, and printing it would change \
+              the bytes every consumer's `{:?}` of a value has always produced"
+)]
+impl fmt::Debug for CdtValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CdtValue")
+            .field("parts", &self.parts)
+            .finish()
     }
 }
 

@@ -163,11 +163,10 @@ fn answer(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(relations.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(relations.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
     solutions(&result)
@@ -330,11 +329,10 @@ fn a_multi_term_needle_is_refused_rather_than_narrowed() {
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions {
-            env: &ExtensionEnv::over_relations(registry(&index))
+        QueryOptions::new().with_env(
+            &ExtensionEnv::over_relations(registry(&index))
                 .expect("the fixture declarations read cleanly"),
-            ..QueryOptions::EMPTY
-        },
+        ),
     );
     let message = match outcome {
         Err(diagnostic) => diagnostic.message,

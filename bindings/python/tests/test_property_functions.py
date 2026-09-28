@@ -1197,11 +1197,6 @@ def test_mutable_dataset_carries_the_path_relation_surface_too() -> None:
         ),
         # A zero-hop path is the identity and has no witness.
         (([(_node("p"), "forward")], 0, 4, 8, 64, "walk"), "min_hops must be at least 1"),
-        # An unbounded depth is a stack-overflow abort, so the cap is hard.
-        (
-            ([(_node("p"), "forward")], 1, 100_000, 8, 64, "walk"),
-            "exceeds the hard cap",
-        ),
         # An empty accepted-length interval is a caller who has not finished deciding.
         (([(_node("p"), "forward")], 3, 2, 8, 64, "walk"), "exceeds max_hops"),
         # A guard of zero can only ever produce an error.
@@ -1223,6 +1218,21 @@ def test_a_malformed_path_relation_is_refused_by_name(
 
     with pytest.raises(ValueError, match=message):
         store.query(WALK_QUERY, path_relations={WALK: declaration})
+
+
+def test_a_max_hops_past_every_walk_is_accepted_and_answers() -> None:
+    """A `max_hops` far past any walk the chain holds is valid configuration.
+
+    The traversal keeps its per-depth state on the heap, so the depth needs no ceiling:
+    the relation answers exactly the rows the chain's own walks produce, the same rows a
+    `max_hops` sized for the chain answers — the neighbour of the refusals above.
+    """
+    store = _store_with(CHAIN_TTL)
+    deep = {WALK: ([(_node("p"), "forward")], 1, 100_000, 1024, 100_000, "walk")}
+
+    assert _walk_rows(store.query(WALK_QUERY, path_relations=deep)) == _walk_rows(
+        store.query(WALK_QUERY, path_relations=_walk_relation())
+    )
 
 
 def test_a_step_the_data_has_no_edges_for_answers_nothing() -> None:

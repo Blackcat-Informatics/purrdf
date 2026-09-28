@@ -342,8 +342,8 @@ fn absolute_iri(key: &str, value: &str) -> Result<String, String> {
 
 /// Read one count key as a non-negative integer of its own width.
 ///
-/// The RANGE check that matters — a zero `min-hops`, an empty length interval, a
-/// `max-hops` past [`purrdf_sparql_eval::MAX_HOPS_CAP`], a zero guard — belongs to
+/// The RANGE check that matters — a zero `min-hops`, an empty length interval, a zero
+/// guard — belongs to
 /// [`PathLimits::new`] and is left there rather than restated: a second copy of a bound
 /// is a second opinion about it.
 fn number<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {

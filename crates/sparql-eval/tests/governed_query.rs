@@ -896,7 +896,7 @@ fn d6_precedence_order() {
             &QueryGovernors::METERED,
         )
         .expect_err("a federation failure is an error, not an exhausted budget");
-    assert_eq!(diagnostic.code, "native-sparql-query-eval");
+    assert_eq!(diagnostic.code, "native-sparql-service-unconfigured");
 
     // The same holds before evaluation begins: a query that does not parse is a parse
     // diagnostic even under a governor that is already firing.

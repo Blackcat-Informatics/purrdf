@@ -47,8 +47,9 @@
 //! Six of the fifteen functions mint a composite that never passed through the
 //! lexical scanner, so the scanner's bounds never saw it: `cdt:List`, `cdt:Map`,
 //! `cdt:concat`, `cdt:merge`, `cdt:put` and `cdt:subseq`. Each of those computes the
-//! element count, the nesting depth and the exact canonical byte length of the
-//! result **from borrowed inputs**, checks all three, and only then clones anything.
+//! element count and the exact canonical byte length of the result **from borrowed
+//! inputs**, checks both, and only then clones anything; the measure it checked is the
+//! one the built value then carries.
 //! `cdt:put(?m, ?k, ?m)` doubles a map's element count on every application, so
 //! without that a query of twenty-one lines could ask for a value no host can hold;
 //! with it, the twenty-first application is a [`CdtOutcome::Bound`] that allocated
@@ -373,9 +374,9 @@ impl CdtFn {
 ///   becomes an error: inside `BIND` the variable stays unbound, inside `FILTER` the
 ///   solution is dropped. This is the outcome the corpus writes as
 ///   `FILTER(!BOUND(?x))`, and it is emphatically **not** "false".
-/// * [`CdtOutcome::Bound`] — one of [`crate::MAX_NESTING_DEPTH`],
-///   [`crate::MAX_ELEMENTS`] or [`crate::MAX_LEXICAL_BYTES`] would have been exceeded by the value the function was
-///   asked to mint. This is a **hard failure of the query**, not an expression
+/// * [`CdtOutcome::Bound`] — [`crate::MAX_ELEMENTS`] or [`crate::MAX_LEXICAL_BYTES`]
+///   would have been exceeded by the value the function was asked to mint. This is a
+///   **hard failure of the query**, not an expression
 ///   error: degrading it to an unbound variable would let a hostile query silently
 ///   change a result set instead of being refused, so a consumer must propagate it
 ///   as a query failure.
@@ -542,10 +543,11 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_constructor(items: Vec<CdtTerm>) -> CdtOutcome<CdtValue> {
-    if let Err(error) = check_extent(&list_extent(items.iter())) {
+    let extent = list_extent(items.iter());
+    if let Err(error) = check_extent(&extent) {
         return CdtOutcome::Bound(error);
     }
-    CdtOutcome::Value(CdtValue::from_checked_items(items))
+    CdtOutcome::Value(CdtValue::from_checked_items(items, extent))
 }
 
 /// `cdt:Map(…)` — build a map from alternating key and value arguments.
@@ -609,7 +611,7 @@ pub fn map_constructor(pairs: &[(CdtTerm, CdtTerm)]) -> CdtOutcome<CdtValue> {
             value: pairs[index].1.clone(),
         })
         .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(entries))
+    CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent))
 }
 
 // ── The list functions ──────────────────────────────────────────────────────────
@@ -752,7 +754,8 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
     let Some((_, rest)) = items.split_first() else {
         return raise("cdt:tail on an empty cdt:List");
     };
-    CdtOutcome::Value(CdtValue::from_checked_items(rest.to_vec()))
+    let extent = list_extent(rest.iter());
+    CdtOutcome::Value(CdtValue::from_checked_items(rest.to_vec(), extent))
 }
 
 /// `cdt:reverse(list)` — the same elements in the opposite order.
@@ -781,7 +784,8 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
 pub fn list_reverse(items: &[CdtTerm]) -> CdtValue {
     let mut reversed = items.to_vec();
     reversed.reverse();
-    CdtValue::from_checked_items(reversed)
+    let extent = list_extent(reversed.iter());
+    CdtValue::from_checked_items(reversed, extent)
 }
 
 /// `cdt:subseq(list, start[, length])` — a contiguous run of elements.
@@ -872,10 +876,11 @@ pub fn list_subseq(
         }
     };
     let taken = &items[from..to];
-    if let Err(error) = check_extent(&list_extent(taken.iter())) {
+    let extent = list_extent(taken.iter());
+    if let Err(error) = check_extent(&extent) {
         return CdtOutcome::Bound(error);
     }
-    CdtOutcome::Value(CdtValue::from_checked_items(taken.to_vec()))
+    CdtOutcome::Value(CdtValue::from_checked_items(taken.to_vec(), extent))
 }
 
 /// `cdt:concat(…)` — the concatenation of the argument lists, in argument order.
@@ -912,7 +917,7 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
         return CdtOutcome::Bound(error);
     }
     let items: Vec<CdtTerm> = lists.iter().copied().flatten().cloned().collect();
-    CdtOutcome::Value(CdtValue::from_checked_items(items))
+    CdtOutcome::Value(CdtValue::from_checked_items(items, extent))
 }
 
 /// `cdt:contains(list, term)` — does the list hold an element **equal by value** to
@@ -1134,7 +1139,7 @@ pub fn map_contains_key(entries: &[CdtEntry], key: &CdtTerm) -> bool {
 /// pure function of the map's *value* rather than of how the map was authored.
 ///
 /// No bound can be exceeded: the result has one leaf element per entry, so it is
-/// smaller than the map in every one of the three dimensions.
+/// smaller than the map in both dimensions.
 ///
 /// # Examples
 ///
@@ -1147,7 +1152,9 @@ pub fn map_contains_key(entries: &[CdtEntry], key: &CdtTerm) -> bool {
 /// ```
 #[must_use]
 pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
-    CdtValue::from_checked_items(entries.iter().map(|entry| entry.key.to_term()).collect())
+    let items: Vec<CdtTerm> = entries.iter().map(|entry| entry.key.to_term()).collect();
+    let extent = list_extent(items.iter());
+    CdtValue::from_checked_items(items, extent)
 }
 
 /// `cdt:put(map, key[, value])` — the map with one entry set to a value.
@@ -1186,8 +1193,8 @@ pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
 ///
 /// `cdt:put(?m, ?k, ?m)` roughly doubles a map's element count each time it is
 /// applied, so this is the function that most needs a bound. The result's element
-/// count, depth and canonical byte length are computed from the borrowed map and the
-/// borrowed value first; only if all three fit is anything cloned.
+/// count and canonical byte length are computed from the borrowed map and the
+/// borrowed value first; only if both fit is anything cloned.
 ///
 /// # Examples
 ///
@@ -1234,7 +1241,8 @@ pub fn map_put(entries: &[CdtEntry], key: &CdtTerm, value: &CdtTerm) -> CdtOutco
             }
         }
     }
-    if let Err(error) = check_extent(&map_extent(pairs.iter().copied())) {
+    let extent = map_extent(pairs.iter().copied());
+    if let Err(error) = check_extent(&extent) {
         return CdtOutcome::Bound(error);
     }
     let built = pairs
@@ -1244,7 +1252,7 @@ pub fn map_put(entries: &[CdtEntry], key: &CdtTerm, value: &CdtTerm) -> CdtOutco
             value: value.clone(),
         })
         .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(built))
+    CdtOutcome::Value(CdtValue::from_checked_entries(built, extent))
 }
 
 /// What `cdt:remove` did.
@@ -1310,7 +1318,8 @@ pub fn map_remove(entries: &[CdtEntry], key: &CdtTerm) -> MapRemoval {
     let mut kept = Vec::with_capacity(entries.len() - 1);
     kept.extend_from_slice(&entries[..index]);
     kept.extend_from_slice(&entries[index + 1..]);
-    MapRemoval::Removed(CdtValue::from_checked_entries(kept))
+    let extent = map_extent(kept.iter().map(|entry| (&entry.key, &entry.value)));
+    MapRemoval::Removed(CdtValue::from_checked_entries(kept, extent))
 }
 
 /// `cdt:merge(…)` — the union of the argument maps.
@@ -1367,7 +1376,7 @@ pub fn map_merge(maps: &[&[CdtEntry]]) -> CdtOutcome<CdtValue> {
         .into_iter()
         .map(|(_, entry)| entry.clone())
         .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(entries))
+    CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent))
 }
 
 // ── Dispatch on the runtime composite datatype ──────────────────────────────────

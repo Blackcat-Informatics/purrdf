@@ -9,13 +9,15 @@
 //! `purrdf-core` so consumers can depend on the contract without depending on
 //! oxigraph. Concrete oxigraph adapters live in the sibling `purrdf` crate.
 
+use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
 
 use purrdf_events::RdfEventSink;
 
 use crate::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId, TermValue,
+    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId,
+    TermValue, try_fold_nested,
 };
 
 /// Term interning seam: dataset-independent values enter a concrete term table.
@@ -41,27 +43,34 @@ pub trait TermFactory {
 }
 
 impl TermFactory for RdfDatasetBuilder {
+    /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+    /// predicate and object, each fully before the next, then the triple itself.
     fn intern_value(&mut self, value: &TermValue) -> TermId {
-        match value {
-            TermValue::Iri(iri) => self.intern_iri_value(iri),
-            TermValue::Blank { label, scope } => self.intern_blank_value(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => self.intern_literal_value(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-            TermValue::Triple { s, p, o } => {
-                let s = self.intern_value(s);
-                let p = self.intern_value(p);
-                let o = self.intern_value(o);
-                self.intern_triple_value(s, p, o)
-            }
+        let interned = try_fold_nested(
+            value,
+            self,
+            |builder, value| {
+                Ok::<_, Infallible>(Nested::Leaf(match value {
+                    TermValue::Iri(iri) => builder.intern_iri_value(iri),
+                    TermValue::Blank { label, scope } => builder.intern_blank_value(label, *scope),
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => builder.intern_literal_value(RdfLiteral {
+                        lexical_form: lexical_form.clone(),
+                        datatype: Some(datatype.clone()),
+                        language: language.clone(),
+                        direction: *direction,
+                    }),
+                    TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+                }))
+            },
+            |builder, _, s, p, o| Ok(builder.intern_triple_value(s, p, o)),
+        );
+        match interned {
+            Ok(id) => id,
         }
     }
 
@@ -229,6 +238,7 @@ pub trait RdfSerializer {
 mod tests {
     use super::*;
     use crate::RdfTextDirection;
+    use crate::TermBox;
 
     fn iri(value: &str) -> TermValue {
         TermValue::Iri(value.to_owned())
@@ -256,9 +266,9 @@ mod tests {
             direction: Some(RdfTextDirection::Rtl),
         };
         let triple = TermValue::Triple {
-            s: Box::new(s.clone()),
-            p: Box::new(p.clone()),
-            o: Box::new(o),
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(o),
         };
 
         let mut builder = RdfDatasetBuilder::new();
@@ -279,5 +289,67 @@ mod tests {
         assert_eq!(dataset.term_id_by_value(&blank), Some(blank_id));
         assert_eq!(dataset.term_id_by_value(&typed), Some(typed_id));
         assert_eq!(dataset.term_id_by_value(&directional), Some(directional_id));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The value-interning seam against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use super::TermFactory;
+    use crate::test_rng::TermShape;
+    use crate::{RdfDatasetBuilder, TermId, TermValue};
+
+    fn reference(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let s = reference(builder, s);
+                let p = reference(builder, p);
+                let o = reference(builder, o);
+                builder.intern_triple_value(s, p, o)
+            }
+            leaf => builder.intern_value(leaf),
+        }
+    }
+
+    /// Every generated value interns into a fresh builder as the recursive reference
+    /// interns it: the same id, and the same next id after it.
+    #[test]
+    fn interning_agrees_with_its_recursive_reference_on_generated_values() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::Any);
+            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            assert_eq!(
+                found.intern_value(&value),
+                reference(&mut expected, &value),
+                "seed {seed}"
+            );
+            let sentinel = "http://example.org/sentinel";
+            assert_eq!(
+                found.intern_iri(sentinel),
+                expected.intern_iri(sentinel),
+                "seed {seed}"
+            );
+        }
+    }
+
+    /// A value a hundred thousand triple terms deep interns on a thread whose whole stack
+    /// is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_value_interns_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::test_rng::triple_chain(LEVELS);
+                let mut builder = RdfDatasetBuilder::new();
+                assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("interning did not overflow the thread's stack");
     }
 }

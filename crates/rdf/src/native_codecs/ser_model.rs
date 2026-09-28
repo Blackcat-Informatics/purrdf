@@ -490,16 +490,16 @@ fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&Base
 ///
 /// # Termination
 ///
-/// This recurses on a literal's datatype and on a quoted triple's `(s, p, o)` with no
-/// depth bound and no visited set — a serializer's inner loop should carry neither —
-/// so it is sound only because every producer of a [`SerGraph`] hands it a term table
-/// that terminates. There are exactly three, and each owes that guarantee: the text
+/// This follows a literal's datatype and a quoted triple's `(s, p, o)` over a work
+/// list with no depth bound and no visited set — a serializer's inner loop should carry
+/// neither — so it finishes only because every producer of a [`SerGraph`] hands it a
+/// term table that terminates. There are exactly three, and each owes that guarantee: the text
 /// parsers and the [`DatasetView`](crate::DatasetView) lowering in `serialize.rs` both
 /// intern a triple term's components BEFORE the term itself, so a component id is
 /// always strictly smaller than the term naming it; and `crate::gts::gts_to_ser`,
 /// whose input is a caller-supplied GTS graph and which therefore proves it, refusing
 /// a self-reaching table with `gts-self-reaching-term`. A fourth producer must do the
-/// same — a stack overflow here aborts the process rather than panicking.
+/// same — a self-reaching table would never finish writing.
 ///
 /// `ix` is the caller's one-per-document [`ReifierIndex`]: quoted-triple terms resolve
 /// through it rather than through a scan of the reifier table per term.
@@ -519,6 +519,12 @@ fn write_term_absolute<W: TextOut + ?Sized>(
     write_term_in(g, ix, tid, out, None);
 }
 
+/// [`write_term`] against `base`.
+///
+/// A quoted triple is written over a work list: its opening `<<( ` at once, then its
+/// subject next, with the separators, the predicate, the object and the closing ` )>>`
+/// held back in that order until the subject's whole nesting is written. A typed
+/// literal's datatype is written next after its `^^`.
 fn write_term_in<W: TextOut + ?Sized>(
     g: &SerGraph,
     ix: &ReifierIndex,
@@ -526,52 +532,80 @@ fn write_term_in<W: TextOut + ?Sized>(
     out: &mut W,
     base: Option<&BaseIri>,
 ) {
-    let t = &g.terms[tid];
-    match t.kind {
-        SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), base),
-        SerTermKind::Bnode => match &t.value {
-            Some(v) => {
-                out.push_str("_:");
-                out.push_str(v);
+    let mut held: Vec<TermPiece> = Vec::new();
+    let mut next = Some(TermPiece::Term(tid));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let tid = match piece {
+            TermPiece::Text(text) => {
+                out.push_str(text);
+                continue;
             }
-            None => {
-                let _ = write!(out, "_:b{tid}");
-            }
-        },
-        SerTermKind::Literal => {
-            out.push('"');
-            out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
-            out.push('"');
-            if let Some(lang) = &t.lang {
-                out.push('@');
-                out.push_str(lang);
-                if let Some(direction) = t.direction.as_deref().filter(|d| is_literal_direction(d))
-                {
-                    out.push_str("--");
-                    out.push_str(direction);
+            TermPiece::Term(tid) => tid,
+        };
+        let t = &g.terms[tid];
+        match t.kind {
+            SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), base),
+            SerTermKind::Bnode => match &t.value {
+                Some(v) => {
+                    out.push_str("_:");
+                    out.push_str(v);
                 }
-            } else if let Some(dt) = t.datatype {
-                out.push_str("^^");
-                write_term_in(g, ix, dt, out, base);
+                None => {
+                    let _ = write!(out, "_:b{tid}");
+                }
+            },
+            SerTermKind::Literal => {
+                out.push('"');
+                out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+                out.push('"');
+                if let Some(lang) = &t.lang {
+                    out.push('@');
+                    out.push_str(lang);
+                    if let Some(direction) =
+                        t.direction.as_deref().filter(|d| is_literal_direction(d))
+                    {
+                        out.push_str("--");
+                        out.push_str(direction);
+                    }
+                } else if let Some(dt) = t.datatype {
+                    out.push_str("^^");
+                    next = Some(TermPiece::Term(dt));
+                }
+                // else: plain literal == xsd:string, written bare
             }
-            // else: plain literal == xsd:string, written bare
+            // quoted triple (RDF 1.2 triple term), resolved through its reifier
+            SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
+                Some((s, p, o)) => {
+                    out.push_str("<<( ");
+                    held.extend(TermPiece::triple_tail(p, o));
+                    next = Some(TermPiece::Term(s));
+                }
+                // degraded but syntactically valid: an unbound reifier becomes a blank node
+                None => {
+                    let _ = write!(out, "_:unbound_triple_{tid}");
+                }
+            },
         }
-        // quoted triple (RDF 1.2 triple term), resolved through its reifier
-        SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
-            Some((s, p, o)) => {
-                out.push_str("<<( ");
-                write_term_in(g, ix, s, out, base);
-                out.push(' ');
-                write_term_in(g, ix, p, out, base);
-                out.push(' ');
-                write_term_in(g, ix, o, out, base);
-                out.push_str(" )>>");
-            }
-            // degraded but syntactically valid: an unbound reifier becomes a blank node
-            None => {
-                let _ = write!(out, "_:unbound_triple_{tid}");
-            }
-        },
+    }
+}
+
+/// One pending piece of a term being written over a work list: a term, or fixed text.
+enum TermPiece {
+    Term(usize),
+    Text(&'static str),
+}
+
+impl TermPiece {
+    /// What follows a quoted triple's subject, in the order it is popped: a space, the
+    /// predicate, a space, the object, and the closing ` )>>`.
+    const fn triple_tail(p: usize, o: usize) -> [Self; 5] {
+        [
+            Self::Text(" )>>"),
+            Self::Term(o),
+            Self::Text(" "),
+            Self::Term(p),
+            Self::Text(" "),
+        ]
     }
 }
 
@@ -750,52 +784,62 @@ pub(crate) fn emits_any_statement(g: &SerGraph) -> bool {
 ///
 /// # Termination
 ///
-/// It also mirrors [`write_term`]'s unguarded recursion, and rests on the same
+/// It also mirrors [`write_term`]'s unguarded work list, and rests on the same
 /// invariant: a [`SerGraph`]'s term table terminates because every producer of one
 /// guarantees it.
 fn write_trig_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
-    let t = &g.terms[tid];
-    match t.kind {
-        SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => out.push_str("rdf:reifies"),
-        SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), g.base()),
-        SerTermKind::Bnode => match &t.value {
-            Some(v) => {
-                out.push_str("_:");
-                out.push_str(v);
+    let mut held: Vec<TermPiece> = Vec::new();
+    let mut next = Some(TermPiece::Term(tid));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let tid = match piece {
+            TermPiece::Text(text) => {
+                out.push_str(text);
+                continue;
             }
-            None => {
-                let _ = write!(out, "_:b{tid}");
+            TermPiece::Term(tid) => tid,
+        };
+        let t = &g.terms[tid];
+        match t.kind {
+            SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => {
+                out.push_str("rdf:reifies");
             }
-        },
-        SerTermKind::Literal => {
-            out.push('"');
-            out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
-            out.push('"');
-            if let Some(lang) = &t.lang {
-                out.push('@');
-                out.push_str(lang);
-                if let Some(direction) = t.direction.as_deref().filter(|d| is_literal_direction(d))
-                {
-                    out.push_str("--");
-                    out.push_str(direction);
+            SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), g.base()),
+            SerTermKind::Bnode => match &t.value {
+                Some(v) => {
+                    out.push_str("_:");
+                    out.push_str(v);
                 }
-            } else if let Some(dt) = t.datatype {
-                out.push_str("^^");
-                write_trig_term(g, ix, dt, out);
+                None => {
+                    let _ = write!(out, "_:b{tid}");
+                }
+            },
+            SerTermKind::Literal => {
+                out.push('"');
+                out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+                out.push('"');
+                if let Some(lang) = &t.lang {
+                    out.push('@');
+                    out.push_str(lang);
+                    if let Some(direction) =
+                        t.direction.as_deref().filter(|d| is_literal_direction(d))
+                    {
+                        out.push_str("--");
+                        out.push_str(direction);
+                    }
+                } else if let Some(dt) = t.datatype {
+                    out.push_str("^^");
+                    next = Some(TermPiece::Term(dt));
+                }
             }
+            SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
+                Some((s, p, o)) => {
+                    out.push_str("<<( ");
+                    held.extend(TermPiece::triple_tail(p, o));
+                    next = Some(TermPiece::Term(s));
+                }
+                None => write_term(g, ix, tid, out),
+            },
         }
-        SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
-            Some((s, p, o)) => {
-                out.push_str("<<( ");
-                write_trig_term(g, ix, s, out);
-                out.push(' ');
-                write_trig_term(g, ix, p, out);
-                out.push(' ');
-                write_trig_term(g, ix, o, out);
-                out.push_str(" )>>");
-            }
-            None => write_term(g, ix, tid, out),
-        },
     }
 }
 
@@ -1633,5 +1677,220 @@ mod tests {
             let got = escape_literal(&s);
             prop_assert_eq!(got.as_ref(), escape_literal_oracle(&s));
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod term_walk_tests {
+    //! The N-Quads and TriG term writers against their recursive references, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use core::convert::Infallible;
+    use core::fmt::Write as _;
+
+    use purrdf_core::{Nested, TermValue, try_fold_nested};
+
+    use super::{
+        RDF_REIFIES, ReifierIndex, SerGraph, SerTerm, SerTermKind, write_term, write_trig_term,
+    };
+
+    /// Lower `value` into `graph`'s term table, a triple term through a self-reifier
+    /// binding as the production lowering does, and return its term id. The IRI
+    /// `http://example.org/p1` is lowered as `rdf:reifies`, so the TriG writer's one
+    /// special spelling is reached.
+    pub(crate) fn lower(graph: &mut SerGraph, value: &TermValue) -> usize {
+        fn push(graph: &mut SerGraph, term: SerTerm) -> usize {
+            graph.terms.push(term);
+            graph.terms.len() - 1
+        }
+        fn shaped(kind: SerTermKind, value: Option<String>) -> SerTerm {
+            SerTerm {
+                kind,
+                value,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+            }
+        }
+        let lowered = try_fold_nested(
+            value,
+            graph,
+            |graph, value| {
+                Ok::<_, Infallible>(Nested::Leaf(match value {
+                    TermValue::Iri(iri) if iri == "http://example.org/p1" => push(
+                        graph,
+                        shaped(SerTermKind::Iri, Some(RDF_REIFIES.to_owned())),
+                    ),
+                    TermValue::Iri(iri) => push(graph, shaped(SerTermKind::Iri, Some(iri.clone()))),
+                    TermValue::Blank { label, .. } => {
+                        push(graph, shaped(SerTermKind::Bnode, Some(label.clone())))
+                    }
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype = (language.is_none()
+                            && datatype != "http://www.w3.org/2001/XMLSchema#string")
+                            .then(|| push(graph, shaped(SerTermKind::Iri, Some(datatype.clone()))));
+                        push(
+                            graph,
+                            SerTerm {
+                                kind: SerTermKind::Literal,
+                                value: Some(lexical_form.clone()),
+                                datatype,
+                                lang: language.clone(),
+                                direction: direction.map(|d| d.as_str().to_owned()),
+                                reifier: None,
+                            },
+                        )
+                    }
+                    TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+                }))
+            },
+            |graph, _, s, p, o| {
+                let id = graph.terms.len();
+                graph.reifiers.push((id, (s, p, o), None));
+                let mut term = shaped(SerTermKind::Triple, None);
+                term.reifier = Some(id);
+                Ok(push(graph, term))
+            },
+        );
+        match lowered {
+            Ok(id) => id,
+        }
+    }
+
+    /// The recursive reference of `write_term_in` (and so [`write_term`]).
+    fn reference_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+        let t = &g.terms[tid];
+        match t.kind {
+            SerTermKind::Iri => {
+                let _ = write!(
+                    out,
+                    "<{}>",
+                    super::escape_iri(t.value.as_deref().unwrap_or(""))
+                );
+            }
+            SerTermKind::Bnode => {
+                let _ = write!(out, "_:{}", t.value.as_deref().unwrap_or(""));
+            }
+            SerTermKind::Literal => reference_literal(g, ix, t, out, reference_term),
+            SerTermKind::Triple => {
+                let (s, p, o) = ix.get(t.reifier.expect("bound")).expect("bound");
+                out.push_str("<<( ");
+                reference_term(g, ix, s, out);
+                out.push(' ');
+                reference_term(g, ix, p, out);
+                out.push(' ');
+                reference_term(g, ix, o, out);
+                out.push_str(" )>>");
+            }
+        }
+    }
+
+    /// The recursive reference of [`write_trig_term`].
+    fn reference_trig(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+        let t = &g.terms[tid];
+        match t.kind {
+            SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => {
+                out.push_str("rdf:reifies");
+            }
+            SerTermKind::Literal => reference_literal(g, ix, t, out, reference_trig),
+            SerTermKind::Triple => {
+                let (s, p, o) = ix.get(t.reifier.expect("bound")).expect("bound");
+                out.push_str("<<( ");
+                reference_trig(g, ix, s, out);
+                out.push(' ');
+                reference_trig(g, ix, p, out);
+                out.push(' ');
+                reference_trig(g, ix, o, out);
+                out.push_str(" )>>");
+            }
+            SerTermKind::Iri | SerTermKind::Bnode => reference_term(g, ix, tid, out),
+        }
+    }
+
+    /// A literal as both references spell it, its datatype written by `datatype`.
+    fn reference_literal(
+        g: &SerGraph,
+        ix: &ReifierIndex,
+        t: &SerTerm,
+        out: &mut String,
+        datatype: fn(&SerGraph, &ReifierIndex, usize, &mut String),
+    ) {
+        let _ = write!(
+            out,
+            "\"{}\"",
+            super::escape_literal(t.value.as_deref().unwrap_or(""))
+        );
+        if let Some(lang) = &t.lang {
+            let _ = write!(out, "@{lang}");
+            if let Some(direction) = t.direction.as_deref() {
+                let _ = write!(out, "--{direction}");
+            }
+        } else if let Some(dt) = t.datatype {
+            out.push_str("^^");
+            datatype(g, ix, dt, out);
+        }
+    }
+
+    /// Both work-list writers spell every generated term exactly as their recursive
+    /// references do, nested triple terms included.
+    #[test]
+    fn the_term_writers_agree_with_their_recursive_references_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::IriPredicates,
+            );
+            nested += usize::from(budget < 7);
+            let mut graph = SerGraph::default();
+            let id = lower(&mut graph, &value);
+            let ix = graph.reifier_index();
+            let (mut written, mut expected) = (String::new(), String::new());
+            write_term(&graph, &ix, id, &mut written);
+            reference_term(&graph, &ix, id, &mut expected);
+            assert_eq!(written, expected, "seed {seed}: {value:?}");
+            let (mut written, mut expected) = (String::new(), String::new());
+            write_trig_term(&graph, &ix, id, &mut written);
+            reference_trig(&graph, &ix, id, &mut expected);
+            assert_eq!(written, expected, "seed {seed}: {value:?}");
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is written both ways on a thread
+    /// whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut graph = SerGraph::default();
+                let id = lower(&mut graph, &value);
+                drop(value);
+                let ix = graph.reifier_index();
+                let level =
+                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+                let innermost = "<http://example.org/o>".len();
+                let mut written = String::new();
+                write_term(&graph, &ix, id, &mut written);
+                assert_eq!(written.len(), LEVELS * level + innermost);
+                let mut written = String::new();
+                write_trig_term(&graph, &ix, id, &mut written);
+                assert_eq!(written.len(), LEVELS * level + innermost);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no writer overflowed the thread's stack");
     }
 }

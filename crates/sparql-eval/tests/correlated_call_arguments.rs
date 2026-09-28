@@ -29,6 +29,7 @@
 //! shape against SPARQL's bottom-up answer: the relation evaluated FREE on its own,
 //! joined or filtered against the left side afterwards.
 
+use purrdf_core::TermBox;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -93,9 +94,9 @@ impl Kind {
                 scope: BlankScope::DEFAULT,
             },
             Self::Quoted => TermValue::Triple {
-                s: Box::new(TermValue::iri(format!("{EX}a"))),
-                p: Box::new(TermValue::iri(format!("{EX}r"))),
-                o: Box::new(TermValue::iri(format!("{EX}{name}"))),
+                s: TermBox::new(TermValue::iri(format!("{EX}a"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}r"))),
+                o: TermBox::new(TermValue::iri(format!("{EX}{name}"))),
             },
         }
     }
@@ -286,10 +287,7 @@ fn run(variant: Variant, body: &str) -> Outcome {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {
@@ -616,10 +614,7 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(REL.to_owned(), Arc::new(relation));
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let engine = NativeSparqlEngine::new();
     let data = dataset();
 

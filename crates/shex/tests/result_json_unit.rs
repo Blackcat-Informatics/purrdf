@@ -5,6 +5,7 @@
 //! the array shape, `node`/`shape`/`status`/`reason` fields, term syntax for
 //! IRIs and literals, and deterministic output.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -172,9 +173,9 @@ fn round_trips_literal_escapes_including_backspace_and_form_feed() {
 #[test]
 fn round_trips_quoted_triple_term() {
     let triple = TermValue::Triple {
-        s: Box::new(TermValue::iri("http://a.example/s")),
-        p: Box::new(TermValue::iri("http://a.example/p")),
-        o: Box::new(TermValue::iri("http://a.example/o")),
+        s: TermBox::new(TermValue::iri("http://a.example/s")),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(TermValue::iri("http://a.example/o")),
     };
     assert_eq!(round_trip(&triple), triple);
 }
@@ -182,14 +183,14 @@ fn round_trips_quoted_triple_term() {
 #[test]
 fn round_trips_nested_quoted_triple_term() {
     let inner = TermValue::Triple {
-        s: Box::new(TermValue::iri("http://a.example/s")),
-        p: Box::new(TermValue::iri("http://a.example/p")),
-        o: Box::new(TermValue::iri("http://a.example/o")),
+        s: TermBox::new(TermValue::iri("http://a.example/s")),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(TermValue::iri("http://a.example/o")),
     };
     let outer = TermValue::Triple {
-        s: Box::new(inner),
-        p: Box::new(TermValue::iri("http://a.example/p2")),
-        o: Box::new(TermValue::iri("http://a.example/o2")),
+        s: TermBox::new(inner),
+        p: TermBox::new(TermValue::iri("http://a.example/p2")),
+        o: TermBox::new(TermValue::iri("http://a.example/o2")),
     };
     assert_eq!(round_trip(&outer), outer);
 }
@@ -197,9 +198,9 @@ fn round_trips_nested_quoted_triple_term() {
 #[test]
 fn round_trips_quoted_triple_with_escaped_literal_object() {
     let triple = TermValue::Triple {
-        s: Box::new(TermValue::iri("http://a.example/s")),
-        p: Box::new(TermValue::iri("http://a.example/p")),
-        o: Box::new(TermValue::simple_literal(
+        s: TermBox::new(TermValue::iri("http://a.example/s")),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(TermValue::simple_literal(
             "line1\nline2\u{8}\u{c}\"quoted\"",
         )),
     };

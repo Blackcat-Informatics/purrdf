@@ -28,8 +28,10 @@
 //! both use `_:b` without the match conflating them.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 
-use purrdf_core::{BlankScope, RdfDataset, TermValue};
+use purrdf_core::{BlankScope, Nested, RdfDataset, TermValue, try_fold_nested, visit_nested};
 
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::owl_dl::query::{QNode, QTriple};
@@ -75,23 +77,71 @@ pub(crate) type PatTriple = [Pat; 3];
 /// either fails outright or fixes nothing, and either way it does so before the search
 /// branches.
 pub(crate) fn var_count(pat: &Pat) -> usize {
-    match pat {
-        Pat::Var(_) => 1,
-        Pat::Triple(inner) => inner.iter().map(var_count).sum(),
-        Pat::Ground(_) => 0,
+    let mut count = 0;
+    let ControlFlow::Continue(()) = pat.visit(|pat| -> ControlFlow<Infallible> {
+        count += usize::from(matches!(pat, Pat::Var(_)));
+        ControlFlow::Continue(())
+    });
+    count
+}
+
+impl Pat {
+    /// Visit every position of this pattern in pre-order over [`visit_nested`]'s work
+    /// list — a triple term first, then its subject with everything below it, then its
+    /// predicate, then its object. The first `Break` ends the visit and is returned.
+    pub(crate) fn visit<'p, B>(
+        &'p self,
+        mut visit: impl FnMut(&'p Self) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        visit_nested(self, |pat| {
+            visit(pat)?;
+            ControlFlow::Continue(match pat {
+                Self::Triple(inner) => Some([&inner[0], &inner[1], &inner[2]]),
+                Self::Ground(_) | Self::Var(_) => None,
+            })
+        })
+    }
+
+    /// Fold this pattern bottom-up over [`try_fold_nested`]'s work list: `leaf`
+    /// answers for every position that is not a triple term, and `triple` combines a
+    /// triple term's three answers — each folded fully, in order — into its own. The
+    /// first error ends the fold.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf` or `triple` returns.
+    pub(crate) fn try_fold<T, E>(
+        &self,
+        mut leaf: impl FnMut(&Self) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        try_fold_nested(
+            self,
+            &mut (),
+            |(), pat| match pat {
+                Self::Triple(inner) => Ok(Nested::Triple(&inner[0], &inner[1], &inner[2])),
+                leaf_pat => leaf(leaf_pat).map(Nested::Leaf),
+            },
+            |(), _, s, p, o| triple(s, p, o),
+        )
     }
 }
 
 /// Read a term of a conclusion GRAPH as a pattern: every blank node is an existential.
+///
+/// A triple term is read bottom-up over [`TermValue::try_fold_owned`]'s work list.
 pub(crate) fn conclusion_node(term: TermValue) -> Pat {
-    match term {
-        TermValue::Blank { label, scope } => Pat::Var(VarKey::Blank { label, scope }),
-        TermValue::Triple { s, p, o } => Pat::Triple(Box::new([
-            conclusion_node(*s),
-            conclusion_node(*p),
-            conclusion_node(*o),
-        ])),
-        ground => Pat::Ground(ground),
+    let pat = term.try_fold_owned(
+        |term| {
+            Ok::<_, Infallible>(match term {
+                TermValue::Blank { label, scope } => Pat::Var(VarKey::Blank { label, scope }),
+                ground => Pat::Ground(ground),
+            })
+        },
+        |s, p, o| Ok(Pat::Triple(Box::new([s, p, o]))),
+    );
+    match pat {
+        Ok(pat) => pat,
     }
 }
 
@@ -135,11 +185,23 @@ pub(crate) fn patterns_at(triples: &[Triple], keep: &BTreeSet<usize>) -> Vec<Pat
 /// outside it: [`try_unify`](super::homomorphism) keys the binding by that name at every
 /// depth, so one name is one variable and a pattern that uses it in both places is joined
 /// rather than split into two.
+///
+/// A nested [`QNode::Triple`] is read bottom-up over [`try_fold_nested`]'s work list.
 fn bgp_node(node: &QNode) -> Pat {
-    match node {
-        QNode::Var(name) => Pat::Var(VarKey::Projected(name.clone())),
-        QNode::Term(term) => conclusion_node(term.clone()),
-        QNode::Triple { s, p, o } => Pat::Triple(Box::new([bgp_node(s), bgp_node(p), bgp_node(o)])),
+    let pat = try_fold_nested(
+        node,
+        &mut (),
+        |(), node| {
+            Ok::<_, Infallible>(match node {
+                QNode::Var(name) => Nested::Leaf(Pat::Var(VarKey::Projected(name.clone()))),
+                QNode::Term(term) => Nested::Leaf(conclusion_node(term.clone())),
+                QNode::Triple { s, p, o } => Nested::Triple(&**s, &**p, &**o),
+            })
+        },
+        |(), _, s, p, o| Ok(Pat::Triple(Box::new([s, p, o]))),
+    );
+    match pat {
+        Ok(pat) => pat,
     }
 }
 
@@ -168,7 +230,123 @@ pub(crate) fn bgp_patterns(bgp: &[QTriple]) -> Vec<PatTriple> {
 /// function of the question alone, so it is still deterministic.
 pub(crate) fn projected_vars(pats: &[PatTriple]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    fn walk(pat: &Pat, names: &mut Vec<String>) {
+    for triple in pats {
+        for position in triple {
+            let ControlFlow::Continue(()) = position.visit(|pat| -> ControlFlow<Infallible> {
+                if let Pat::Var(VarKey::Projected(name)) = pat
+                    && !names.iter().any(|seen| seen == name)
+                {
+                    names.push(name.clone());
+                }
+                ControlFlow::Continue(())
+            });
+        }
+    }
+    names
+}
+
+#[cfg(test)]
+pub(crate) mod term_walk_tests {
+    //! The pattern readers and walks against their recursive references, and at a
+    //! hundred thousand levels on a 128 KiB thread; and the generated patterns the other
+    //! entailment walks are tested over.
+
+    use core::convert::Infallible;
+    use core::ops::ControlFlow;
+
+    use purrdf_core::TermValue;
+
+    use super::{Pat, QNode, VarKey, bgp_node, conclusion_node, projected_vars, var_count};
+
+    /// A generated basic-graph-pattern node: a generated term whose IRIs
+    /// `http://example.org/i1` and `…/i2` stand as the projected variables `?x` and
+    /// `?y`, so a pattern mixes ground terms, blank existentials and projected variables
+    /// at every depth.
+    pub(crate) fn generated_qnode(seed: u64) -> QNode {
+        fn to_qnode(value: &TermValue) -> QNode {
+            match value {
+                TermValue::Triple { s, p, o } => QNode::Triple {
+                    s: Box::new(to_qnode(s)),
+                    p: Box::new(to_qnode(p)),
+                    o: Box::new(to_qnode(o)),
+                },
+                TermValue::Iri(iri) if iri == "http://example.org/i1" => QNode::Var("x".to_owned()),
+                TermValue::Iri(iri) if iri == "http://example.org/i2" => QNode::Var("y".to_owned()),
+                other => QNode::Term(other.clone()),
+            }
+        }
+        let mut state = seed;
+        let mut budget = 8;
+        to_qnode(&purrdf_core::test_rng::term_value(
+            &mut state,
+            &mut budget,
+            purrdf_core::test_rng::TermShape::Any,
+        ))
+    }
+
+    /// A generated pattern position, read from [`generated_qnode`].
+    pub(crate) fn generated_pat(seed: u64) -> Pat {
+        bgp_node(&generated_qnode(seed))
+    }
+
+    /// Take a pattern chain nested in its object slot apart one level at a time: the
+    /// pattern's own drop is derived, and descends once per level.
+    pub(crate) fn dismantle(mut pat: Pat) {
+        while let Pat::Triple(inner) = pat {
+            let [_, _, o] = *inner;
+            pat = o;
+        }
+    }
+
+    /// A pattern chain `levels` deep: `<<( ?x <p> <<( ?x <p> … _:b … )>> )>>`.
+    pub(crate) fn pattern_chain(levels: usize) -> Pat {
+        let mut pat = Pat::Var(VarKey::Blank {
+            label: "b".to_owned(),
+            scope: purrdf_core::BlankScope::DEFAULT,
+        });
+        for _ in 0..levels {
+            pat = Pat::Triple(Box::new([
+                Pat::Var(VarKey::Projected("x".to_owned())),
+                Pat::Ground(TermValue::iri("http://example.org/p")),
+                pat,
+            ]));
+        }
+        pat
+    }
+
+    fn reference_conclusion(term: TermValue) -> Pat {
+        match term {
+            TermValue::Blank { label, scope } => Pat::Var(VarKey::Blank { label, scope }),
+            TermValue::Triple { s, p, o } => Pat::Triple(Box::new([
+                reference_conclusion(s.into_inner()),
+                reference_conclusion(p.into_inner()),
+                reference_conclusion(o.into_inner()),
+            ])),
+            ground => Pat::Ground(ground),
+        }
+    }
+
+    fn reference_bgp(node: &QNode) -> Pat {
+        match node {
+            QNode::Var(name) => Pat::Var(VarKey::Projected(name.clone())),
+            QNode::Term(term) => reference_conclusion(term.clone()),
+            QNode::Triple { s, p, o } => Pat::Triple(Box::new([
+                reference_bgp(s),
+                reference_bgp(p),
+                reference_bgp(o),
+            ])),
+        }
+    }
+
+    fn reference_var_count(pat: &Pat) -> usize {
+        match pat {
+            Pat::Var(_) => 1,
+            Pat::Triple(inner) => inner.iter().map(reference_var_count).sum(),
+            Pat::Ground(_) => 0,
+        }
+    }
+
+    fn reference_projected(pat: &Pat, names: &mut Vec<String>) {
         match pat {
             Pat::Var(VarKey::Projected(name)) => {
                 if !names.iter().any(|seen| seen == name) {
@@ -177,16 +355,81 @@ pub(crate) fn projected_vars(pats: &[PatTriple]) -> Vec<String> {
             }
             Pat::Triple(inner) => {
                 for position in &**inner {
-                    walk(position, names);
+                    reference_projected(position, names);
                 }
             }
             Pat::Var(VarKey::Blank { .. }) | Pat::Ground(_) => {}
         }
     }
-    for triple in pats {
-        for position in triple {
-            walk(position, &mut names);
+
+    /// Every pattern reader and walk answers every generated node exactly as its
+    /// recursive reference does.
+    #[test]
+    fn the_pattern_walks_agree_with_their_recursive_references_on_generated_nodes() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let node = generated_qnode(seed);
+            nested += usize::from(matches!(&node, QNode::Triple { .. }));
+            let pat = bgp_node(&node);
+            assert_eq!(
+                format!("{pat:?}"),
+                format!("{:?}", reference_bgp(&node)),
+                "seed {seed}"
+            );
+            if let QNode::Term(term) = &node {
+                assert_eq!(
+                    format!("{:?}", conclusion_node(term.clone())),
+                    format!("{:?}", reference_conclusion(term.clone())),
+                    "seed {seed}"
+                );
+            }
+            assert_eq!(var_count(&pat), reference_var_count(&pat), "seed {seed}");
+            let triple = [pat.clone(), generated_pat(seed + 1), pat];
+            let mut expected = Vec::new();
+            for position in &triple {
+                reference_projected(position, &mut expected);
+            }
+            assert_eq!(projected_vars(&[triple]), expected, "seed {seed}");
         }
+        assert!(nested > 0, "some generated node is a triple term");
     }
-    names
+
+    /// A pattern a hundred thousand levels deep is read, counted, visited and folded on
+    /// a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_pattern_is_walked_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let pat = conclusion_node(purrdf_core::test_rng::triple_chain(LEVELS));
+                assert_eq!(var_count(&pat), 0, "a chain of IRIs has no blank node");
+                dismantle(pat);
+                let pat = pattern_chain(LEVELS);
+                assert_eq!(var_count(&pat), LEVELS + 1);
+                // The pattern's derived copy descends once per level, so the chain is
+                // moved into the triple and back out rather than copied.
+                let triples = [[pat, pattern_chain(0), pattern_chain(0)]];
+                assert_eq!(projected_vars(&triples), ["x"]);
+                let [[pat, _, _]] = triples;
+                let mut visited = 0_usize;
+                let ControlFlow::Continue(()) = pat.visit(|_| -> ControlFlow<Infallible> {
+                    visited += 1;
+                    ControlFlow::Continue(())
+                });
+                // Each level is its triple term, its variable subject and its ground
+                // predicate — its object is the next level — and the innermost object is
+                // the one blank-node variable.
+                assert_eq!(visited, 3 * LEVELS + 1);
+                let depth = pat.try_fold(
+                    |_| Ok::<_, Infallible>(0_usize),
+                    |s, p, o| Ok(1 + s.max(p).max(o)),
+                );
+                assert_eq!(depth, Ok(LEVELS));
+                dismantle(pat);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
+    }
 }

@@ -202,7 +202,7 @@
 //! let result = engine.query_with_options_view(
 //!     &*dataset,
 //!     SparqlRequest { query: &query, base_iri: None, substitutions: &[] },
-//!     QueryOptions { env: &env, ..QueryOptions::EMPTY },
+//!     QueryOptions::new().with_env(&env),
 //! )?;
 //!
 //! // Propagated, not `unreachable!`. This example is meant to be copied, and a host that
@@ -344,6 +344,7 @@
 //!
 //! See each relation's own emission-order contract for the resulting row order.
 
+use purrdf_core::TermBox;
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
@@ -465,23 +466,6 @@ impl PathStep {
 // The traversal envelope
 // ---------------------------------------------------------------------------
 
-/// The hard ceiling on [`PathLimits::max_hops`].
-///
-/// A traversal envelope with no depth bound is not merely slow, it is *unsound as a
-/// containment story*. Every other host-code hazard at this seam — a panicking relation,
-/// a relation that emits a malformed row — is contained by
-/// [`open_contained`](crate::property_fn::open_contained) /
-/// [`next_contained`](crate::property_fn::next_contained), which catch unwinding panics.
-/// A stack overflow is NOT an unwinding panic: it is an abort, and it takes the whole
-/// process with it, escaping panic containment entirely. The traversals in this module
-/// are written with explicit heap stacks for exactly that reason, and this cap is the
-/// second half of the same defence — it bounds the per-walk state (the digest stack, the
-/// hop vector) that a depth-parameterised traversal accumulates, so no configuration
-/// value can turn a deep graph into an unrecoverable failure. 4096 is far above any
-/// depth at which the walk count itself remains tractable, so the cap is a safety rail,
-/// not a functional limit.
-pub const MAX_HOPS_CAP: u32 = 4096;
-
 /// The traversal envelope one relation runs inside: the accepted walk lengths, and the
 /// two resource guards.
 ///
@@ -526,7 +510,6 @@ impl PathLimits {
     /// * `min_hops > max_hops`. The accepted length interval would be empty, which is a
     ///   caller who has not finished deciding rather than a relation that legitimately
     ///   matches nothing.
-    /// * `max_hops > MAX_HOPS_CAP`. See [`MAX_HOPS_CAP`].
     /// * `max_paths_per_seed == 0` or `max_expansions_per_invocation == 0`. A guard set
     ///   to zero fails on the first unit of work, so it can only ever produce an error;
     ///   a caller who wants no rows should not register the relation.
@@ -546,13 +529,6 @@ impl PathLimits {
             return Err(EvalError::config(format!(
                 "min_hops ({min_hops}) exceeds max_hops ({max_hops}); the accepted walk-length \
                  interval would be empty"
-            )));
-        }
-        if max_hops > MAX_HOPS_CAP {
-            return Err(EvalError::config(format!(
-                "max_hops ({max_hops}) exceeds the hard cap {MAX_HOPS_CAP}; an unbounded \
-                 traversal depth is a stack-overflow abort, which escapes the property-function \
-                 seam's panic containment entirely"
             )));
         }
         if max_paths_per_seed == 0 {
@@ -1114,9 +1090,9 @@ fn canonical_edges<D: DatasetView>(
         // which end the hop arrives at.
         let mut record = |subject: TermValue, object: TermValue| {
             let statement = TermValue::Triple {
-                s: Box::new(subject.clone()),
-                p: Box::new(predicate.clone()),
-                o: Box::new(object.clone()),
+                s: TermBox::new(subject.clone()),
+                p: TermBox::new(predicate.clone()),
+                o: TermBox::new(object.clone()),
             };
             let (from, to) = match direction {
                 PathDirection::Forward => (subject, object),
@@ -1869,7 +1845,8 @@ struct DfsFrame {
 /// [`open_contained`](crate::property_fn::open_contained) /
 /// [`next_contained`](crate::property_fn::next_contained) entirely and takes the process
 /// with it. Every piece of per-depth state here (`stack`, `hops`, `digests`) is therefore
-/// an explicit heap vector, and [`MAX_HOPS_CAP`] bounds how tall they can grow.
+/// an explicit heap vector, as tall as the caller's `max_hops` lets a walk grow, and the
+/// two resource guards bound the work that grows them.
 #[derive(Debug)]
 struct PathWitnessCursor {
     graph: Arc<PathGraph>,
@@ -1941,7 +1918,7 @@ impl PathWitnessCursor {
         let target = edge.to;
 
         self.prepared.charge_expansion(&self.graph, self.seed)?;
-        let child_depth = u32::try_from(depth).expect("depth is bounded by MAX_HOPS_CAP") + 1;
+        let child_depth = u32::try_from(depth).expect("a walk never outgrows max_hops, a u32") + 1;
         if self.prepared.prune(target, child_depth) {
             return Ok(true);
         }
@@ -2311,6 +2288,7 @@ mod tests {
 
     use super::*;
     use crate::property_fn::{next_contained, open_contained};
+    use purrdf_core::TermBox;
 
     /// The IRI a call would be written under; only ever read back in a panic message.
     const CALL_IRI: &str = "http://example.org/ns#pathWitness";
@@ -2322,9 +2300,9 @@ mod tests {
     /// The asserted statement term a hop over `(s, p, o)` records.
     fn stmt(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(iri(s)),
-            p: Box::new(iri(p)),
-            o: Box::new(iri(o)),
+            s: TermBox::new(iri(s)),
+            p: TermBox::new(iri(p)),
+            o: TermBox::new(iri(o)),
         }
     }
 
@@ -2617,9 +2595,9 @@ mod tests {
         assert_eq!(
             rows[0][POS_EDGE],
             TermValue::Triple {
-                s: Box::new(iri("a")),
-                p: Box::new(iri("p")),
-                o: Box::new(quoted.clone()),
+                s: TermBox::new(iri("a")),
+                p: TermBox::new(iri("p")),
+                o: TermBox::new(quoted.clone()),
             }
         );
         // ...and the hop OUT of it records the ASSERTED orientation of the statement it
@@ -2627,9 +2605,9 @@ mod tests {
         assert_eq!(
             rows[2][POS_EDGE],
             TermValue::Triple {
-                s: Box::new(iri("z")),
-                p: Box::new(iri("q")),
-                o: Box::new(quoted),
+                s: TermBox::new(iri("z")),
+                p: TermBox::new(iri("q")),
+                o: TermBox::new(quoted),
             }
         );
     }
@@ -2768,21 +2746,17 @@ mod tests {
 
     #[test]
     fn the_limits_reject_every_ill_formed_envelope() {
-        for (min, max, paths, expansions) in [
-            (0, 3, 1, 1),
-            (3, 2, 1, 1),
-            (1, MAX_HOPS_CAP + 1, 1, 1),
-            (1, 3, 0, 1),
-            (1, 3, 1, 0),
-        ] {
+        for (min, max, paths, expansions) in
+            [(0, 3, 1, 1), (3, 2, 1, 1), (1, 3, 0, 1), (1, 3, 1, 0)]
+        {
             let Err(error) = PathLimits::new(min, max, paths, expansions) else {
                 panic!("({min}, {max}, {paths}, {expansions}) is ill-formed and must be refused");
             };
             assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
         }
-        let ok = PathLimits::new(1, MAX_HOPS_CAP, 2, 3).expect("the cap itself is allowed");
+        let ok = PathLimits::new(1, u32::MAX, 2, 3).expect("any max_hops a u32 holds is allowed");
         assert_eq!(ok.min_hops(), 1);
-        assert_eq!(ok.max_hops(), MAX_HOPS_CAP);
+        assert_eq!(ok.max_hops(), u32::MAX);
         assert_eq!(ok.max_paths_per_seed(), 2);
         assert_eq!(ok.max_expansions_per_invocation(), 3);
     }

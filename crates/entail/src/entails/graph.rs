@@ -24,6 +24,7 @@
 //! content land. Reading a named graph as part of the answer would let a conclusion be
 //! "entailed" by a graph the question never mentioned.
 
+use std::convert::Infallible;
 use std::fmt::Write as _;
 
 use purrdf_core::{RdfDataset, RdfTextDirection, TermValue};
@@ -81,7 +82,31 @@ fn implicit_datatype(
 /// safe: two literals that render the same text ARE the same literal, so a `miss` line
 /// never shows `"1"^^xsd:integer` and `"1"^^xsd:string` as one term, while a graph of
 /// plain strings is not padded with `^^<…#string>` on every line.
+///
+/// A triple term is spelled `<<s p o>>` over [`TermValue::try_write_nested`]'s work list.
 pub(crate) fn show(term: &TermValue) -> String {
+    let mut out = String::new();
+    let written = term.try_write_nested(
+        &mut out,
+        "<<",
+        " ",
+        ">>",
+        |out, leaf| {
+            out.push_str(&show_leaf(leaf));
+            Ok::<(), Infallible>(())
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    );
+    match written {
+        Ok(()) => out,
+    }
+}
+
+/// [`show`] for a term that is not a triple term.
+fn show_leaf(term: &TermValue) -> String {
     match term {
         TermValue::Iri(iri) => format!("<{iri}>"),
         // Diagnostics-only rendering (`miss` lines / error text), never RDF
@@ -105,14 +130,13 @@ pub(crate) fn show(term: &TermValue) -> String {
             }
             out
         }
-        TermValue::Triple { s, p, o } => {
-            format!("<<{} {} {}>>", show(s), show(p), show(o))
-        }
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfTextDirection, TermValue};
 
     use super::show;
@@ -176,18 +200,70 @@ mod tests {
         assert_ne!(show(&ltr), show(&tagged("foo", "en", None)));
     }
 
-    /// The rule applies inside a triple term too, since `show` recurses through itself.
+    /// The rule applies inside a triple term too, since `show` spells a triple term's
+    /// components by the same rule.
     #[test]
     fn a_triple_term_renders_its_object_by_the_same_rule() {
         let term = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(typed("1", "http://www.w3.org/2001/XMLSchema#integer")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(typed("1", "http://www.w3.org/2001/XMLSchema#integer")),
         };
         assert_eq!(
             show(&term),
             "<<<http://example.org/s> <http://example.org/p> \
              \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>>>"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The diagnostic rendering against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::show;
+
+    fn reference(term: &TermValue) -> String {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                format!("<<{} {} {}>>", reference(s), reference(p), reference(o))
+            }
+            leaf => show(leaf),
+        }
+    }
+
+    /// Every generated term renders exactly as the recursive reference renders it.
+    #[test]
+    fn the_rendering_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            assert_eq!(show(&value), reference(&value), "seed {seed}");
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep renders on a thread whose whole stack
+    /// is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_renders_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let shown = show(&purrdf_core::test_rng::triple_chain(LEVELS));
+                let level = "<<<http://example.org/s> <http://example.org/p> ".len() + ">>".len();
+                assert_eq!(shown.len(), LEVELS * level + "<http://example.org/o>".len());
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the rendering did not overflow the thread's stack");
     }
 }

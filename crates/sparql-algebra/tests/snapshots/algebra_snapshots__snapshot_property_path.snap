@@ -9,7 +9,7 @@ Select {
                 ?d,
             ),
             path: Sequence(
-                Sequence(
+                [
                     NamedNode(
                         <https://x/members>,
                     ),
@@ -18,10 +18,10 @@ Select {
                             <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>,
                         ),
                     ),
-                ),
-                NamedNode(
-                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#first>,
-                ),
+                    NamedNode(
+                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#first>,
+                    ),
+                ],
             ),
             object: Variable(
                 ?x,

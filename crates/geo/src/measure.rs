@@ -150,37 +150,42 @@ pub(crate) struct Parts {
 }
 
 impl Parts {
-    /// Take `geometry` apart, recursing through collections.
+    /// Take `geometry` apart, flattening every collection it nests.
     pub(crate) fn of(geometry: &Geometry) -> Self {
         let mut parts = Self::default();
         parts.absorb(geometry);
         parts
     }
 
-    /// Add `geometry`'s pieces to `self`.
+    /// Add `geometry`'s pieces to `self`, in written order.
+    ///
+    /// Iterative: nested collections are walked off a heap work list, so a
+    /// collection of any depth is taken apart without a stack frame per level.
     fn absorb(&mut self, geometry: &Geometry) {
-        match geometry.body() {
-            GeometryBody::Point(point) => {
-                self.points.extend(point.iter().map(plane));
-            }
-            GeometryBody::LineString(coords) => self.push_line(coords),
-            GeometryBody::Polygon(rings) => self.push_polygon(rings),
-            GeometryBody::MultiPoint(points) => {
-                self.points.extend(points.iter().flatten().map(plane));
-            }
-            GeometryBody::MultiLineString(lines) => {
-                for line in lines {
-                    self.push_line(line);
+        let mut pending: Vec<&Geometry> = vec![geometry];
+        while let Some(geometry) = pending.pop() {
+            match geometry.body() {
+                GeometryBody::Point(point) => {
+                    self.points.extend(point.iter().map(plane));
                 }
-            }
-            GeometryBody::MultiPolygon(polygons) => {
-                for rings in polygons {
-                    self.push_polygon(rings);
+                GeometryBody::LineString(coords) => self.push_line(coords),
+                GeometryBody::Polygon(rings) => self.push_polygon(rings),
+                GeometryBody::MultiPoint(points) => {
+                    self.points.extend(points.iter().flatten().map(plane));
                 }
-            }
-            GeometryBody::GeometryCollection(members) => {
-                for member in members {
-                    self.absorb(member);
+                GeometryBody::MultiLineString(lines) => {
+                    for line in lines {
+                        self.push_line(line);
+                    }
+                }
+                GeometryBody::MultiPolygon(polygons) => {
+                    for rings in polygons {
+                        self.push_polygon(rings);
+                    }
+                }
+                GeometryBody::GeometryCollection(members) => {
+                    // Members are pushed last-first so they pop in written order.
+                    pending.extend(members.iter().rev());
                 }
             }
         }
@@ -695,7 +700,7 @@ pub fn geometry_n(geometry: &Geometry, n: usize) -> Option<Geometry> {
 ///   validity function, and this is not it.
 /// * **GeometryCollection** — every member simple is **necessary and not
 ///   sufficient**, so the members' points and curves are gathered across the whole
-///   collection (recursively) and run through exactly the checks the `MULTIPOINT`
+///   collection (through every level of nesting) and run through exactly the checks the `MULTIPOINT`
 ///   and `MULTILINESTRING` arms run, plus the point-against-curve check neither
 ///   homogeneous arm can express: **no two positions equal**, **any two curves
 ///   meet only at points bounding both**, and **no point member lies anywhere on
@@ -747,7 +752,7 @@ pub fn is_simple(geometry: &Geometry) -> bool {
             // the disagreement the doc above promises does not happen.
             //
             // So the members' points and curves are gathered across the whole
-            // collection (recursively, since a collection may nest) and run
+            // collection (through every level, since a collection may nest) and run
             // through exactly the checks the MULTIPOINT and MULTILINESTRING arms
             // run. Polygons contribute nothing because surfaces are always simple.
             //
@@ -775,36 +780,44 @@ pub fn is_simple(geometry: &Geometry) -> bool {
 }
 
 /// Gather, from `geometry` and every geometry nested inside it, the planar points
-/// and the planar curves that [`is_simple`] compares against one another.
+/// and the planar curves that [`is_simple`] compares against one another, in
+/// written order.
 ///
 /// Surfaces are skipped: OGC Simple Features makes them always simple, so they
 /// constrain nothing here. A curve of fewer than two positions is skipped for the
 /// same reason the `MultiLineString` arm skips it — it has no segment to meet
 /// anything with.
+///
+/// Iterative: nested collections are walked off a heap work list, so a collection
+/// of any depth is gathered without a stack frame per level.
 fn collect_simplicity_parts(
     geometry: &Geometry,
     points: &mut Vec<Coord>,
     curves: &mut Vec<Vec<Coord>>,
 ) {
-    match geometry.body() {
-        GeometryBody::Point(point) => points.extend(point.iter().map(plane)),
-        GeometryBody::MultiPoint(members) => points.extend(members.iter().flatten().map(plane)),
-        GeometryBody::LineString(coords) => {
-            if coords.len() >= 2 {
-                curves.push(coords.iter().map(plane).collect());
+    let mut pending: Vec<&Geometry> = vec![geometry];
+    while let Some(geometry) = pending.pop() {
+        match geometry.body() {
+            GeometryBody::Point(point) => points.extend(point.iter().map(plane)),
+            GeometryBody::MultiPoint(members) => {
+                points.extend(members.iter().flatten().map(plane));
             }
-        }
-        GeometryBody::MultiLineString(lines) => {
-            for line in lines {
-                if line.len() >= 2 {
-                    curves.push(line.iter().map(plane).collect());
+            GeometryBody::LineString(coords) => {
+                if coords.len() >= 2 {
+                    curves.push(coords.iter().map(plane).collect());
                 }
             }
-        }
-        GeometryBody::Polygon(_) | GeometryBody::MultiPolygon(_) => {}
-        GeometryBody::GeometryCollection(members) => {
-            for member in members {
-                collect_simplicity_parts(member, points, curves);
+            GeometryBody::MultiLineString(lines) => {
+                for line in lines {
+                    if line.len() >= 2 {
+                        curves.push(line.iter().map(plane).collect());
+                    }
+                }
+            }
+            GeometryBody::Polygon(_) | GeometryBody::MultiPolygon(_) => {}
+            GeometryBody::GeometryCollection(members) => {
+                // Members are pushed last-first so they pop in written order.
+                pending.extend(members.iter().rev());
             }
         }
     }
@@ -1797,5 +1810,153 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// The decomposition's and the simplicity gatherer's walks over nested collections,
+/// against recursive references on generated trees and a hundred thousand levels
+/// deep.
+#[cfg(test)]
+mod nesting_tests {
+    use super::{Parts, area, bounds, collect_simplicity_parts, is_simple, length, perimeter};
+    use crate::exact::Rat;
+    use crate::geom::arbitrary::{self, Lcg};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody};
+
+    /// The recursive decomposition: a collection's pieces are its members' pieces
+    /// in written order, and a geometry that is not a collection is taken apart by
+    /// the one-node walk.
+    fn reference_absorb(parts: &mut Parts, geometry: &Geometry) {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                for member in members {
+                    reference_absorb(parts, member);
+                }
+            }
+            _ => {
+                let mut one = Parts::default();
+                one.absorb(geometry);
+                parts.points.extend(one.points);
+                parts.lines.extend(one.lines);
+                parts.polygons.extend(one.polygons);
+            }
+        }
+    }
+
+    /// The recursive gathering of simplicity parts.
+    fn reference_simplicity_parts(
+        geometry: &Geometry,
+        points: &mut Vec<Coord>,
+        curves: &mut Vec<Vec<Coord>>,
+    ) {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                for member in members {
+                    reference_simplicity_parts(member, points, curves);
+                }
+            }
+            _ => collect_simplicity_parts(geometry, points, curves),
+        }
+    }
+
+    fn same_parts(a: &Parts, b: &Parts) -> bool {
+        a.points == b.points && a.lines == b.lines && a.polygons == b.polygons
+    }
+
+    fn r(value: i64) -> Rat {
+        Rat::from_i64(value)
+    }
+
+    fn seq(points: &[(i64, i64)]) -> CoordSeq {
+        points.iter().map(|&(x, y)| Coord::xy(r(x), r(y))).collect()
+    }
+
+    fn point(x: i64, y: i64) -> Geometry {
+        Geometry::new(
+            CoordDim::Xy,
+            GeometryBody::Point(Some(Coord::xy(r(x), r(y)))),
+        )
+        .expect("a well-formed point")
+    }
+
+    fn line(points: &[(i64, i64)]) -> Geometry {
+        Geometry::new(CoordDim::Xy, GeometryBody::LineString(seq(points)))
+            .expect("a well-formed line")
+    }
+
+    fn polygon(rings: &[&[(i64, i64)]]) -> Geometry {
+        Geometry::new(
+            CoordDim::Xy,
+            GeometryBody::Polygon(rings.iter().map(|ring| seq(ring)).collect()),
+        )
+        .expect("a well-formed polygon")
+    }
+
+    fn collection(members: Vec<Geometry>) -> Geometry {
+        Geometry::new(CoordDim::Xy, GeometryBody::GeometryCollection(members))
+            .expect("uniform dimension")
+    }
+
+    /// Over generated trees of every dimension and shape, the work-list walks
+    /// gather the same pieces, in the same order, as the recursive references.
+    #[test]
+    fn decomposition_and_simplicity_parts_agree_with_the_recursive_references() {
+        let mut rng = Lcg::new(0x5eed_5001);
+        let dims = [CoordDim::Xy, CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm];
+        for round in 0..300 {
+            let tree = arbitrary::geometry(&mut rng, dims[round % 4], 4);
+            let iterative = Parts::of(&tree);
+            let mut recursive = Parts::default();
+            reference_absorb(&mut recursive, &tree);
+            assert!(
+                same_parts(&iterative, &recursive),
+                "round {round}: {iterative:?} against {recursive:?} for {tree:?}"
+            );
+            let (mut points, mut curves) = (Vec::new(), Vec::new());
+            collect_simplicity_parts(&tree, &mut points, &mut curves);
+            let (mut reference_points, mut reference_curves) = (Vec::new(), Vec::new());
+            reference_simplicity_parts(&tree, &mut reference_points, &mut reference_curves);
+            assert_eq!(points, reference_points, "round {round}: {tree:?}");
+            assert_eq!(curves, reference_curves, "round {round}: {tree:?}");
+        }
+    }
+
+    /// A single-member collection adds no piece, so the pieces, the measures and
+    /// the simplicity of a geometry nested a hundred thousand collections deep are
+    /// the flat geometry's own — the closed form, pinned at depths one and two and
+    /// then run on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_deep_collection_decomposes_measures_and_decides_simplicity() {
+        let square = polygon(&[&[(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]]);
+        let expected = Parts::of(&square);
+        assert_eq!(expected.polygons.len(), 1);
+        assert!(expected.points.is_empty() && expected.lines.is_empty());
+        let crossing = collection(vec![point(1, 1), line(&[(0, 0), (2, 2)])]);
+        let lone = point(1, 1);
+        assert!(!is_simple(&crossing), "a point on a curve is an anomaly");
+        assert!(is_simple(&lone), "a point alone is simple");
+        for levels in 1..=2 {
+            let nested = arbitrary::nest(square.clone(), levels);
+            assert!(
+                same_parts(&Parts::of(&nested), &expected),
+                "{levels} levels"
+            );
+            assert_eq!(area(&nested), r(1), "{levels} levels");
+            assert_eq!(perimeter(&nested), perimeter(&square), "{levels} levels");
+            assert_eq!(bounds(&nested), bounds(&square), "{levels} levels");
+            assert!(!is_simple(&arbitrary::nest(crossing.clone(), levels)));
+            assert!(is_simple(&arbitrary::nest(lone.clone(), levels)));
+        }
+
+        arbitrary::on_small_stack(move || {
+            let deep = arbitrary::nest(square.clone(), arbitrary::DEEP);
+            assert!(same_parts(&Parts::of(&deep), &expected));
+            assert_eq!(area(&deep), r(1));
+            assert_eq!(perimeter(&deep), perimeter(&square));
+            assert_eq!(length(&deep), length(&square));
+            assert_eq!(bounds(&deep), bounds(&square));
+            assert!(!is_simple(&arbitrary::nest(crossing, arbitrary::DEEP)));
+            assert!(is_simple(&arbitrary::nest(lone, arbitrary::DEEP)));
+        });
     }
 }

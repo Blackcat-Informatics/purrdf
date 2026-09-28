@@ -98,9 +98,13 @@ Anything outside this surface — and every malformed query — is a typed
   capabilities (see
   [below](#per-service-context-the-serviceresolver-seam)). Where it stops:
   PurRDF ships no HTTP client (the exchange is an `HttpTransport` trait the
-  Rust host implements) and no shipped surface — CLI, Python, wasm or C —
-  installs a resolver, so a non-`SILENT` `SERVICE` or `LOAD` there fails by
-  name; federation is a Rust-host composition. All seven W3C
+  Rust host implements). The CLI, Python and C surfaces install no resolver,
+  and neither do the wasm package's synchronous methods, so a `SERVICE` or
+  `LOAD` there fails by name unless written `SILENT`. The wasm package's asynchronous
+  methods take host resolvers — JavaScript handlers the job suspends on
+  through JSPI (see
+  [Getting Started: JavaScript](../getting-started/javascript.md#asynchronous-queries-and-federation)).
+  Federation is a host composition. All seven W3C
   `service` federation cases pass
   through this seam. The forwarded body is re-emitted through the
   deterministic serializer — the federation wire format — whose
@@ -471,22 +475,29 @@ there is refused by name rather than misparsed as a subject term.
 ### `SERVICE` forwarding
 
 A pattern containing a written `LATERAL` clause — anywhere in the forwarded
-body, including nested inside another `SERVICE` — is refused only under
-`SERVICE SILENT`: there, a remote's rejection of the `LATERAL` extension
-would otherwise be swallowed into the identity table, a silent wrong answer
-rather than a typed refusal. A plain, non-silent `SERVICE` with a fixed IRI forwards the body
-with its `LATERAL { … }` text intact, so the endpoint's actual verdict — an
-answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own extension,
-so a Jena-backed endpoint answers it), or an honest failure from one that does
-not implement it — surfaces the same way any other unsupported forwarded
-construct's rejection would. A variable-endpoint `SERVICE ?g` is refused only
-when nothing supplies `?g`'s binding — nothing in the incoming solution names
-an IRI for the remote evaluator to resolve. When an enclosing pattern binds
-`?g` — a preceding triple pattern in the same group, or a `LATERAL` left-hand
-side's per-row correlation — the endpoint resolves to that IRI before the
-remote call is made (the same per-row substitution described under "Points of
-disagreement with Jena" above) and the query dispatches normally, the same as
-a `SERVICE` with a fixed IRI.
+body, including nested inside another `SERVICE` — is forwarded with its
+`LATERAL { … }` text intact, `SILENT` or not, so the endpoint's actual verdict
+— an answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own
+extension, so a Jena-backed endpoint answers it), or a failure from one that
+does not implement it — surfaces the same way any other forwarded construct's
+rejection would: an error, or under `SILENT` the join identity recorded on the
+evidence. A custom scalar function call is forwarded the same way. A
+variable-endpoint `SERVICE ?g` is refused only when nothing supplies `?g`'s
+binding — nothing in the incoming solution names an IRI for the remote
+evaluator to resolve — and `SERVICE SILENT` does not change that, because no
+invocation is made for `SILENT` to absorb. When an enclosing pattern binds `?g` — a preceding triple
+pattern in the same group, or a `LATERAL` left-hand side's per-row correlation
+— the endpoint resolves to that IRI before the remote call is made (the same
+per-row substitution described under "Points of disagreement with Jena" above)
+and the query dispatches normally, the same as a `SERVICE` with a fixed IRI:
+one request per incoming solution, so two solutions that name the same IRI each
+send their own.
+When the left side of the `OPTIONAL`, `MINUS` or group join holding the clause
+binds `?g` in every solution, the right side is still evaluated on its own and
+the clause is sent once to each distinct IRI that left side binds `?g` to. A
+join is commutative, so the same holds when the other side of a group join
+binds `?g` — `{ SERVICE ?g { … } ?s ex:endpoint ?g }` — while an `OPTIONAL` or
+`MINUS` takes its endpoints from its left side alone.
 
 ### Per-service context: the `ServiceResolver` seam
 
@@ -545,46 +556,47 @@ handed the **absolute** IRI, which is the form a `ServiceCatalog` is keyed on.
 
 ### The `SILENT` contract
 
-SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached
-"will be considered to have matched with a single, empty, solution" — the join
-identity, so the surrounding query proceeds unchanged. PurRDF keeps that promise
-exactly, and confines it to what it is a promise *about*:
+SPARQL 1.1 Federated Query §3.2 defines a `SERVICE` clause as the endpoint's
+answer "in case of a successful service invocation according to the SPARQL
+protocol, and otherwise Ω0 in case SilentOp is true, and otherwise error". Ω0
+is the single empty solution — the join identity, so the surrounding query
+proceeds unchanged. PurRDF reads "otherwise" as written:
 
 | Outcome | `SERVICE` | `SERVICE SILENT` |
 |---|---|---|
-| The endpoint is unreachable, or its response undecodable | query error | join identity |
-| A capability was denied | query error | query error |
-| This engine's own governor tripped | truncation | truncation |
+| The invocation fails, for any reason: the endpoint is unreachable or its response undecodable; no source reaches it; a capability was denied or the host refused the request; the host's handler faulted; a variable endpoint is bound to a term that is not an IRI | query error | join identity, recorded on the evidence |
+| This engine's own governor tripped, or its stack ran out | truncation, or the stack refusal | truncation, or the stack refusal |
 
-The first and last rows are long-standing behaviour: `SILENT` is a statement
-about an endpoint the caller does not control, never about the caller's own
+`SILENT` is a statement about the invocation, never about the caller's own
 budget, so a governor trip reached through a `SERVICE` clause propagates as a
-truncation whether or not `SILENT` is written.
+truncation whether or not `SILENT` is written. A denial is an invocation that
+did not succeed, and the query's author wrote `SILENT` knowing the service
+might not answer.
 
-The middle row follows from that same principle. A capability denial is a
-decision taken on *this* side of the seam — by the host running the engine,
-deterministically, before any endpoint was consulted — so it is exactly like a
-governor trip and nothing like an unreachable endpoint. Swallowing one would put
-the join identity into the surrounding join, making it a no-op, and hand back an
-answer that looks complete and is wrong; and because a denial is permanent
-rather than transient, it would be wrong identically on every run, so nothing
-would ever surface a symptom.
+The answer `SILENT` gives is indistinguishable from an endpoint that answered
+with nothing to add, so every silenced invocation is recorded:
+`GovernorEvidence::silenced` lists one `SilencedInvocation` per failure — the
+endpoint, the kind of failure (`transport`, `decode`, `disabled`,
+`unconfigured`, `denied`, `host-denied`, `not-an-iri`, `fault`) and the message the
+error would have carried. Every governed query carries it; an ungoverned call
+returns a bare result, so run it under `QueryGovernors::METERED` to read the
+record. A denial raised by a `SERVICE` nested inside a body an
+`InProcessServiceResolver` evaluates travels back out as the structured denial
+it is, so the enclosing clause reports it — or records it — as a denial at
+every depth.
 
-That row holds at every nesting depth. `InProcessServiceResolver` evaluates a
-forwarded body itself, so a denial raised by a `SERVICE` nested inside one
-travels back out through that inner evaluation — as a structured denial, never
-flattened into a message. Flattening it would make a nested denial silenceable
-by an enclosing `SERVICE SILENT` while the identical denial one level up is not,
-which is the same look-complete-and-be-wrong outcome the row exists to prevent.
+`LOAD SILENT` follows SPARQL 1.1 Update §3.1.4, under which the operation
+"will still return success" when it fails: a document that cannot be fetched
+or parsed, a refusal, a fault, and the absence of a `GraphResolver` are each a
+success with nothing loaded, recorded on the update's evidence as a
+`SilencedInvocation` naming the source IRI. A `GraphResolver` reports why it
+produced no document as a typed `LoadError`, whose `code()` is the diagnostic
+code a `LOAD` without `SILENT` fails with.
 
-There is deliberately no knob that softens this. A host that genuinely wants a
-blocked service to behave like an unreachable one already has an exact way to
-say so: return a transport error from its own resolver. That is an honest claim
-that the endpoint did not answer, and `SILENT` swallows it under the first row.
-Adding a visibility flag would have bought no expressive power, only a second
-spelling of an existing one — and with it the possibility of two callers running
-the same query over the same data through the same resolver and getting
-different answers.
+Under `MINUS`, a variable endpoint's left solutions are partitioned by endpoint
+and each partition is subtracted by the right side evaluated with its own
+endpoint alone, so a silenced endpoint — Ω0, which binds nothing — removes none
+of its own rows while every answering endpoint still removes its matches.
 
 ## EXISTS under SEP-0007
 
@@ -1096,12 +1108,12 @@ inside a composite literal in a query is never the `_:b` in the data.
 
 ### Limits, and what a composite refuses
 
-Nesting is bounded, and the bounds are an invariant of the value — the
-programmatic constructors enforce them exactly as the parser does:
+A composite is bounded by memory in its nesting, and by two bounds that are an
+invariant of the value — the programmatic constructors enforce them exactly as
+the parser does, and every nesting level counts as one element:
 
 | Bound | Value |
 |---|---|
-| Nesting depth | 64 |
 | Total elements, all levels | 2²⁰ (1 048 576) |
 | Lexical bytes | 64 MiB |
 
@@ -1445,11 +1457,11 @@ into an `AggregateRegistry` under an IRI of the caller's choosing:
 
 ```rust,ignore
 use std::sync::Arc;
-use purrdf_core::{SparqlRequest, TermValue};
-use purrdf_sparql_eval::{
+use purrdf::sparql::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    NativeSparqlEngine, QueryOptions, Volatility,
+    ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
+use purrdf::{SparqlRequest, TermValue};
 
 /// A running total over one numeric argument — `example.org`'s own
 /// `AGG(<https://example.org/agg#total>, ?x)`.
@@ -1522,6 +1534,9 @@ registry.register(
     "https://example.org/agg#total",
     Arc::new(TotalAggregate),
 );
+// The environment a query text is read in: `AGG(<iri>, …)` is admitted against
+// this registry.
+let env = ExtensionEnv::over_aggregates(registry)?;
 
 let engine = NativeSparqlEngine::new();
 let result = engine.query_with_options_view(
@@ -1531,10 +1546,7 @@ let result = engine.query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions {
-        aggregates: &registry,
-        ..QueryOptions::EMPTY
-    },
+    QueryOptions::new().with_env(&env),
 )?;
 ```
 
@@ -1662,9 +1674,11 @@ graph pattern. `?step` and `?len` are `xsd:integer` literals precisely so
 
 There is no default relation IRI and no default traversal envelope. PurRDF mints
 no vocabulary IRIs, so the name a query spells in predicate position is
-caller-supplied; and a zero-hop path has no witness while an unbounded depth is a
-stack-overflow abort, so the minimum and maximum hop counts and the two resource
-guards are stated every time rather than invented by the library.
+caller-supplied; and a zero-hop path has no witness while an unbounded walk has no
+end, so the minimum and maximum hop counts and the two resource guards are stated
+every time rather than invented by the library. Any `max_hops` a `u32` holds is
+accepted: the traversal keeps its per-depth state on the heap, and the two
+resource guards bound the work a walk does.
 
 Two relation TYPES, not one with a mode switch: `PathWitnessRelation` enumerates
 every simple-prefix walk (exponential in the worst case) and

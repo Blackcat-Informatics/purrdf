@@ -66,12 +66,17 @@
 //! [`Arc`]. That is what makes an index paired with the *wrong* dataset a silent
 //! wrong answer rather than a failure, and it is why [`verify_binding`] exists.
 
+use core::convert::Infallible;
+use core::ops::ControlFlow;
 use core::slice;
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
+use purrdf_core::{
+    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
+};
 use purrdf_sparql_eval::{
     EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
     Volatility,
@@ -188,45 +193,42 @@ impl Digest {
         }
     }
 
-    /// Absorb a term value, tag first, recursing through a triple term's
-    /// components.
+    /// Absorb a term value, tag first, through a triple term's components.
     ///
-    /// The recursion is unbounded by design and by the same contract every other
-    /// term walker in this workspace relies on: [`DatasetView`]'s documented
-    /// termination obligation makes a triple term's components strictly smaller
-    /// than the term naming them, so the structure is finite. A depth cap here
-    /// would add a refusal that rejects legal RDF 1.2 data while protecting
-    /// against nothing this crate can actually receive.
+    /// The terms are absorbed in [`TermValue::visit_terms`]'s pre-order — a triple
+    /// term's tag, then its subject's whole nesting, then its predicate's, then its
+    /// object's. The walk is unbounded by design and by the same contract every
+    /// other term walker in this workspace relies on: a term value is finite, and a
+    /// depth cap here would add a refusal that rejects legal RDF 1.2 data while
+    /// protecting against nothing this crate can actually receive.
     fn term(&mut self, value: &TermValue) {
-        match value {
-            TermValue::Iri(iri) => {
-                self.tag(TERM_IRI);
-                self.field(iri);
+        let ControlFlow::Continue(()) = value.visit_terms(|term| -> ControlFlow<Infallible> {
+            match term {
+                TermValue::Iri(iri) => {
+                    self.tag(TERM_IRI);
+                    self.field(iri);
+                }
+                TermValue::Blank { label, scope } => {
+                    self.tag(TERM_BLANK);
+                    self.field(label);
+                    self.scope(*scope);
+                }
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    self.tag(TERM_LITERAL);
+                    self.field(lexical_form);
+                    self.field(datatype);
+                    self.optional(language.as_deref());
+                    self.optional(direction.map(RdfTextDirection::as_str));
+                }
+                TermValue::Triple { .. } => self.tag(TERM_TRIPLE),
             }
-            TermValue::Blank { label, scope } => {
-                self.tag(TERM_BLANK);
-                self.field(label);
-                self.scope(*scope);
-            }
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => {
-                self.tag(TERM_LITERAL);
-                self.field(lexical_form);
-                self.field(datatype);
-                self.optional(language.as_deref());
-                self.optional(direction.map(RdfTextDirection::as_str));
-            }
-            TermValue::Triple { s, p, o } => {
-                self.tag(TERM_TRIPLE);
-                self.term(s);
-                self.term(p);
-                self.term(o);
-            }
-        }
+            ControlFlow::Continue(())
+        });
     }
 
     /// Absorb a blank node's scope ordinal.
@@ -835,41 +837,55 @@ fn resolve_graph<D: DatasetView>(
 
 /// Resolve a dataset-local id to its dataset-independent [`TermValue`].
 ///
-/// Recurses through a literal's datatype and a triple term's components; the
-/// recursion carries no depth cap, for the reason `Digest::term` gives.
+/// Follows a literal's datatype and a triple term's components; the walk carries no
+/// depth cap, for the reason `Digest::term` gives. A triple term is assembled
+/// bottom-up over [`fold_term`]'s work list: its subject, predicate and object are
+/// resolved in that order, each fully before the next.
 ///
 /// A literal whose datatype does not resolve to an IRI cannot occur in a
 /// well-formed dataset — the IR expands the datatype at intern time — so that
 /// branch falls back to the empty IRI rather than raising a refusal for a state
 /// no [`DatasetView`] implementor in this workspace can produce.
 fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => TermValue::iri(iri),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
+    let value = fold_term(
+        dataset,
+        id,
+        |_, term| {
+            Ok::<_, Infallible>(match term {
+                TermRef::Iri(iri) => TermValue::iri(iri),
+                TermRef::Blank { label, scope } => TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype: match dataset.resolve(datatype) {
+                        TermRef::Iri(iri) => iri.to_owned(),
+                        TermRef::Blank { .. }
+                        | TermRef::Literal { .. }
+                        | TermRef::Triple { .. } => String::new(),
+                    },
+                    language: language.map(str::to_owned),
+                    direction,
+                },
+                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+            })
         },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermValue::Literal {
-            lexical_form: lexical.to_owned(),
-            datatype: match dataset.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                TermRef::Blank { .. } | TermRef::Literal { .. } | TermRef::Triple { .. } => {
-                    String::new()
-                }
-            },
-            language: language.map(str::to_owned),
-            direction,
+        |_, s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
         },
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_value(dataset, s)),
-            p: Box::new(resolve_value(dataset, p)),
-            o: Box::new(resolve_value(dataset, o)),
-        },
+    );
+    match value {
+        Ok(value) => value,
     }
 }
 
@@ -2808,5 +2824,109 @@ mod tests {
             invoke(&unanswerable, &[Some(iri("gz")), Some(iri("gq"))], None).is_err(),
             "with no comparable pairing the honest answer is a refusal, not false"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term digest and the value bridge against their recursive references, and the
+    //! digest at a hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{
+        RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermBox, TermId, TermRef, TermValue,
+    };
+
+    use super::{Digest, TERM_BLANK, TERM_IRI, TERM_LITERAL, TERM_TRIPLE, resolve_value};
+
+    fn reference_feed(digest: &mut Digest, value: &TermValue) {
+        match value {
+            TermValue::Iri(iri) => {
+                digest.tag(TERM_IRI);
+                digest.field(iri);
+            }
+            TermValue::Blank { label, scope } => {
+                digest.tag(TERM_BLANK);
+                digest.field(label);
+                digest.scope(*scope);
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                digest.tag(TERM_LITERAL);
+                digest.field(lexical_form);
+                digest.field(datatype);
+                digest.optional(language.as_deref());
+                digest.optional(direction.map(RdfTextDirection::as_str));
+            }
+            TermValue::Triple { s, p, o } => {
+                digest.tag(TERM_TRIPLE);
+                reference_feed(digest, s);
+                reference_feed(digest, p);
+                reference_feed(digest, o);
+            }
+        }
+    }
+
+    fn reference_value(ds: &RdfDataset, id: TermId) -> TermValue {
+        match ds.resolve(id) {
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference_value(ds, s)),
+                p: TermBox::new(reference_value(ds, p)),
+                o: TermBox::new(reference_value(ds, o)),
+            },
+            _ => ds.term_value(id),
+        }
+    }
+
+    /// The digest absorbs, and the bridge resolves, every generated term exactly as the
+    /// recursive references do.
+    #[test]
+    fn the_digest_and_the_bridge_agree_with_their_recursive_references() {
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::WellFormed,
+            );
+            let (mut found, mut expected) = (Digest::new(), Digest::new());
+            found.term(&value);
+            reference_feed(&mut expected, &value);
+            assert_eq!(found.finish(), expected.finish(), "seed {seed}");
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let object = ds.quads().next().expect("one quad").o;
+            assert_eq!(
+                resolve_value(&*ds, object),
+                reference_value(&ds, object),
+                "seed {seed}"
+            );
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep is absorbed on a thread whose whole
+    /// stack is 128 KiB, to a digest that tells it from one a level shallower.
+    #[test]
+    fn a_hundred_thousand_level_term_is_digested_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let (mut deep, mut shallower) = (Digest::new(), Digest::new());
+                deep.term(&purrdf_core::test_rng::triple_chain(LEVELS));
+                shallower.term(&purrdf_core::test_rng::triple_chain(LEVELS - 1));
+                assert_ne!(deep.finish(), shallower.finish());
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the digest did not overflow the thread's stack");
     }
 }

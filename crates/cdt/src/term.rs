@@ -140,6 +140,11 @@ impl CdtLiteral {
 /// lexical space. The three components are unrestricted [`CdtTerm`]s because the
 /// superset production spells them as `Element`; whether the resulting triple is
 /// well-formed RDF is the consumer's question, not this lexical layer's.
+///
+/// The components may nest triple terms and composites without bound, so this type
+/// implements `Drop` iteratively ([`crate::tree`]); the fields are public to read and
+/// assign, and are moved out with `core::mem::replace` / `take` rather than by
+/// destructuring the struct by value, which a type with a `Drop` does not allow.
 #[derive(Debug, Clone)]
 pub struct CdtTripleTerm {
     /// The subject component.
@@ -152,18 +157,17 @@ pub struct CdtTripleTerm {
 
 /// An element of a `cdt:List`, or the value of a `cdt:Map` entry.
 ///
-/// # Nesting depth is an invariant, not a suggestion
+/// # The tree is walked iteratively, however deep
 ///
-/// This is an owning tree, so its `Drop`, `Clone` and `Debug` glue is the
-/// compiler-generated recursive one and each costs stack proportional to the nesting
-/// depth. What makes those safe is that the only composite an element can hold is a
-/// [`CdtValue`], and **every** [`CdtValue`] is within [`crate::MAX_NESTING_DEPTH`]
-/// because its contents are private and every constructor checks (see
-/// [`crate::limits`]). The variants below are therefore free to be public: the deepest
-/// tree they can assemble is one level deeper than the deepest value, and that level
-/// is refused the moment the element is offered to [`CdtValue::list`] /
-/// [`CdtValue::map`] — or here, at [`CdtTerm::composite`], which refuses it earlier.
-#[derive(Debug, Clone)]
+/// This is an owning tree with no depth bound of its own: a level is one element of
+/// [`crate::MAX_ELEMENTS`] and a few bytes of [`crate::MAX_LEXICAL_BYTES`], and those
+/// two are the only bounds. Its `Drop`, `Clone` and `Debug` are therefore not the
+/// compiler's recursive glue but the loops in [`crate::tree`], each over an explicit
+/// heap work list, and equality and ordering are the loops in [`crate::ops`]. The
+/// variants below are free to be public: an element assembled by hand nests as deep
+/// as its author likes, costs heap for every level and stack for none, and is
+/// measured against the two bounds the moment it is offered to [`CdtValue::list`] /
+/// [`CdtValue::map`] — or here, at [`CdtTerm::composite`], which measures it earlier.
 pub enum CdtTerm {
     /// `IRIREF` — always absolute (CDT lexical forms carry no base).
     Iri(String),
@@ -185,15 +189,17 @@ pub enum CdtTerm {
 impl CdtTerm {
     /// A nested composite element.
     ///
-    /// A composite of depth *d* can only ever appear inside a value of depth *d + 1*,
-    /// so an element already at [`crate::MAX_NESTING_DEPTH`] has nowhere to go. The
-    /// bound is therefore checked here, at the point the element is made, rather than
-    /// leaving the caller to discover it only when the element is finally placed.
+    /// An element can only ever appear inside a composite that is one element larger
+    /// and two bytes longer than it, so the bounds are checked here against that
+    /// smallest container, at the point the element is made, rather than leaving the
+    /// caller to discover a refusal only when the element is finally placed. The
+    /// measure reads the value's own carried extent, so it costs the same whatever the
+    /// value's depth.
     ///
     /// # Errors
     ///
-    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
-    /// [`CdtError::InputTooLarge`], whichever bound the element crosses first.
+    /// [`CdtError::TooManyElements`] or [`CdtError::InputTooLarge`], whichever bound
+    /// the element crosses first.
     ///
     /// # Examples
     ///
@@ -215,14 +221,13 @@ impl CdtTerm {
 
     /// A triple-term element.
     ///
-    /// A triple term adds no nesting level of its own, but it *combines* three
-    /// elements' element counts and canonical lengths into one, so all three bounds
-    /// are checked against the combined term.
+    /// A triple term *combines* three elements' element counts and canonical lengths
+    /// into one, so both bounds are checked against the combined term.
     ///
     /// # Errors
     ///
-    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
-    /// [`CdtError::InputTooLarge`], whichever bound the combined term crosses first.
+    /// [`CdtError::TooManyElements`] or [`CdtError::InputTooLarge`], whichever bound
+    /// the combined term crosses first.
     ///
     /// # Examples
     ///

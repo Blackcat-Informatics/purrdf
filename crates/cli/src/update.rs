@@ -78,10 +78,7 @@ pub(crate) fn run(
         ),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let query_options = QueryOptions::new().with_env(&env);
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors();

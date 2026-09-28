@@ -31,7 +31,7 @@
 //! # Iterative, like everything else here
 //!
 //! The walk carries an explicit heap worklist and never recurses, so it is safe on a
-//! value of any admissible depth.
+//! value of any depth.
 
 use alloc::vec::Vec;
 

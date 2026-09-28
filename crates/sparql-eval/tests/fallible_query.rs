@@ -756,10 +756,7 @@ fn query_fallible_view_dispatches_a_registered_relation_with_options() {
     let registry = pair_relation();
     let env =
         ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
 
     let complete = engine
         .query_fallible_view(&view, request(RELATION_QUERY), options)
@@ -787,10 +784,7 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     let registry = pair_relation();
     let env =
         ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
 
     let stale = engine
         .prepare_query(RELATION_QUERY, None)

@@ -14,6 +14,7 @@
 //! external XML crate, no `std::io`** — keeping the crate wasm-clean and
 //! oxigraph-free. The SRX grammar is shallow and fixed, so a tree-walk is enough.
 
+use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
@@ -204,13 +205,68 @@ fn read_head_vars(root: &Element) -> Result<Vec<String>, Error> {
 }
 
 /// Decode a single bound-term element (`<uri>`/`<bnode>`/`<literal>`/`<triple>`).
+///
+/// A `<triple>` is decoded over a work list of the triples being decoded: each finds
+/// its `<subject>` term element and decodes it — a nested `<triple>` there fully —
+/// then does the same for its `<predicate>` and its `<object>`, and is checked and
+/// assembled once all three are decoded. The first error ends the decoding.
 fn decode_term(elem: &Element) -> Result<TermValue, Error> {
-    match elem.name.as_str() {
-        "uri" => Ok(TermValue::Iri(elem.text())),
-        "bnode" => Ok(TermValue::Blank {
+    /// A `<triple>` being decoded, and the components decoded so far.
+    struct Frame<'e> {
+        elem: &'e Element,
+        decoded: Vec<TermValue>,
+    }
+    let mut frames: Vec<Frame<'_>> = Vec::new();
+    let mut next = elem;
+    loop {
+        let Some(mut term) = decode_leaf(next)? else {
+            let first = component(next, "subject")?;
+            frames.push(Frame {
+                elem: next,
+                decoded: Vec::with_capacity(3),
+            });
+            next = first;
+            continue;
+        };
+        loop {
+            let Some(frame) = frames.last_mut() else {
+                return Ok(term);
+            };
+            frame.decoded.push(term);
+            match frame.decoded.len() {
+                1 => {
+                    next = component(frame.elem, "predicate")?;
+                    break;
+                }
+                2 => {
+                    next = component(frame.elem, "object")?;
+                    break;
+                }
+                _ => {}
+            }
+            let innermost = frames.pop().expect("the innermost triple is being decoded");
+            let [s, p, o] = <[TermValue; 3]>::try_from(innermost.decoded)
+                .unwrap_or_else(|_| unreachable!("a triple is assembled from three components"));
+            if !matches!(p, TermValue::Iri(_)) {
+                return Err(fmt("triple-term predicate is not an IRI"));
+            }
+            term = TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            };
+        }
+    }
+}
+
+/// Decode a bound-term element that is not a `<triple>`, or `None` for a `<triple>`.
+fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
+    Ok(Some(match elem.name.as_str() {
+        "uri" => TermValue::Iri(elem.text()),
+        "bnode" => TermValue::Blank {
             label: elem.text(),
             scope: BlankScope::DEFAULT,
-        }),
+        },
         "literal" => {
             let language = elem.attr("xml:lang").map(str::to_owned);
             // A tag arriving in a DOCUMENT is parsed input, held to the same
@@ -251,28 +307,16 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
                 None if language.is_some() => RDF_LANGSTRING.to_owned(),
                 None => XSD_STRING.to_owned(),
             };
-            Ok(TermValue::Literal {
+            TermValue::Literal {
                 lexical_form: elem.text(),
                 datatype,
                 language,
                 direction,
-            })
-        }
-        "triple" => {
-            let s = decode_term(component(elem, "subject")?)?;
-            let p = decode_term(component(elem, "predicate")?)?;
-            let o = decode_term(component(elem, "object")?)?;
-            if !matches!(p, TermValue::Iri(_)) {
-                return Err(fmt("triple-term predicate is not an IRI"));
             }
-            Ok(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
-            })
         }
-        other => Err(fmt(&format!("unexpected term element <{other}>"))),
-    }
+        "triple" => return Ok(None),
+        other => return Err(fmt(&format!("unexpected term element <{other}>"))),
+    }))
 }
 
 /// Read the single child term element of a `<triple>` component wrapper.
@@ -738,6 +782,7 @@ mod tests {
     use super::*;
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
+    use purrdf_core::TermBox;
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits
@@ -891,9 +936,9 @@ mod tests {
         assert_eq!(
             parsed.rows[0][0],
             Some(TermValue::Triple {
-                s: Box::new(TermValue::Iri("http://ex/s".to_owned())),
-                p: Box::new(TermValue::Iri("http://ex/p".to_owned())),
-                o: Box::new(TermValue::Literal {
+                s: TermBox::new(TermValue::Iri("http://ex/s".to_owned())),
+                p: TermBox::new(TermValue::Iri("http://ex/p".to_owned())),
+                o: TermBox::new(TermValue::Literal {
                     lexical_form: "o".to_owned(),
                     datatype: XSD_STRING.to_owned(),
                     language: None,
@@ -1275,5 +1320,105 @@ mod tests {
                 "the gate must not alter the tag it lets through ({tag:?})"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term-element decoder against its recursive reference.
+
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{Element, Error, XmlParser, component, decode_leaf, decode_term, fmt};
+
+    fn reference(elem: &Element) -> Result<TermValue, Error> {
+        if let Some(term) = decode_leaf(elem)? {
+            return Ok(term);
+        }
+        let s = reference(component(elem, "subject")?)?;
+        let p = reference(component(elem, "predicate")?)?;
+        let o = reference(component(elem, "object")?)?;
+        if !matches!(p, TermValue::Iri(_)) {
+            return Err(fmt("triple-term predicate is not an IRI"));
+        }
+        Ok(TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
+        })
+    }
+
+    /// A term's result-document element, with every `<object>` wrapper dropped when
+    /// `lose_objects` holds, so the decoder meets a missing component.
+    fn element_text(value: &TermValue, lose_objects: bool) -> String {
+        let escape = |text: &str| {
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+        };
+        match value {
+            TermValue::Iri(iri) => format!("<uri>{}</uri>", escape(iri)),
+            TermValue::Blank { label, .. } => format!("<bnode>{}</bnode>", escape(label)),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => match language {
+                Some(tag) => format!(
+                    "<literal xml:lang=\"{}\">{}</literal>",
+                    escape(tag),
+                    escape(lexical_form)
+                ),
+                None => format!(
+                    "<literal datatype=\"{}\">{}</literal>",
+                    escape(datatype),
+                    escape(lexical_form)
+                ),
+            },
+            TermValue::Triple { s, p, o } => format!(
+                "<triple><subject>{}</subject><predicate>{}</predicate>{}</triple>",
+                element_text(s, lose_objects),
+                element_text(p, lose_objects),
+                if lose_objects {
+                    String::new()
+                } else {
+                    format!("<object>{}</object>", element_text(o, lose_objects))
+                }
+            ),
+        }
+    }
+
+    /// Every generated term's element — whole, and with its objects lost — decodes to
+    /// exactly the term or the refusal the recursive reference reaches.
+    #[test]
+    fn the_decoder_agrees_with_its_recursive_reference_on_generated_elements() {
+        let (mut decoded, mut refused) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 6;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            for lose_objects in [false, true] {
+                let text = element_text(&value, lose_objects);
+                let elem = XmlParser::new(&text)
+                    .parse_document()
+                    .expect("a generated element is well-formed XML");
+                let found = decode_term(&elem);
+                assert_eq!(
+                    format!("{found:?}"),
+                    format!("{:?}", reference(&elem)),
+                    "seed {seed}: {text}"
+                );
+                decoded += usize::from(found.is_ok());
+                refused += usize::from(found.is_err());
+            }
+        }
+        assert!(decoded > 0, "some generated element decodes");
+        assert!(refused > 0, "some generated element is refused");
     }
 }

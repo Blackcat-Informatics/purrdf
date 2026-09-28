@@ -33,6 +33,7 @@
 //! resolved via `ctx.scratch.value_of(ctx.dataset, term)`, so the value is valid
 //! across a snapshot→mutable boundary (the UPDATE round-trip).
 
+use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, TermValue};
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
@@ -64,7 +65,8 @@ pub(crate) enum TermOrdinal {
     /// carries the column, `None` if it does not — a row can never bind it, exactly
     /// as an `index_of` miss would report.
     Variable(Option<usize>),
-    /// A nested quoted-triple-term position, resolved recursively.
+    /// A nested quoted-triple-term position: the ordinals of its three positions,
+    /// nesting as the pattern nests.
     Triple(Box<TripleOrdinal>),
 }
 
@@ -74,6 +76,32 @@ pub(crate) struct TripleOrdinal {
     pub(crate) subject: TermOrdinal,
     pub(crate) predicate: PredicateOrdinal,
     pub(crate) object: TermOrdinal,
+}
+
+impl Drop for TripleOrdinal {
+    /// Take the nested ordinals apart over a work list, so dropping the ordinal tree
+    /// of a template term nested to any depth costs no more machine stack.
+    ///
+    /// Each nested triple ordinal is detached from its parent (the parent's position
+    /// is left [`TermOrdinal::Ground`]) before the parent is released, so a released
+    /// box holds no nested box and its own drop reaches nothing further.
+    fn drop(&mut self) {
+        let mut pending: Vec<Box<Self>> = Vec::new();
+        for position in [&mut self.subject, &mut self.object] {
+            if let TermOrdinal::Triple(nested) = std::mem::replace(position, TermOrdinal::Ground) {
+                pending.push(nested);
+            }
+        }
+        while let Some(mut triple) = pending.pop() {
+            for position in [&mut triple.subject, &mut triple.object] {
+                if let TermOrdinal::Triple(nested) =
+                    std::mem::replace(position, TermOrdinal::Ground)
+                {
+                    pending.push(nested);
+                }
+            }
+        }
+    }
 }
 
 /// The predicate-position twin of [`TermOrdinal`]: a predicate can never be a
@@ -86,8 +114,8 @@ pub(crate) enum PredicateOrdinal {
     Variable(Option<usize>),
 }
 
-/// Resolve one [`TriplePattern`]'s three positions against `schema`, recursing
-/// into nested quoted-triple terms. Called ONCE per template quad, before the
+/// Resolve one [`TriplePattern`]'s three positions against `schema`, nested
+/// quoted-triple terms included. Called ONCE per template quad, before the
 /// row loop — see [`TermOrdinal`]'s doc comment for why.
 pub(crate) fn resolve_triple(tp: &TriplePattern, schema: &VarSchema) -> TripleOrdinal {
     TripleOrdinal {
@@ -97,16 +125,54 @@ pub(crate) fn resolve_triple(tp: &TriplePattern, schema: &VarSchema) -> TripleOr
     }
 }
 
-/// Resolve one [`TermPattern`] position against `schema`, recursing into a nested
-/// quoted-triple term. See [`TermOrdinal`]'s doc comment.
+/// Resolve one [`TermPattern`] position against `schema`, a nested quoted-triple
+/// term included. See [`TermOrdinal`]'s doc comment.
+///
+/// The ordinal tree is assembled bottom-up over a work list: a quoted triple's
+/// positions are resolved subject, predicate, object — each fully before the next —
+/// and its ordinal is built once all three exist, so a term nested to any depth costs
+/// no more machine stack.
 pub(crate) fn resolve_term(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
-    match term {
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
-            TermOrdinal::Ground
-        }
-        TermPattern::Variable(v) => TermOrdinal::Variable(schema.index_of(v)),
-        TermPattern::Triple(t) => TermOrdinal::Triple(Box::new(resolve_triple(t, schema))),
+    enum Step<'t> {
+        Term(&'t TermPattern),
+        Predicate(&'t NamedNodePattern),
+        Assemble,
     }
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(term)];
+    let mut terms: Vec<TermOrdinal> = Vec::new();
+    let mut predicates: Vec<PredicateOrdinal> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term) => match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
+                    terms.push(TermOrdinal::Ground);
+                }
+                TermPattern::Variable(v) => terms.push(TermOrdinal::Variable(schema.index_of(v))),
+                TermPattern::Triple(t) => steps.extend([
+                    Step::Assemble,
+                    Step::Term(&t.object),
+                    Step::Predicate(&t.predicate),
+                    Step::Term(&t.subject),
+                ]),
+            },
+            Step::Predicate(predicate) => predicates.push(resolve_predicate(predicate, schema)),
+            Step::Assemble => {
+                let object = terms.pop().expect("a quoted triple's object is resolved");
+                let predicate = predicates
+                    .pop()
+                    .expect("a quoted triple's predicate is resolved");
+                let subject = terms.pop().expect("a quoted triple's subject is resolved");
+                terms.push(TermOrdinal::Triple(Box::new(TripleOrdinal {
+                    subject,
+                    predicate,
+                    object,
+                })));
+            }
+        }
+    }
+    terms
+        .pop()
+        .expect("the position's ordinal is the last one assembled")
 }
 
 /// Resolve one [`NamedNodePattern`] predicate position against `schema`. See
@@ -172,16 +238,21 @@ pub(crate) fn positionally_ill_formed(
 /// * its **predicate** is an IRI, and nothing else.
 /// * its **object** is any term, recursing when it is itself a triple term.
 ///
-/// The subject arm needs no recursion: an IRI or a blank node has no components, and
-/// every other term kind is already refused, so recursing on the subject could only
-/// re-derive `true`.
+/// The subject needs no descent: an IRI or a blank node has no components, and every
+/// other term kind is already refused, so descending into the subject could only
+/// re-derive `true`. The walk therefore follows the object chain alone, one loop
+/// iteration per level.
 fn triple_term_well_formed(term: &TermValue) -> bool {
-    let TermValue::Triple { s, p, o } = term else {
-        return true;
-    };
-    matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
-        && matches!(**p, TermValue::Iri(_))
-        && triple_term_well_formed(o)
+    let mut term = term;
+    while let TermValue::Triple { s, p, o } = term {
+        if !matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+            || !matches!(**p, TermValue::Iri(_))
+        {
+            return false;
+        }
+        term = o;
+    }
+    true
 }
 
 /// Instantiate a **variable-free** template term (the `INSERT DATA` / `DELETE DATA`
@@ -189,32 +260,65 @@ fn triple_term_well_formed(term: &TermValue) -> bool {
 /// consulted — a `Variable` here is a malformed-input guard that skips the quad
 /// (`None`). Blank labels mint fresh from `counter`, co-referring within the shared
 /// `blanks` scope (one DATA block), exactly like the solution-driven path.
+///
+/// A quoted triple is instantiated subject, predicate, object — each fully before the
+/// next, so blank labels are minted in written order — and assembled once all three
+/// exist; the first position that yields no term ends the walk there, and nothing
+/// after it is minted. The walk keeps its own work list, so a term nested to any
+/// depth costs no more machine stack.
 pub(crate) fn instantiate_ground_term(
     term: &TermPattern,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
 ) -> Option<TermValue> {
-    match term {
-        TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
-        TermPattern::Literal(l) => Some(literal_to_value(l)),
-        // The DATA path mints unprefixed: it is variable-free ingestion with a
-        // request-local counter, never a per-focus SHACL evaluation.
-        TermPattern::BlankNode(b) => Some(mint_blank(b.as_str(), blanks, counter, None)),
-        TermPattern::Triple(t) => {
-            let s = instantiate_ground_term(&t.subject, blanks, counter)?;
-            let p = match &t.predicate {
-                NamedNodePattern::NamedNode(n) => named_node_to_value(n),
-                NamedNodePattern::Variable(_) => return None,
-            };
-            let o = instantiate_ground_term(&t.object, blanks, counter)?;
-            Some(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
-            })
-        }
-        TermPattern::Variable(_) => None,
+    enum Step<'t> {
+        Term(&'t TermPattern),
+        Predicate(&'t NamedNodePattern),
+        Assemble,
     }
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(term)];
+    let mut values: Vec<TermValue> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term) => match term {
+                TermPattern::NamedNode(n) => values.push(named_node_to_value(n)),
+                TermPattern::Literal(l) => values.push(literal_to_value(l)),
+                // The DATA path mints unprefixed: it is variable-free ingestion with a
+                // request-local counter, never a per-focus SHACL evaluation.
+                TermPattern::BlankNode(b) => {
+                    values.push(mint_blank(b.as_str(), blanks, counter, None));
+                }
+                TermPattern::Triple(t) => steps.extend([
+                    Step::Assemble,
+                    Step::Term(&t.object),
+                    Step::Predicate(&t.predicate),
+                    Step::Term(&t.subject),
+                ]),
+                TermPattern::Variable(_) => return None,
+            },
+            Step::Predicate(predicate) => match predicate {
+                NamedNodePattern::NamedNode(n) => values.push(named_node_to_value(n)),
+                NamedNodePattern::Variable(_) => return None,
+            },
+            Step::Assemble => {
+                let o = values
+                    .pop()
+                    .expect("a quoted triple's object is instantiated");
+                let p = values
+                    .pop()
+                    .expect("a quoted triple's predicate is instantiated");
+                let s = values
+                    .pop()
+                    .expect("a quoted triple's subject is instantiated");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
+            }
+        }
+    }
+    values.pop()
 }
 
 /// Instantiate a subject/object template term. `None` = an unbound variable.
@@ -225,6 +329,12 @@ pub(crate) fn instantiate_ground_term(
 /// from `term` (a mismatch cannot arise from any caller in this crate, since every
 /// `TermOrdinal` a caller holds was built by [`resolve_term`]/[`resolve_triple`]
 /// from the exact pattern it is later paired with).
+///
+/// A quoted triple is instantiated subject, predicate, object — each fully before the
+/// next, so blank labels are minted in written order — and assembled once all three
+/// exist; the first position that yields no term ends the walk there, and nothing
+/// after it is minted. The walk keeps its own work list, so a term nested to any
+/// depth costs no more machine stack.
 pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     term: &TermPattern,
     ordinal: &TermOrdinal,
@@ -232,40 +342,70 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Option<TermValue> {
-    match term {
-        TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
-        TermPattern::Literal(l) => Some(literal_to_value(l)),
-        TermPattern::Variable(_) => {
-            let TermOrdinal::Variable(ord) = ordinal else {
-                debug_assert!(
-                    false,
-                    "TermOrdinal must mirror the TermPattern it was resolved from"
-                );
-                return None;
-            };
-            let term = ord.and_then(|c| row[c])?;
-            Some(ctx.scratch.value_of(ctx.dataset, term))
-        }
-        TermPattern::BlankNode(b) => Some(fresh_blank(b.as_str(), blanks, ctx)),
-        TermPattern::Triple(t) => {
-            // RDF 1.2 quoted-triple term in the template: instantiate recursively.
-            let TermOrdinal::Triple(to) = ordinal else {
-                debug_assert!(
-                    false,
-                    "TermOrdinal must mirror the TermPattern it was resolved from"
-                );
-                return None;
-            };
-            let s = instantiate_term(&t.subject, &to.subject, row, blanks, ctx)?;
-            let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)?;
-            let o = instantiate_term(&t.object, &to.object, row, blanks, ctx)?;
-            Some(TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
-            })
+    enum Step<'t> {
+        Term(&'t TermPattern, &'t TermOrdinal),
+        Predicate(&'t NamedNodePattern, &'t PredicateOrdinal),
+        Assemble,
+    }
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(term, ordinal)];
+    let mut values: Vec<TermValue> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term, ordinal) => match term {
+                TermPattern::NamedNode(n) => values.push(named_node_to_value(n)),
+                TermPattern::Literal(l) => values.push(literal_to_value(l)),
+                TermPattern::Variable(_) => {
+                    let TermOrdinal::Variable(ord) = ordinal else {
+                        debug_assert!(
+                            false,
+                            "TermOrdinal must mirror the TermPattern it was resolved from"
+                        );
+                        return None;
+                    };
+                    let term = ord.and_then(|c| row[c])?;
+                    values.push(ctx.scratch.value_of(ctx.dataset, term));
+                }
+                TermPattern::BlankNode(b) => values.push(fresh_blank(b.as_str(), blanks, ctx)),
+                TermPattern::Triple(t) => {
+                    // RDF 1.2 quoted-triple term in the template: its three positions
+                    // are instantiated in turn, in lock step with their ordinals.
+                    let TermOrdinal::Triple(to) = ordinal else {
+                        debug_assert!(
+                            false,
+                            "TermOrdinal must mirror the TermPattern it was resolved from"
+                        );
+                        return None;
+                    };
+                    steps.extend([
+                        Step::Assemble,
+                        Step::Term(&t.object, &to.object),
+                        Step::Predicate(&t.predicate, &to.predicate),
+                        Step::Term(&t.subject, &to.subject),
+                    ]);
+                }
+            },
+            Step::Predicate(predicate, ordinal) => {
+                values.push(instantiate_predicate(predicate, ordinal, row, ctx)?);
+            }
+            Step::Assemble => {
+                let o = values
+                    .pop()
+                    .expect("a quoted triple's object is instantiated");
+                let p = values
+                    .pop()
+                    .expect("a quoted triple's predicate is instantiated");
+                let s = values
+                    .pop()
+                    .expect("a quoted triple's subject is instantiated");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
+            }
         }
     }
+    values.pop()
 }
 
 /// Instantiate a predicate template position. `None` = an unbound variable.
@@ -339,5 +479,320 @@ pub(crate) fn mint_blank(
     TermValue::Blank {
         label: fresh,
         scope: BlankScope::DEFAULT,
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The template-term walks — ordinal resolution and both instantiations — checked
+    //! against recursive references over generated shapes: the same term, the same
+    //! blank-label map and the same counter after each; and a template term a hundred
+    //! thousand levels deep, resolved, instantiated and released on a thread with a
+    //! 128 KiB stack.
+
+    use super::{
+        PredicateOrdinal, TermOrdinal, TripleOrdinal, fresh_blank, instantiate_ground_term,
+        instantiate_predicate, instantiate_term, mint_blank, resolve_predicate, resolve_term,
+    };
+    use crate::DetHashMap;
+    use crate::convert::{literal_to_value, named_node_to_value};
+    use crate::eval::EvalCtx;
+    use crate::scratch::SolutionTerm;
+    use crate::solution::{Solution, VarSchema};
+    use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermValue};
+    use purrdf_sparql_algebra::{
+        BlankNode, Child, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+        Variable,
+    };
+    use std::sync::Arc;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    /// A generated template term: every leaf kind, and quoted triples while `budget`
+    /// lasts. Variables are drawn from `?a` (bound in the fixture row), `?b` (in the
+    /// schema, unbound) and `?c` (not in the schema).
+    fn pattern(choices: &mut Choices, budget: &mut usize) -> TermPattern {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermPattern::NamedNode(iri(&format!("n{}", choices.choose(3)))),
+            1 => TermPattern::Literal(Literal::new_simple("x")),
+            2 => TermPattern::BlankNode(BlankNode::new(["b0", "b1", "b2"][choices.choose(3)])),
+            3 => TermPattern::Variable(Variable::new(["a", "b", "c"][choices.choose(3)])),
+            _ => {
+                *budget -= 1;
+                let subject = pattern(choices, budget);
+                let predicate = match choices.choose(4) {
+                    0 => NamedNodePattern::Variable(Variable::new("a")),
+                    1 => NamedNodePattern::Variable(Variable::new("b")),
+                    _ => NamedNodePattern::NamedNode(iri("p")),
+                };
+                let object = pattern(choices, budget);
+                TermPattern::Triple(Child::new(TriplePattern {
+                    subject,
+                    predicate,
+                    object,
+                }))
+            }
+        }
+    }
+
+    /// The recursive reference for [`instantiate_ground_term`].
+    fn ground_reference(
+        term: &TermPattern,
+        blanks: &mut DetHashMap<String, String>,
+        counter: &mut u64,
+    ) -> Option<TermValue> {
+        match term {
+            TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
+            TermPattern::Literal(l) => Some(literal_to_value(l)),
+            TermPattern::BlankNode(b) => Some(mint_blank(b.as_str(), blanks, counter, None)),
+            TermPattern::Triple(t) => {
+                let s = ground_reference(&t.subject, blanks, counter)?;
+                let p = match &t.predicate {
+                    NamedNodePattern::NamedNode(n) => named_node_to_value(n),
+                    NamedNodePattern::Variable(_) => return None,
+                };
+                let o = ground_reference(&t.object, blanks, counter)?;
+                Some(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            }
+            TermPattern::Variable(_) => None,
+        }
+    }
+
+    /// The recursive reference for [`resolve_term`].
+    fn resolve_term_by_recursion(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
+                TermOrdinal::Ground
+            }
+            TermPattern::Variable(v) => TermOrdinal::Variable(schema.index_of(v)),
+            TermPattern::Triple(t) => TermOrdinal::Triple(Box::new(TripleOrdinal {
+                subject: resolve_term_by_recursion(&t.subject, schema),
+                predicate: resolve_predicate(&t.predicate, schema),
+                object: resolve_term_by_recursion(&t.object, schema),
+            })),
+        }
+    }
+
+    /// The recursive reference for [`instantiate_term`].
+    fn instantiate_reference<D: DatasetView + Sync>(
+        term: &TermPattern,
+        ordinal: &TermOrdinal,
+        row: &Solution<D::Id>,
+        blanks: &mut DetHashMap<String, String>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Option<TermValue> {
+        match term {
+            TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
+            TermPattern::Literal(l) => Some(literal_to_value(l)),
+            TermPattern::Variable(_) => {
+                let TermOrdinal::Variable(ord) = ordinal else {
+                    panic!("the ordinal mirrors the pattern");
+                };
+                let term = ord.and_then(|c| row[c])?;
+                Some(ctx.scratch.value_of(ctx.dataset, term))
+            }
+            TermPattern::BlankNode(b) => Some(fresh_blank(b.as_str(), blanks, ctx)),
+            TermPattern::Triple(t) => {
+                let TermOrdinal::Triple(to) = ordinal else {
+                    panic!("the ordinal mirrors the pattern");
+                };
+                let s = instantiate_reference(&t.subject, &to.subject, row, blanks, ctx)?;
+                let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)?;
+                let o = instantiate_reference(&t.object, &to.object, row, blanks, ctx)?;
+                Some(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            }
+        }
+    }
+
+    /// The ordinal tree spelled out, for comparison.
+    fn spell(ordinal: &TermOrdinal) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let mut pending: Vec<&TermOrdinal> = vec![ordinal];
+        while let Some(ordinal) = pending.pop() {
+            match ordinal {
+                TermOrdinal::Ground => out.push('g'),
+                TermOrdinal::Variable(column) => {
+                    write!(out, "v{column:?}").expect("writing to a String cannot fail");
+                }
+                TermOrdinal::Triple(triple) => {
+                    match triple.predicate {
+                        PredicateOrdinal::Ground => out.push_str("(pg"),
+                        PredicateOrdinal::Variable(column) => {
+                            write!(out, "(pv{column:?}").expect("writing to a String cannot fail");
+                        }
+                    }
+                    pending.extend([&triple.object, &triple.subject]);
+                }
+            }
+            out.push(' ');
+        }
+        out
+    }
+
+    /// One quad `:s :p :o`, whose subject the fixture row binds to `?a`.
+    fn fixture() -> (Arc<RdfDataset>, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let o = builder.intern_iri(&format!("{EX}o"));
+        builder.push_quad(s, p, o, None);
+        (builder.freeze().expect("the fixture freezes"), s)
+    }
+
+    /// The schema `?a ?b` and the row binding `?a` to `bound`, leaving `?b` unbound.
+    fn row_for(bound: TermId) -> (VarSchema, Solution<TermId>) {
+        let mut schema = VarSchema::new();
+        schema.push(Variable::new("a"));
+        schema.push(Variable::new("b"));
+        let row: Solution<TermId> = smallvec::smallvec![Some(SolutionTerm::Existing(bound)), None];
+        (schema, row)
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// A quoted-triple chain `depth` levels deep, its innermost object the blank
+    /// `_:deep`.
+    fn deep_pattern(depth: usize) -> TermPattern {
+        let mut term = TermPattern::BlankNode(BlankNode::new("deep"));
+        for _ in 0..depth {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(iri("s")),
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// How many triple terms `value`'s object chain nests, and its innermost object.
+    fn unwind(value: &TermValue) -> (usize, &TermValue) {
+        let mut levels = 0;
+        let mut term = value;
+        while let TermValue::Triple { o, .. } = term {
+            levels += 1;
+            term = o;
+        }
+        (levels, term)
+    }
+
+    #[test]
+    fn the_ground_instantiation_agrees_with_the_recursive_reference() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 5;
+            let pattern = pattern(&mut choices, &mut budget);
+            let (mut blanks_walk, mut counter_walk) = (DetHashMap::default(), 0_u64);
+            let walked = instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk);
+            let (mut blanks_ref, mut counter_ref) = (DetHashMap::default(), 0_u64);
+            let referenced = ground_reference(&pattern, &mut blanks_ref, &mut counter_ref);
+            assert_eq!(walked, referenced, "seed {seed}");
+            assert_eq!(blanks_walk, blanks_ref, "seed {seed}");
+            assert_eq!(counter_walk, counter_ref, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn the_solution_driven_instantiation_agrees_with_the_recursive_reference() {
+        let (dataset, bound) = fixture();
+        let (schema, row) = row_for(bound);
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 5;
+            let pattern = pattern(&mut choices, &mut budget);
+            let ordinal_walk = resolve_term(&pattern, &schema);
+            let ordinal_ref = resolve_term_by_recursion(&pattern, &schema);
+            assert_eq!(spell(&ordinal_walk), spell(&ordinal_ref), "seed {seed}");
+
+            let mut ctx_walk = EvalCtx::new(&*dataset);
+            let mut blanks_walk = DetHashMap::default();
+            let walked = instantiate_term(
+                &pattern,
+                &ordinal_walk,
+                &row,
+                &mut blanks_walk,
+                &mut ctx_walk,
+            );
+            let mut ctx_ref = EvalCtx::new(&*dataset);
+            let mut blanks_ref = DetHashMap::default();
+            let referenced =
+                instantiate_reference(&pattern, &ordinal_ref, &row, &mut blanks_ref, &mut ctx_ref);
+            assert_eq!(walked, referenced, "seed {seed}");
+            assert_eq!(blanks_walk, blanks_ref, "seed {seed}");
+            assert_eq!(ctx_walk.bnode_counter, ctx_ref.bnode_counter, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_template_term_is_instantiated_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let pattern = deep_pattern(DEPTH);
+
+            let mut blanks = DetHashMap::default();
+            let mut counter = 0_u64;
+            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter)
+                .expect("a variable-free template term instantiates");
+            let (levels, innermost) = unwind(&ground);
+            assert_eq!(levels, DEPTH);
+            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "c1"));
+            assert_eq!(counter, 1);
+            drop(ground);
+
+            let (dataset, _) = fixture();
+            let schema = VarSchema::new();
+            let row: Solution<TermId> = smallvec::smallvec![];
+            let mut ctx = EvalCtx::new(&*dataset);
+            let ordinal = resolve_term(&pattern, &schema);
+            let mut blanks = DetHashMap::default();
+            let driven = instantiate_term(&pattern, &ordinal, &row, &mut blanks, &mut ctx)
+                .expect("a variable-free template term instantiates");
+            let (levels, innermost) = unwind(&driven);
+            assert_eq!(levels, DEPTH);
+            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "c1"));
+            assert_eq!(ctx.bnode_counter, 1);
+            drop(driven);
+            drop(ordinal);
+            drop(pattern);
+        });
     }
 }

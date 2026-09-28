@@ -25,13 +25,6 @@ pub enum CdtError {
         /// The actual length of the offered lexical form, in bytes.
         length: usize,
     },
-    /// Composite nesting deeper than [`crate::MAX_NESTING_DEPTH`].
-    DepthExceeded {
-        /// Byte offset of the opening delimiter that would have exceeded the bound.
-        offset: usize,
-        /// The bound that was exceeded.
-        limit: usize,
-    },
     /// More elements than [`crate::MAX_ELEMENTS`], counted across every level.
     TooManyElements {
         /// Byte offset of the element that would have exceeded the bound.
@@ -124,7 +117,6 @@ impl CdtError {
     pub const fn offset(&self) -> usize {
         match self {
             Self::InputTooLarge { offset, .. }
-            | Self::DepthExceeded { offset, .. }
             | Self::TooManyElements { offset, .. }
             | Self::Unexpected { offset, .. }
             | Self::UnexpectedEnd { offset, .. }
@@ -146,9 +138,6 @@ impl fmt::Display for CdtError {
                 f,
                 "lexical form is {length} bytes, over the {offset}-byte bound"
             ),
-            Self::DepthExceeded { offset, limit } => {
-                write!(f, "at byte {offset}: nesting deeper than {limit}")
-            }
             Self::TooManyElements { offset, limit } => {
                 write!(f, "at byte {offset}: more than {limit} elements")
             }

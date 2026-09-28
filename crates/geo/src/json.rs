@@ -34,35 +34,34 @@
 //! the ambiguity and refuse it (which [`crate::geojson`] does for the members
 //! that decide a geometry).
 //!
-//! # Bounded work
+//! # Nesting is bounded by memory alone
 //!
-//! Nesting is capped at [`MAX_DEPTH`] containers. The reader is recursive
-//! descent, so an unbounded document would be a stack overflow — an abort, not an
-//! error a host can catch — and a literal arrives from the dataset, which is
-//! untrusted input. The cap is deliberately far above anything GeoJSON needs (a
-//! `MultiPolygon` reaches five), and the tests prove that a document one level
-//! *below* the cap still parses, because an over-refusal here would reject
-//! conforming data just as surely as a missing check would accept malformed data.
+//! A document nests as deep as its author writes it. The reader keeps its open
+//! arrays and objects on an explicit heap stack, the writer keeps its pending
+//! values on another, and a [`JsonValue`] drops, clones, compares and prints over
+//! work lists rather than the compiler's recursive glue (the `tree` module), so no
+//! walk here spends a stack frame per level. Depth is bounded by memory and by
+//! nothing else, identically on every host: a literal arrives from the dataset,
+//! which is untrusted input, and a stack overflow would be an `abort` no host can
+//! catch — but so would a fixed cap be a refusal of conforming data below any
+//! figure that protected the stack, and there is no such figure to pick.
+
+use core::mem;
 
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
 
 use crate::error::GeoError;
-
-/// The greatest number of nested arrays and objects [`parse`] will accept.
-///
-/// A document nested more deeply than this is refused rather than recursed into.
-/// GeoSPARQL needs five levels at the very most (a `MultiPolygon`'s
-/// `coordinates`, its polygons, their rings, their positions, their ordinates),
-/// so the cap is a stack guard against hostile input, never a limit real data
-/// meets.
-pub const MAX_DEPTH: usize = 128;
 
 /// A parsed JSON value.
 ///
 /// [`Self::Number`] keeps the source lexeme verbatim, so a consumer can decide
 /// the value exactly rather than inheriting a float's rounding; see the module
 /// documentation for why that is the whole reason this reader exists.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A value nests as deep as its document writes it, so `Clone`, `PartialEq`,
+/// `Debug` and `Drop` are the iterative impls in the `tree` module, not the
+/// compiler's recursive glue.
+#[derive(Eq)]
 pub enum JsonValue {
     /// The literal `null`.
     Null,
@@ -80,6 +79,10 @@ pub enum JsonValue {
     /// 8259 allows it, and dropping a repeat would be a silent loss.
     Object(Vec<(String, Self)>),
 }
+
+#[cfg(test)]
+pub(crate) mod arbitrary;
+mod tree;
 
 impl JsonValue {
     /// The value of the **first** member named `name`, or `None` when this is not
@@ -135,17 +138,15 @@ impl JsonValue {
 /// any departure from RFC 8259: a malformed number (a leading `+`, a leading
 /// zero, a bare `.`, `NaN`, `Infinity`), an unterminated string, array or
 /// object, a trailing comma, an unescaped control character in a string, an
-/// unpaired UTF-16 surrogate, content after the top-level value, or nesting
-/// deeper than [`MAX_DEPTH`].
+/// unpaired UTF-16 surrogate, or content after the top-level value.
 pub fn parse(text: &str) -> Result<JsonValue, GeoError> {
     let mut parser = Parser {
         text,
         bytes: text.as_bytes(),
         pos: 0,
-        depth: 0,
     };
     parser.skip_whitespace();
-    let value = parser.value()?;
+    let value = parser.document()?;
     parser.skip_whitespace();
     if parser.pos == text.len() {
         Ok(value)
@@ -154,14 +155,43 @@ pub fn parse(text: &str) -> Result<JsonValue, GeoError> {
     }
 }
 
-/// The recursive-descent reader. Positions are byte offsets into `text`; every
-/// structural character JSON has is ASCII, so a byte offset the reader stops at
-/// is always a `char` boundary.
+/// The reader. Positions are byte offsets into `text`; every structural character
+/// JSON has is ASCII, so a byte offset the reader stops at is always a `char`
+/// boundary.
 struct Parser<'a> {
     text: &'a str,
     bytes: &'a [u8],
     pos: usize,
-    depth: usize,
+}
+
+/// An array or object whose `[` or `{` has been read and whose members are still
+/// being read.
+enum Open {
+    /// The items read so far.
+    Array(Vec<JsonValue>),
+    /// The members read so far, and the name of the member whose value is being
+    /// read.
+    Object {
+        members: Vec<(String, JsonValue)>,
+        name: String,
+    },
+}
+
+impl Open {
+    /// The value the closed container denotes.
+    fn close(self) -> JsonValue {
+        match self {
+            Self::Array(items) => JsonValue::Array(items),
+            Self::Object { members, .. } => JsonValue::Object(members),
+        }
+    }
+}
+
+/// What reading at the cursor produced: a whole value, or a container opened onto
+/// the stack whose first member is next.
+enum Read {
+    Value(JsonValue),
+    Opened,
 }
 
 impl Parser<'_> {
@@ -185,34 +215,141 @@ impl Parser<'_> {
         }
     }
 
-    /// Count one more open container, refusing past [`MAX_DEPTH`].
-    fn enter(&mut self) -> Result<(), GeoError> {
-        self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            return Err(GeoError::literal(format!(
-                "JSON at byte {}: nesting deeper than {MAX_DEPTH} arrays and objects; the reader \
-                 caps depth because it is recursive and a literal is untrusted input",
-                self.pos
-            )));
+    /// Read the value at the cursor, with every array and object it nests.
+    ///
+    /// Iterative: the open containers live in an explicit heap stack, and the loop
+    /// alternates between reading the next value and closing the containers a
+    /// finished member completes. Nesting therefore costs heap and never stack, so
+    /// a document is read however deep it nests, and a diagnostic anywhere inside it
+    /// is the same diagnostic at the same byte as it would be at the top level.
+    fn document(&mut self) -> Result<JsonValue, GeoError> {
+        let mut open: Vec<Open> = Vec::new();
+        loop {
+            let mut finished = match self.value(&mut open)? {
+                Read::Value(value) => value,
+                Read::Opened => continue,
+            };
+            // A finished value is the document, or a member of the innermost open
+            // container: it is appended, and either the container continues with
+            // the next member or it closes and is itself the finished value one
+            // level up.
+            loop {
+                let Some(top) = open.last_mut() else {
+                    return Ok(finished);
+                };
+                if self.append(top, finished)? {
+                    break;
+                }
+                finished = open
+                    .pop()
+                    .expect("the container just read is still open")
+                    .close();
+            }
         }
-        Ok(())
     }
 
-    fn value(&mut self) -> Result<JsonValue, GeoError> {
+    /// Read one value at the cursor. A scalar is complete; an empty array or object
+    /// is complete; any other array or object is opened onto `open` with the cursor
+    /// on its first value.
+    fn value(&mut self, open: &mut Vec<Open>) -> Result<Read, GeoError> {
         let start = self.pos;
-        match self.bytes.get(self.pos) {
-            Some(b'n') => self.word("null", JsonValue::Null),
-            Some(b't') => self.word("true", JsonValue::Bool(true)),
-            Some(b'f') => self.word("false", JsonValue::Bool(false)),
-            Some(b'"') => self.string().map(JsonValue::String),
-            Some(b'[') => self.array(),
-            Some(b'{') => self.object(),
-            Some(b'-' | b'0'..=b'9') => self.number(),
+        let value = match self.bytes.get(self.pos) {
+            Some(b'n') => self.word("null", JsonValue::Null)?,
+            Some(b't') => self.word("true", JsonValue::Bool(true))?,
+            Some(b'f') => self.word("false", JsonValue::Bool(false))?,
+            Some(b'"') => JsonValue::String(self.string()?),
+            Some(b'[') => {
+                self.pos += 1;
+                self.skip_whitespace();
+                if self.bytes.get(self.pos) == Some(&b']') {
+                    self.pos += 1;
+                    JsonValue::Array(Vec::new())
+                } else {
+                    open.push(Open::Array(Vec::new()));
+                    return Ok(Read::Opened);
+                }
+            }
+            Some(b'{') => {
+                self.pos += 1;
+                self.skip_whitespace();
+                if self.bytes.get(self.pos) == Some(&b'}') {
+                    self.pos += 1;
+                    JsonValue::Object(Vec::new())
+                } else {
+                    let name = self.member_name()?;
+                    open.push(Open::Object {
+                        members: Vec::new(),
+                        name,
+                    });
+                    return Ok(Read::Opened);
+                }
+            }
+            Some(b'-' | b'0'..=b'9') => self.number()?,
             // `+1`, `.5`, `NaN` and `Infinity` all land here: none of them is a
             // JSON value, and naming the position is more useful than naming the
             // spelling the author probably meant.
-            _ => Err(self.expected(start, "a JSON value")),
+            _ => return Err(self.expected(start, "a JSON value")),
+        };
+        Ok(Read::Value(value))
+    }
+
+    /// Append a finished `value` to the innermost open container and read what
+    /// follows it: `Ok(true)` when another member does, the cursor on it (and, for
+    /// an object, its name already read); `Ok(false)` when the container closed.
+    fn append(&mut self, top: &mut Open, value: JsonValue) -> Result<bool, GeoError> {
+        match top {
+            Open::Array(items) => {
+                items.push(value);
+                self.skip_whitespace();
+                match self.bytes.get(self.pos) {
+                    Some(b',') => {
+                        self.pos += 1;
+                        self.skip_whitespace();
+                        Ok(true)
+                    }
+                    Some(b']') => {
+                        self.pos += 1;
+                        Ok(false)
+                    }
+                    // Includes the unterminated case (`None`) and the trailing
+                    // comma, which reappears on the next turn as "expected a JSON
+                    // value".
+                    _ => Err(self.expected(self.pos, "`,` or `]` in an array")),
+                }
+            }
+            Open::Object { members, name } => {
+                members.push((mem::take(name), value));
+                self.skip_whitespace();
+                match self.bytes.get(self.pos) {
+                    Some(b',') => {
+                        self.pos += 1;
+                        self.skip_whitespace();
+                        *name = self.member_name()?;
+                        Ok(true)
+                    }
+                    Some(b'}') => {
+                        self.pos += 1;
+                        Ok(false)
+                    }
+                    _ => Err(self.expected(self.pos, "`,` or `}` in an object")),
+                }
+            }
         }
+    }
+
+    /// A member's quoted name and the `:` after it, the cursor left on its value.
+    fn member_name(&mut self) -> Result<String, GeoError> {
+        if self.bytes.get(self.pos) != Some(&b'"') {
+            return Err(self.expected(self.pos, "a `\"`-quoted member name"));
+        }
+        let name = self.string()?;
+        self.skip_whitespace();
+        if self.bytes.get(self.pos) != Some(&b':') {
+            return Err(self.expected(self.pos, "`:` after a member name"));
+        }
+        self.pos += 1;
+        self.skip_whitespace();
+        Ok(name)
     }
 
     fn word(&mut self, word: &str, value: JsonValue) -> Result<JsonValue, GeoError> {
@@ -222,71 +359,6 @@ impl Parser<'_> {
             Ok(value)
         } else {
             Err(self.expected(start, &format!("`{word}`")))
-        }
-    }
-
-    fn array(&mut self) -> Result<JsonValue, GeoError> {
-        self.enter()?;
-        self.pos += 1;
-        let mut items: Vec<JsonValue> = Vec::new();
-        self.skip_whitespace();
-        if self.bytes.get(self.pos) == Some(&b']') {
-            self.pos += 1;
-            self.depth -= 1;
-            return Ok(JsonValue::Array(items));
-        }
-        loop {
-            self.skip_whitespace();
-            items.push(self.value()?);
-            self.skip_whitespace();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b']') => {
-                    self.pos += 1;
-                    self.depth -= 1;
-                    return Ok(JsonValue::Array(items));
-                }
-                // Includes the unterminated case (`None`) and the trailing comma,
-                // which reappears on the next turn as "expected a JSON value".
-                _ => return Err(self.expected(self.pos, "`,` or `]` in an array")),
-            }
-        }
-    }
-
-    fn object(&mut self) -> Result<JsonValue, GeoError> {
-        self.enter()?;
-        self.pos += 1;
-        let mut members: Vec<(String, JsonValue)> = Vec::new();
-        self.skip_whitespace();
-        if self.bytes.get(self.pos) == Some(&b'}') {
-            self.pos += 1;
-            self.depth -= 1;
-            return Ok(JsonValue::Object(members));
-        }
-        loop {
-            self.skip_whitespace();
-            if self.bytes.get(self.pos) != Some(&b'"') {
-                return Err(self.expected(self.pos, "a `\"`-quoted member name"));
-            }
-            let name = self.string()?;
-            self.skip_whitespace();
-            if self.bytes.get(self.pos) != Some(&b':') {
-                return Err(self.expected(self.pos, "`:` after a member name"));
-            }
-            self.pos += 1;
-            self.skip_whitespace();
-            let value = self.value()?;
-            members.push((name, value));
-            self.skip_whitespace();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b'}') => {
-                    self.pos += 1;
-                    self.depth -= 1;
-                    return Ok(JsonValue::Object(members));
-                }
-                _ => return Err(self.expected(self.pos, "`,` or `}` in an object")),
-            }
         }
     }
 
@@ -478,6 +550,15 @@ impl Parser<'_> {
 // Writing
 // ---------------------------------------------------------------------------
 
+/// One step of the writer: a value still to write, an object member still to write
+/// (its name, `:`, then its value), or a fixed piece of the text around a
+/// container's members.
+enum Job<'a> {
+    Value(&'a JsonValue),
+    Member(&'a str, &'a JsonValue),
+    Text(&'static str),
+}
+
 /// Render a value as compact JSON — no insignificant whitespace — deterministically.
 ///
 /// The output is a pure function of the value: members are written in the
@@ -491,43 +572,52 @@ impl Parser<'_> {
 /// A `Number` lexeme is trusted, not re-validated: one that came from [`parse`]
 /// is grammatical by construction, and one a caller built is that caller's
 /// responsibility.
+///
+/// Iterative: a container's members and the `,` and `]` or `}` around them go onto
+/// a heap work list in reverse, so they pop in document order. Nesting costs heap
+/// and never stack.
 #[must_use]
 pub fn write(value: &JsonValue) -> String {
     let mut out = String::new();
-    write_into(value, &mut out);
-    out
-}
-
-fn write_into(value: &JsonValue, out: &mut String) {
-    match value {
-        JsonValue::Null => out.push_str("null"),
-        JsonValue::Bool(true) => out.push_str("true"),
-        JsonValue::Bool(false) => out.push_str("false"),
-        JsonValue::Number(lexeme) => out.push_str(lexeme),
-        JsonValue::String(text) => write_string(text, out),
-        JsonValue::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_into(item, out);
-            }
-            out.push(']');
-        }
-        JsonValue::Object(members) => {
-            out.push('{');
-            for (index, (name, member)) in members.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_string(name, out);
+    let mut jobs: Vec<Job<'_>> = vec![Job::Value(value)];
+    while let Some(job) = jobs.pop() {
+        match job {
+            Job::Text(text) => out.push_str(text),
+            Job::Member(name, member) => {
+                write_string(name, &mut out);
                 out.push(':');
-                write_into(member, out);
+                jobs.push(Job::Value(member));
             }
-            out.push('}');
+            Job::Value(value) => match value {
+                JsonValue::Null => out.push_str("null"),
+                JsonValue::Bool(true) => out.push_str("true"),
+                JsonValue::Bool(false) => out.push_str("false"),
+                JsonValue::Number(lexeme) => out.push_str(lexeme),
+                JsonValue::String(text) => write_string(text, &mut out),
+                JsonValue::Array(items) => {
+                    out.push('[');
+                    jobs.push(Job::Text("]"));
+                    for (index, item) in items.iter().enumerate().rev() {
+                        jobs.push(Job::Value(item));
+                        if index > 0 {
+                            jobs.push(Job::Text(","));
+                        }
+                    }
+                }
+                JsonValue::Object(members) => {
+                    out.push('{');
+                    jobs.push(Job::Text("}"));
+                    for (index, (name, member)) in members.iter().enumerate().rev() {
+                        jobs.push(Job::Member(name, member));
+                        if index > 0 {
+                            jobs.push(Job::Text(","));
+                        }
+                    }
+                }
+            },
         }
     }
+    out
 }
 
 /// A JSON string: the workspace's one JSON escape law,
@@ -540,8 +630,9 @@ fn write_string(text: &str, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonValue, MAX_DEPTH, parse, write};
+    use super::{JsonValue, Parser, arbitrary, parse, write};
     use crate::error::GeoError;
+    use crate::geom::arbitrary::{self as deep, Lcg};
 
     fn number(lexeme: &str) -> JsonValue {
         JsonValue::Number(lexeme.to_owned())
@@ -918,8 +1009,185 @@ mod tests {
         assert_eq!(JsonValue::Object(vec![]).kind_name(), "an object");
     }
 
+    // ---- the recursive references ----------------------------------------
+
+    /// The recursive-descent reading of one value: the reference the work-list
+    /// reader is compared with on shallow documents. It shares the scalar readers
+    /// and spells the container diagnostics identically, so the only thing the
+    /// comparison can turn on is the walk.
+    fn reference_value(parser: &mut Parser<'_>) -> Result<JsonValue, GeoError> {
+        let start = parser.pos;
+        match parser.bytes.get(parser.pos) {
+            Some(b'n') => parser.word("null", JsonValue::Null),
+            Some(b't') => parser.word("true", JsonValue::Bool(true)),
+            Some(b'f') => parser.word("false", JsonValue::Bool(false)),
+            Some(b'"') => parser.string().map(JsonValue::String),
+            Some(b'[') => reference_array(parser),
+            Some(b'{') => reference_object(parser),
+            Some(b'-' | b'0'..=b'9') => parser.number(),
+            _ => Err(parser.expected(start, "a JSON value")),
+        }
+    }
+
+    fn reference_array(parser: &mut Parser<'_>) -> Result<JsonValue, GeoError> {
+        parser.pos += 1;
+        let mut items: Vec<JsonValue> = Vec::new();
+        parser.skip_whitespace();
+        if parser.bytes.get(parser.pos) == Some(&b']') {
+            parser.pos += 1;
+            return Ok(JsonValue::Array(items));
+        }
+        loop {
+            parser.skip_whitespace();
+            items.push(reference_value(parser)?);
+            parser.skip_whitespace();
+            match parser.bytes.get(parser.pos) {
+                Some(b',') => parser.pos += 1,
+                Some(b']') => {
+                    parser.pos += 1;
+                    return Ok(JsonValue::Array(items));
+                }
+                _ => return Err(parser.expected(parser.pos, "`,` or `]` in an array")),
+            }
+        }
+    }
+
+    fn reference_object(parser: &mut Parser<'_>) -> Result<JsonValue, GeoError> {
+        parser.pos += 1;
+        let mut members: Vec<(String, JsonValue)> = Vec::new();
+        parser.skip_whitespace();
+        if parser.bytes.get(parser.pos) == Some(&b'}') {
+            parser.pos += 1;
+            return Ok(JsonValue::Object(members));
+        }
+        loop {
+            parser.skip_whitespace();
+            if parser.bytes.get(parser.pos) != Some(&b'"') {
+                return Err(parser.expected(parser.pos, "a `\"`-quoted member name"));
+            }
+            let name = parser.string()?;
+            parser.skip_whitespace();
+            if parser.bytes.get(parser.pos) != Some(&b':') {
+                return Err(parser.expected(parser.pos, "`:` after a member name"));
+            }
+            parser.pos += 1;
+            parser.skip_whitespace();
+            let value = reference_value(parser)?;
+            members.push((name, value));
+            parser.skip_whitespace();
+            match parser.bytes.get(parser.pos) {
+                Some(b',') => parser.pos += 1,
+                Some(b'}') => {
+                    parser.pos += 1;
+                    return Ok(JsonValue::Object(members));
+                }
+                _ => return Err(parser.expected(parser.pos, "`,` or `}` in an object")),
+            }
+        }
+    }
+
+    fn reference_parse(text: &str) -> Result<JsonValue, GeoError> {
+        let mut parser = Parser {
+            text,
+            bytes: text.as_bytes(),
+            pos: 0,
+        };
+        parser.skip_whitespace();
+        let value = reference_value(&mut parser)?;
+        parser.skip_whitespace();
+        if parser.pos == text.len() {
+            Ok(value)
+        } else {
+            Err(parser.expected(parser.pos, "the end of the text after the top-level value"))
+        }
+    }
+
+    /// The recursive writer: the reference the work-list writer is compared with.
+    fn reference_write(value: &JsonValue, out: &mut String) {
+        match value {
+            JsonValue::Null => out.push_str("null"),
+            JsonValue::Bool(true) => out.push_str("true"),
+            JsonValue::Bool(false) => out.push_str("false"),
+            JsonValue::Number(lexeme) => out.push_str(lexeme),
+            JsonValue::String(text) => super::write_string(text, out),
+            JsonValue::Array(items) => {
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    reference_write(item, out);
+                }
+                out.push(']');
+            }
+            JsonValue::Object(members) => {
+                out.push('{');
+                for (index, (name, member)) in members.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    super::write_string(name, out);
+                    out.push(':');
+                    reference_write(member, out);
+                }
+                out.push('}');
+            }
+        }
+    }
+
+    /// Over generated documents — every kind, nested, whitespace between tokens —
+    /// the work-list reader and the recursive reference produce the same value; and
+    /// over the same documents with one structural fault, the same refusal at the
+    /// same byte.
+    #[test]
+    fn the_reader_agrees_with_the_recursive_reference_on_generated_documents() {
+        let mut rng = Lcg::new(0x5eed_2001);
+        for round in 0..400 {
+            let value = arbitrary::value(&mut rng, 4);
+            let mut text = String::new();
+            arbitrary::spaced_text(&mut rng, &value, &mut text);
+            assert_eq!(
+                parse(&text),
+                reference_parse(&text),
+                "round {round}: the two readers disagree on {text}"
+            );
+            assert_eq!(
+                parse(&text),
+                Ok(value),
+                "round {round}: the spaced text reads back to its value: {text}"
+            );
+            for _ in 0..4 {
+                let faulted = arbitrary::faulted(&mut rng, &text);
+                assert_eq!(
+                    parse(&faulted),
+                    reference_parse(&faulted),
+                    "round {round}: the two readers disagree on {faulted:?}"
+                );
+            }
+        }
+    }
+
+    /// Over generated values the work-list writer and the recursive reference emit
+    /// the same bytes, and the bytes read back to the value.
+    #[test]
+    fn the_writer_agrees_with_the_recursive_reference_on_generated_values() {
+        let mut rng = Lcg::new(0x5eed_2002);
+        for round in 0..400 {
+            let value = arbitrary::value(&mut rng, 5);
+            let mut expected = String::new();
+            reference_write(&value, &mut expected);
+            assert_eq!(write(&value), expected, "round {round}: {value:?}");
+            assert_eq!(
+                parse(&expected),
+                Ok(value),
+                "round {round}: the bytes read back to the value: {expected}"
+            );
+        }
+    }
+
     // ---- depth -----------------------------------------------------------
 
+    /// `[` `depth` times, then `]` `depth` times.
     fn nested(depth: usize) -> String {
         let mut text = String::with_capacity(depth * 2);
         for _ in 0..depth {
@@ -931,45 +1199,80 @@ mod tests {
         text
     }
 
-    /// The over-refusal control for the depth cap: one level below the cap, and
-    /// the cap itself, must still parse. A guard that rejected ordinary data
-    /// would be as much a bug as no guard at all.
-    #[test]
-    fn nesting_up_to_the_cap_parses_and_beyond_it_is_refused() {
-        assert!(parse(&nested(1)).is_ok(), "one array parses");
-        assert!(parse(&nested(127)).is_ok(), "depth 127 parses");
-        assert!(
-            parse(&nested(MAX_DEPTH)).is_ok(),
-            "depth {MAX_DEPTH} is the cap and is inclusive"
-        );
-        let message = refusal(&nested(MAX_DEPTH + 1));
-        assert!(
-            message.contains("nesting deeper"),
-            "the refusal names the cap: {message}"
-        );
-        assert!(
-            parse(&nested(1000)).is_err(),
-            "a deeply hostile document is refused rather than recursed into"
-        );
+    /// How many containers deep a chain of first members goes.
+    fn levels(value: &JsonValue) -> usize {
+        let mut depth = 0;
+        let mut node = value;
+        loop {
+            node = match node {
+                JsonValue::Array(items) => {
+                    depth += 1;
+                    match items.first() {
+                        Some(item) => item,
+                        None => return depth,
+                    }
+                }
+                JsonValue::Object(members) => {
+                    depth += 1;
+                    match members.first() {
+                        Some((_, member)) => member,
+                        None => return depth,
+                    }
+                }
+                _ => return depth,
+            };
+        }
     }
 
+    /// A hundred thousand nested arrays, and a hundred thousand nested objects,
+    /// are read, written back byte for byte and dropped on a 128 KiB stack; a
+    /// refusal at the bottom of such a document is the refusal the same text
+    /// produces at the top, at its own byte.
     #[test]
-    fn the_depth_cap_counts_objects_too() {
-        let mut text = String::new();
-        for _ in 0..=MAX_DEPTH {
-            text.push_str("{\"a\":");
-        }
-        text.push('1');
-        for _ in 0..=MAX_DEPTH {
-            text.push('}');
-        }
-        assert!(parse(&text).is_err(), "objects count against the same cap");
+    fn nesting_is_bounded_by_memory_alone() {
+        let depth = deep::DEEP;
+        assert_eq!(nested(1), "[]");
+        assert_eq!(nested(2), "[[]]");
+        assert_eq!(levels(&parse(&nested(2)).expect("two arrays")), 2);
+        deep::on_small_stack(move || {
+            let arrays = nested(depth);
+            let value = parse(&arrays).expect("a hundred thousand nested arrays parse");
+            assert_eq!(levels(&value), depth);
+            assert_eq!(write(&value), arrays, "and write back byte for byte");
+            drop(value);
+
+            let mut objects = String::with_capacity(depth * 6 + 1);
+            for _ in 0..depth {
+                objects.push_str("{\"a\":");
+            }
+            objects.push('1');
+            for _ in 0..depth {
+                objects.push('}');
+            }
+            let value = parse(&objects).expect("a hundred thousand nested objects parse");
+            assert_eq!(levels(&value), depth);
+            assert_eq!(write(&value), objects, "and write back byte for byte");
+            drop(value);
+
+            let mut unfinished = String::with_capacity(depth + 1);
+            for _ in 0..depth {
+                unfinished.push('[');
+            }
+            assert_eq!(
+                refusal(&unfinished),
+                format!("JSON at byte {depth}: expected a JSON value, found the end of the text")
+            );
+            unfinished.push('x');
+            assert_eq!(
+                refusal(&unfinished),
+                format!("JSON at byte {depth}: expected a JSON value, found `x`")
+            );
+        });
     }
 
-    /// Depth is per open container, not cumulative: a wide document is not a deep
-    /// one, and refusing it would be an over-refusal.
+    /// Width is not depth: two thousand sibling arrays nest two levels.
     #[test]
-    fn a_wide_shallow_document_is_not_deep() {
+    fn a_wide_shallow_document_is_two_levels_deep() {
         let mut text = String::from("[");
         for index in 0..2000 {
             if index > 0 {
@@ -978,7 +1281,8 @@ mod tests {
             text.push_str("[1,2]");
         }
         text.push(']');
-        assert!(parse(&text).is_ok(), "2000 sibling arrays are depth 2");
+        let value = parse(&text).expect("2000 sibling arrays parse");
+        assert_eq!(levels(&value), 2, "2000 sibling arrays are depth 2");
     }
 
     // ---- writing ---------------------------------------------------------

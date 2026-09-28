@@ -86,10 +86,7 @@ fn run(body: &str) -> Result<Vec<Vec<String>>, String> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {

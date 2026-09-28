@@ -288,10 +288,7 @@ fn registry(attests: Attests) -> ExtensionEnv {
 }
 
 fn options(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// Whether a phase runs the lane that can carry a witness.

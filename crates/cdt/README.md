@@ -16,8 +16,9 @@ release crate in the workspace.
 What it gives you:
 
 * `parse_list` / `parse_map` / `parse_cdt` — the SEP-0009 lexical grammar,
-  scanned **iteratively** under three published resource bounds (nesting depth,
-  element count, total bytes). No recursive descent anywhere, so a hostile
+  scanned **iteratively** under two published resource bounds, element count
+  (`MAX_ELEMENTS`, every nesting level one element) and total bytes
+  (`MAX_LEXICAL_BYTES`). No recursive descent anywhere, so a hostile
   lexical form yields a typed error carrying a byte offset instead of an
   uncatchable stack-overflow abort.
 * `CdtValue::canonical_lexical` — a byte-deterministic canonical spelling that

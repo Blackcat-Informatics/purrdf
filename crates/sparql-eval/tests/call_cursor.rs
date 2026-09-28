@@ -149,10 +149,7 @@ fn dataset() -> Arc<RdfDataset> {
 }
 
 fn options(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// The shape a retrieval unit renders: a nested projection with a renaming `BIND`,

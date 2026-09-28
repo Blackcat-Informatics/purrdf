@@ -2306,34 +2306,55 @@ fn a_predicate_containing_the_field_separator_is_expressible_when_escaped() {
 }
 
 /// An envelope the ENGINE refuses is refused whichever lane it reaches, and the message
-/// names both the relation and the kernel's own diagnostic.
+/// names both the relation and the kernel's own diagnostic. The valid neighbour: a
+/// `max-hops` far past any walk the chain holds is not a refusal — the traversal keeps its
+/// per-depth state on the heap and needs no ceiling — and the same query answers.
 #[test]
 fn a_path_relation_with_an_unbuildable_envelope_names_the_relation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+    let envelope = |min: u32, max: u32| {
+        format!(
+            "iri={WALK_IRI};forward=http://example.org/p;min-hops={min};max-hops={max};\
+             max-paths-per-seed=64;max-expansions=99;mode=walk"
+        )
+    };
 
     let out = run(&[
         "query",
         "--data",
         &ttl,
         "--path-relation",
-        &format!(
-            "iri={WALK_IRI};forward=http://example.org/p;min-hops=1;max-hops=99999;\
-             max-paths-per-seed=64;max-expansions=99;mode=walk"
-        ),
+        &envelope(3, 2),
         &walk_query("?len ?step"),
     ]);
-
-    assert!(!out.status.success(), "a max-hops past the cap is refused");
+    assert!(
+        !out.status.success(),
+        "an empty walk-length interval is refused"
+    );
     let message = stderr(&out);
     assert!(
         message.contains(WALK_IRI),
         "must name the relation: {message}"
     );
     assert!(
-        message.contains("exceeds the hard cap"),
+        message.contains("exceeds max_hops"),
         "must carry the kernel's own diagnostic: {message}"
+    );
+
+    let neighbour = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--path-relation",
+        &envelope(1, 99_999),
+        &walk_query("?len ?step"),
+    ]);
+    assert!(
+        neighbour.status.success(),
+        "a max-hops past every walk answers: {}",
+        stderr(&neighbour)
     );
 }
 

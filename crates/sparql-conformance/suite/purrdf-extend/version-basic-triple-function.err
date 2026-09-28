@@ -3,6 +3,6 @@
 # variable that could bind to any dataset value), so this pins that the whole
 # §17.4.6 "Functions on Triple Terms" family is gated, not merely the
 # triple-term grammar production.
-native-sparql-query-eval
+native-sparql-unsupported
 triple-term function
 isTRIPLE()

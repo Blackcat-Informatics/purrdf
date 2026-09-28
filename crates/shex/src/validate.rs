@@ -145,8 +145,31 @@ fn status_str(status: ConformanceStatus) -> &'static str {
     }
 }
 
-/// A term in the shape-map term syntax (`<iri>` / `_:label` / Turtle literal).
-fn node_term_string(value: &TermValue) -> String {
+/// A term in the shape-map term syntax (`<iri>` / `_:label` / Turtle literal), each
+/// triple term spelled `<< s p o >>` over [`TermValue::try_write_nested`]'s work list.
+pub(crate) fn node_term_string(value: &TermValue) -> String {
+    let mut out = String::new();
+    let written = value.try_write_nested(
+        &mut out,
+        "<< ",
+        " ",
+        " >>",
+        |out, leaf| {
+            out.push_str(&leaf_term_string(leaf));
+            Ok::<(), std::convert::Infallible>(())
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    );
+    match written {
+        Ok(()) => out,
+    }
+}
+
+/// [`node_term_string`] for a term that is not a triple term.
+fn leaf_term_string(value: &TermValue) -> String {
     match value {
         TermValue::Iri(iri) => format!("<{iri}>"),
         TermValue::Blank { label, .. } => format!("_:{label}"),
@@ -167,12 +190,7 @@ fn node_term_string(value: &TermValue) -> String {
             }
             lit
         }
-        TermValue::Triple { s, p, o } => format!(
-            "<< {} {} {} >>",
-            node_term_string(s),
-            node_term_string(p),
-            node_term_string(o)
-        ),
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
 

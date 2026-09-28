@@ -26,37 +26,45 @@ use crate::class_membership::ClassMembershipView;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// Resolve a pattern term to its interned id using variant-specific dataset
-/// lookups, recursively resolving the components of a quoted triple. Returns
-/// `None` if the term (including any quoted-triple component) is not interned
-/// in this dataset, in which case the pattern matches nothing.
+/// lookups, through the components of a quoted triple. Returns `None` if the term
+/// (including any quoted-triple component) is not interned in this dataset, in which
+/// case the pattern matches nothing.
+///
+/// A quoted triple is resolved over [`Term::fold_nested`]'s work list: its subject,
+/// predicate and object, each fully before the next, and the first component the
+/// dataset lacks ends the lookup.
 pub(crate) fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId> {
-    match term {
-        Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
-        // The native term carries the SCOPE-QUALIFIED label `term_id_to_native`
-        // rendered; decode it back to the `(label, scope)` pair the dataset holds.
-        // A label a caller MINTED rather than read out of a dataset is raw, not
-        // qualified, so the verbatim default-scope lookup is kept as the fallback.
-        // (The two spellings differ only for a scoped or marker-prefixed label;
-        // every other label is its own qualification.)
-        Term::BlankNode(label) => {
-            let (decoded, scope) = ::purrdf::BlankScope::unqualify_label(label);
-            dataset
-                .term_id_by_blank(&decoded, scope)
-                .or_else(|| dataset.term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT))
-        }
-        Term::Literal(literal) => dataset.term_id_by_literal(
-            literal.value(),
-            literal.datatype_str(),
-            literal.language(),
-            literal.direction(),
-        ),
-        Term::Triple(triple) => {
-            let s = resolve_id(dataset, &triple.subject)?;
-            let p = dataset.term_id_by_iri(triple.predicate.as_str())?;
-            let o = resolve_id(dataset, &triple.object)?;
-            dataset.term_id_by_triple(s, p, o)
-        }
-    }
+    term.fold_nested(
+        &mut (),
+        |(), term| {
+            match term {
+                Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
+                // The native term carries the SCOPE-QUALIFIED label `term_id_to_native`
+                // rendered; decode it back to the `(label, scope)` pair the dataset
+                // holds. A label a caller MINTED rather than read out of a dataset is
+                // raw, not qualified, so the verbatim default-scope lookup is kept as
+                // the fallback. (The two spellings differ only for a scoped or
+                // marker-prefixed label; every other label is its own qualification.)
+                Term::BlankNode(label) => {
+                    let (decoded, scope) = ::purrdf::BlankScope::unqualify_label(label);
+                    dataset
+                        .term_id_by_blank(&decoded, scope)
+                        .or_else(|| dataset.term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT))
+                }
+                Term::Literal(literal) => dataset.term_id_by_literal(
+                    literal.value(),
+                    literal.datatype_str(),
+                    literal.language(),
+                    literal.direction(),
+                ),
+                Term::Triple(_) => unreachable!("a quoted triple is folded from its parts"),
+            }
+            .ok_or(())
+        },
+        |(), predicate| dataset.term_id_by_iri(predicate.as_str()).ok_or(()),
+        |(), s, p, o| dataset.term_id_by_triple(s, p, o).ok_or(()),
+    )
+    .ok()
 }
 
 /// Which graph(s) a pattern lookup ranges over.
@@ -493,5 +501,50 @@ mod tests {
             !split.sparql_view_shares_core_ids(),
             "two retained views are two id spaces, however alike their contents"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The pattern-term lookup against its recursive reference.
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId};
+
+    use super::resolve_id;
+    use crate::term::Term;
+    use crate::term::term_walk_tests::generated;
+
+    fn reference(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
+        match term {
+            Term::Triple(triple) => {
+                let s = reference(dataset, &triple.subject)?;
+                let p = dataset.term_id_by_iri(triple.predicate.as_str())?;
+                let o = reference(dataset, &triple.object)?;
+                dataset.term_id_by_triple(s, p, o)
+            }
+            leaf => resolve_id(dataset, leaf),
+        }
+    }
+
+    /// Every generated term — stored in the dataset, and not — resolves exactly as the
+    /// recursive reference resolves it.
+    #[test]
+    fn the_lookup_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut found = 0;
+        for seed in 0..300_u64 {
+            let stored = generated(seed);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&stored.to_term_value());
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            for term in [stored, generated(seed + 5_000)] {
+                let id = resolve_id(&*dataset, &term);
+                assert_eq!(id, reference(&dataset, &term), "seed {seed}");
+                found += usize::from(id.is_some());
+            }
+        }
+        assert!(found > 0, "some generated term is found");
     }
 }

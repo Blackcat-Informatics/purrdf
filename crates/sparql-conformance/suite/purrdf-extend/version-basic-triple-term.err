@@ -3,6 +3,6 @@
 # other evaluation failure; the second line pins the reason (a triple term in
 # term position); the spec citation pins that it is the Basic-profile gate and
 # not some unrelated "triple term" mention.
-native-sparql-query-eval
+native-sparql-unsupported
 triple term
 1.2-basic

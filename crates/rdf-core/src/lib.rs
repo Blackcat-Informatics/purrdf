@@ -174,7 +174,8 @@ pub use fno::{
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
-    GovernorEvidence, ResourceDimension, ResourceVector, StopCause, TrippedGovernor,
+    GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, SilencedKind,
+    SilencedTarget, StopCause, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 /// Deterministic embedding companions bound to exact PurRDF packs.
@@ -188,19 +189,20 @@ pub use ir::{
     CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
     DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
     GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
+    MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
     PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
     PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
     PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
     QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
     RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
-    SubsetPageProvider, TermId, TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder,
-    ViewCanonError, blank_count_view, canonical_relabel, canonical_relabel_with_mapping,
-    canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
-    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
-    deskolemize, graph_digest_view, skolemize, try_canonicalize, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
-    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
+    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
+    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
+    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
+    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,

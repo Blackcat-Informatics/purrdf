@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use purrdf::ir::MutableDataset;
+use purrdf::ir::{Nested, try_fold_nested};
 use purrdf::{DatasetSink, RdfTerm, RdfTextDirection};
 use purrdf_events::{
     EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId, TextDirection,
@@ -65,24 +65,60 @@ impl Sink {
 
     /// Declare a term (deduplicated by value) and return its protocol id, emitting any
     /// nested triple-term components first so no forward reference is needed.
+    ///
+    /// A triple term is emitted over [`try_fold_nested`]'s work list: its subject, its
+    /// predicate IRI and its object, each fully before the next, then the triple
+    /// itself. Every term is looked up in the memo when it is reached and recorded
+    /// there once its own id is minted.
     fn emit_term(&mut self, term: &RdfTerm) -> Result<EventTermId, String> {
+        /// One node of a term's nesting: a term, or a triple term's predicate IRI.
+        #[derive(Clone, Copy)]
+        enum Node<'t> {
+            Term(&'t RdfTerm),
+            Predicate(&'t str),
+        }
+        try_fold_nested(
+            Node::Term(term),
+            self,
+            |sink, node| match node {
+                Node::Term(term @ RdfTerm::Triple(triple)) => Ok(match sink.ids.get(term) {
+                    Some(id) => Nested::Leaf(*id),
+                    None => Nested::Triple(
+                        Node::Term(&triple.subject),
+                        Node::Predicate(&triple.predicate),
+                        Node::Term(&triple.object),
+                    ),
+                }),
+                Node::Term(term) => sink.emit_leaf(term).map(Nested::Leaf),
+                Node::Predicate(iri) => sink
+                    .emit_leaf(&RdfTerm::Iri(iri.to_owned()))
+                    .map(Nested::Leaf),
+            },
+            |sink, node, s, p, o| {
+                let Node::Term(term) = node else {
+                    unreachable!("only a term nests components")
+                };
+                let id = sink.mint();
+                // ControlFlow is ignored: DatasetSink is an accumulator that never
+                // signals Break (cancellation is a source/driver concern, not a sink).
+                let _ = sink
+                    .sink_mut()?
+                    .term(id, EventTerm::Triple(EventTriple { s, p, o }))
+                    .map_err(|e| e.to_string())?;
+                sink.ids.insert(term.clone(), id);
+                Ok(id)
+            },
+        )
+    }
+
+    /// Declare a term that is not a triple term (deduplicated by value) and return its
+    /// protocol id.
+    fn emit_leaf(&mut self, term: &RdfTerm) -> Result<EventTermId, String> {
         if let Some(id) = self.ids.get(term) {
             return Ok(*id);
         }
         let id = match term {
-            RdfTerm::Triple(triple) => {
-                let s = self.emit_term(&triple.subject)?;
-                let p = self.emit_term(&RdfTerm::Iri(triple.predicate.clone()))?;
-                let o = self.emit_term(&triple.object)?;
-                let id = self.mint();
-                // ControlFlow is ignored: DatasetSink is an accumulator that never
-                // signals Break (cancellation is a source/driver concern, not a sink).
-                let _ = self
-                    .sink_mut()?
-                    .term(id, EventTerm::Triple(EventTriple { s, p, o }))
-                    .map_err(|e| e.to_string())?;
-                id
-            }
+            RdfTerm::Triple(_) => unreachable!("a triple term is emitted from its parts"),
             RdfTerm::Iri(iri) => {
                 let id = self.mint();
                 let _ = self
@@ -193,9 +229,7 @@ impl Sink {
         let dataset = sink
             .into_dataset()
             .ok_or_else(|| JsError::new("the sink produced no dataset"))?;
-        Ok(Dataset {
-            inner: MutableDataset::new(dataset),
-        })
+        Ok(Dataset::from_frozen(dataset))
     }
 }
 
@@ -276,5 +310,83 @@ mod tests {
             sink.push_inner(&triple_quad("https://e/s", "https://e/p", "https://e/o"))
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The streaming sink's term declaration against its recursive reference.
+
+    use purrdf::{RdfLiteral, RdfTerm, RdfTriple, TermValue};
+    use purrdf_events::{EventTerm, EventTermId, EventTriple, RdfEventSink as _};
+
+    use super::Sink;
+
+    fn reference(sink: &mut Sink, term: &RdfTerm) -> Result<EventTermId, String> {
+        if let Some(id) = sink.ids.get(term) {
+            return Ok(*id);
+        }
+        let RdfTerm::Triple(triple) = term else {
+            return sink.emit_leaf(term);
+        };
+        let s = reference(sink, &triple.subject)?;
+        let p = reference(sink, &RdfTerm::Iri(triple.predicate.clone()))?;
+        let o = reference(sink, &triple.object)?;
+        let id = sink.mint();
+        let _ = sink
+            .sink_mut()?
+            .term(id, EventTerm::Triple(EventTriple { s, p, o }))
+            .map_err(|e| e.to_string())?;
+        sink.ids.insert(term.clone(), id);
+        Ok(id)
+    }
+
+    fn owned(value: &TermValue) -> RdfTerm {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    unreachable!("the generator was asked for IRI predicates")
+                };
+                RdfTerm::triple(RdfTriple::new(owned(s), predicate.clone(), owned(o)))
+            }
+            TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+            TermValue::Blank { label, .. } => RdfTerm::blank_node(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => RdfTerm::literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+        }
+    }
+
+    /// Declaring a run of generated terms — repeats and shared components included —
+    /// mints the same protocol ids, in the same order, as the recursive reference.
+    #[test]
+    fn declaration_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..200_u64 {
+            let (mut found, mut expected) = (Sink::default(), Sink::default());
+            for offset in [0, 1, 0, 2] {
+                let mut state = seed * 7 + offset;
+                let mut budget = 6;
+                let term = owned(&purrdf_core::test_rng::term_value(
+                    &mut state,
+                    &mut budget,
+                    purrdf_core::test_rng::TermShape::IriPredicates,
+                ));
+                assert_eq!(
+                    found.emit_term(&term),
+                    reference(&mut expected, &term),
+                    "seed {seed}"
+                );
+            }
+            assert_eq!(found.next_id, expected.next_id, "seed {seed}");
+            assert_eq!(found.ids, expected.ids, "seed {seed}");
+        }
     }
 }

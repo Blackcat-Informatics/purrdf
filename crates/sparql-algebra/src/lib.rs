@@ -77,18 +77,23 @@ pub mod algebra;
 pub mod ast;
 pub mod error;
 pub mod lexer;
+mod owned;
 pub mod parser;
 mod retained_size;
 pub mod serialize;
 pub mod substitute;
+mod traits;
+pub mod tree;
 mod validate;
+pub mod walk;
+mod worklist;
 
 pub use algebra::{
     AggregateArityError, AggregateExpression, AggregateExpressionError, AggregateFunction,
-    AggregateOrderByError, AggregateParts, AggregateScalarvalError, CdtArity, CdtCall, CdtFn,
-    Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation, NegatedPathElement,
-    OrderExpression, PropertyFunctionCall, PropertyPathExpression, PurrdfCall, PurrdfFn, Query,
-    QueryDataset, SparqlVersion, Update, UsingClause,
+    AggregateOrderByError, AggregateParts, AggregateScalarvalError, ArithmeticOperator, CdtArity,
+    CdtCall, CdtFn, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
+    NegatedPathElement, OrderExpression, PropertyFunctionCall, PropertyPathExpression, PurrdfCall,
+    PurrdfFn, Query, QueryDataset, SparqlVersion, Update, UsingClause,
 };
 pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
@@ -96,7 +101,9 @@ pub use ast::{
 };
 pub use error::{ParseError, Result};
 pub use parser::{
-    MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES, ParserOptions, QuerySplit, SparqlParser,
+    ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
     builtin_function_keyword,
 };
 pub use serialize::pattern_to_select_query;
+pub use tree::{Args, Chain, Child, NonEmpty, Subtree};
+pub use walk::{Flow, NodeRef, Visit, fold_post_order, walk_pre_post};

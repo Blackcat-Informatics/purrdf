@@ -21,9 +21,12 @@
 //! iteration order (buckets are populated in ascending-id order and reads return the
 //! first match).
 
+use crate::TermBox;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
+use std::ops::ControlFlow;
 use std::sync::OnceLock;
 
 use hashbrown::HashTable;
@@ -35,6 +38,7 @@ use crate::hash::FastHasher;
 
 use super::dataset::TermRef;
 use super::term::{BlankScope, StrRange, TermId, TermValue, arena_str};
+use super::term_walk::{Nested, try_fold_nested, visit_nested};
 
 /// Opaque **global** term identity — the id space a paged / cross-segment backend
 /// mints, one width up from [`TermId`]. Like `TermId` it is opaque, is NOT
@@ -504,25 +508,40 @@ impl GlobalDictionary {
     /// already parsed would be pure, repeated waste on the paged hot path. Any NEW
     /// caller is by definition a fresh ingress and must use
     /// [`intern`](Self::intern) instead.
+    ///
+    /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+    /// predicate and object, each fully before the next, then the triple itself.
     pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
-        match value {
-            TermValue::Iri(iri) => self.intern_lookup(GlobalTermLookup::Iri(iri)),
-            TermValue::Blank { label, scope } => self.intern_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype_id = self.intern_lookup(GlobalTermLookup::Iri(datatype));
-                self.intern_literal(lexical_form, datatype_id, language.as_deref(), *direction)
-            }
-            TermValue::Triple { s, p, o } => {
-                let s = self.reintern_validated(s);
-                let p = self.reintern_validated(p);
-                let o = self.reintern_validated(o);
-                self.intern_triple(s, p, o)
-            }
+        let interned = try_fold_nested(
+            value,
+            self,
+            |dict, value| {
+                Ok::<_, Infallible>(Nested::Leaf(match value {
+                    TermValue::Iri(iri) => dict.intern_lookup(GlobalTermLookup::Iri(iri)),
+                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype_id = dict.intern_lookup(GlobalTermLookup::Iri(datatype));
+                        dict.intern_literal(
+                            lexical_form,
+                            datatype_id,
+                            language.as_deref(),
+                            *direction,
+                        )
+                    }
+                    TermValue::Triple { s, p, o } => {
+                        return Ok(Nested::Triple(&**s, &**p, &**o));
+                    }
+                }))
+            },
+            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
+        );
+        match interned {
+            Ok(id) => id,
         }
     }
 
@@ -561,8 +580,8 @@ impl GlobalDictionary {
         self.intern_lookup(GlobalTermLookup::Triple { s, p, o })
     }
 
-    /// Intern a dataset-independent [`TermValue`], recursively for triple terms and
-    /// literal datatypes. Idempotent, store-once, insertion order.
+    /// Intern a dataset-independent [`TermValue`], its triple terms and literal
+    /// datatypes included. Idempotent, store-once, insertion order.
     ///
     /// The datatype of a [`TermValue::Literal`] is interned as its own IRI term
     /// first, so a literal's datatype is itself a [`GlobalTermId`] in this space; a
@@ -573,31 +592,45 @@ impl GlobalDictionary {
     /// [`IriError`] when any IRI the value carries — its own, a literal's datatype, or
     /// one nested inside a triple term — is not absolute. See
     /// [`intern_iri`](Self::intern_iri).
+    ///
+    /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+    /// predicate and object, each fully before the next, then the triple itself. The
+    /// first IRI refused ends the walk, with everything interned before it left in
+    /// place.
     pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriError> {
-        Ok(match value {
-            TermValue::Iri(iri) => self.intern_iri(iri)?,
-            TermValue::Blank { label, scope } => self.intern_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype_id = self.intern_iri(datatype)?;
-                self.intern_literal(lexical_form, datatype_id, language.as_deref(), *direction)
-            }
-            TermValue::Triple { s, p, o } => {
-                let s = self.intern(s)?;
-                let p = self.intern(p)?;
-                let o = self.intern(o)?;
-                self.intern_triple(s, p, o)
-            }
-        })
+        try_fold_nested(
+            value,
+            self,
+            |dict, value| {
+                Ok(Nested::Leaf(match value {
+                    TermValue::Iri(iri) => dict.intern_iri(iri)?,
+                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype_id = dict.intern_iri(datatype)?;
+                        dict.intern_literal(
+                            lexical_form,
+                            datatype_id,
+                            language.as_deref(),
+                            *direction,
+                        )
+                    }
+                    TermValue::Triple { s, p, o } => {
+                        return Ok(Nested::Triple(&**s, &**p, &**o));
+                    }
+                }))
+            },
+            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
+        )
     }
 
     /// Resolve a global id to a borrowed [`TermRef`] (arena-borrow; no allocation).
     /// Triple components and a literal's datatype are returned as [`GlobalTermId`]s;
-    /// resolve them recursively if their values are needed.
+    /// resolve each in turn if their values are needed.
     #[must_use]
     pub fn resolve(&self, id: GlobalTermId) -> TermRef<'_, GlobalTermId> {
         match &self.terms[id.index()] {
@@ -620,7 +653,7 @@ impl GlobalDictionary {
         }
     }
 
-    /// Resolve a global id to its **dataset-independent** [`TermValue`], recursing
+    /// Resolve a global id to its **dataset-independent** [`TermValue`], resolving
     /// through a literal's datatype IRI and a triple term's components (the inverse
     /// of [`intern`](Self::intern)). Unlike [`resolve`](Self::resolve) — which hands
     /// back component ids local to THIS dictionary — the returned value is
@@ -628,31 +661,51 @@ impl GlobalDictionary {
     /// This is what [`PagedDataset::compact`](super::paged::PagedDataset::compact)
     /// re-interns into its fresh, dead-id-free dictionary.
     #[must_use]
+    ///
+    /// A triple term is assembled bottom-up over [`try_fold_nested`]'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before the
+    /// next.
     pub fn term_value(&self, id: GlobalTermId) -> TermValue {
-        match &self.terms[id.index()] {
-            GlobalInternedTerm::Iri(iri) => TermValue::Iri(arena_str(&self.arena, *iri).to_owned()),
-            GlobalInternedTerm::Blank { label, scope } => TermValue::Blank {
-                label: arena_str(&self.arena, *label).to_owned(),
-                scope: *scope,
+        let value = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(Nested::Leaf(match &self.terms[id.index()] {
+                    GlobalInternedTerm::Iri(iri) => {
+                        TermValue::Iri(arena_str(&self.arena, *iri).to_owned())
+                    }
+                    GlobalInternedTerm::Blank { label, scope } => TermValue::Blank {
+                        label: arena_str(&self.arena, *label).to_owned(),
+                        scope: *scope,
+                    },
+                    GlobalInternedTerm::Literal(lit) => {
+                        // A literal's datatype is always an interned IRI (C0.1).
+                        let datatype = match &self.terms[lit.datatype.index()] {
+                            GlobalInternedTerm::Iri(iri) => arena_str(&self.arena, *iri).to_owned(),
+                            _ => unreachable!("a literal datatype is always an interned IRI"),
+                        };
+                        TermValue::Literal {
+                            lexical_form: arena_str(&self.arena, lit.lexical_form).to_owned(),
+                            datatype,
+                            language: lit.language.map(|r| arena_str(&self.arena, r).to_owned()),
+                            direction: lit.direction,
+                        }
+                    }
+                    GlobalInternedTerm::Triple { s, p, o } => {
+                        return Ok(Nested::Triple(*s, *p, *o));
+                    }
+                }))
             },
-            GlobalInternedTerm::Literal(lit) => {
-                // A literal's datatype is always an interned IRI (C0.1).
-                let datatype = match &self.terms[lit.datatype.index()] {
-                    GlobalInternedTerm::Iri(iri) => arena_str(&self.arena, *iri).to_owned(),
-                    _ => unreachable!("a literal datatype is always an interned IRI"),
-                };
-                TermValue::Literal {
-                    lexical_form: arena_str(&self.arena, lit.lexical_form).to_owned(),
-                    datatype,
-                    language: lit.language.map(|r| arena_str(&self.arena, r).to_owned()),
-                    direction: lit.direction,
-                }
-            }
-            GlobalInternedTerm::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.term_value(*s)),
-                p: Box::new(self.term_value(*p)),
-                o: Box::new(self.term_value(*o)),
+            |(), _, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
             },
+        );
+        match value {
+            Ok(value) => value,
         }
     }
 
@@ -669,75 +722,92 @@ impl GlobalDictionary {
     }
 
     /// Canonical **value** hash of a stored term, resolving the literal datatype id
-    /// to its IRI string and recursing triple components to their values. MUST match
+    /// to its IRI string and each triple component to its value. MUST match
     /// [`hash_value`] (i.e. [`TermValue`]'s `Hash`) for equal values.
+    ///
+    /// The terms are fed in [`visit_nested`]'s pre-order — a triple term's tag, then
+    /// its subject's whole nesting, then its predicate's, then its object's — which is
+    /// the order [`TermValue`]'s `Hash` feeds them.
     fn hash_term_value<H: Hasher>(&self, id: GlobalTermId, state: &mut H) {
-        match &self.terms[id.index()] {
-            GlobalInternedTerm::Iri(iri) => {
-                0u8.hash(state);
-                arena_str(&self.arena, *iri).hash(state);
-            }
-            GlobalInternedTerm::Blank { label, scope } => {
-                1u8.hash(state);
-                arena_str(&self.arena, *label).hash(state);
-                scope.hash(state);
-            }
-            GlobalInternedTerm::Literal(lit) => {
-                2u8.hash(state);
-                arena_str(&self.arena, lit.lexical_form).hash(state);
-                self.hash_datatype_iri(lit.datatype, state);
-                lit.language.map(|r| arena_str(&self.arena, r)).hash(state);
-                lit.direction.hash(state);
-            }
-            GlobalInternedTerm::Triple { s, p, o } => {
-                3u8.hash(state);
-                self.hash_term_value(*s, state);
-                self.hash_term_value(*p, state);
-                self.hash_term_value(*o, state);
-            }
-        }
+        let ControlFlow::Continue(()) = visit_nested(id, |id| -> ControlFlow<Infallible, _> {
+            ControlFlow::Continue(match &self.terms[id.index()] {
+                GlobalInternedTerm::Iri(iri) => {
+                    0u8.hash(state);
+                    arena_str(&self.arena, *iri).hash(state);
+                    None
+                }
+                GlobalInternedTerm::Blank { label, scope } => {
+                    1u8.hash(state);
+                    arena_str(&self.arena, *label).hash(state);
+                    scope.hash(state);
+                    None
+                }
+                GlobalInternedTerm::Literal(lit) => {
+                    2u8.hash(state);
+                    arena_str(&self.arena, lit.lexical_form).hash(state);
+                    self.hash_datatype_iri(lit.datatype, state);
+                    lit.language.map(|r| arena_str(&self.arena, r)).hash(state);
+                    lit.direction.hash(state);
+                    None
+                }
+                GlobalInternedTerm::Triple { s, p, o } => {
+                    3u8.hash(state);
+                    Some([*s, *p, *o])
+                }
+            })
+        });
     }
 
     /// Whether a stored term equals a dataset-independent [`TermValue`], compared BY
     /// VALUE directly against the interned representation (zero allocations).
+    ///
+    /// The pair is compared in [`visit_nested`]'s pre-order — a triple term's subject
+    /// pair fully before its predicate pair, before its object pair — and the first
+    /// mismatch ends the comparison.
     fn term_matches_value(&self, id: GlobalTermId, value: &TermValue) -> bool {
-        match (&self.terms[id.index()], value) {
-            (GlobalInternedTerm::Iri(iri), TermValue::Iri(v)) => arena_str(&self.arena, *iri) == v,
-            (
-                GlobalInternedTerm::Blank { label, scope },
-                TermValue::Blank {
-                    label: vl,
-                    scope: vs,
-                },
-            ) => arena_str(&self.arena, *label) == vl && scope == vs,
-            (
-                GlobalInternedTerm::Literal(lit),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                },
-            ) => {
-                arena_str(&self.arena, lit.lexical_form) == lexical_form
-                    && lit.direction == *direction
-                    && lit.language.map(|r| arena_str(&self.arena, r)) == language.as_deref()
-                    && self.iri_matches(lit.datatype, datatype)
+        visit_nested((id, value), |(id, value)| {
+            let matched = match (&self.terms[id.index()], value) {
+                (GlobalInternedTerm::Iri(iri), TermValue::Iri(v)) => {
+                    arena_str(&self.arena, *iri) == v
+                }
+                (
+                    GlobalInternedTerm::Blank { label, scope },
+                    TermValue::Blank {
+                        label: vl,
+                        scope: vs,
+                    },
+                ) => arena_str(&self.arena, *label) == vl && scope == vs,
+                (
+                    GlobalInternedTerm::Literal(lit),
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    },
+                ) => {
+                    arena_str(&self.arena, lit.lexical_form) == lexical_form
+                        && lit.direction == *direction
+                        && lit.language.map(|r| arena_str(&self.arena, r)) == language.as_deref()
+                        && self.iri_matches(lit.datatype, datatype)
+                }
+                (
+                    GlobalInternedTerm::Triple { s, p, o },
+                    TermValue::Triple {
+                        s: vs,
+                        p: vp,
+                        o: vo,
+                    },
+                ) => return ControlFlow::Continue(Some([(*s, &**vs), (*p, &**vp), (*o, &**vo)])),
+                _ => false,
+            };
+            if matched {
+                ControlFlow::Continue(None)
+            } else {
+                ControlFlow::Break(())
             }
-            (
-                GlobalInternedTerm::Triple { s, p, o },
-                TermValue::Triple {
-                    s: vs,
-                    p: vp,
-                    o: vo,
-                },
-            ) => {
-                self.term_matches_value(*s, vs)
-                    && self.term_matches_value(*p, vp)
-                    && self.term_matches_value(*o, vo)
-            }
-            _ => false,
-        }
+        })
+        .is_continue()
     }
 
     /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
@@ -789,6 +859,7 @@ fn hash_value(value: &TermValue) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TermBox;
 
     /// Intern a fixture value, asserting it satisfies the IR-boundary absoluteness
     /// invariant. Every fixture below is deliberately absolute; the refusal path has
@@ -897,9 +968,9 @@ mod tests {
         let p = TermValue::iri("http://example.org/p");
         let o = TermValue::simple_literal("obj");
         let value = TermValue::Triple {
-            s: Box::new(s.clone()),
-            p: Box::new(p.clone()),
-            o: Box::new(o.clone()),
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(o.clone()),
         };
         let id = intern(&mut dict, &value);
         let TermRef::Triple {
@@ -955,9 +1026,9 @@ mod tests {
             TermValue::iri("http://example.org/a"), // repeat → same id
             TermValue::lang_literal("x", "en"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/a")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/a")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ];
 
@@ -1022,9 +1093,9 @@ mod tests {
             TermValue::iri(""),
             TermValue::typed_literal("42", "relativeDatatype"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("relativePredicate")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("relativePredicate")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             assert!(dict.intern(&value).is_err(), "value {value:?}");
@@ -1066,5 +1137,90 @@ mod tests {
     #[should_panic(expected = "cannot exceed u64::MAX-1 entries")]
     fn global_term_id_from_index_rejects_u64_max() {
         let _ = GlobalTermId::from_index(u64::MAX);
+    }
+
+    // ── The walks over nested triple terms ─────────────────────────────────────────
+
+    /// The recursive reference of [`GlobalDictionary::term_value`].
+    fn reference_value(dict: &GlobalDictionary, id: GlobalTermId) -> TermValue {
+        match dict.resolve(id) {
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference_value(dict, s)),
+                p: TermBox::new(reference_value(dict, p)),
+                o: TermBox::new(reference_value(dict, o)),
+            },
+            _ => dict.term_value(id),
+        }
+    }
+
+    /// The stored hash of `id`'s value.
+    fn stored_hash(dict: &GlobalDictionary, id: GlobalTermId) -> u64 {
+        let mut hasher = ahash::AHasher::default();
+        dict.hash_term_value(id, &mut hasher);
+        hasher.finish()
+    }
+
+    /// Interning, resolving, hashing and matching a generated term agree with the
+    /// recursive reference and with each other, nested triple terms included, and a
+    /// term matches only an equal value.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_rng::TermShape::Any,
+            );
+            let other = crate::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_rng::TermShape::Any,
+            );
+            nested += usize::from(budget < 7);
+            let mut dict = GlobalDictionary::new();
+            let id = intern(&mut dict, &value);
+            assert_eq!(dict.term_value(id), value, "seed {seed}");
+            assert_eq!(reference_value(&dict, id), value, "seed {seed}");
+            assert_eq!(stored_hash(&dict, id), hash_value(&value), "seed {seed}");
+            assert!(dict.term_matches_value(id, &value), "seed {seed}");
+            assert_eq!(
+                dict.term_matches_value(id, &other),
+                value == other,
+                "seed {seed}: {value:?} against {other:?}"
+            );
+            assert_eq!(dict.reintern_validated(&value), id, "seed {seed}");
+            assert_eq!(dict.term_id_by_value(&value), Some(id), "seed {seed}");
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is interned, resolved, hashed and
+    /// matched on a thread whose whole stack is 128 KiB. (The lookup by value builds an
+    /// index hashing every stored term's whole value, which is quadratic over a chain,
+    /// so it is exercised on the generated terms above instead.)
+    #[test]
+    fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::test_rng::triple_chain(LEVELS);
+                let mut dict = GlobalDictionary::new();
+                let id = intern(&mut dict, &value);
+                assert_eq!(dict.reintern_validated(&value), id);
+                assert!(dict.term_matches_value(id, &value));
+                assert_eq!(stored_hash(&dict, id), hash_value(&value));
+                let resolved = dict.term_value(id);
+                assert!(
+                    resolved == value,
+                    "the resolved chain equals the interned one"
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

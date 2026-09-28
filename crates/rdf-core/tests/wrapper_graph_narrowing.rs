@@ -43,6 +43,7 @@
 //! Residue keeping lives on the bundle carrier, not on a wrapper built here; it is
 //! pinned by `ir::pipeline_bundle`'s own tests.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -239,9 +240,9 @@ fn delta_graph_seam_matches_the_filtered_stream() {
     // REMOVAL: drop the g2 reifier declaration and the g2 annotation, so the base
     // arm's suppression mask is non-empty.
     let quoted = TermValue::Triple {
-        s: Box::new(iri("s")),
-        p: Box::new(TermValue::iri(P)),
-        o: Box::new(iri("o")),
+        s: TermBox::new(iri("s")),
+        p: TermBox::new(TermValue::iri(P)),
+        o: TermBox::new(iri("o")),
     };
     assert!(
         mutable.remove(&QuadValues::quad(
@@ -353,9 +354,9 @@ fn delta_graph_seam_matches_the_filtered_stream_for_a_blank_graph_name() {
             s: iri("added-r"),
             p: TermValue::iri(REIFIES),
             o: TermValue::Triple {
-                s: Box::new(iri("s")),
-                p: Box::new(TermValue::iri(P)),
-                o: Box::new(iri("o")),
+                s: TermBox::new(iri("s")),
+                p: TermBox::new(TermValue::iri(P)),
+                o: TermBox::new(iri("o")),
             },
             g: Some(TermValue::Blank {
                 label: "bg".into(),
@@ -417,9 +418,9 @@ fn a_respelled_term_resolves_onto_the_base_row_and_never_duplicates_it() {
         direction: None,
     };
     let quoted = TermValue::Triple {
-        s: Box::new(iri("s")),
-        p: Box::new(TermValue::iri(P)),
-        o: Box::new(shouted.clone()),
+        s: TermBox::new(iri("s")),
+        p: TermBox::new(TermValue::iri(P)),
+        o: TermBox::new(shouted.clone()),
     };
 
     let base_quads = base.quads().count();

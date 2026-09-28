@@ -18,6 +18,9 @@
 //!   validation (delegated to `purrdf-iri`).
 //! * [`ParseError::CdtArity`] — a SEP-0009 composite-datatype function was
 //!   called with a number of arguments its spec-fixed signature does not admit.
+//!
+//! How deeply a request nests is never a reason: the parser holds what encloses the
+//! cursor on heap-allocated stacks, so nesting is bounded by memory alone.
 
 use core::fmt;
 

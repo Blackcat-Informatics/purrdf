@@ -48,6 +48,7 @@
 //! * **Governed × strategy** — the truncated-inner-never-memoized discipline, pinned
 //!   against the current (post-redesign) decision site.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -110,8 +111,8 @@ fn bgp1(s: TermPattern, iri: &str, o: TermPattern) -> GraphPattern {
               threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
               targets, where the same box is still the field's type"
 )]
-fn bx(p: GraphPattern) -> Box<GraphPattern> {
-    Box::new(p)
+fn bx(p: GraphPattern) -> Child<GraphPattern> {
+    Child::new(p)
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ fn exists_results(
         ctx = ctx.with_property_functions(registry);
     }
     let seq = eval(outer, &mut ctx).expect("outer pattern evaluates");
-    let exists_expr = Expression::Exists(Box::new(inner.clone()));
+    let exists_expr = Expression::Exists(Child::new(inner.clone()));
     seq.rows
         .iter()
         .map(|row| {
@@ -307,6 +308,7 @@ fn assert_probe_and_definition_agree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_sparql_algebra::Child;
 
     // ---- shared fixture: `EX:s{n} EX:knows EX:{target}` outer, correlated on `?s` ----
     //
@@ -437,10 +439,10 @@ mod tests {
         // `{ ?s :member ?m } UNION { ?s :nosuchpred ?never }` — the right branch never
         // matches anything, so the union's truth value tracks the left branch alone,
         // through `admissible_rec`'s dedicated `Union` arm (both branches admissible).
-        let inner = GraphPattern::Union {
-            left: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
-            right: bx(bgp1(tvar("s"), &format!("{EX}nosuchpred"), tvar("never"))),
-        };
+        let inner = GraphPattern::union(
+            bgp1(tvar("s"), &format!("{EX}member"), tvar("m")),
+            bgp1(tvar("s"), &format!("{EX}nosuchpred"), tvar("never")),
+        );
         assert_probe_and_definition_agree(&ds, &arm_outer(), &inner);
     }
 
@@ -454,8 +456,8 @@ mod tests {
         // root's (conservative) `current_row_vars` set.
         let inner = GraphPattern::Filter {
             expr: Expression::Equal(
-                Box::new(Expression::Variable(var("m"))),
-                Box::new(Expression::NamedNode(nn(&format!("{EX}club")))),
+                Child::new(Expression::Variable(var("m"))),
+                Child::new(Expression::NamedNode(nn(&format!("{EX}club")))),
             ),
             inner: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
         };
@@ -924,8 +926,8 @@ mod tests {
         let group = GraphPattern::Group {
             inner: bx(GraphPattern::Filter {
                 expr: Expression::Equal(
-                    Box::new(Expression::Variable(var("x"))),
-                    Box::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::Variable(var("x"))),
+                    Child::new(Expression::Variable(var("s"))),
                 ),
                 inner: bx(bgp1(tvar("z"), &format!("{EX}item"), tvar("x"))),
             }),
@@ -944,8 +946,8 @@ mod tests {
         };
         let inner = GraphPattern::Filter {
             expr: Expression::Greater(
-                Box::new(Expression::Variable(var("c"))),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::Variable(var("c"))),
+                Child::new(Expression::Literal(Literal::new_typed(
                     "1",
                     nn("http://www.w3.org/2001/XMLSchema#integer"),
                 ))),
@@ -1024,8 +1026,8 @@ mod tests {
             }),
             right: bx(GraphPattern::Filter {
                 expr: Expression::Equal(
-                    Box::new(Expression::Variable(var("x"))),
-                    Box::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::Variable(var("x"))),
+                    Child::new(Expression::Variable(var("s"))),
                 ),
                 inner: bx(bgp1(tvar("zw"), &format!("{EX}item"), tvar("x"))),
             }),
@@ -1485,12 +1487,12 @@ mod tests {
             }),
             right: bx(bgp1(tvar("z"), &format!("{EX}cand"), tvar("c"))),
             expression: Some(Expression::Equal(
-                Box::new(Expression::Variable(var("c"))),
-                Box::new(Expression::Variable(var("s"))),
+                Child::new(Expression::Variable(var("c"))),
+                Child::new(Expression::Variable(var("s"))),
             )),
         };
         let inner = GraphPattern::Filter {
-            expr: Expression::Not(Box::new(Expression::Bound(var("c")))),
+            expr: Expression::Not(Child::new(Expression::Bound(var("c")))),
             inner: bx(left_join),
         };
 
@@ -1694,8 +1696,8 @@ mod tests {
         // still a genuinely free variable (never substituted): `IF`'s condition
         // `?s = :trigger` is therefore INDETERMINATE (an unbound-variable comparison —
         // SPARQL's type-error, `Ok(None)`), and `Expression::If`'s `None` arm evaluates
-        // NEITHER branch at all (`crate::expr::eval_expr`'s `If` arm: `Some(true) =>
-        // eval T, Some(false) => eval E, None => Ok(None)`) — so the custom call the
+        // NEITHER branch at all (the expression VM's `IF` branch instruction: `true`
+        // runs T, `false` runs E, an error jumps past both to an unbound value) — so the custom call the
         // correct path hard-errors on is never even reached, and the probe would answer
         // `false` for the `:trigger` row too, cleanly, no error. This is exactly why
         // `Function::Custom` makes the containing construct UNCONDITIONALLY
@@ -1719,15 +1721,15 @@ mod tests {
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
         let inner = GraphPattern::Filter {
             expr: Expression::If(
-                Box::new(Expression::Equal(
-                    Box::new(Expression::Variable(var("s"))),
-                    Box::new(Expression::NamedNode(nn(&format!("{EX}trigger")))),
+                Child::new(Expression::Equal(
+                    Child::new(Expression::Variable(var("s"))),
+                    Child::new(Expression::NamedNode(nn(&format!("{EX}trigger")))),
                 )),
-                Box::new(Expression::FunctionCall(
+                Child::new(Expression::FunctionCall(
                     Function::Custom(nn("http://example.org/undefined-fn")),
-                    Vec::new(),
+                    Vec::new().into(),
                 )),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::Literal(Literal::new_typed(
                     "true",
                     nn("http://www.w3.org/2001/XMLSchema#boolean"),
                 ))),
@@ -1793,8 +1795,8 @@ mod tests {
     #[test]
     fn exists_silent_service_swallow_point_parity() {
         // `EXISTS { ?s :tag ?w2 . SERVICE SILENT <http://example.org/remote> { ?x :p ?y } }`
-        // — no `ctx.remote` source is configured, so `crate::remote::eval_service`'s
-        // `silent_or_err` swallows the missing source into the JOIN IDENTITY (a single
+        // — no `ctx.remote` source is configured, so `crate::remote::invoke_service`
+        // silences the missing source into the JOIN IDENTITY (a single
         // empty-binding row — `crate::remote::identity_seq`'s doc, "`Join(left,
         // identity) == left`, so a swallowed `SERVICE SILENT` leaves the surrounding
         // query unchanged"), uniformly, REGARDLESS of any row's bindings (the endpoint is
@@ -1854,11 +1856,11 @@ mod tests {
         // divergence WITNESS: forcing the probe on it would need this test to actually
         // dispatch a remote call with the endpoint IRI still unbound, which
         // `crate::remote::eval_service` refuses outright before ever reaching a source
-        // (`NamedNodePattern::Variable(_) => silent_or_err(silent, ...)`, "SERVICE with
-        // a variable endpoint is not supported (needs lateral evaluation)") — an
+        // (`crate::service_endpoints::eval_variable_endpoint`: with no enclosing join
+        // listing the variable's endpoints, "SERVICE ?g with no endpoint") — an
         // UNCONDITIONAL refusal, independent of probe/definition strategy, of any
-        // `ctx.remote` configuration, and of `silent`'s value (`silent_or_err` still
-        // requires SOME outcome; without SILENT it hard-errors either way). There is no
+        // `ctx.remote` configuration, and of `silent`'s value (no invocation is made, so
+        // there is no failed invocation for `SILENT` to absorb). There is no
         // configuration under which forcing the probe reaches different code from the
         // natural (definition) path at all — both refuse identically, before any
         // dispatch a "wrong answer" could be observed in. So this test pins the
@@ -1904,13 +1906,13 @@ mod tests {
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
         let inner = GraphPattern::Filter {
             expr: Expression::Equal(
-                Box::new(Expression::Variable(var("s"))),
-                Box::new(Expression::Variable(var("z"))),
+                Child::new(Expression::Variable(var("s"))),
+                Child::new(Expression::Variable(var("z"))),
             ),
             inner: bx(GraphPattern::Filter {
                 expr: Expression::GreaterOrEqual(
-                    Box::new(Expression::Variable(var("r"))),
-                    Box::new(Expression::Literal(Literal::new_typed(
+                    Child::new(Expression::Variable(var("r"))),
+                    Child::new(Expression::Literal(Literal::new_typed(
                         "0",
                         nn("http://www.w3.org/2001/XMLSchema#integer"),
                     ))),
@@ -1918,7 +1920,7 @@ mod tests {
                 inner: bx(GraphPattern::Extend {
                     inner: bx(bgp1(tvar("z"), &format!("{EX}base"), tvar("b"))),
                     variable: var("r"),
-                    expression: Expression::FunctionCall(Function::Rand, Vec::new()),
+                    expression: Expression::FunctionCall(Function::Rand, Vec::new().into()),
                 }),
             }),
         };
@@ -1929,7 +1931,7 @@ mod tests {
             let mut ctx = EvalCtx::new(&ds);
             ctx.options.exists_memo = memo;
             let seq = eval(&outer, &mut ctx).expect("outer");
-            let exists_expr = Expression::Exists(Box::new(inner.clone()));
+            let exists_expr = Expression::Exists(Child::new(inner.clone()));
             for row in &seq.rows {
                 crate::expr::eval_ebv(&exists_expr, row, &seq.schema, &mut ctx)
                     .expect("no hard error");
@@ -1989,8 +1991,8 @@ mod tests {
 
         let nested = GraphPattern::Filter {
             expr: Expression::Less(
-                Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
-                Box::new(Expression::Literal(Literal::new_typed(
+                Child::new(Expression::FunctionCall(Function::Rand, Vec::new().into())),
+                Child::new(Expression::Literal(Literal::new_typed(
                     "0.5",
                     nn("http://www.w3.org/2001/XMLSchema#double"),
                 ))),
@@ -2186,8 +2188,8 @@ mod tests {
             bgp1(tvar("s"), &format!("{EX}p2"), tvar("y")),
             GraphPattern::Filter {
                 expr: Expression::Less(
-                    Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
-                    Box::new(Expression::Literal(Literal::new_typed(
+                    Child::new(Expression::FunctionCall(Function::Rand, Vec::new().into())),
+                    Child::new(Expression::Literal(Literal::new_typed(
                         "0.5",
                         nn("http://www.w3.org/2001/XMLSchema#double"),
                     ))),
@@ -2299,10 +2301,7 @@ mod tests {
                 left: bx(l.clone()),
                 right: bx(r.clone()),
             },
-            1 => GraphPattern::Union {
-                left: bx(l.clone()),
-                right: bx(r.clone()),
-            },
+            1 => GraphPattern::union(l.clone(), r.clone()),
             2 => GraphPattern::LeftJoin {
                 left: bx(l.clone()),
                 right: bx(r.clone()),
@@ -2360,7 +2359,7 @@ mod tests {
         let mut ctx = EvalCtx::new(ds);
         ctx.options.exists_memo = memo;
         let seq = eval(outer, &mut ctx).expect("outer pattern evaluates");
-        let exists_expr = Expression::Exists(Box::new(inner.clone()));
+        let exists_expr = Expression::Exists(Child::new(inner.clone()));
         seq.rows
             .iter()
             .map(|row| {

@@ -3,6 +3,7 @@
 
 //! Generic RDF-to-columnar projection.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{
@@ -166,52 +167,108 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
         }
     }
 
+    /// Resolve source term `id`, memoised in `values` with `active` holding the
+    /// terms being resolved.
+    ///
+    /// The walk runs over a work list of terms being resolved: a term is entered by
+    /// first consulting `values`, then refusing a term already being resolved (a
+    /// cycle); a literal's datatype is resolved fully before the literal is checked,
+    /// and a triple term's subject, predicate and object each fully, in that order,
+    /// before the triple is assembled. Every term is memoised as soon as its value
+    /// exists, and the first refusal ends the walk.
     fn resolve(&mut self, id: D::Id) -> Result<TermValue, ColumnarError> {
-        if let Some(value) = self.values.get(&id) {
-            return Ok(value.clone());
+        /// A term being resolved, the terms it depends on in resolution order, and
+        /// the values they resolved to so far.
+        struct Frame<'v, I> {
+            id: I,
+            term: TermRef<'v, I>,
+            dependencies: ([I; 3], usize),
+            resolved: Vec<TermValue>,
         }
-        if !self.active.insert(id) {
-            return Err(ColumnarError::malformed(
-                "term graph",
-                "cyclic triple-term reference",
-            ));
-        }
-
-        let value = match self.view.resolve(id) {
-            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-            TermRef::Blank { label, scope } => TermValue::Blank {
-                label: label.to_owned(),
-                scope,
-            },
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = self.resolve(datatype)?;
-                let TermValue::Iri(datatype) = datatype else {
-                    return Err(ColumnarError::malformed(
-                        "literal datatype",
-                        "datatype id does not resolve to an IRI",
-                    ));
-                };
-                TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype,
-                    language: language.map(str::to_owned),
-                    direction,
-                }
+        let view = self.view;
+        let enter = |this: &mut Self,
+                     id: D::Id|
+         -> Result<Result<TermValue, Frame<'a, D::Id>>, ColumnarError> {
+            if let Some(value) = this.values.get(&id) {
+                return Ok(Ok(value.clone()));
             }
-            TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.resolve(s)?),
-                p: Box::new(self.resolve(p)?),
-                o: Box::new(self.resolve(o)?),
-            },
+            if !this.active.insert(id) {
+                return Err(ColumnarError::malformed(
+                    "term graph",
+                    "cyclic triple-term reference",
+                ));
+            }
+            let term = view.resolve(id);
+            let dependencies = match term {
+                TermRef::Literal { datatype, .. } => ([datatype, datatype, datatype], 1),
+                TermRef::Triple { s, p, o } => ([s, p, o], 3),
+                TermRef::Iri(_) | TermRef::Blank { .. } => ([id, id, id], 0),
+            };
+            Ok(Err(Frame {
+                id,
+                term,
+                dependencies,
+                resolved: Vec::new(),
+            }))
         };
-        self.active.remove(&id);
-        self.values.insert(id, value.clone());
-        Ok(value)
+        let mut frames = match enter(self, id)? {
+            Ok(value) => return Ok(value),
+            Err(frame) => vec![frame],
+        };
+        loop {
+            let frame = frames.last_mut().expect("a term is being resolved");
+            let (dependencies, count) = frame.dependencies;
+            if frame.resolved.len() < count {
+                match enter(self, dependencies[frame.resolved.len()])? {
+                    Ok(value) => frame.resolved.push(value),
+                    Err(inner) => frames.push(inner),
+                }
+                continue;
+            }
+            let Frame {
+                id, term, resolved, ..
+            } = frames.pop().expect("a term is being resolved");
+            let mut resolved = resolved.into_iter();
+            let value = match term {
+                TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                TermRef::Blank { label, scope } => TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                },
+                TermRef::Literal {
+                    lexical,
+                    language,
+                    direction,
+                    ..
+                } => {
+                    let TermValue::Iri(datatype) =
+                        resolved.next().expect("a literal's datatype is resolved")
+                    else {
+                        return Err(ColumnarError::malformed(
+                            "literal datatype",
+                            "datatype id does not resolve to an IRI",
+                        ));
+                    };
+                    TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype,
+                        language: language.map(str::to_owned),
+                        direction,
+                    }
+                }
+                TermRef::Triple { .. } => TermValue::Triple {
+                    s: TermBox::new(resolved.next().expect("a triple's subject is resolved")),
+                    p: TermBox::new(resolved.next().expect("a triple's predicate is resolved")),
+                    o: TermBox::new(resolved.next().expect("a triple's object is resolved")),
+                },
+            };
+            self.active.remove(&id);
+            self.values.insert(id, value.clone());
+            match frames.last_mut() {
+                Some(parent) => parent.resolved.push(value),
+                None => return Ok(value),
+            }
+        }
     }
 
     fn get(&self, id: D::Id) -> Result<&TermValue, ColumnarError> {
@@ -681,6 +738,98 @@ mod tests {
             let forward = write(&*build(false), &blobs, compression).unwrap();
             let reverse = write(&*build(true), &blobs, compression).unwrap();
             assert_eq!(forward, reverse);
+        }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The source-term resolution against its recursive reference.
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermRef, TermValue};
+
+    use super::{ColumnarError, Resolver};
+
+    fn reference<D: DatasetView>(
+        resolver: &mut Resolver<'_, D>,
+        id: D::Id,
+    ) -> Result<TermValue, ColumnarError> {
+        if let Some(value) = resolver.values.get(&id) {
+            return Ok(value.clone());
+        }
+        if !resolver.active.insert(id) {
+            return Err(ColumnarError::malformed(
+                "term graph",
+                "cyclic triple-term reference",
+            ));
+        }
+        let value = match resolver.view.resolve(id) {
+            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+            TermRef::Blank { label, scope } => TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermValue::Iri(datatype) = reference(resolver, datatype)? else {
+                    return Err(ColumnarError::malformed(
+                        "literal datatype",
+                        "datatype id does not resolve to an IRI",
+                    ));
+                };
+                TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype,
+                    language: language.map(str::to_owned),
+                    direction,
+                }
+            }
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference(resolver, s)?),
+                p: TermBox::new(reference(resolver, p)?),
+                o: TermBox::new(reference(resolver, o)?),
+            },
+        };
+        resolver.active.remove(&id);
+        resolver.values.insert(id, value.clone());
+        Ok(value)
+    }
+
+    /// Every term of a dataset holding a generated term resolves — each twice, the second
+    /// time through the memo — exactly as the recursive reference resolves it, leaving the
+    /// same memo.
+    #[test]
+    fn resolution_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::WellFormed,
+            );
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset: std::sync::Arc<RdfDataset> =
+                builder.freeze().expect("a generated term freezes");
+            let (mut found, mut expected) = (Resolver::new(&*dataset), Resolver::new(&*dataset));
+            for quad in dataset.quads() {
+                for id in [quad.s, quad.p, quad.o, quad.o] {
+                    assert_eq!(
+                        format!("{:?}", found.resolve(id)),
+                        format!("{:?}", reference(&mut expected, id)),
+                        "seed {seed}"
+                    );
+                }
+            }
+            assert_eq!(found.values, expected.values, "seed {seed}");
         }
     }
 }

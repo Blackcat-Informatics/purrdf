@@ -16,6 +16,7 @@
 //! is unsearchable with nothing anywhere reporting it. These tests assert the
 //! opposite by construction.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
@@ -275,8 +276,8 @@ fn triple_term_subjects_are_indexed() {
     let dataset = builder.freeze().expect("the fixture must validate");
 
     // The disguise must not name `s` itself: a term that contains its own id is
-    // an infinite structure, and the resolver's depth bound would (correctly)
-    // refuse it.
+    // an infinite structure, which no view may present and no resolver could
+    // finish walking.
     let view = TripleSubjectView {
         inner: Arc::clone(&dataset),
         disguised: s,
@@ -288,9 +289,9 @@ fn triple_term_subjects_are_indexed() {
     assert_eq!(
         subjects(&index),
         vec![TermValue::Triple {
-            s: Box::new(TermValue::iri(O)),
-            p: Box::new(TermValue::iri(P)),
-            o: Box::new(TermValue::iri(O)),
+            s: TermBox::new(TermValue::iri(O)),
+            p: TermBox::new(TermValue::iri(P)),
+            o: TermBox::new(TermValue::iri(O)),
         }],
         "the subject must be the whole triple term, resolved component by component"
     );

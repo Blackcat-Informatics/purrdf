@@ -41,10 +41,8 @@
 //!   evaluated in-engine — none of them is out of scope. What remains a typed
 //!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
 //!   quoted-triple-term component in a BGP or property-path pattern (`convert`), an
-//!   unresolved custom SPARQL function IRI (`expr`), `heldIn` called without a
-//!   caller-supplied standpoint-predicate configuration, and a manually constructed
-//!   graph pattern whose nesting exceeds the parser's safety bound
-//!   (`governor::soundness`). A call into a relation, or an `AGG(<iri>, …)` custom
+//!   unresolved custom SPARQL function IRI (`expr`), and `heldIn` called without a
+//!   caller-supplied standpoint-predicate configuration. A call into a relation, or an `AGG(<iri>, …)` custom
 //!   aggregate, the host did not register — or one no declared access pattern
 //!   admits, for a relation — is not in that residue either: it is a typed
 //!   [`EvalError::Function`], because the construct is supported and the host's
@@ -90,6 +88,7 @@ mod construct;
 mod contain;
 mod convert;
 mod dataset_spec;
+mod deferred_exists;
 mod describe_query;
 mod enf;
 pub mod engine;
@@ -108,11 +107,16 @@ pub mod interned;
 pub mod knn;
 mod list_fn;
 mod modifier;
+#[cfg(test)]
+mod nested_exists_gate;
+#[cfg(test)]
+mod op_count;
 pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
 pub mod path_relation;
+mod plan;
 mod plan_cache;
 mod plan_memory;
 mod prebind_memo;
@@ -121,17 +125,28 @@ pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
 mod registry_id;
+// The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
+// parameters applied as text, and response-format negotiation. No I/O.
+pub mod protocol;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
+mod row_checkpoint;
+#[cfg(test)]
+mod row_checkpoint_gate;
 mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
 pub mod execution;
 pub mod service;
+mod service_endpoints;
 pub mod solution;
+// The guard every recursive evaluator entry passes through, over `purrdf-stack`'s
+// measurement (a host that switches the stack pointer onto a stack of its own installs
+// that stack's floor there, not here).
+mod stack;
 pub mod stat_agg;
 mod statement_layer;
 mod substitute;
@@ -140,6 +155,7 @@ mod template;
 pub mod test_rng;
 pub mod update;
 pub mod user_fn;
+mod vm;
 // The per-query record of what the relations a query invoked attested about the
 // indexes behind them — which generation answered, and whether it was whole.
 pub mod witness;
@@ -199,7 +215,10 @@ pub use modifier::{ValueAggregate, compare_values, fold_values, order_values};
 // governor stopped the execution — without also depending on `purrdf-core` directly. A
 // governed surface whose outcome types are unnameable from the crate that produces them
 // is one no consumer can match on.
-pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGovernor};
+pub use purrdf_core::{
+    GovernorEvidence, ResourceDimension, SilencedInvocation, SilencedKind, SilencedTarget,
+    StopCause, TrippedGovernor,
+};
 // The adornment lattice, re-exported for the same reason: it appears in
 // [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
 // host implementing the trait cannot write the impl without naming it.
@@ -254,8 +273,8 @@ pub use registry_id::RegistryId;
 // [`PropertyFunctionRegistry`] as ordinary relations, and should not have to name a module
 // path to build the values it registers.
 pub use path_relation::{
-    MAX_HOPS_CAP, PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep,
-    PathWitnessRelation, ShortestPathWitnessRelation,
+    PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep, PathWitnessRelation,
+    ShortestPathWitnessRelation,
 };
 pub use remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
@@ -268,7 +287,7 @@ pub use service::{
     ServiceCredential, ServiceDenial, ServiceProfile, ServiceRouter,
 };
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
-pub use update::{GraphResolveRequest, GraphResolver};
+pub use update::{GraphResolveRequest, GraphResolver, LoadError};
 pub use user_fn::{
     Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
     NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,

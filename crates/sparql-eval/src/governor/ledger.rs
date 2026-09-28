@@ -121,12 +121,11 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use purrdf_sparql_algebra::GraphPattern;
+use std::sync::Arc;
 
-use super::soundness::{pattern_label, walk_spine};
 use super::{CHARGE_SCHEDULE, ChargePoint};
-use crate::DetHashMap;
 use crate::agg_fn::AggDescriptor;
+use crate::plan::{NodeId, PlanShape};
 use crate::property_fn::PfDescriptor;
 
 /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
@@ -174,14 +173,12 @@ struct LedgerNode {
 /// Shared by `Arc` with every forked worker for the same reason
 /// [`GovernorState`](super::GovernorState) is: a per-worker copy would split one node's
 /// charges across copies and none of them would be the total.
-#[derive(Debug)]
 pub(crate) struct ChargeLedger {
-    /// One entry per plan node, in pre-order.
+    /// One entry per plan node, indexed by [`NodeId`].
     nodes: Vec<LedgerNode>,
-    /// Plan-node address to its pre-order ordinal. Addresses are stable for the immutable
-    /// query algebra for as long as the plan is borrowed, which is the same discipline
-    /// [`crate::eval::EvalCtx`]'s address-memoized caches already rely on.
-    ordinals: DetHashMap<usize, usize>,
+    /// The shape of the tree the ledger lines are the nodes of, which is where a node's
+    /// address resolves to its line.
+    shape: Arc<PlanShape>,
     /// Fuel charged per node, per [`ChargePoint`], in [`CHARGE_SCHEDULE`] order.
     fuel: Vec<[AtomicU64; CHARGE_SCHEDULE.len()]>,
     /// Rows each node committed to its own output.
@@ -190,28 +187,32 @@ pub(crate) struct ChargeLedger {
     cells: Vec<AtomicU64>,
 }
 
+impl std::fmt::Debug for ChargeLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChargeLedger")
+            .field("nodes", &self.nodes)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ChargeLedger {
-    /// A ledger over the plan rooted at `root`, with the planner's per-BGP predictions
-    /// keyed by node address.
-    pub(crate) fn for_plan(
-        root: &GraphPattern,
-        estimates: &DetHashMap<usize, PlanEstimate>,
-    ) -> Self {
-        let mut nodes = Vec::new();
-        let mut ordinals = DetHashMap::default();
-        walk_spine(root, &mut |node, _context, depth| {
-            let address = std::ptr::from_ref(node) as usize;
-            ordinals.insert(address, nodes.len());
-            nodes.push(LedgerNode {
-                label: pattern_label(node),
-                depth,
-                estimate: estimates.get(&address).cloned(),
-            });
-        });
-        let count = nodes.len();
+    /// A ledger over the tree `shape` numbers, with the planner's per-node predictions
+    /// indexed by [`NodeId`] (a missing entry is no prediction).
+    pub(crate) fn for_plan(shape: &Arc<PlanShape>, estimates: &[Option<PlanEstimate>]) -> Self {
+        let count = shape.len();
+        let nodes = (0..count)
+            .map(|index| {
+                let node = NodeId::from_index(index);
+                LedgerNode {
+                    label: shape.kind(node).label(),
+                    depth: shape.depth(node) as usize,
+                    estimate: estimates.get(index).cloned().flatten(),
+                }
+            })
+            .collect();
         Self {
             nodes,
-            ordinals,
+            shape: Arc::clone(shape),
             fuel: (0..count)
                 .map(|_| std::array::from_fn(|_| AtomicU64::new(0)))
                 .collect(),
@@ -220,15 +221,10 @@ impl ChargeLedger {
         }
     }
 
-    /// The pre-order ordinal of the plan node at `address`, or `None` when the address is
-    /// not a plan node — an `EXISTS` substituted temporary, or a SHACL-AF function body.
-    pub(crate) fn ordinal_of(&self, address: usize) -> Option<usize> {
-        self.ordinals.get(&address).copied()
-    }
-
-    /// The ordinal of the plan root, which is where a fresh cursor starts.
-    pub(crate) const fn root_ordinal() -> usize {
-        0
+    /// The node of the plan at `address`, or `None` when the address is not a plan node
+    /// — an `EXISTS` substituted temporary, or a SHACL-AF function body.
+    pub(crate) fn ordinal_of(&self, address: usize) -> Option<NodeId> {
+        self.shape.node_at(address)
     }
 
     /// Charge `units` of fuel to `node` under `point`.
@@ -236,15 +232,15 @@ impl ChargeLedger {
     /// `Relaxed` on both the load and the store: the counters carry no accompanying data
     /// a reader must see in order, and the value read at the end of the execution is
     /// read after every worker has been joined.
-    pub(crate) fn record_fuel(&self, node: usize, point: ChargePoint, units: u64) {
-        if let Some(slots) = self.fuel.get(node) {
+    pub(crate) fn record_fuel(&self, node: NodeId, point: ChargePoint, units: u64) {
+        if let Some(slots) = self.fuel.get(node.index()) {
             slots[point.schedule_index()].fetch_add(units, Ordering::Relaxed);
         }
     }
 
     /// Record `rows` committed to `node`'s output.
-    pub(crate) fn record_rows(&self, node: usize, rows: u64) {
-        if let Some(slot) = self.rows.get(node) {
+    pub(crate) fn record_rows(&self, node: NodeId, rows: u64) {
+        if let Some(slot) = self.rows.get(node.index()) {
             slot.fetch_add(rows, Ordering::Relaxed);
         }
     }
@@ -254,8 +250,8 @@ impl ChargeLedger {
     /// A maximum rather than a sum, for the same reason the
     /// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells)
     /// ceiling is: the quantity is how large one bag got, not how many bags were built.
-    pub(crate) fn record_cells(&self, node: usize, cells: u64) {
-        if let Some(slot) = self.cells.get(node) {
+    pub(crate) fn record_cells(&self, node: NodeId, cells: u64) {
+        if let Some(slot) = self.cells.get(node.index()) {
             slot.fetch_max(cells, Ordering::Relaxed);
         }
     }

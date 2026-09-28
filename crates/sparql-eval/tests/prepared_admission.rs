@@ -11,6 +11,7 @@
 //! mutability say so in place, with what coverage (if any) survives it and where.
 
 use purrdf_core::{RdfDatasetBuilder, SparqlResult};
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     Expression, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions,
     PropertyFunctionCall, PropertyPathExpression, Query, QueryDataset, TermPattern, Variable,
@@ -85,7 +86,7 @@ fn term_validation_preserves_rdf_values_and_rejects_invalid_structure() {
             "text",
             NamedNode::new_unchecked("relative"),
         )),
-        GroundTerm::Triple(Box::new(GroundTriple {
+        GroundTerm::Triple(Child::new(GroundTriple {
             subject: GroundTerm::Literal(Literal::new_simple("subject")),
             predicate: NamedNode::new("http://example.org/p").unwrap(),
             object: named(),
@@ -132,7 +133,7 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
         GraphPattern::Path {
             subject: TermPattern::Variable(Variable::new("s")),
             path: PropertyPathExpression::Range {
-                inner: Box::new(PropertyPathExpression::NamedNode(
+                inner: Child::new(PropertyPathExpression::NamedNode(
                     NamedNode::new("http://example.org/p").unwrap(),
                 )),
                 min: 3,
@@ -141,7 +142,7 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
             object: TermPattern::Variable(Variable::new("o")),
         },
         GraphPattern::Unfold {
-            inner: empty(),
+            inner: empty().into(),
             expression: Expression::Variable(Variable::new("list")),
             element: Variable::new("x"),
             companion: Some(Variable::new("x")),
@@ -155,22 +156,33 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
                 .is_err()
         );
     }
-    let mut expression = Expression::Literal(Literal::new_simple("leaf"));
-    for _ in 0..(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_NODES
-        + 8 * purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH)
-    {
-        expression = Expression::Not(Box::new(expression));
-    }
-    assert!(
-        engine
-            .prepare_algebra(
+    // A negation chain too tall for the walks over it to fit the preparing thread's
+    // stack is refused, typed. On an 8 MiB thread — which the C library may hand up to
+    // 32 MiB — eighty thousand levels need 41 MB of walks at the parser's 512-byte
+    // charge, while dropping the refused chain there needs under 5 MB.
+    let refused = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut expression = Expression::Literal(Literal::new_simple("leaf"));
+            for _ in 0..80_000 {
+                expression = Expression::Not(Child::new(expression));
+            }
+            NativeSparqlEngine::new().prepare_algebra(
                 ask(GraphPattern::Filter {
                     expr: expression,
-                    inner: empty()
+                    inner: empty().into(),
                 }),
-                QueryOptions::EMPTY
+                QueryOptions::EMPTY,
             )
-            .is_err()
+        })
+        .expect("spawn")
+        .join()
+        .expect("the preparing thread returned rather than aborting")
+        .expect_err("a chain too tall for the stack is refused");
+    assert_eq!(
+        refused.code,
+        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
+        "{refused}"
     );
 }
 
@@ -192,10 +204,7 @@ fn rewritten_calls_share_registry_and_arity_admission() {
     );
     let env =
         ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     assert!(PreparedQuery::rewritten(call(vec![], vec![]), options).is_err());
     let query = call(
         vec![TermPattern::Variable(Variable::new("s"))],
@@ -346,12 +355,10 @@ fn cache_keys_keep_base_unicode_and_field_boundaries_distinct() {
 
 #[test]
 fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() {
-    // One group element per OPTIONAL, with no nested group contents. This
-    // reaches the parser's combinator budget while using only two brace levels.
-    let query = format!(
-        "ASK {{ {} }}",
-        "OPTIONAL {} ".repeat(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_NODES)
-    );
+    // One group element per OPTIONAL, with no nested group contents: a 2 048-link
+    // `LeftJoin` spine — the whole of the combinator budget the parser used to
+    // enforce — using only two brace levels.
+    let query = format!("ASK {{ {} }}", "OPTIONAL {} ".repeat(2_048));
     let engine = NativeSparqlEngine::new();
     let parsed = purrdf_sparql_algebra::SparqlParser::new()
         .parse_query(&query)
@@ -361,13 +368,17 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     let typed = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
     assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
-    // Preparation accepts the parser's envelope. Execution retains its existing
-    // narrower recursive-evaluator guard and must return a diagnostic safely.
+    // Preparation accepts the parser's envelope. Execution measures the stack it runs
+    // on: on this test thread the recursive evaluator runs out of it and returns its
+    // typed diagnostic safely, and on a thread with room it answers.
     for prepared in [&text, &typed] {
-        assert!(
-            engine
-                .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
-                .is_err()
+        let refused = engine
+            .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
+            .expect_err("the spine does not evaluate on a test thread's stack");
+        assert_eq!(
+            refused.code,
+            purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
+            "{refused}"
         );
         assert!(
             engine
@@ -381,11 +392,24 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
                 .is_err()
         );
     }
-    let too_many = format!(
-        "ASK {{ {} }}",
-        "OPTIONAL {} ".repeat(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_NODES + 1)
+    let answered = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn_scoped(scope, || {
+                NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
+            })
+            .expect("spawn")
+            .join()
+            .expect("the large thread returned")
+    })
+    .expect("the spine evaluates where the stack holds it");
+    assert!(
+        matches!(answered, SparqlResult::Boolean(true)),
+        "{answered:?}"
     );
-    assert!(engine.prepare_query(&too_many, None).is_err());
+    // Past the old budget, the spine still prepares: nothing counts its links.
+    let longer = format!("ASK {{ {} }}", "OPTIONAL {} ".repeat(2_049));
+    engine.prepare_query(&longer, None).unwrap();
 }
 
 struct SubjectBoundRelation {
@@ -440,10 +464,7 @@ fn subject_bound_registry() -> ExtensionEnv {
 fn admission_reorders_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
     let env = registry;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
         iri: "http://example.org/relation".into(),
         subject_args: vec![TermPattern::Variable(Variable::new("s"))],
@@ -451,11 +472,11 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
     });
     assert!(PreparedQuery::rewritten(ask(call.clone()), options).is_err());
     let raw = ask(GraphPattern::Join {
-        left: Box::new(GraphPattern::Lateral {
-            left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-            right: Box::new(call),
+        left: Child::new(GraphPattern::Lateral {
+            left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+            right: Child::new(call),
         }),
-        right: Box::new(GraphPattern::Bgp {
+        right: Child::new(GraphPattern::Bgp {
             patterns: vec![purrdf_sparql_algebra::TriplePattern {
                 subject: TermPattern::Variable(Variable::new("s")),
                 predicate: purrdf_sparql_algebra::NamedNodePattern::NamedNode(
@@ -509,10 +530,7 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
 fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
     let env = registry;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(&env);
     let query = "SELECT (FOLD(?v ORDER BY ASC(EXISTS { \
                  ?s <http://example.org/relation> ?o . \
                  ?s <http://example.org/binding> ?bound \
@@ -551,10 +569,9 @@ fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
 
 #[test]
 fn parser_and_prepared_execution_agree_near_the_evaluator_depth_boundary() {
-    let query = format!(
-        "ASK {{ {} }}",
-        "OPTIONAL {} ".repeat(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH - 2)
-    );
+    // As long a spine as the evaluator's removed 128-level count admitted: it prepares
+    // and evaluates on a test thread's stack, ungoverned and governed alike.
+    let query = format!("ASK {{ {} }}", "OPTIONAL {} ".repeat(126));
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(&query, None).unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
@@ -589,7 +606,7 @@ fn compiler_aggregate_calls_are_admitted_with_their_registry() {
     )
     .unwrap();
     let query = ask(GraphPattern::Group {
-        inner: Box::new(values(vec![Variable::new("x")], vec![Some(named())])),
+        inner: Child::new(values(vec![Variable::new("x")], vec![Some(named())])),
         variables: vec![],
         aggregates: vec![(Variable::new("result"), aggregate)],
     });
@@ -675,7 +692,7 @@ fn aggregate_output_collisions_are_refused_without_rejecting_redundant_keys() {
         ),
     ] {
         let query = ask(GraphPattern::Group {
-            inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+            inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
             variables,
             aggregates,
         });
@@ -687,12 +704,12 @@ fn aggregate_output_collisions_are_refused_without_rejecting_redundant_keys() {
 fn deeply_nested_prepared_expressions_execute_without_recursive_admission_visitors() {
     let mut expression = Expression::Literal(Literal::new_simple("true"));
     for _ in 0..512 {
-        expression = Expression::Not(Box::new(expression));
+        expression = Expression::Not(Child::new(expression));
     }
     let engine = NativeSparqlEngine::new();
     let query = ask(GraphPattern::Filter {
         expr: expression,
-        inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+        inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
     });
     let prepared = engine.prepare_algebra(query, QueryOptions::EMPTY).unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();

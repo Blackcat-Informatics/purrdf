@@ -17,6 +17,7 @@
 
 use std::num::NonZeroU32;
 
+use super::term_walk::TermBox;
 use crate::RdfTextDirection;
 
 /// The `xsd:string` datatype IRI — the default datatype of a plain literal (C0.1).
@@ -276,7 +277,11 @@ pub(crate) enum InternedTerm {
 /// the core correctness rule: keying value→id lookup on `TermRef` would
 /// smuggle ids local to *another* dataset and silently return wrong answers, so the
 /// key carries no `TermId` at all. A `&TermValue` is the spec's "TermValueRef".
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Clone`, `==`, `Ord`, `Hash`, `Debug`, the canonical bytes and the drop all walk a
+/// nested triple term over a work list (see [`TermBox`]), so none of them needs more
+/// machine stack for a deeper term; `Debug` writes exactly what `#[derive(Debug)]`
+/// would.
 pub enum TermValue {
     /// An IRI, by its full string.
     Iri(String),
@@ -303,11 +308,11 @@ pub enum TermValue {
     /// A triple term, identified structurally by its `(s, p, o)` **values** (C0.3).
     Triple {
         /// The quoted triple's subject value.
-        s: Box<Self>,
+        s: TermBox,
         /// The quoted triple's predicate value.
-        p: Box<Self>,
+        p: TermBox,
         /// The quoted triple's object value.
-        o: Box<Self>,
+        o: TermBox,
     },
 }
 
@@ -404,132 +409,12 @@ impl TermValue {
     /// conflicting one. (Note this is NOT the derive order, which would put Blank
     /// before Literal — hence the hand-written `Ord`.)
     #[inline]
-    fn canonical_tag(&self) -> u8 {
+    pub(super) fn canonical_tag(&self) -> u8 {
         match self {
             Self::Iri(_) => 0,
             Self::Literal { .. } => 1,
             Self::Blank { .. } => 2,
             Self::Triple { .. } => 3,
-        }
-    }
-}
-
-// A TOTAL, dataset-independent order over `TermValue` — the canonical order in which
-// `PagedDataset::compact` re-interns the live terms, so the renumbered
-// `GlobalTermId` assignment is a pure function of the live term-VALUE set (never of
-// ingest order, page order, or the old numbering). Cross-kind order follows
-// [`canonical_tag`](TermValue::canonical_tag) (the serializer's IRI < Literal < Blank
-// < Triple); within a kind the components compare in the same (datatype, language,
-// lexical) precedence the renderer's `ObjKey` uses, with `direction` as a final
-// tiebreak so two literals differing ONLY in base direction (distinct values) still
-// order deterministically.
-impl Ord for TermValue {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.canonical_tag()
-            .cmp(&other.canonical_tag())
-            .then_with(|| match (self, other) {
-                (Self::Iri(a), Self::Iri(b)) => a.cmp(b),
-                (
-                    Self::Literal {
-                        lexical_form: la,
-                        datatype: da,
-                        language: ga,
-                        direction: dira,
-                    },
-                    Self::Literal {
-                        lexical_form: lb,
-                        datatype: db,
-                        language: gb,
-                        direction: dirb,
-                    },
-                ) => da
-                    .cmp(db)
-                    .then_with(|| ga.cmp(gb))
-                    .then_with(|| la.cmp(lb))
-                    .then_with(|| dira.cmp(dirb)),
-                (
-                    Self::Blank {
-                        label: la,
-                        scope: sa,
-                    },
-                    Self::Blank {
-                        label: lb,
-                        scope: sb,
-                    },
-                ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
-                (
-                    Self::Triple {
-                        s: sa,
-                        p: pa,
-                        o: oa,
-                    },
-                    Self::Triple {
-                        s: sb,
-                        p: pb,
-                        o: ob,
-                    },
-                ) => sa.cmp(sb).then_with(|| pa.cmp(pb)).then_with(|| oa.cmp(ob)),
-                // Equal tags guarantee the same variant, so every reachable pair is
-                // matched above; a mixed-variant pair is unreachable here.
-                _ => core::cmp::Ordering::Equal,
-            })
-    }
-}
-
-impl PartialOrd for TermValue {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-// `Hash` is hand-written (not derived) with **explicit** discriminant tags so it is
-// robust against compiler-dependent enum-discriminant hashing AND matches the
-// allocation-free `RdfDataset::hash_term` (which hashes the interned representation
-// directly) byte-for-byte. The two MUST stay in sync — the
-// `term_id_by_value` round-trip tests fail if they diverge. `String`/`Box<str>`/
-// `&str` all hash via `str`, so the by-value datatype here matches the resolved IRI
-// string there.
-//
-// `Hash` is the second of THREE hand-written encodings of this type — [`Ord`] above,
-// this `Hash`, and [`TermValue::canonical_bytes`] below. All three enumerate the
-// variants and their fields by hand, and all three MUST stay in sync with the enum
-// definition: adding a variant or a field means visiting every one of them. `Hash`
-// and `canonical_bytes` additionally share ONE discriminant numbering (`Iri` = 0,
-// `Blank` = 1, `Literal` = 2, `Triple` = 3) so there is never a second, conflicting
-// tag space to reconcile. (Note this numbering is deliberately NOT
-// [`canonical_tag`](TermValue::canonical_tag), which encodes the serializer's
-// cross-kind SORT order and is a different question.)
-impl core::hash::Hash for TermValue {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Self::Iri(iri) => {
-                0u8.hash(state);
-                iri.hash(state);
-            }
-            Self::Blank { label, scope } => {
-                1u8.hash(state);
-                label.hash(state);
-                scope.hash(state);
-            }
-            Self::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => {
-                2u8.hash(state);
-                lexical_form.hash(state);
-                datatype.hash(state);
-                language.hash(state);
-                direction.hash(state);
-            }
-            Self::Triple { s, p, o } => {
-                3u8.hash(state);
-                s.hash(state);
-                p.hash(state);
-                o.hash(state);
-            }
         }
     }
 }
@@ -611,15 +496,13 @@ impl TermValue {
     /// `Blank` = 1, `Literal` = 2, `Triple` = 3) so the type has one tag space, not
     /// two. All three must be revisited together when the enum changes.
     ///
-    /// # Recursion
+    /// # Nesting
     ///
-    /// [`TermValue::Triple`] recurses structurally into `(s, p, o)` — RDF 1.2 triple
-    /// terms are first-class values here, identified by their components (C0.3), so
-    /// a nested triple term contributes its full sub-encoding rather than a summary.
-    /// The recursion depth is the term's own triple-term nesting depth, which is
-    /// exactly the bound already carried by this type's derived `PartialEq`, its
-    /// hand-written `Ord` and `Hash`, and its `Box`-chasing `Drop`; this method adds
-    /// no new depth exposure.
+    /// [`TermValue::Triple`] contributes its tag and then the full sub-encodings of
+    /// `(s, p, o)` in turn — RDF 1.2 triple terms are first-class values here,
+    /// identified by their components (C0.3), so a nested triple term contributes its
+    /// full sub-encoding rather than a summary. The encoding is written in that
+    /// pre-order from a work list, so a term of any depth is encoded without recursion.
     ///
     /// # Buffer reuse
     ///
@@ -627,6 +510,16 @@ impl TermValue {
     /// reuse one allocation. Note that appended encodings are themselves
     /// self-delimiting and therefore concatenate unambiguously.
     pub fn canonical_bytes(&self, out: &mut Vec<u8>) {
+        let mut pending = Vec::new();
+        self.canonical_bytes_shallow(out, &mut pending);
+        while let Some(term) = pending.pop() {
+            term.canonical_bytes_shallow(out, &mut pending);
+        }
+    }
+
+    /// Append this term's own part of the canonical encoding — its tag and fields —
+    /// and, for a triple term, queue its components on `pending`, subject on top.
+    fn canonical_bytes_shallow<'a>(&'a self, out: &mut Vec<u8>, pending: &mut Vec<&'a Self>) {
         match self {
             Self::Iri(iri) => {
                 out.push(0u8);
@@ -672,9 +565,7 @@ impl TermValue {
             }
             Self::Triple { s, p, o } => {
                 out.push(3u8);
-                s.canonical_bytes(out);
-                p.canonical_bytes(out);
-                o.canonical_bytes(out);
+                pending.extend([&**o, &**p, &**s]);
             }
         }
     }
@@ -1090,9 +981,9 @@ mod tests {
         let b = TermValue::iri("http://example.org/b");
         let c = TermValue::iri("http://example.org/c");
         let triple = TermValue::Triple {
-            s: Box::new(a.clone()),
-            p: Box::new(b.clone()),
-            o: Box::new(c.clone()),
+            s: TermBox::new(a.clone()),
+            p: TermBox::new(b.clone()),
+            o: TermBox::new(c.clone()),
         };
 
         let mut flat = Vec::new();
@@ -1103,14 +994,14 @@ mod tests {
 
         // Re-association: `<<( <<(a b c)>> b c )>>` vs `<<( a b <<(a b c)>> )>>`.
         let nested_subject = TermValue::Triple {
-            s: Box::new(triple.clone()),
-            p: Box::new(b.clone()),
-            o: Box::new(c.clone()),
+            s: TermBox::new(triple.clone()),
+            p: TermBox::new(b.clone()),
+            o: TermBox::new(c.clone()),
         };
         let nested_object = TermValue::Triple {
-            s: Box::new(a),
-            p: Box::new(b),
-            o: Box::new(triple.clone()),
+            s: TermBox::new(a),
+            p: TermBox::new(b),
+            o: TermBox::new(triple.clone()),
         };
         assert_encodings_pairwise_distinct(&[triple, nested_subject, nested_object]);
     }
@@ -1124,12 +1015,12 @@ mod tests {
     #[test]
     fn canonical_bytes_golden_encoding_is_pinned() {
         let term = TermValue::Triple {
-            s: Box::new(TermValue::iri("s")),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::iri("s")),
+            p: TermBox::new(TermValue::Blank {
                 label: "b".to_owned(),
                 scope: BlankScope(7),
             }),
-            o: Box::new(TermValue::Literal {
+            o: TermBox::new(TermValue::Literal {
                 lexical_form: "v".to_owned(),
                 datatype: "t".to_owned(),
                 language: None,
@@ -1165,6 +1056,7 @@ mod tests {
     mod strategies {
         use super::{PROP_STRINGS, TermValue};
         use crate::RdfTextDirection;
+        use crate::ir::TermBox;
         use crate::ir::term::BlankScope;
         use proptest::prelude::*;
 
@@ -1205,9 +1097,9 @@ mod tests {
         pub(super) fn term_value() -> impl Strategy<Value = TermValue> {
             leaf().prop_recursive(3, 24, 3, |inner| {
                 (inner.clone(), inner.clone(), inner).prop_map(|(s, p, o)| TermValue::Triple {
-                    s: Box::new(s),
-                    p: Box::new(p),
-                    o: Box::new(o),
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
                 })
             })
         }

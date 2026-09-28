@@ -10,6 +10,7 @@
 //! are not simple counters — the cell peak, the scratch arena, the recursion guard —
 //! measure what they claim to.
 
+use purrdf_sparql_algebra::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -28,7 +29,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, MAX_UDF_DEPTH, eval_evaluated};
 use crate::governor::lift::Evaluated;
 use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
-use crate::parallel::{force_parallel_for_test, force_sequential_operation};
+use crate::parallel::force_parallel_for_test;
 use crate::user_fn::{Arity, Volatility};
 
 /// The namespace every fixture in this module uses.
@@ -122,8 +123,8 @@ fn chain_pattern() -> GraphPattern {
 
 #[test]
 fn ac3_effective_budget_is_invariant_under_worker_count() {
-    // The sequential guard is deliberately NOT engaged: no `force_parallel_for_test`,
-    // no `force_sequential_operation`, and an input of 1500 rows, which is above
+    // The sequential guard is deliberately NOT engaged: no `force_parallel_for_test` in
+    // either direction, and an input of 1500 rows, which is above
     // `PARALLEL_MIN_ROWS`. The row loop therefore really runs on rayon, and each pool
     // below really splits it into a different number of differently-sized chunks —
     // `chunk_size_for` is `len / (threads * 4)`, so one thread gives chunks of 375 and
@@ -183,7 +184,7 @@ fn ac3_forced_parallel_equals_forced_sequential_under_governors() {
         run(&pattern, &dataset, &governors)
     };
     let sequential = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run(&pattern, &dataset, &governors)
     };
     // And the plain gate too, which for this input size chooses parallel on its own.
@@ -330,9 +331,9 @@ fn intermediate_cells_use_the_maximum_operator_instance_not_a_sum() {
     let dataset = builder.freeze().expect("fixture is positionally valid");
 
     let pattern = GraphPattern::Project {
-        inner: Box::new(GraphPattern::Filter {
+        inner: Child::new(GraphPattern::Filter {
             expr: Expression::Bound(Variable::new("s")),
-            inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+            inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         }),
         variables: vec![Variable::new("s")],
     };
@@ -367,7 +368,7 @@ fn intermediate_cells_use_the_maximum_operator_instance_not_a_sum() {
     // Cell-denominated, not row-denominated: the same ten rows over one column are half
     // the allocation and are admitted by a ceiling the two-column bag exceeds.
     let narrow = GraphPattern::Project {
-        inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         variables: vec![Variable::new("s")],
     };
     assert_eq!(
@@ -408,14 +409,15 @@ fn scratch_growth_is_charged_so_a_satisfied_row_count_cannot_hide_an_oom() {
 
     let padding = "x".repeat(1024);
     let pattern = GraphPattern::Extend {
-        inner: Box::new(bgp(vec![triple(var("s"), "p", var("o"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "p", var("o"))])),
         variable: Variable::new("big"),
         expression: Expression::FunctionCall(
             Function::Concat,
             vec![
                 Expression::Variable(Variable::new("o")),
                 Expression::Literal(Literal::new_simple(&padding)),
-            ],
+            ]
+            .into(),
         ),
     };
 
@@ -922,8 +924,8 @@ fn pf_registry(
 /// feasibility-ordering pass rebuilds a chain into.
 fn pf_pattern() -> GraphPattern {
     GraphPattern::Lateral {
-        left: Box::new(bgp(vec![triple(var("s"), "p", var("m"))])),
-        right: Box::new(GraphPattern::PropertyFunction(
+        left: Child::new(bgp(vec![triple(var("s"), "p", var("m"))])),
+        right: Child::new(GraphPattern::PropertyFunction(
             purrdf_sparql_algebra::PropertyFunctionCall {
                 iri: PF.to_owned(),
                 subject_args: vec![],
@@ -958,8 +960,8 @@ fn run_with_relations(
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));
     let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
-        pattern,
-        &crate::DetHashMap::default(),
+        crate::plan::Tree::build(pattern).shape(),
+        &[],
     ));
     let mut ctx = EvalCtx::new(dataset)
         .with_governors(Arc::clone(&state))
@@ -1182,7 +1184,7 @@ fn a_property_function_call_trips_at_the_same_point_parallel_and_sequential() {
         run_with_relations(&pattern, &dataset, &registry, &governors).0
     };
     let sequential = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run_with_relations(&pattern, &dataset, &registry, &governors).0
     };
 
@@ -1343,8 +1345,8 @@ fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
 /// `?s ex:cat ?cat . ?s ex:val ?val` — [`agg_group_dataset`]'s driving join.
 fn agg_join_inner() -> GraphPattern {
     GraphPattern::Join {
-        left: Box::new(bgp(vec![triple(var("s"), "cat", var("cat"))])),
-        right: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        left: Child::new(bgp(vec![triple(var("s"), "cat", var("cat"))])),
+        right: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
     }
 }
 
@@ -1352,7 +1354,7 @@ fn agg_join_inner() -> GraphPattern {
 /// [`agg_join_inner`] — one built-in aggregate expression per group.
 fn sum_group_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(agg_join_inner()),
+        inner: Child::new(agg_join_inner()),
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
@@ -1373,7 +1375,7 @@ fn sum_group_pattern() -> GraphPattern {
 /// variable, so the two patterns' fuel is comparable value for value.
 fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(agg_join_inner()),
+        inner: Child::new(agg_join_inner()),
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
@@ -1394,7 +1396,7 @@ fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
 /// [`duplicate_value_dataset`]) so `DISTINCT` discards all but the first.
 fn count_distinct_group_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("n"),
@@ -1441,8 +1443,8 @@ fn run_with_aggregates(
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));
     let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
-        pattern,
-        &crate::DetHashMap::default(),
+        crate::plan::Tree::build(pattern).shape(),
+        &[],
     ));
     let mut ctx = EvalCtx::new(dataset)
         .with_governors(Arc::clone(&state))
@@ -1727,7 +1729,7 @@ fn within_group_chunked_fold_charges_identically_forced_parallel_vs_sequential()
         run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
     };
     let (sequential_run, sequential_ledger) = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
     };
 
@@ -1830,7 +1832,7 @@ const PARTIAL_COUNTER_IRI: &str = "http://example.org/agg/partialCounter";
 /// chunked fold is the only fold this pattern can ever exercise.
 fn partial_counter_pattern() -> GraphPattern {
     GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("partials"),
@@ -1956,7 +1958,7 @@ fn within_group_chunk_plan_and_governed_outcome_are_invariant_under_worker_count
         .expect("the partial counter's answer is an integer");
     assert_eq!(
         chunk_count,
-        crate::parallel::planned_aggregate_chunk_count(usize::try_from(ROWS).unwrap()),
+        crate::parallel::planned_aggregate_chunk_count(false, usize::try_from(ROWS).unwrap()),
         "the answer must match the production chunk planner exactly"
     );
     assert!(
@@ -2036,7 +2038,7 @@ fn order_dependent_custom_aggregate_is_byte_identical_under_worker_count() {
     registry.register_statistical_aggregates(NS);
 
     let pattern = GraphPattern::Group {
-        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        inner: Child::new(bgp(vec![triple(var("s"), "val", var("val"))])),
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("first"),

@@ -1245,9 +1245,15 @@ fn evaluate_shape_focus_nodes(
     if let Some(governors) = crate::sparql::current_governors() {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-        let _governor_scope = crate::sparql::enter_governor_scope(governors);
+        let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&governors));
         let mut out = Vec::new();
         for focus in focus_nodes {
+            // The stop signal is polled between focus nodes as well as inside every
+            // query, so a validation with no SPARQL in it — Core constraints read the IR
+            // directly and charge nothing — still stops, and a host that slices its
+            // signal into yields still gets the event loop back while it runs. Only
+            // this governed branch pays for it: the ungoverned one has no signal.
+            crate::sparql::poll_between_evaluations(Some(&governors))?;
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
@@ -2049,9 +2055,9 @@ impl PreparedValidator {
     ///
     /// `CHANGE_PATH_CONSTANT` is the entry cost the zero-growth cases already pin.
     /// `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, by
-    /// `crates/shapes/tests/sparql_path_alloc.rs`: **51** for a `sh:sparql` SELECT
-    /// constraint, **114** for a custom `sh:ask` component over a two-valued path,
-    /// **64** for a custom `sh:select` component, and **127** for a
+    /// `crates/shapes/tests/sparql_path_alloc.rs`: **40** for a `sh:sparql` SELECT
+    /// constraint, **86** for a custom `sh:ask` component over a two-valued path,
+    /// **48** for a custom `sh:select` component, and **101** for a
     /// `sh:expression` function call over two argument tuples.
     ///
     /// The term is FLAT in the data graph — a fixed focus count costs the same over
@@ -2136,7 +2142,7 @@ impl PreparedValidator {
     /// FIRST-PARTY one: `sh:sparql`, a custom component's `sh:ask`/`sh:select`
     /// validator and a SHACL-AF `sh:expression` call each run one query per focus
     /// node and so carry a real per-focus-node term, pinned in closed form at
-    /// 51 / 114 / 64 / 127 allocations by
+    /// 40 / 86 / 48 / 101 allocations by
     /// `crates/shapes/tests/sparql_path_alloc.rs`. See
     /// [`Self::validate_focus_nodes`] for that closed form, for what the term is
     /// made of, and for the two third-party residuals the guarantee also excludes.

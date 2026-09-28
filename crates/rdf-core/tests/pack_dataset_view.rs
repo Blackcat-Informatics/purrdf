@@ -14,6 +14,7 @@
 //! language-tagged, directional), a scoped blank node, an `rdf:List` collection, and
 //! reifier + annotation side-table rows (including a graph-scoped annotation).
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -62,9 +63,9 @@ fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
+            s: TermBox::new(to_value(v, s)),
+            p: TermBox::new(to_value(v, p)),
+            o: TermBox::new(to_value(v, o)),
         },
     }
 }
@@ -543,9 +544,9 @@ fn resolve_and_quad_refs_match_source() {
                 }
             }
             TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(to_value(v, s)),
-                p: Box::new(to_value(v, p)),
-                o: Box::new(to_value(v, o)),
+                s: TermBox::new(to_value(v, s)),
+                p: TermBox::new(to_value(v, p)),
+                o: TermBox::new(to_value(v, o)),
             },
         }
     }

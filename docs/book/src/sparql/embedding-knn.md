@@ -88,8 +88,10 @@ registry.register(
 );
 ```
 
-The registry then reaches the engine through `QueryOptions::property_functions`
-exactly as on the [full-text](full-text.md) page. This is a Rust-host seam.
+The registry then reaches the engine through an `ExtensionEnv`
+(`ExtensionEnv::over_relations`, handed to the query with
+`QueryOptions::with_env`) exactly as on the [full-text](full-text.md) page.
+This is a Rust-host seam.
 
 ## Exact search, ordered under the declared metric
 

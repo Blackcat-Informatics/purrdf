@@ -77,7 +77,8 @@
 use crate::error::GeoError;
 use crate::exact::Rat;
 use crate::geom::{
-    Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral, Rings,
+    self, Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral,
+    Rings,
 };
 use crate::json::{self, JsonValue};
 
@@ -156,34 +157,51 @@ fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
 /// point would be refused for a disagreement that does not exist. So the tree is
 /// read first, the dimension is unified across it, and only then is it
 /// materialized.
+///
+/// The tree is kept flat, as its nodes in post-order — every member before the
+/// collection that holds it — which is the order the geometries are built in, so
+/// neither holding it nor dropping it nor materializing it walks a level per stack
+/// frame.
 struct Pending {
     /// `Some` once a position has fixed the dimension; `None` while the geometry
     /// has no positions at all.
     dim: Option<CoordDim>,
-    shape: PendingShape,
+    /// The nodes in post-order; the last is the root.
+    nodes: Vec<PendingNode>,
 }
 
-enum PendingShape {
+enum PendingNode {
     /// Any of the six non-collection kinds, already complete. Boxed because a
     /// `GeometryBody` inlines a `SmallVec` of exact coordinates and is two
     /// orders of magnitude larger than the collection variant beside it.
     Body(Box<GeometryBody>),
-    /// A `GeometryCollection`'s members, still awaiting the shared dimension.
-    Collection(Vec<Pending>),
+    /// A `GeometryCollection` of this many members, which are the subtrees just
+    /// before it.
+    Collection(usize),
 }
 
 impl Pending {
+    /// The geometry, every node given `dim`, built bottom-up in one pass over the
+    /// post-order: a body becomes a geometry, and a collection takes the last
+    /// `count` geometries built as its members. The first refusal is the one the
+    /// tree's first offending node raises, in written order.
     fn into_geometry(self, dim: CoordDim) -> Result<Geometry, GeoError> {
-        match self.shape {
-            PendingShape::Body(body) => Geometry::new(dim, *body),
-            PendingShape::Collection(members) => {
-                let members = members
-                    .into_iter()
-                    .map(|member| member.into_geometry(dim))
-                    .collect::<Result<Vec<_>, GeoError>>()?;
-                Geometry::new(dim, GeometryBody::GeometryCollection(members))
-            }
+        let mut built: Vec<Geometry> = Vec::new();
+        for node in self.nodes {
+            let geometry = match node {
+                PendingNode::Body(body) => Geometry::new(dim, *body)?,
+                PendingNode::Collection(count) => {
+                    let first = built
+                        .len()
+                        .checked_sub(count)
+                        .expect("a collection's members are built before it");
+                    let members: Vec<Geometry> = built.drain(first..).collect();
+                    Geometry::new(dim, GeometryBody::GeometryCollection(members))?
+                }
+            };
+            built.push(geometry);
         }
+        Ok(built.pop().expect("the root is the last geometry built"))
     }
 }
 
@@ -191,7 +209,87 @@ impl Pending {
 const GEOMETRY_TYPES: &str = "`Point`, `MultiPoint`, `LineString`, `MultiLineString`, `Polygon`, `MultiPolygon` or \
      `GeometryCollection`";
 
+/// A `GeometryCollection` whose `geometries` are being read.
+struct OpenCollection<'a> {
+    /// The members still to read, in written order.
+    rest: core::slice::Iter<'a, JsonValue>,
+    /// The dimension each member read so far fixed, in written order.
+    dims: Vec<Option<CoordDim>>,
+}
+
+/// Read one Geometry object, with every collection it nests.
+///
+/// Iterative: the open collections live in an explicit heap stack, and the loop
+/// alternates between reading the next object and closing the collections a
+/// finished member completes. Nesting therefore costs heap and never stack, so a
+/// literal is read however deep it nests, and a refusal anywhere inside it is the
+/// refusal the same object would raise at the top level. A collection's members
+/// are read in written order, and its dimension is unified once its last member is
+/// read, before anything after it.
 fn read_object(value: &JsonValue) -> Result<Pending, GeoError> {
+    let mut nodes: Vec<PendingNode> = Vec::new();
+    let mut open: Vec<OpenCollection<'_>> = Vec::new();
+    let mut next = value;
+    loop {
+        let mut finished = match read_node(next)? {
+            Node::Body { dim, body } => {
+                nodes.push(PendingNode::Body(body));
+                dim
+            }
+            Node::Collection(items) => {
+                let mut rest = items.iter();
+                match rest.next() {
+                    Some(first) => {
+                        open.push(OpenCollection {
+                            rest,
+                            dims: Vec::with_capacity(items.len()),
+                        });
+                        next = first;
+                        continue;
+                    }
+                    None => {
+                        nodes.push(PendingNode::Collection(0));
+                        None
+                    }
+                }
+            }
+        };
+        // A finished geometry is the result, or a member of the innermost open
+        // collection: its dimension is recorded, and either the collection continues
+        // with the next member or it closes and is itself the finished geometry one
+        // level up.
+        loop {
+            let Some(top) = open.last_mut() else {
+                return Ok(Pending {
+                    dim: finished,
+                    nodes,
+                });
+            };
+            top.dims.push(finished);
+            if let Some(item) = top.rest.next() {
+                next = item;
+                break;
+            }
+            let OpenCollection { dims, .. } =
+                open.pop().expect("the collection just read is still open");
+            finished = unified_dim(&dims)?;
+            nodes.push(PendingNode::Collection(dims.len()));
+        }
+    }
+}
+
+/// What one Geometry object is: a complete body, or a collection whose members are
+/// still to be read.
+enum Node<'a> {
+    Body {
+        dim: Option<CoordDim>,
+        body: Box<GeometryBody>,
+    },
+    Collection(&'a [JsonValue]),
+}
+
+/// Read one Geometry object without descending into a collection's members.
+fn read_node(value: &JsonValue) -> Result<Node<'_>, GeoError> {
     if !matches!(value, JsonValue::Object(_)) {
         return Err(GeoError::literal(format!(
             "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
@@ -210,9 +308,9 @@ fn read_object(value: &JsonValue) -> Result<Pending, GeoError> {
             let coordinates = decisive_member(value, "coordinates", type_name)?;
             let mut dim = None;
             let body = read_coordinates(type_name, coordinates, &mut dim)?;
-            Ok(Pending {
+            Ok(Node::Body {
                 dim,
-                shape: PendingShape::Body(Box::new(body)),
+                body: Box::new(body),
             })
         }
         "GeometryCollection" => {
@@ -222,15 +320,7 @@ fn read_object(value: &JsonValue) -> Result<Pending, GeoError> {
                 geometries,
                 "the `geometries` of a GeoJSON GeometryCollection",
             )?;
-            let mut members = Vec::with_capacity(items.len());
-            for item in items {
-                members.push(read_object(item)?);
-            }
-            let dim = unified_dim(&members)?;
-            Ok(Pending {
-                dim,
-                shape: PendingShape::Collection(members),
-            })
+            Ok(Node::Collection(items))
         }
         other => Err(GeoError::literal(format!(
             "`{other}` is not a GeoJSON geometry type; RFC 7946 defines {GEOMETRY_TYPES}"
@@ -320,12 +410,12 @@ fn reject_foreign_shape_member(
     )))
 }
 
-/// The one dimension every member of a collection shares, or `None` when no
-/// member has any position at all.
-fn unified_dim(members: &[Pending]) -> Result<Option<CoordDim>, GeoError> {
+/// The one dimension every member of a collection shares, given the dimension each
+/// member fixed in written order, or `None` when no member has any position at all.
+fn unified_dim(dims: &[Option<CoordDim>]) -> Result<Option<CoordDim>, GeoError> {
     let mut unified: Option<CoordDim> = None;
-    for member in members {
-        let Some(member_dim) = member.dim else {
+    for member in dims {
+        let Some(member_dim) = *member else {
             continue;
         };
         match unified {
@@ -602,11 +692,38 @@ fn dim_name(dim: CoordDim) -> &'static str {
     }
 }
 
+/// The Geometry object for `geometry`, with every collection it nests.
+///
+/// Iterative: a bottom-up fold over the tree assembles each collection's object from
+/// its members' objects in written order, so nesting costs heap and never stack, and
+/// the first refusal is the first member's in written order.
 fn geometry_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError> {
-    let type_member = (
+    geom::try_fold(
+        geometry,
+        |member| body_value(member, scale),
+        |collection, members| Ok(collection_value(collection, members)),
+    )
+}
+
+/// The `"type"` member of a geometry's object.
+fn type_member(geometry: &Geometry) -> (String, JsonValue) {
+    (
         "type".to_owned(),
         JsonValue::String(geometry.kind().geojson_type().to_owned()),
-    );
+    )
+}
+
+/// The object for a collection whose members' objects are `members`, in written
+/// order.
+fn collection_value(geometry: &Geometry, members: Vec<JsonValue>) -> JsonValue {
+    JsonValue::Object(vec![
+        type_member(geometry),
+        ("geometries".to_owned(), JsonValue::Array(members)),
+    ])
+}
+
+/// The object for a geometry that holds positions rather than geometries.
+fn body_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError> {
     let coordinates = match geometry.body() {
         GeometryBody::Point(point) => point.as_ref().map_or_else(
             || JsonValue::Array(Vec::new()),
@@ -642,19 +759,12 @@ fn geometry_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError
                 .map(|polygon| rings_value(polygon, scale))
                 .collect(),
         ),
-        GeometryBody::GeometryCollection(members) => {
-            let mut items = Vec::with_capacity(members.len());
-            for member in members {
-                items.push(geometry_value(member, scale)?);
-            }
-            return Ok(JsonValue::Object(vec![
-                type_member,
-                ("geometries".to_owned(), JsonValue::Array(items)),
-            ]));
+        GeometryBody::GeometryCollection(_) => {
+            unreachable!("a collection's object is assembled from its members' objects")
         }
     };
     Ok(JsonValue::Object(vec![
-        type_member,
+        type_member(geometry),
         ("coordinates".to_owned(), coordinates),
     ]))
 }
@@ -1147,36 +1257,6 @@ mod tests {
     }
 
     #[test]
-    fn deeper_nesting_than_the_json_reader_allows_is_refused_but_ordinary_nesting_is_not() {
-        fn nested(levels: usize) -> String {
-            let mut text = String::new();
-            for _ in 0..levels {
-                text.push_str(r#"{"type":"GeometryCollection","geometries":["#);
-            }
-            text.push_str(r#"{"type":"Point","coordinates":[1,2]}"#);
-            for _ in 0..levels {
-                text.push_str("]}");
-            }
-            text
-        }
-        // Each level of collection is two JSON containers (the object and its
-        // `geometries` array), so the reader's 128-container cap bites at 64.
-        assert!(
-            read(&nested(1)).is_ok(),
-            "RFC 7946 discourages but does not forbid nesting, so one level parses"
-        );
-        assert!(read(&nested(8)).is_ok(), "and so do eight");
-        assert!(
-            read(&nested(62)).is_ok(),
-            "62 levels is 124 containers, below the cap: it must NOT be refused"
-        );
-        assert!(
-            read(&nested(500)).is_err(),
-            "a hostile depth is refused rather than recursed into"
-        );
-    }
-
-    #[test]
     fn refusal_messages_say_what_is_wrong() {
         assert!(
             refusal(r#"{"type":"Point","coordinates":[1,2,3,4]}"#).contains("at most three"),
@@ -1611,5 +1691,395 @@ mod tests {
                 "and serialization is a fixed point too, for {text}"
             );
         }
+    }
+}
+
+/// The reader's and the writer's walks over nested collections, against recursive
+/// references on generated literals and a hundred thousand levels deep.
+#[cfg(test)]
+mod nesting_tests {
+    use super::{
+        Node, body_value, collection_value, geometry_of, geometry_value, read_node, unified_dim,
+        write_bare,
+    };
+    use crate::error::GeoError;
+    use crate::exact::Rat;
+    use crate::geom::arbitrary::{self, Lcg};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind};
+    use crate::json::{self, JsonValue};
+
+    const SCALE: u32 = 12;
+
+    // ---- the recursive references -----------------------------------------
+
+    /// The tree-shaped intermediate the recursive reference reads into: each node
+    /// with the dimension its positions fixed.
+    enum Reference {
+        Body(Option<CoordDim>, Box<GeometryBody>),
+        Collection(Option<CoordDim>, Vec<Self>),
+    }
+
+    impl Reference {
+        fn dim(&self) -> Option<CoordDim> {
+            match self {
+                Self::Body(dim, _) | Self::Collection(dim, _) => *dim,
+            }
+        }
+    }
+
+    /// The recursive reading: one object through `read_node`, its members through
+    /// itself, its dimension unified when its last member is read.
+    fn reference_read(value: &JsonValue) -> Result<Reference, GeoError> {
+        match read_node(value)? {
+            Node::Body { dim, body } => Ok(Reference::Body(dim, body)),
+            Node::Collection(items) => {
+                let mut members = Vec::with_capacity(items.len());
+                for item in items {
+                    members.push(reference_read(item)?);
+                }
+                let dims: Vec<Option<CoordDim>> = members.iter().map(Reference::dim).collect();
+                let dim = unified_dim(&dims)?;
+                Ok(Reference::Collection(dim, members))
+            }
+        }
+    }
+
+    /// The recursive materialization, every node given `dim`.
+    fn reference_materialize(pending: Reference, dim: CoordDim) -> Result<Geometry, GeoError> {
+        match pending {
+            Reference::Body(_, body) => Geometry::new(dim, *body),
+            Reference::Collection(_, members) => {
+                let members = members
+                    .into_iter()
+                    .map(|member| reference_materialize(member, dim))
+                    .collect::<Result<Vec<_>, GeoError>>()?;
+                Geometry::new(dim, GeometryBody::GeometryCollection(members))
+            }
+        }
+    }
+
+    /// `geometry_of` with the recursive walks in place of the work-list ones.
+    fn reference_geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
+        if lexical.bytes().all(purrdf_iri::terminals::is_ws) {
+            return Ok(Geometry::empty(
+                CoordDim::Xy,
+                GeometryKind::GeometryCollection,
+            ));
+        }
+        let value = json::parse(lexical)?;
+        let pending = reference_read(&value)?;
+        let dim = pending.dim().unwrap_or(CoordDim::Xy);
+        reference_materialize(pending, dim).map_err(|error| {
+            GeoError::literal(format!(
+                "this geo:geoJSONLiteral is well-formed JSON but does not denote a geometry: {}",
+                error.detail()
+            ))
+        })
+    }
+
+    /// The recursive writer: a collection's object from its members' objects.
+    fn reference_geometry_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError> {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                let mut items = Vec::with_capacity(members.len());
+                for member in members {
+                    items.push(reference_geometry_value(member, scale)?);
+                }
+                Ok(collection_value(geometry, items))
+            }
+            _ => body_value(geometry, scale),
+        }
+    }
+
+    // ---- the literal generator --------------------------------------------
+
+    /// Objects both readers must refuse, and one (the 3D point) they must accept
+    /// alone and refuse beside a 2D sibling.
+    const FAULTS: [&str; 11] = [
+        r#"{"type":"Circle","coordinates":[1,2]}"#,
+        r#"{"type":"Point","coordinates":null}"#,
+        r#"{"type":"Feature","geometry":null}"#,
+        r#"{"type":"Point","coordinates":[1,2,3,4]}"#,
+        r#"{"type":"GeometryCollection","coordinates":[]}"#,
+        r#"{"type":"Point","geometries":[]}"#,
+        r#"{"type":"Point","coordinates":[1,2],"coordinates":[3,4]}"#,
+        r#"{"type":"LineString","coordinates":[[0,0]]}"#,
+        r#"{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,0]]]}"#,
+        "[1,2]",
+        r#"{"type":"Point","coordinates":[1,2,3]}"#,
+    ];
+
+    /// One run of RFC 8259 whitespace, one time in three.
+    fn space(rng: &mut Lcg, out: &mut String) {
+        if rng.chance(3) {
+            out.push_str([" ", "\t", "\n", "\r\n"][rng.below(4) as usize]);
+        }
+    }
+
+    /// An ordinate in one of three spellings of the same value.
+    fn ordinate(rng: &mut Lcg, value: &Rat) -> String {
+        let plain = value.to_decimal_string(0);
+        match rng.below(3) {
+            0 => plain,
+            1 => format!("{plain}.0"),
+            _ => format!("{plain}e0"),
+        }
+    }
+
+    fn position(rng: &mut Lcg, coord: &Coord) -> String {
+        let mut out = format!("[{},{}", ordinate(rng, coord.x()), ordinate(rng, coord.y()));
+        if let Some(z) = coord.z() {
+            out.push(',');
+            out.push_str(&ordinate(rng, z));
+        }
+        out.push(']');
+        out
+    }
+
+    fn positions(rng: &mut Lcg, coords: &CoordSeq) -> String {
+        let items: Vec<String> = coords.iter().map(|coord| position(rng, coord)).collect();
+        format!("[{}]", items.join(","))
+    }
+
+    fn rings(rng: &mut Lcg, rings: &[CoordSeq]) -> String {
+        let items: Vec<String> = rings.iter().map(|ring| positions(rng, ring)).collect();
+        format!("[{}]", items.join(","))
+    }
+
+    /// The `coordinates` of a geometry that holds positions. A `MULTIPOINT` member
+    /// with no position, which GeoJSON cannot write, is written `[]`, which both
+    /// readers must refuse identically.
+    fn coordinates(rng: &mut Lcg, body: &GeometryBody) -> String {
+        match body {
+            GeometryBody::Point(None) => "[]".to_owned(),
+            GeometryBody::Point(Some(coord)) => position(rng, coord),
+            GeometryBody::LineString(coords) => positions(rng, coords),
+            GeometryBody::Polygon(shape) => rings(rng, shape),
+            GeometryBody::MultiPoint(points) => {
+                let items: Vec<String> = points
+                    .iter()
+                    .map(|point| {
+                        point
+                            .as_ref()
+                            .map_or_else(|| "[]".to_owned(), |c| position(rng, c))
+                    })
+                    .collect();
+                format!("[{}]", items.join(","))
+            }
+            GeometryBody::MultiLineString(lines) => {
+                let items: Vec<String> = lines.iter().map(|line| positions(rng, line)).collect();
+                format!("[{}]", items.join(","))
+            }
+            GeometryBody::MultiPolygon(polygons) => {
+                let items: Vec<String> = polygons.iter().map(|shape| rings(rng, shape)).collect();
+                format!("[{}]", items.join(","))
+            }
+            GeometryBody::GeometryCollection(_) => {
+                unreachable!("a collection's members are written by `literal`")
+            }
+        }
+    }
+
+    /// `geometry` as a GeoJSON literal: members in a random order, whitespace
+    /// sprinkled, a foreign member one time in three, and one time in eight the
+    /// object replaced by one of [`FAULTS`].
+    fn literal(rng: &mut Lcg, geometry: &Geometry, out: &mut String) {
+        if rng.chance(8) {
+            out.push_str(FAULTS[rng.below(11) as usize]);
+            return;
+        }
+        let type_member = format!("\"type\":\"{}\"", geometry.kind().geojson_type());
+        let shape_member = match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                let mut text = String::from("\"geometries\":[");
+                for (index, member) in members.iter().enumerate() {
+                    if index > 0 {
+                        text.push(',');
+                    }
+                    literal(rng, member, &mut text);
+                }
+                text.push(']');
+                text
+            }
+            body => format!("\"coordinates\":{}", coordinates(rng, body)),
+        };
+        let mut members = vec![type_member, shape_member];
+        if rng.chance(3) {
+            members.push(
+                ["\"bbox\":[0,0,1,1]", "\"note\":\"x\"", "\"id\":7"][rng.below(3) as usize]
+                    .to_owned(),
+            );
+        }
+        if rng.chance(2) {
+            members.swap(0, 1);
+        }
+        if members.len() == 3 && rng.chance(2) {
+            members.swap(1, 2);
+        }
+        out.push('{');
+        space(rng, out);
+        for (index, member) in members.iter().enumerate() {
+            if index > 0 {
+                space(rng, out);
+                out.push(',');
+                space(rng, out);
+            }
+            out.push_str(member);
+        }
+        space(rng, out);
+        out.push('}');
+    }
+
+    /// How many collections deep a chain of first members goes.
+    fn levels(geometry: &Geometry) -> usize {
+        let mut depth = 0;
+        let mut node = geometry;
+        while let GeometryBody::GeometryCollection(members) = node.body() {
+            depth += 1;
+            match members.first() {
+                Some(member) => node = member,
+                None => break,
+            }
+        }
+        depth
+    }
+
+    // ---- reading ------------------------------------------------------------
+
+    /// Over generated literals — every kind, nested, foreign members, whitespace,
+    /// and faults at any level — the work-list reader and the recursive reference
+    /// return the same geometry or the same refusal.
+    #[test]
+    fn the_reader_agrees_with_the_recursive_reference_on_generated_literals() {
+        let mut rng = Lcg::new(0x5eed_4001);
+        for round in 0..400 {
+            let dim = if round % 2 == 0 {
+                CoordDim::Xy
+            } else {
+                CoordDim::Xyz
+            };
+            let tree = arbitrary::geometry(&mut rng, dim, 4);
+            let mut text = String::new();
+            literal(&mut rng, &tree, &mut text);
+            assert_eq!(
+                geometry_of(&text),
+                reference_geometry_of(&text),
+                "round {round}: the two readers disagree on {text}"
+            );
+        }
+    }
+
+    /// Over generated geometries the work-list writer and the recursive reference
+    /// build the same object or raise the same refusal, and a written geometry
+    /// reads back to itself.
+    #[test]
+    fn the_writer_agrees_with_the_recursive_reference_on_generated_geometries() {
+        let mut rng = Lcg::new(0x5eed_4002);
+        for round in 0..400 {
+            let dim = if round % 2 == 0 {
+                CoordDim::Xy
+            } else {
+                CoordDim::Xyz
+            };
+            let tree = arbitrary::geometry(&mut rng, dim, 4);
+            let iterative = geometry_value(&tree, SCALE);
+            let recursive = reference_geometry_value(&tree, SCALE);
+            assert_eq!(iterative, recursive, "round {round}: {tree:?}");
+            if let Ok(value) = recursive {
+                let written = write_bare(&tree, SCALE).expect("the object was built");
+                assert_eq!(written, json::write(&value), "round {round}");
+                // A tree with no position fixes no dimension and reads back planar,
+                // so only a tree that is planar or holds a position reads back to
+                // itself.
+                if tree.dim() == CoordDim::Xy || tree.coord_count() > 0 {
+                    assert_eq!(
+                        geometry_of(&written),
+                        Ok(tree),
+                        "round {round}: the written literal reads back: {written}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A hundred thousand nested collections are read and written back byte for
+    /// byte on a 128 KiB stack, a dimension fixed at the bottom governs the top,
+    /// and a refusal at the bottom is the refusal the same object raises alone.
+    ///
+    /// The expected text is a closed form pinned at depths one and two by literal
+    /// strings: each level wraps the one below in
+    /// `{"type":"GeometryCollection","geometries":[` and `]}`.
+    #[test]
+    fn a_hundred_thousand_deep_collection_reads_and_writes() {
+        const OPEN: &str = r#"{"type":"GeometryCollection","geometries":["#;
+        const CLOSE: &str = "]}";
+        const POINT: &str = r#"{"type":"Point","coordinates":[1,2]}"#;
+        const ONE: &str =
+            r#"{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}]}"#;
+        const TWO: &str = r#"{"type":"GeometryCollection","geometries":[{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}]}]}"#;
+        assert_eq!(format!("{OPEN}{POINT}{CLOSE}"), ONE);
+        assert_eq!(format!("{OPEN}{OPEN}{POINT}{CLOSE}{CLOSE}"), TWO);
+        for (text, depth) in [(POINT, 0), (ONE, 1), (TWO, 2)] {
+            let geometry = geometry_of(text).expect("a shallow literal reads");
+            assert_eq!(levels(&geometry), depth);
+            assert_eq!(geometry.coord_count(), 1);
+            assert_eq!(write_bare(&geometry, SCALE).expect("no measure"), text);
+        }
+
+        let depth = arbitrary::DEEP;
+        let wrapped = move |inner: &str| {
+            let mut text =
+                String::with_capacity(OPEN.len() * depth + inner.len() + CLOSE.len() * depth);
+            for _ in 0..depth {
+                text.push_str(OPEN);
+            }
+            text.push_str(inner);
+            for _ in 0..depth {
+                text.push_str(CLOSE);
+            }
+            text
+        };
+        arbitrary::on_small_stack(move || {
+            let text = wrapped(POINT);
+            assert_eq!(
+                text.len(),
+                OPEN.len() * depth + POINT.len() + CLOSE.len() * depth
+            );
+            let geometry = geometry_of(&text).expect("a hundred thousand nested collections read");
+            assert_eq!(geometry.kind(), GeometryKind::GeometryCollection);
+            assert_eq!(geometry.dim(), CoordDim::Xy);
+            assert_eq!(levels(&geometry), depth);
+            assert_eq!(geometry.coord_count(), 1);
+            assert!(!geometry.is_empty());
+            assert_eq!(
+                write_bare(&geometry, SCALE).expect("no measure"),
+                text,
+                "the literal writes back byte for byte"
+            );
+            drop(geometry);
+
+            // The dimension a position fixes at the bottom governs the whole tree.
+            let elevated = geometry_of(&wrapped(r#"{"type":"Point","coordinates":[1,2,3]}"#))
+                .expect("a 3D point at the bottom reads");
+            assert_eq!(elevated.dim(), CoordDim::Xyz);
+            drop(elevated);
+
+            // Nothing at the bottom is the empty geometry through every level.
+            let hollow = geometry_of(&wrapped(r#"{"type":"GeometryCollection","geometries":[]}"#))
+                .expect("an empty collection at the bottom reads");
+            assert!(hollow.is_empty());
+            assert_eq!(levels(&hollow), depth + 1);
+            drop(hollow);
+
+            // A refusal at the bottom is the refusal the object raises alone.
+            let circle = r#"{"type":"Circle","coordinates":[1,2]}"#;
+            assert_eq!(geometry_of(&wrapped(circle)), geometry_of(circle));
+            let mixed =
+                r#"{"type":"Point","coordinates":[1,2]},{"type":"Point","coordinates":[1,2,3]}"#;
+            assert_eq!(
+                geometry_of(&wrapped(mixed)),
+                geometry_of(&format!("{OPEN}{mixed}{CLOSE}"))
+            );
+        });
     }
 }

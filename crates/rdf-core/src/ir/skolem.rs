@@ -63,7 +63,9 @@
 //! always yields the same dataset.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::fmt::Write as _;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use crate::RdfLiteral;
@@ -71,6 +73,7 @@ use crate::RdfLiteral;
 use super::builder::RdfDatasetBuilder;
 use super::dataset::{QuadHandle, RdfDataset, TermRef};
 use super::term::{BlankScope, TermId};
+use super::term_walk::{Nested, try_fold_nested, visit_nested};
 
 /// The well-known path (RFC 8615) under which skolem IRIs are minted, including
 /// both surrounding separators: a skolem IRI is
@@ -347,7 +350,12 @@ pub(crate) trait TermMapper {
 }
 
 /// Re-intern the term at `id` into `builder`, routing blanks and IRIs through
-/// `mapper` and recursing into quoted-triple components and literal datatypes.
+/// `mapper`, through quoted-triple components and literal datatypes.
+///
+/// A triple term is re-interned over [`try_fold_nested`]'s work list: its subject,
+/// predicate (an IRI-only position) and object, each fully before the next, then the
+/// triple itself. Every term is reported to [`TermMapper::record_term`] as soon as its
+/// own id exists, and the first refusal ends the walk.
 fn reintern<M: TermMapper>(
     ds: &RdfDataset,
     builder: &mut RdfDatasetBuilder,
@@ -355,41 +363,49 @@ fn reintern<M: TermMapper>(
     mapper: &mut M,
     iri_only: bool,
 ) -> Result<TermId, M::Error> {
-    let mapped = match ds.resolve(id) {
-        TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
-        TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let dt = match ds.resolve(datatype) {
-                TermRef::Iri(iri) => iri,
-                other => unreachable!("a literal datatype must be an IRI, got {other:?}"),
-            };
-            // Route the datatype through the mapper so an IRI-rewriting mapper
-            // gets to refuse it (`iri_only`); the returned id is the same one
-            // `intern_literal` re-derives from the string below.
-            let mapped_datatype = mapper.map_iri(builder, dt, true)?;
-            mapper.record_term(datatype, mapped_datatype);
-            let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
-            Ok(builder.intern_literal(RdfLiteral {
-                lexical_form,
-                datatype: Some(dt.to_owned()),
-                language: language.map(str::to_owned),
-                direction,
-            }))
-        }
-        TermRef::Triple { s, p, o } => {
-            let s = reintern(ds, builder, s, mapper, false)?;
-            let p = reintern(ds, builder, p, mapper, true)?;
-            let o = reintern(ds, builder, o, mapper, false)?;
-            Ok(builder.intern_triple(s, p, o))
-        }
-    }?;
-    mapper.record_term(id, mapped);
-    Ok(mapped)
+    try_fold_nested(
+        (id, iri_only),
+        &mut (builder, mapper),
+        |(builder, mapper), (id, iri_only)| {
+            let mapped = match ds.resolve(id) {
+                TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
+                TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let dt = match ds.resolve(datatype) {
+                        TermRef::Iri(iri) => iri,
+                        other => unreachable!("a literal datatype must be an IRI, got {other:?}"),
+                    };
+                    // Route the datatype through the mapper so an IRI-rewriting mapper
+                    // gets to refuse it (`iri_only`); the returned id is the same one
+                    // `intern_literal` re-derives from the string below.
+                    let mapped_datatype = mapper.map_iri(builder, dt, true)?;
+                    mapper.record_term(datatype, mapped_datatype);
+                    let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, *mapper)?;
+                    Ok(builder.intern_literal(RdfLiteral {
+                        lexical_form,
+                        datatype: Some(dt.to_owned()),
+                        language: language.map(str::to_owned),
+                        direction,
+                    }))
+                }
+                TermRef::Triple { s, p, o } => {
+                    return Ok(Nested::Triple((s, false), (p, true), (o, false)));
+                }
+            }?;
+            mapper.record_term(id, mapped);
+            Ok(Nested::Leaf(mapped))
+        },
+        |(builder, mapper), (id, _), s, p, o| {
+            let mapped = builder.intern_triple(s, p, o);
+            mapper.record_term(id, mapped);
+            Ok(mapped)
+        },
+    )
 }
 
 /// Rewrite the terms a composite (`cdt:List` / `cdt:Map`) literal EMBEDS in its
@@ -703,18 +719,19 @@ impl TermMapper for Deskolemizer {
 /// Collect every `(label, scope)` blank the dataset carries in any statement
 /// surface (quads, quoted triples, reifiers, annotations, graph declarations).
 fn existing_blanks(ds: &RdfDataset) -> BTreeSet<(Box<str>, BlankScope)> {
+    /// Collect the blanks of the term at `id`, through its triple-term nesting, over
+    /// [`visit_nested`]'s work list.
     fn walk(ds: &RdfDataset, id: TermId, out: &mut BTreeSet<(Box<str>, BlankScope)>) {
-        match ds.resolve(id) {
-            TermRef::Blank { label, scope } => {
-                out.insert((label.into(), scope));
-            }
-            TermRef::Triple { s, p, o } => {
-                walk(ds, s, out);
-                walk(ds, p, out);
-                walk(ds, o, out);
-            }
-            TermRef::Iri(_) | TermRef::Literal { .. } => {}
-        }
+        let ControlFlow::Continue(()) = visit_nested(id, |id| -> ControlFlow<Infallible, _> {
+            ControlFlow::Continue(match ds.resolve(id) {
+                TermRef::Blank { label, scope } => {
+                    out.insert((label.into(), scope));
+                    None
+                }
+                TermRef::Triple { s, p, o } => Some([s, p, o]),
+                TermRef::Iri(_) | TermRef::Literal { .. } => None,
+            })
+        });
     }
     let mut out = BTreeSet::new();
     for q in ds.quads() {
@@ -1113,7 +1130,7 @@ mod tests {
         struct CoalescingMapper;
 
         impl TermMapper for CoalescingMapper {
-            type Error = std::convert::Infallible;
+            type Error = Infallible;
 
             fn map_blank(
                 &mut self,
@@ -1302,6 +1319,140 @@ mod tests {
                 0,
                 "{name}: no content ids to fabricate"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term rewrite and the blank survey against their recursive references.
+
+    use std::collections::BTreeSet;
+    use std::convert::Infallible;
+
+    use super::{
+        BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermMapper, TermRef,
+        existing_blanks, reintern, remap_composite_lexical,
+    };
+    use crate::backend::TermFactory as _;
+    use crate::test_rng::TermShape;
+
+    /// A mapper that interns every term unchanged and logs every call it receives.
+    #[derive(Default)]
+    struct Logging(Vec<String>);
+
+    impl TermMapper for Logging {
+        type Error = Infallible;
+
+        fn map_blank(
+            &mut self,
+            builder: &mut RdfDatasetBuilder,
+            id: TermId,
+            label: &str,
+            scope: BlankScope,
+        ) -> Result<TermId, Self::Error> {
+            self.0.push(format!("blank {id:?} {label} {scope:?}"));
+            Ok(builder.intern_blank(label, scope))
+        }
+
+        fn map_iri(
+            &mut self,
+            builder: &mut RdfDatasetBuilder,
+            iri: &str,
+            iri_only: bool,
+        ) -> Result<TermId, Self::Error> {
+            self.0.push(format!("iri {iri} {iri_only}"));
+            Ok(builder.intern_iri(iri))
+        }
+
+        fn record_term(&mut self, source: TermId, target: TermId) {
+            self.0.push(format!("record {source:?} {target:?}"));
+        }
+    }
+
+    fn reference_reintern(
+        ds: &RdfDataset,
+        builder: &mut RdfDatasetBuilder,
+        id: TermId,
+        mapper: &mut Logging,
+        iri_only: bool,
+    ) -> Result<TermId, Infallible> {
+        let mapped = match ds.resolve(id) {
+            TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
+            TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(dt) = ds.resolve(datatype) else {
+                    unreachable!("a literal datatype is an IRI")
+                };
+                let mapped_datatype = mapper.map_iri(builder, dt, true)?;
+                mapper.record_term(datatype, mapped_datatype);
+                let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
+                Ok(builder.intern_literal(RdfLiteral {
+                    lexical_form,
+                    datatype: Some(dt.to_owned()),
+                    language: language.map(str::to_owned),
+                    direction,
+                }))
+            }
+            TermRef::Triple { s, p, o } => {
+                let s = reference_reintern(ds, builder, s, mapper, false)?;
+                let p = reference_reintern(ds, builder, p, mapper, true)?;
+                let o = reference_reintern(ds, builder, o, mapper, false)?;
+                Ok(builder.intern_triple(s, p, o))
+            }
+        }?;
+        mapper.record_term(id, mapped);
+        Ok(mapped)
+    }
+
+    fn reference_blanks(ds: &RdfDataset, id: TermId, out: &mut BTreeSet<(Box<str>, BlankScope)>) {
+        match ds.resolve(id) {
+            TermRef::Blank { label, scope } => {
+                out.insert((label.into(), scope));
+            }
+            TermRef::Triple { s, p, o } => {
+                reference_blanks(ds, s, out);
+                reference_blanks(ds, p, out);
+                reference_blanks(ds, o, out);
+            }
+            TermRef::Iri(_) | TermRef::Literal { .. } => {}
+        }
+    }
+
+    /// Every generated stored term is rewritten with the same calls, in the same order,
+    /// to the same id as the recursive reference; and its blanks are surveyed as the
+    /// reference surveys them.
+    #[test]
+    fn the_rewrite_and_the_survey_agree_with_their_recursive_references() {
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let quad = ds.quads().next().expect("one quad");
+            let object = quad.o;
+            let (mut found, mut expected) = (Logging::default(), Logging::default());
+            let (mut into, mut expected_into) =
+                (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            let id = reintern(&ds, &mut into, object, &mut found, false);
+            let reference =
+                reference_reintern(&ds, &mut expected_into, object, &mut expected, false);
+            assert_eq!(id, reference, "seed {seed}");
+            assert_eq!(found.0, expected.0, "seed {seed}");
+            let mut blanks = BTreeSet::new();
+            for id in [quad.s, quad.o] {
+                reference_blanks(&ds, id, &mut blanks);
+            }
+            assert_eq!(existing_blanks(&ds), blanks, "seed {seed}");
         }
     }
 }

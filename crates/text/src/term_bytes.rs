@@ -40,6 +40,9 @@
 //! Because the four tags are distinct and each variant's own fields are
 //! self-delimiting, the whole encoding is prefix-free and injective.
 
+use core::convert::Infallible;
+use core::ops::ControlFlow;
+
 use purrdf_core::TermValue;
 
 use crate::error::TextError;
@@ -66,21 +69,6 @@ const DIRECTION_LTR: u8 = 0x01;
 /// Tag byte for a right-to-left base direction.
 const DIRECTION_RTL: u8 = 0x02;
 
-/// How deeply a [`TermValue::Triple`] may nest before the encoder refuses it.
-///
-/// `TermValue` is a heap-linked tree and this encoder walks it with ordinary
-/// recursion, so an adversarial or merely pathological term — a triple term
-/// whose subject is a triple term, some thousands deep — would exhaust the
-/// stack, and a stack overflow aborts the process rather than raising anything a
-/// caller can handle. The bound turns that abort into a
-/// [`TextError::Data`]: the input is refused, by name, and the host stays up.
-///
-/// The value is far above anything RDF 1.2 syntax produces in practice (a
-/// hand-written triple term nests once or twice) and far below the depth at
-/// which the frames here threaten a default stack, so it separates real data
-/// from a resource attack without arbitrating between two plausible datasets.
-pub(crate) const MAX_TRIPLE_DEPTH: u32 = 64;
-
 /// Append the canonical, injective encoding of `value` to `out`.
 ///
 /// Distinct terms always append distinct byte strings, and equal terms always
@@ -89,10 +77,14 @@ pub(crate) const MAX_TRIPLE_DEPTH: u32 = 64;
 /// one buffer and stays unambiguous when it is (each term's encoding is
 /// self-delimiting).
 ///
-/// Fails with [`TextError::Data`] if `value` nests triple terms more than
-/// [`MAX_TRIPLE_DEPTH`] deep.
-pub(crate) fn encode_term(value: &TermValue, out: &mut Vec<u8>) -> Result<(), TextError> {
-    encode_at_depth(value, out, 0)
+/// The terms are appended in [`TermValue::visit_terms`]'s pre-order — a triple
+/// term's tag, then its subject's whole encoding, then its predicate's, then its
+/// object's — over a work list, so a term nested to any depth encodes.
+pub(crate) fn encode_term(value: &TermValue, out: &mut Vec<u8>) {
+    let ControlFlow::Continue(()) = value.visit_terms(|term| -> ControlFlow<Infallible> {
+        encode_node(term, out);
+        ControlFlow::Continue(())
+    });
 }
 
 /// A [`FINGERPRINT_BYTES`]-wide digest of `terms`, in the order given.
@@ -108,10 +100,7 @@ pub(crate) fn encode_term(value: &TermValue, out: &mut Vec<u8>) -> Result<(), Te
 ///
 /// # Errors
 ///
-/// [`TextError::Data`] if any term nests triple terms past the encoder's depth
-/// bound. The bound exists because the encoder walks a heap-linked tree with
-/// ordinary recursion, and a stack overflow would abort the process rather than
-/// raise anything a caller can handle.
+/// None: every term has an encoding, at any nesting depth.
 pub fn fingerprint_terms<'a, I>(terms: I) -> Result<[u8; FINGERPRINT_BYTES], TextError>
 where
     I: IntoIterator<Item = &'a TermValue>,
@@ -120,21 +109,16 @@ where
     let mut buffer = Vec::new();
     for term in terms {
         buffer.clear();
-        encode_term(term, &mut buffer)?;
+        encode_term(term, &mut buffer);
         hasher.update(&buffer);
     }
     Ok(*hasher.finalize().as_bytes())
 }
 
-/// [`encode_term`]'s recursive body, carrying the current triple-term nesting
-/// depth so the bound can be enforced without exposing it in the public
-/// signature.
-fn encode_at_depth(value: &TermValue, out: &mut Vec<u8>, depth: u32) -> Result<(), TextError> {
-    if depth > MAX_TRIPLE_DEPTH {
-        return Err(TextError::data(format!(
-            "triple term nests deeper than the encoder's bound of {MAX_TRIPLE_DEPTH}"
-        )));
-    }
+/// Append one term's own bytes: a triple term's tag alone — its components are
+/// appended after it by [`encode_term`]'s walk — or every other term's whole
+/// encoding.
+fn encode_node(value: &TermValue, out: &mut Vec<u8>) {
     match value {
         TermValue::Iri(iri) => {
             out.push(TAG_IRI);
@@ -172,14 +156,8 @@ fn encode_at_depth(value: &TermValue, out: &mut Vec<u8>, depth: u32) -> Result<(
                 None => out.push(ABSENT),
             }
         }
-        TermValue::Triple { s, p, o } => {
-            out.push(TAG_TRIPLE);
-            encode_at_depth(s, out, depth + 1)?;
-            encode_at_depth(p, out, depth + 1)?;
-            encode_at_depth(o, out, depth + 1)?;
-        }
+        TermValue::Triple { .. } => out.push(TAG_TRIPLE),
     }
-    Ok(())
 }
 
 /// Append `text` as a little-endian `u64` byte length followed by its UTF-8
@@ -200,16 +178,19 @@ pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
 mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
-    use super::{FINGERPRINT_BYTES, MAX_TRIPLE_DEPTH, encode_term, fingerprint_terms};
-    use crate::error::TextError;
+    use super::{
+        FINGERPRINT_BYTES, TAG_BLANK, TAG_IRI, TAG_LITERAL, TAG_TRIPLE, encode_term,
+        fingerprint_terms, push_str,
+    };
 
     /// Encode one term into a fresh buffer, for tests that only care about the
     /// bytes of a single value.
     fn encode(value: &TermValue) -> Vec<u8> {
         let mut out = Vec::new();
-        encode_term(value, &mut out).expect("shallow test terms are within the depth bound");
+        encode_term(value, &mut out);
         out
     }
 
@@ -219,9 +200,9 @@ mod tests {
         let mut value = inner;
         for _ in 0..depth {
             value = TermValue::Triple {
-                s: Box::new(value),
-                p: Box::new(TermValue::iri("https://example.org/p")),
-                o: Box::new(TermValue::iri("https://example.org/o")),
+                s: TermBox::new(value),
+                p: TermBox::new(TermValue::iri("https://example.org/p")),
+                o: TermBox::new(TermValue::iri("https://example.org/o")),
             };
         }
         value
@@ -266,9 +247,9 @@ mod tests {
     fn any_term() -> impl Strategy<Value = TermValue> {
         leaf_term().prop_recursive(3, 24, 3, |inner| {
             (inner.clone(), inner.clone(), inner).prop_map(|(s, p, o)| TermValue::Triple {
-                s: Box::new(s),
-                p: Box::new(p),
-                o: Box::new(o),
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
             })
         })
     }
@@ -311,7 +292,7 @@ mod tests {
         fn encoding_appends_to_the_buffer(a in any_term(), b in any_term()) {
             let mut both = encode(&a);
             let prefix_len = both.len();
-            encode_term(&b, &mut both).expect("within the depth bound");
+            encode_term(&b, &mut both);
             prop_assert_eq!(&both[..prefix_len], &encode(&a)[..]);
             prop_assert_eq!(&both[prefix_len..], &encode(&b)[..]);
         }
@@ -412,54 +393,98 @@ mod tests {
         let a = TermValue::iri("https://example.org/a");
         let b = TermValue::simple_literal("a");
 
-        let forward = fingerprint_terms([&a, &b]).expect("within the depth bound");
+        let forward = fingerprint_terms([&a, &b]).expect("every term encodes");
         assert_eq!(
             forward,
-            fingerprint_terms([&a, &b]).expect("within the depth bound"),
+            fingerprint_terms([&a, &b]).expect("every term encodes"),
             "the same sequence must digest identically"
         );
         assert_ne!(
             forward,
-            fingerprint_terms([&b, &a]).expect("within the depth bound"),
+            fingerprint_terms([&b, &a]).expect("every term encodes"),
             "a reordered sequence is a different sequence"
         );
         assert_eq!(forward.len(), FINGERPRINT_BYTES);
     }
 
-    /// A term the encoder refuses is refused by the fingerprint too, rather
-    /// than silently contributing nothing to the digest.
-    #[test]
-    fn the_fingerprint_propagates_the_depth_refusal() {
-        let deep = nest(
-            TermValue::iri("https://example.org/x"),
-            MAX_TRIPLE_DEPTH + 1,
-        );
-        assert!(matches!(
-            fingerprint_terms([&deep]),
-            Err(TextError::Data(_))
-        ));
+    /// The recursive reference of [`encode_term`]: a triple term's tag, then its
+    /// subject, predicate and object encoded in turn.
+    fn reference_encode(value: &TermValue, out: &mut Vec<u8>) {
+        match value {
+            TermValue::Iri(iri) => {
+                out.push(TAG_IRI);
+                push_str(iri, out);
+            }
+            TermValue::Blank { label, scope } => {
+                out.push(TAG_BLANK);
+                push_str(label, out);
+                out.extend_from_slice(&scope.ordinal().to_le_bytes());
+            }
+            TermValue::Literal { .. } => {
+                let mut leaf = Vec::new();
+                encode_term(value, &mut leaf);
+                assert_eq!(leaf.first(), Some(&TAG_LITERAL));
+                out.extend_from_slice(&leaf);
+            }
+            TermValue::Triple { s, p, o } => {
+                out.push(TAG_TRIPLE);
+                reference_encode(s, out);
+                reference_encode(p, out);
+                reference_encode(o, out);
+            }
+        }
     }
 
-    /// A term exactly at the bound encodes; one past it is refused as data
-    /// rather than overflowing the stack.
-    #[test]
-    fn the_depth_bound_is_enforced_not_overflowed() {
-        let at_bound = nest(TermValue::iri("https://example.org/x"), MAX_TRIPLE_DEPTH);
-        let mut out = Vec::new();
-        assert_eq!(
-            encode_term(&at_bound, &mut out),
-            Ok(()),
-            "a term at the bound must encode"
-        );
+    proptest! {
+        /// The work-list encoder appends exactly the bytes the recursive reference
+        /// does, nested triple terms included.
+        #[test]
+        fn encoding_agrees_with_the_recursive_reference(term in any_term()) {
+            let mut expected = Vec::new();
+            reference_encode(&term, &mut expected);
+            prop_assert_eq!(encode(&term), expected);
+        }
+    }
 
-        let past_bound = nest(
-            TermValue::iri("https://example.org/x"),
-            MAX_TRIPLE_DEPTH + 1,
+    /// A deeply nested term is encoded, and fingerprinted as the digest of that
+    /// encoding.
+    #[test]
+    fn the_fingerprint_of_a_deeply_nested_term_is_the_digest_of_its_encoding() {
+        let deep = nest(TermValue::iri("https://example.org/x"), 1_000);
+        assert_eq!(
+            fingerprint_terms([&deep]).expect("every term encodes"),
+            *blake3::hash(&encode(&deep)).as_bytes()
         );
-        let mut out = Vec::new();
-        assert!(
-            matches!(encode_term(&past_bound, &mut out), Err(TextError::Data(_))),
-            "a term past the bound must be refused as data"
-        );
+    }
+
+    /// A triple term a hundred thousand levels deep is encoded on a thread whose
+    /// whole stack is 128 KiB: every level is its tag, its nested subject, and its
+    /// predicate and object IRIs.
+    #[test]
+    fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
+        const LEVELS: u32 = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let innermost = TermValue::iri("https://example.org/x");
+                let deep = nest(innermost.clone(), LEVELS);
+                let level = 1
+                    + encode(&TermValue::iri("https://example.org/p")).len()
+                    + encode(&TermValue::iri("https://example.org/o")).len();
+                let bytes = encode(&deep);
+                assert_eq!(
+                    bytes.len(),
+                    LEVELS as usize * level + encode(&innermost).len()
+                );
+                assert!(
+                    bytes[..LEVELS as usize]
+                        .iter()
+                        .all(|&tag| tag == TAG_TRIPLE)
+                );
+                drop(deep);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the encoder did not overflow the thread's stack");
     }
 }

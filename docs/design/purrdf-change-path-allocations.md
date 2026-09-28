@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 51 |
-| custom `sh:ask` component | 114 |
-| custom `sh:select` component | 64 |
-| `sh:expression` function call | 127 |
+| `sh:sparql` constraint | 40 |
+| custom `sh:ask` component | 86 |
+| custom `sh:select` component | 48 |
+| `sh:expression` function call | 101 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 68 |
-| custom `sh:ask` component, governed | 138 |
-| custom `sh:select` component, governed | 81 |
-| `sh:expression` function call, governed | 152 |
+| `sh:sparql` constraint, governed | 61 |
+| custom `sh:ask` component, governed | 114 |
+| custom `sh:select` component, governed | 69 |
+| `sh:expression` function call, governed | 126 |
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in
@@ -261,11 +261,11 @@ The relocation was TRIED first and is recorded here because it is the more
 attractive of the two and it is wrong. Establishing the nesting fact at admission
 reads as obviously right — admission is once, and the plan is immutable afterwards
 — and it silently moved an acceptance boundary the crate states and tests:
-preparation accepts the PARSER's envelope, and the evaluator's narrower depth limit
-belongs to execution. A flat `OPTIONAL {} OPTIONAL {} …` spine sits inside the
-parser's budget at two brace levels and lowers to a `LeftJoin` chain far past the
-evaluator's limit, so preparing it must succeed and evaluating it must return a
-typed diagnostic. With the guard at admission, preparing it became an error — as
+preparation accepts every tree the parser builds whose walks fit the admitting
+thread's stack, and the evaluator's narrower `wasm32` graph-pattern count belongs
+to execution. A flat `OPTIONAL {} OPTIONAL {} …` spine written at two brace
+levels lowers to a `LeftJoin` chain far past that count, so preparing it must
+succeed and evaluating it there must return a typed diagnostic. With the guard at admission, preparing it became an error — as
 did preparing one of this workspace's own generated corpus queries. Every test in
 the module holding the changed code still passed. Measured
 on `crates/sparql-eval/tests/prepared_execution.rs`'s `query_prepared` pin over a
@@ -498,7 +498,23 @@ per-surface saving therefore follows the number of runs per focus node, and the
 `sh:expression` call — whose argument terms are node-expression outputs and never
 had an id — does not move at all, which is what says the drop is this change and
 not something beneath it: 51 / 114 / 64 / 127 ungoverned, 68 / 138 / 81 / 152
-governed, which is where both stand now.
+governed. The governed `sh:ask` figure has since dropped to 136 for a reason of
+its own: its validator's `&&` is one algebra node holding both operands in one
+vector, where the binary node boxed each, so the per-run copy of the substituted
+query allocates once less on each of the two value nodes.
+
+The eleventh: the height check every evaluation runs before its first operator
+allocated a traversal vector per EXPRESSION. That check walked graph-pattern nodes
+only, and reached the `EXISTS` patterns an expression can hide by handing each
+expression attached to a pattern node to a second iterative walk with a pending
+vector of its own — allocated, and grown once as soon as a function call pushed
+its name and its argument: two allocations per attached expression, per run. The
+check now measures the tree through the evaluator's height admission
+(`purrdf_sparql_eval`'s `stack::height`), which walks patterns, expressions, paths
+and terms on one shared stack whose first thirty-two pending nodes live inline, so
+on these fixtures it allocates nothing at all: 47 / 106 / 60 / 119 ungoverned,
+64 / 128 / 77 / 144 governed, and 212, unchanged, on the `&str`-door `sh:ask` fallback
+lane.
 
 An id is meaningful only against the dataset that minted it, so the door makes a
 cross-dataset binding impossible rather than merely refused: the id and the view

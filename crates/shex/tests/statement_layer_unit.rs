@@ -21,6 +21,7 @@
 //! These are the RDF 1.2 *statement* annotations, not the unrelated ShEx
 //! *schema* annotations (`// predicate object`).
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
@@ -100,9 +101,9 @@ fn data() -> Arc<RdfDataset> {
 /// `T1 = <<ex:alice ex:knows ex:bob>>` as a value.
 fn t1_value() -> TermValue {
     TermValue::Triple {
-        s: Box::new(TermValue::iri(ALICE)),
-        p: Box::new(TermValue::iri(KNOWS)),
-        o: Box::new(TermValue::iri(BOB)),
+        s: TermBox::new(TermValue::iri(ALICE)),
+        p: TermBox::new(TermValue::iri(KNOWS)),
+        o: TermBox::new(TermValue::iri(BOB)),
     }
 }
 
@@ -181,9 +182,9 @@ fn selector_over_rdf_reifies_both_directions() {
         vec![
             t1_value(),
             TermValue::Triple {
-                s: Box::new(TermValue::iri(ALICE)),
-                p: Box::new(TermValue::iri(NAME)),
-                o: Box::new(TermValue::simple_literal("Alice")),
+                s: TermBox::new(TermValue::iri(ALICE)),
+                p: TermBox::new(TermValue::iri(NAME)),
+                o: TermBox::new(TermValue::simple_literal("Alice")),
             },
         ],
     );

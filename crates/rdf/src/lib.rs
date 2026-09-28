@@ -243,7 +243,7 @@ pub use purrdf_core::{
     SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap, SerializeGraph, SkolemError,
     SmallVec, SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
     SssomCommentError, SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping,
-    SssomMappingSet, SssomMeta, SssomSetComment, SubsetPageProvider, TermFactory, TermId,
+    SssomMappingSet, SssomMeta, SssomSetComment, SubsetPageProvider, TermBox, TermFactory, TermId,
     TermPosition, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
     ViewAccountingReport, ViewCanonError, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
     assert_ledger_complete, assert_ledger_sound, blank_count_view, canonical_relabel,

@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::guard::{Guard, GuardReads, GuardSite, Negation};
-use purrdf_sparql_algebra::{Expression, Function, GraphPattern, Variable};
+use purrdf_sparql_algebra::{Child, Expression, Function, GraphPattern, Variable};
 
 use super::ir::{
     Element, ElementRule, IrRuleBody, PatternTerm, RuleSet, ShaclProducer, TriplePattern,
@@ -336,9 +336,9 @@ impl ClauseBuilder<'_, '_, '_> {
             // The effective boolean value, with an evaluation error read as false: IF
             // raises the error, the projection is then unbound, and the solution drops.
             Expression::If(
-                Box::new(rewritten),
-                Box::new(Expression::Literal(boolean(true))),
-                Box::new(Expression::Literal(boolean(false))),
+                Child::new(rewritten),
+                Child::new(Expression::Literal(boolean(true))),
+                Child::new(Expression::Literal(boolean(false))),
             )
         } else {
             rewritten
@@ -676,7 +676,7 @@ fn boolean(value: bool) -> purrdf_sparql_algebra::Literal {
 /// The single-row scalar SELECT binding `?result` to `expression`.
 pub(crate) fn pattern_query(expression: Expression) -> String {
     purrdf_sparql_algebra::pattern_to_select_query(&GraphPattern::Extend {
-        inner: Box::new(GraphPattern::Bgp {
+        inner: Child::new(GraphPattern::Bgp {
             patterns: Vec::new(),
         }),
         variable: Variable::new("result"),
@@ -697,46 +697,48 @@ fn rewrite_expression(
             *variable = Variable::new(canonical[position].clone());
         }
     };
-    match expression {
-        Expression::Variable(v) | Expression::Bound(v) => rename(v),
-        Expression::FunctionCall(Function::Now, args) if args.is_empty() => {
-            if let Some(now) = now {
-                *expression = Expression::Literal(now.clone());
+    // An explicit work list of the sub-expressions still to rewrite, so a taller
+    // expression needs no more machine stack. An `EXISTS` pattern is not entered.
+    let mut pending: Vec<&mut Expression> = vec![expression];
+    while let Some(expression) = pending.pop() {
+        match expression {
+            Expression::Variable(v) | Expression::Bound(v) => rename(v),
+            Expression::FunctionCall(Function::Now, args) if args.is_empty() => {
+                if let Some(now) = now {
+                    *expression = Expression::Literal(now.clone());
+                }
             }
-        }
-        Expression::NamedNode(_) | Expression::Literal(_) | Expression::Exists(_) => {}
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
-            rewrite_expression(a, names, canonical, now);
-            rewrite_expression(b, names, canonical, now);
-        }
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            rewrite_expression(a, names, canonical, now);
-        }
-        Expression::In(a, list) => {
-            rewrite_expression(a, names, canonical, now);
-            for item in list {
-                rewrite_expression(item, names, canonical, now);
+            Expression::NamedNode(_) | Expression::Literal(_) | Expression::Exists(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                pending.extend(operands.iter_mut());
             }
-        }
-        Expression::If(a, b, c) => {
-            rewrite_expression(a, names, canonical, now);
-            rewrite_expression(b, names, canonical, now);
-            rewrite_expression(c, names, canonical, now);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list {
-                rewrite_expression(item, names, canonical, now);
+            Expression::Equal(a, b)
+            | Expression::SameTerm(a, b)
+            | Expression::Greater(a, b)
+            | Expression::GreaterOrEqual(a, b)
+            | Expression::Less(a, b)
+            | Expression::LessOrEqual(a, b) => {
+                pending.push(&mut **a);
+                pending.push(&mut **b);
+            }
+            Expression::Arithmetic(first, steps) => {
+                pending.push(&mut **first);
+                pending.extend(steps.iter_mut().map(|(_, operand)| operand));
+            }
+            Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                pending.push(&mut **a);
+            }
+            Expression::In(a, list) => {
+                pending.push(&mut **a);
+                pending.extend(list.iter_mut());
+            }
+            Expression::If(a, b, c) => {
+                pending.push(&mut **a);
+                pending.push(&mut **b);
+                pending.push(&mut **c);
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                pending.extend(list.iter_mut());
             }
         }
     }

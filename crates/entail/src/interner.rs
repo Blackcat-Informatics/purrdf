@@ -9,11 +9,12 @@
 //! engine intern terms from the source dataset and re-materialize them into a fresh
 //! builder soundly.
 
+use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 
 use hashbrown::HashTable;
 
-use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
+use purrdf_core::{Nested, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_fold_nested};
 
 /// Local `TermValue`→`u32` interner over dataset-independent terms.
 #[derive(Default)]
@@ -116,7 +117,7 @@ impl Interner {
 ///   the tag when a language is
 ///   present, so passing the already-expanded datatype through is a no-op, not a
 ///   conflict.)
-/// * A triple term is rebuilt **recursively**, component by component. Its subject,
+/// * A triple term is rebuilt component by component, at every depth. Its subject,
 ///   predicate, or object may itself be a triple term, so the reconstruction nests to
 ///   whatever depth the source term has. Folding one to a stand-in IRI would assert a
 ///   triple nothing entails — unsound, and strictly worse than deriving nothing.
@@ -130,32 +131,41 @@ impl Interner {
 /// [`Construct::TripleTerm`](crate::Construct::TripleTerm) boundary so a caller is told
 /// the closure is incomplete rather than left to assume it is exact. Re-materializing the
 /// term faithfully is what keeps the conclusions the rules DO draw around it correct.
+///
+/// A triple term is interned over [`try_fold_nested`]'s work list: its subject, predicate
+/// and object, each fully before the next, then the triple itself.
 pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(iri) => b.intern_iri(iri),
-        TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_into(b, s);
-            let p = intern_into(b, p);
-            let o = intern_into(b, o);
-            b.intern_triple(s, p, o)
-        }
+    let interned = try_fold_nested(
+        v,
+        b,
+        |b, v| {
+            Ok::<_, Infallible>(Nested::Leaf(match v {
+                TermValue::Iri(iri) => b.intern_iri(iri),
+                TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => b.intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                }),
+                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+            }))
+        },
+        |b, _, s, p, o| Ok(b.intern_triple(s, p, o)),
+    );
+    match interned {
+        Ok(id) => id,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection};
 
     use super::{Interner, intern_into};
@@ -175,9 +185,9 @@ mod tests {
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(TermValue::iri(s)),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(TermValue::iri(o)),
+            s: TermBox::new(TermValue::iri(s)),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(TermValue::iri(o)),
         }
     }
 
@@ -229,15 +239,15 @@ mod tests {
     #[test]
     fn intern_into_round_trips_a_nested_triple_term() {
         let nest = |inner: TermValue| TermValue::Triple {
-            s: Box::new(TermValue::iri(EX_S)),
-            p: Box::new(TermValue::iri(EX_P)),
-            o: Box::new(inner),
+            s: TermBox::new(TermValue::iri(EX_S)),
+            p: TermBox::new(TermValue::iri(EX_P)),
+            o: TermBox::new(inner),
         };
         // Nested in the object slot — the one position RDF 1.2 nests a triple term
         // in, so it is the whole of the nesting the chase can ever re-materialize.
         let outer = nest(quoted(EX_S, EX_P, EX_O));
         assert_eq!(round_trip(&outer), outer);
-        // Depth 3, still through the object slot: the recursion is not special-cased
+        // Depth 3, still through the object slot: the nesting is not special-cased
         // at one level, and a chase that folded the inner-most term to a stand-in
         // IRI would show up here rather than at depth 2.
         let deeper = nest(outer);
@@ -308,5 +318,83 @@ mod tests {
         assert!(!interner.is_subject(literal));
         assert!(!interner.is_subject(directional_literal));
         assert!(!interner.is_subject(triple));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! Re-materialization against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
+
+    use super::intern_into;
+
+    fn reference(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
+        match v {
+            TermValue::Iri(iri) => b.intern_iri(iri),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => b.intern_literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            TermValue::Triple { s, p, o } => {
+                let s = reference(b, s);
+                let p = reference(b, p);
+                let o = reference(b, o);
+                b.intern_triple(s, p, o)
+            }
+        }
+    }
+
+    /// Every generated term interns into a fresh builder in the order the recursive
+    /// reference interns it: the same id, and the same next id after it.
+    #[test]
+    fn interning_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            assert_eq!(
+                intern_into(&mut found, &value),
+                reference(&mut expected, &value),
+                "seed {seed}"
+            );
+            let sentinel = "http://example.org/sentinel";
+            assert_eq!(
+                found.intern_iri(sentinel),
+                expected.intern_iri(sentinel),
+                "seed {seed}"
+            );
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep interns on a thread whose whole stack
+    /// is 128 KiB: one term a level beside the chain's three leaves.
+    #[test]
+    fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut builder = RdfDatasetBuilder::new();
+                assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("interning did not overflow the thread's stack");
     }
 }

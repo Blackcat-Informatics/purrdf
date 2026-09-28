@@ -369,10 +369,7 @@ fn lane_values(dataset: &RdfDataset, query: &str, focus: &TermValue) -> BTreeSet
                 base_iri: None,
                 substitutions: &substitutions,
             },
-            QueryOptions {
-                prebinding: ShaclPrebinding::Applied,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_prebinding(ShaclPrebinding::Applied),
         )
         .unwrap_or_else(|error| panic!("{query} with {focus:?}: {}", error.message));
     let SparqlResult::Solutions {

@@ -8,6 +8,13 @@ on:
     branches:
       - main
 
+# A newer push to a pull request supersedes the run the previous one started, so that
+# run is cancelled rather than left to hold runners for a result nobody reads. Runs on
+# main (and on tags) are never cancelled: every commit there keeps its whole record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 permissions:
   contents: read
 
@@ -83,6 +90,12 @@ jobs:
       - name: Check no terminal predicate is re-derived outside its owning surface
         run: python3 scripts/check-terminal-predicates.py
 
+      - name: Check the thread-local ledger gate can still fail
+        run: python3 scripts/check-thread-locals.py --self-test
+
+      - name: Check every thread-local is in the interleaving ledger with its reason
+        run: python3 scripts/check-thread-locals.py
+
       - name: Check the shapes-parser silent-drop gate can still fail
         run: python3 scripts/check-shapes-parser-drops.py --self-test
 
@@ -94,6 +107,12 @@ jobs:
 
       - name: Check no tracked path is unsafe to pass to a command
         run: python3 scripts/check-tracked-paths.py
+
+      - name: Check the test-shard gate can still fail
+        run: python3 scripts/check-test-shards.py --self-test
+
+      - name: Check the CI test shards cover every workspace member exactly once
+        run: python3 scripts/check-test-shards.py
 
       - name: Check the workload acquisition pins and refusals hold (offline)
         run: python3 scripts/benchmark-acquire.py --self-test
@@ -173,35 +192,61 @@ jobs:
       - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one
-  # job it compiled for 25 minutes before running a test and was cancelled at its
-  # timeout; nearly all of that is first-party test targets, so a dependency cache
-  # alone could not bring it back under budget. `make test-shard` defines the
-  # shards and carries the proof that together they are exactly the old command:
-  # every shard selects `--workspace`, so dependency features resolve as they did,
-  # and the lib / doc / four integration-test shards partition its default target
-  # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
-  # job below already runs through `make capi-check`.
+  # `cargo test --workspace` used to run here as ONE job. On a cold runner it
+  # compiled for thirty minutes before the first test started and then ran for nine
+  # more, so it could not fit the per-job budget however the timeout was set. The
+  # same run is now split by package into the shards `scripts/test-shards.py` names,
+  # one matrix leg each, in parallel. `cargo test -p X` selects exactly the targets
+  # `--workspace` selects for X (unit, integration, bins, examples, test-enabled
+  # benches and X's doctests), so the union of the legs IS the workspace run, and
+  # `scripts/check-test-shards.py` (workspace job, `make check`) refuses a member
+  # left in no shard. `make check` itself still runs the unsplit command.
+  #
+  # The matrix is emitted by this planning job rather than hand-copied into the
+  # `strategy:` below, so there is one list and the gate checks that list. It needs
+  # no Rust toolchain: it reads the manifests, and `--matrix` refuses to print a
+  # list that is not an exact partition of the members.
+  test-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Emit the test shards (refuses a list that leaves a crate untested)
+        id: plan
+        run: |
+          set -euo pipefail
+          shards="$(python3 scripts/test-shards.py --matrix)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "shards: $shards"
+
   test:
+    needs: test-plan
     name: test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # One red shard must not cancel the others: each reports a disjoint slice of
-      # the suite, and a cancelled slice is a slice nobody saw.
+      # Every leg reports: a failure in one shard must not cancel the others and
+      # hide whether they would have passed.
       fail-fast: false
       matrix:
-        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4]
+        shard: ${{ fromJSON(needs.test-plan.outputs.shards) }}
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
     # every other lane too -- and a second place to set one thing was exactly the
     # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
-      # This lane links the workspace's test targets, which is the largest thing CI
-      # builds -- one binary per integration-test file, each carrying the line
-      # tables `[profile.dev]` asks for, plus the umbrella crate's doctests, whose
-      # link line pulls in every member crate at once.
+      # These legs link the workspace's test targets, the largest thing CI builds --
+      # one binary per integration-test file, plus (in the `hosts` shard) the
+      # umbrella crate's doctests, whose link line pulls in every member crate at
+      # once. Splitting shrinks each leg's share, but the heaviest legs still build
+      # most of the library graph, so the reclaim stays on every leg.
       #
       # A hosted runner ships ~30 GB of preinstalled toolchains this repository
       # never uses, and running out of disk here does NOT surface as a disk error:
@@ -230,30 +275,39 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # One cache for all six shards. Every shard resolves features over the whole
-      # workspace, so each compiles its dependencies identically and one saved set
-      # serves them all; the lib shard, which builds every package's dev-dependencies,
-      # is the one that saves it. First-party crates are never cached (the action
-      # cleans them), so every shard still compiles the code under test.
-      - name: Cache the dependency build (shared by every shard)
+      # Warm runs only: a pull request's first run has no cache of its own, and
+      # every leg is sized to fit the budget without one. One key per shard, since
+      # the legs build different graphs. Saved from `main` alone, so six per-branch
+      # target directories do not evict main's (and the wasm lanes') caches from
+      # the repository's shared quota; a branch restores main's. The key is a
+      # `shared-key` so that jobs outside this matrix can restore a shard's build
+      # by name: the Python and conformance lanes restore `test-hosts`, the shard
+      # that builds the Python binding and the conformance harness.
+      - name: Cache the Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
-          save-if: ${{ matrix.shard == 'lib' }}
+          shared-key: test-${{ matrix.shard }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Node for the Unicode ECMAScript oracle
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
 
-      - name: Run workspace tests (this shard; the six include the doc tests)
+      - name: Run this shard's tests (includes doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
         # reassociated path this job requires; the distance, kNN and HNSW tests still
         # assert they executed every path the runner reports. `avx512-sde` below
         # requires the rest.
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
-        run: make test-shard SHARD=${{ matrix.shard }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          packages="$(python3 scripts/test-shards.py --packages "$SHARD")"
+          echo "shard $SHARD: $packages"
+          # shellcheck disable=SC2086 # one word per `-p` / package name
+          cargo test --locked $packages
 
   projection-oracles:
     runs-on: ubuntu-latest
@@ -320,7 +374,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 25 publishable crates with rustdoc lints promoted
+      # Document exactly the 26 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -368,16 +422,62 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: "1.98"
 
-  # The wasm lane, as three jobs along its natural seams, each with its own build
-  # cache (the composite action keys the cache by job): `wasm` proves the release
-  # crates build for wasm32 and that geo and HNSW answer byte-identically on both
-  # targets; `wasm-package` builds the optimized npm package and runs everything
-  # that consumes it; `wasm-test` executes the cross-target determinism tests in
-  # Node. As one job the chain ran 23 minutes on a 30-minute budget, and on main
-  # it was cancelled at the timeout.
+  # Four independent jobs, split from one 30-minute `wasm` job that was being
+  # cancelled mid-run (`gh run view --json jobs`, step startedAt/completedAt,
+  # consistently showed the 30-minute timeout hit before every step
+  # finished). Each of the four groups below was ALREADY a self-contained
+  # build in the old single job -- none of them read another group's output:
+  #   * `make geo-determinism` / `make hnsw-determinism` build their own
+  #     workspace-excluded `cdylib` helper (`crates/geo/determinism`,
+  #     `crates/hnsw/determinism`) into a scratch `--target-dir` of their own
+  #     (`target/geo-determinism`, `target/hnsw-determinism`), never the
+  #     workspace's.
+  #   * `make wasm-pkg` sets its own RUSTFLAGS (`--remap-path-prefix`,
+  #     `+simd128`), which Cargo fingerprints separately from every other
+  #     step's build, so it was already a from-scratch compile in the old job.
+  #   * `make wasm-test` runs `cargo test --target wasm32-unknown-unknown`
+  #     (debug profile, no `--release`) against the WORKSPACE target dir, a
+  #     different profile directory from every `--release` step around it, so
+  #     it also never reused another step's output.
+  # So the split below costs nothing in wall-clock work that the old serial
+  # job was not already redoing; it only adds each new job's own setup
+  # (checkout + toolchain, ~26s-40s) and lets the four groups run in
+  # PARALLEL instead of serialized behind one timeout. Every job reuses the
+  # same `./.github/actions/wasm-toolchain` composite action and its
+  # `Swatinem/rust-cache` key (`wasm-toolchain`) the old job used, so the
+  # cache key set is unchanged.
+  #
+  # Measured per-step (`gh run view --json jobs`, 2026-09-25 branch run,
+  # cancelled mid-oracle at the old 30-minute timeout):
+  #   Checkout 3s, Install Rust 11s, wasm-toolchain action 12s (~26s setup)
+  #   Build release crates on wasm32       246s
+  #   geo-determinism                      342s
+  #   hnsw-determinism                     203s
+  #   Build the optimized wasm package     317s
+  #   Set up Node.js                         3s
+  #   Run npm package gates                 14s
+  #   wasm-test (cross-target determinism) 477s
+  #   TypeScript emitter schema oracle     251s (last completed measurement, 2026-09-24)
+  #   GraphQL emitter schema oracle          4s (last completed measurement, 2026-09-24)
+  # Every one of these grew 1.3x-2x over the three days of measurements this
+  # split is based on (e.g. hnsw-determinism 89s -> 111s -> 203s), so each
+  # timeout below carries headroom past the bare ~1.5x this file's other gates
+  # use, sized per job against its own growth rate rather than a single shared
+  # number.
+
+  # release crates on wasm32 + both wasm32/native determinism digests: kept
+  # together (the coordinator's suggested seam) because their combined
+  # measured time (26s + 246s + 342s + 203s = 817s, ~13.6min) already sits
+  # inside the ~12-15 minute band asked for, so splitting hnsw-determinism out
+  # again would trade a real parallel job for no wall-clock benefit. Kept
+  # under the `wasm` name because `docs/design/purrdf-geo-exactness.md` and
+  # `docs/design/purrdf-hnsw.md` both say "CI runs it in the `wasm` job" about
+  # exactly these two steps.
+  # 817s * 1.5 ~= 1226s (~20.4min); rounded up to 25 minutes for the
+  # documented growth trend above.
   wasm:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -404,6 +504,7 @@ jobs:
             -p purrdf-iri \
             -p purrdf-xsd \
             -p purrdf-cdt \
+            -p purrdf-stack \
             -p purrdf-gts \
             -p purrdf-core \
             -p purrdf-columnar \
@@ -440,9 +541,18 @@ jobs:
         # and compares, rather than trusting the argument.
         run: make hnsw-determinism
 
+  # The optimized npm/wasm package build + its JS gates (async/JSPI suites
+  # included). Split from `wasm` above: `make wasm-pkg` sets its own RUSTFLAGS
+  # (see the note above the `wasm` job), so it never reused that job's build
+  # either.
+  # Measured: setup ~26s + wasm-pkg build 317s + Set up Node.js 3s + npm
+  # package gates 14s = 360s (~6min). 360s * 1.5 ~= 540s (~9min); rounded up
+  # to 20 minutes (this split's floor) since `make wasm-pkg`'s own measured
+  # time grew from 219s to 317s (~1.4x) over the three days behind these
+  # numbers.
   wasm-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -474,16 +584,39 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
-      # Both oracles resolve their compilers from the npm toolchain installed above.
-      - name: TypeScript emitter schema oracle
-        run: node crates/shapes/tests/typescript_oracle.mjs
+      - name: Run the Worker recipe under workerd
+        # The README's Worker recipe and the Cloudflare adapter, served from the package
+        # built above by real workerd through Miniflare: a joined SERVICE, SERVICE SILENT
+        # over a failing endpoint, a catalog denial (403), an upstream 500 (502), and a
+        # request served while a long query runs. The upstream is answered in process;
+        # no request leaves the runner. Miniflare is installed exactly pinned into a
+        # scratch directory, never into the package's devDependencies, so a local
+        # `npm ci` does not download workerd; the driver refuses to run without it.
+        working-directory: crates/rdf-wasm/js
+        timeout-minutes: 8
+        env:
+          PURRDF_MINIFLARE_DIR: ${{ github.workspace }}/.ci-workerd-harness
+        run: |
+          mkdir -p "$PURRDF_MINIFLARE_DIR"
+          npm install --prefix "$PURRDF_MINIFLARE_DIR" --no-save --no-package-lock \
+            --ignore-scripts --no-audit --no-fund miniflare@4.20260730.0
+          node tests/workerd/run-worker-recipe.mjs
 
-      - name: GraphQL emitter schema oracle
-        run: node crates/shapes/tests/graphql_oracle.mjs
-
-  wasm-test:
+  # The cross-target (wasm32 vs native) determinism suites executed in Node.
+  # Split from `wasm` above: `make wasm-test` builds in DEBUG profile (no
+  # `--release`), a different target-dir subtree from every `--release` step
+  # around it in the old job, so it never reused their output either. It does
+  # NOT read `crates/rdf-wasm/js/pkg/` (the `wasm-package` job's artifact) --
+  # it drives `cargo test --target wasm32-unknown-unknown` directly through
+  # `wasm-bindgen-test-runner` -- so no `actions/upload-artifact` /
+  # `download-artifact` or `needs:` is required between the two jobs.
+  # Measured: setup ~26s + Set up Node.js 3s + wasm-test 477s = 506s
+  # (~8.4min). 506s * 1.5 ~= 759s (~12.6min); rounded up to 25 minutes because
+  # this step's own measured time was the fastest-growing of the whole job
+  # (240s -> 377s -> 477s, ~2x over the three days behind these numbers).
+  wasm-cross-determinism:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -505,7 +638,7 @@ jobs:
           node-version: 24
 
       - name: Execute the cross-target determinism tests on wasm32 (Node)
-        # The `wasm` job proves the crates COMPILE for wasm32. This one proves
+        # The `wasm` job's build proves the crates COMPILE for wasm32. This one proves
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
@@ -513,6 +646,58 @@ jobs:
         # index is built, recorded, decoded, verified and searched here too, on the
         # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test
+
+  # Split out of the `wasm` job above: these two oracles never touch any of
+  # the other wasm jobs' builds. `typescript_oracle.mjs` and
+  # `graphql_oracle.mjs` both run a NATIVE `cargo run -p purrdf-shapes
+  # --example ...` to generate their fixtures and resolve the
+  # `typescript`/`graphql` packages out of `crates/rdf-wasm/js`'s own
+  # node_modules (via `createRequire` against that package.json) -- no wasm32
+  # target, no wasm-bindgen/binaryen toolchain, and no `pkg/` build artifact.
+  # Kept as its own job so it gets its own timeout budget instead of competing
+  # with the wasm32 build+test lanes for the single 30-minute timeout that was
+  # cancelling it mid-run.
+  #
+  # Measured (`gh run view --json jobs`, last run where both oracle steps ran
+  # to completion, 2026-09-24): TypeScript emitter schema oracle 251s, GraphQL
+  # emitter schema oracle 4s. Setup here (checkout + native Rust install +
+  # Node + `npm ci`) adds roughly another 30s, for a ~285s (~4m45s) total.
+  # 285s * 1.5 ~= 428s (~7m08s); rounded up to 20 minutes to also absorb the
+  # oracle's own measured growth trend (200s -> 251s over the two runs before
+  # it, and every other step in the neighbouring wasm jobs grew 1.3-2x over
+  # the same few days as the async/JSPI suites landed).
+  wasm-schema-oracles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Install npm dependencies for the emitter schema oracles
+        # Only `npm ci` -- the oracles resolve `typescript`/`graphql` out of
+        # this directory's node_modules directly; they do not need the built
+        # wasm package (`npm run check` and its `pkg/` dependency stay in the
+        # `wasm-package` job above).
+        working-directory: crates/rdf-wasm/js
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: TypeScript emitter schema oracle
+        run: node crates/shapes/tests/typescript_oracle.mjs
+
+      - name: GraphQL emitter schema oracle
+        run: node crates/shapes/tests/graphql_oracle.mjs
 
   # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
   # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
@@ -873,13 +1058,13 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The test lane's saved dependency build, restored and never re-saved: the
+      # The test lane's `hosts` shard build, restored and never re-saved: the
       # module build and the emitter oracle's cargo run share most dependency units
       # with it, and no new cache entry competes for the repository's quota.
       - name: Restore the workspace test lane's dependency build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: test-hosts
           save-if: false
 
       - name: Install uv
@@ -932,13 +1117,13 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The dependency build the test lane saves, restored and never re-saved: the
-      # conformance suites are that lane's test targets, so most dependency units are
-      # already compiled, and no new cache entry competes for the repository's quota.
+      # The build the test lane's `hosts` shard saves, restored and never re-saved:
+      # the conformance suites are that shard's test targets, so most dependency units
+      # are already compiled, and no new cache entry competes for the repository's quota.
       - name: Restore the workspace test lane's dependency build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: test-hosts
           save-if: false
 
       - name: Install uv

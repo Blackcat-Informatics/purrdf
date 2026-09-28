@@ -1620,11 +1620,16 @@ fn enqueue_quoted_triple(
 /// Write one `<predicate>object</predicate>` property, resolving a quoted-triple object
 /// through `rdf:parseType="Triple"`.
 ///
+/// A quoted-triple object nests one `rdf:Description` holding one property, so a
+/// nested triple term is written by a loop: each level writes its opening lines and
+/// holds back its two closing lines, and once the innermost property is written the
+/// held closings are written innermost first.
+///
 /// # Termination
 ///
-/// The `write_property` → `write_triple_node` cycle carries no depth bound and no
-/// visited set. It terminates because the term table it walks does: every producer of a
-/// [`SerGraph`] guarantees that, and the one that takes a caller-supplied graph
+/// The loop follows quoted-triple objects with no depth bound and no visited set. It
+/// terminates because the term table it walks does: every producer of a [`SerGraph`]
+/// guarantees that, and the one that takes a caller-supplied graph
 /// (`crate::gts::gts_to_ser`) proves it, refusing a self-reaching table with
 /// `gts-self-reaching-term`. See `ser_model::write_term`.
 fn write_property<W: TextOut + ?Sized>(
@@ -1636,62 +1641,77 @@ fn write_property<W: TextOut + ?Sized>(
     object: usize,
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
-    let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
-    let term = ser_term(graph, object)?;
-    match term.kind {
-        SerTermKind::Iri => {
-            // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
-            // is spelled against the document base exactly as `rdf:about` is.
-            out.push_str(indent);
-            out.push('<');
-            out.push_str(&name);
-            push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
-            out.push_str("/>\n");
-        }
-        SerTermKind::Bnode => {
-            out.push_str(indent);
-            out.push('<');
-            out.push_str(&name);
-            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
-            out.push_str("/>\n");
-        }
-        SerTermKind::Literal => {
-            let _ = write!(out, "{indent}<{name}");
-            if let Some(language) = &term.lang {
-                push_xml_attribute("xml:lang", language, out)?;
+    let mut closings: Vec<String> = Vec::new();
+    let mut indent = indent.to_owned();
+    let (mut predicate, mut object) = (predicate, object);
+    loop {
+        let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
+        let term = ser_term(graph, object)?;
+        match term.kind {
+            SerTermKind::Iri => {
+                // `rdf:resource` is an IRI reference and resolves against `xml:base`, so
+                // it is spelled against the document base exactly as `rdf:about` is.
+                out.push_str(&indent);
+                out.push('<');
+                out.push_str(&name);
+                push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+                out.push_str("/>\n");
             }
-            if let Some(direction) = &term.direction {
-                let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
+            SerTermKind::Bnode => {
+                out.push_str(&indent);
+                out.push('<');
+                out.push_str(&name);
+                push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+                out.push_str("/>\n");
             }
-            if let Some(datatype) = term.datatype {
-                push_xml_attribute("rdf:datatype", ser_value(ser_term(graph, datatype)?)?, out)?;
+            SerTermKind::Literal => {
+                let _ = write!(out, "{indent}<{name}");
+                if let Some(language) = &term.lang {
+                    push_xml_attribute("xml:lang", language, out)?;
+                }
+                if let Some(direction) = &term.direction {
+                    let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
+                }
+                if let Some(datatype) = term.datatype {
+                    push_xml_attribute(
+                        "rdf:datatype",
+                        ser_value(ser_term(graph, datatype)?)?,
+                        out,
+                    )?;
+                }
+                out.push('>');
+                push_xml_text(ser_value(term)?, out)?;
+                out.push_str("</");
+                out.push_str(&name);
+                out.push_str(">\n");
             }
-            out.push('>');
-            push_xml_text(ser_value(term)?, out)?;
-            out.push_str("</");
-            out.push_str(&name);
-            out.push_str(">\n");
+            SerTermKind::Triple => {
+                let (s, p, o) = term
+                    .reifier
+                    .and_then(|rf| reifier_index.get(rf))
+                    .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
+                let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
+                closings.push(format!("{indent}</{name}>\n"));
+                let description = format!("{indent}  ");
+                let _ = write!(out, "{description}<rdf:Description");
+                write_node_attribute(out, graph, s)?;
+                out.push_str(">\n");
+                closings.push(format!("{description}</rdf:Description>\n"));
+                indent = format!("{description}  ");
+                (predicate, object) = (p, o);
+                continue;
+            }
         }
-        SerTermKind::Triple => {
-            let (s, p, o) = term
-                .reifier
-                .and_then(|rf| reifier_index.get(rf))
-                .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
-            let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
-            write_triple_node(
-                out,
-                &format!("{indent}  "),
-                graph,
-                reifier_index,
-                (s, p, o),
-                namespaces,
-            )?;
-            let _ = writeln!(out, "{indent}</{name}>");
-        }
+        break;
+    }
+    while let Some(closing) = closings.pop() {
+        out.push_str(&closing);
     }
     Ok(())
 }
 
+/// Write the `rdf:Description` of the quoted triple `(s, p, o)`: its subject as the
+/// node attribute and its one property.
 fn write_triple_node<W: TextOut + ?Sized>(
     out: &mut W,
     indent: &str,
@@ -2152,5 +2172,189 @@ mod tests {
             .is_some(),
             "rdf:ID resolves to base#x"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The property writer against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use std::collections::BTreeMap;
+
+    use super::super::ser_model::term_walk_tests::lower;
+    use super::super::ser_model::{ReifierIndex, SerGraph, SerTermKind};
+    use super::{
+        ITS_NS, RDF_NS, RdfDiagnostic, iri_reference, push_xml_attribute, push_xml_text, ser_term,
+        ser_value, serialize_err, serializer_qname, write_node_attribute, write_property,
+    };
+    use core::fmt::Write as _;
+    use purrdf_core::TermValue;
+
+    /// The recursive reference of [`write_property`], with its triple-node helper.
+    fn reference_property(
+        out: &mut String,
+        indent: &str,
+        graph: &SerGraph,
+        ix: &ReifierIndex,
+        predicate: usize,
+        object: usize,
+        namespaces: &BTreeMap<String, String>,
+    ) -> Result<(), RdfDiagnostic> {
+        let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
+        let term = ser_term(graph, object)?;
+        match term.kind {
+            SerTermKind::Iri => {
+                let _ = write!(out, "{indent}<{name}");
+                push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+                out.push_str("/>\n");
+            }
+            SerTermKind::Bnode => {
+                let _ = write!(out, "{indent}<{name}");
+                push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+                out.push_str("/>\n");
+            }
+            SerTermKind::Literal => {
+                let _ = write!(out, "{indent}<{name}");
+                if let Some(language) = &term.lang {
+                    push_xml_attribute("xml:lang", language, out)?;
+                }
+                if let Some(direction) = &term.direction {
+                    let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
+                }
+                if let Some(datatype) = term.datatype {
+                    push_xml_attribute(
+                        "rdf:datatype",
+                        ser_value(ser_term(graph, datatype)?)?,
+                        out,
+                    )?;
+                }
+                out.push('>');
+                push_xml_text(ser_value(term)?, out)?;
+                let _ = writeln!(out, "</{name}>");
+            }
+            SerTermKind::Triple => {
+                let (s, p, o) = term
+                    .reifier
+                    .and_then(|rf| ix.get(rf))
+                    .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
+                let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
+                let inner = format!("{indent}  ");
+                let _ = write!(out, "{inner}<rdf:Description");
+                write_node_attribute(out, graph, s)?;
+                out.push_str(">\n");
+                reference_property(out, &format!("{inner}  "), graph, ix, p, o, namespaces)?;
+                let _ = writeln!(out, "{inner}</rdf:Description>");
+                let _ = writeln!(out, "{indent}</{name}>");
+            }
+        }
+        Ok(())
+    }
+
+    fn namespaces() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("http://example.org/".to_owned(), "ex".to_owned()),
+            (RDF_NS.to_owned(), "rdf".to_owned()),
+        ])
+    }
+
+    /// The looped writer writes every generated object exactly as the recursive
+    /// reference does — including, when a nested subject is not a node, the text written
+    /// before the refusal and the refusal itself.
+    #[test]
+    fn the_property_writer_agrees_with_its_recursive_reference_on_generated_objects() {
+        let (mut nested, mut refused) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::IriPredicates,
+            );
+            nested += usize::from(budget < 7);
+            let mut graph = SerGraph::default();
+            let object = lower(&mut graph, &value);
+            let predicate = lower(&mut graph, &TermValue::iri("http://example.org/p0"));
+            let ix = graph.reifier_index();
+            let (mut written, mut expected) = (String::new(), String::new());
+            let result = write_property(
+                &mut written,
+                "  ",
+                &graph,
+                &ix,
+                predicate,
+                object,
+                &namespaces(),
+            );
+            let reference = reference_property(
+                &mut expected,
+                "  ",
+                &graph,
+                &ix,
+                predicate,
+                object,
+                &namespaces(),
+            );
+            assert_eq!(
+                format!("{result:?}"),
+                format!("{reference:?}"),
+                "seed {seed}"
+            );
+            refused += usize::from(result.is_err());
+            if result.is_ok() {
+                assert_eq!(written, expected, "seed {seed}: {value:?}");
+            } else {
+                assert!(expected.starts_with(&written), "seed {seed}: {value:?}");
+            }
+        }
+        assert!(
+            nested > 0,
+            "some generated object nests a triple term in one"
+        );
+        assert!(
+            refused > 0,
+            "some generated object has a subject that is not a node"
+        );
+    }
+
+    /// A triple-term object three thousand levels deep is written on a thread whose whole
+    /// stack is 128 KiB, every level one `parseType="Triple"` element holding one
+    /// description. RDF/XML indents each level one step deeper, so the document grows with
+    /// the square of the depth; three thousand levels is far past what a recursive writer's
+    /// frames fit in that stack while keeping the document a few tens of megabytes.
+    #[test]
+    fn a_three_thousand_level_object_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 3_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut graph = SerGraph::default();
+                let object = lower(&mut graph, &value);
+                drop(value);
+                let predicate = lower(&mut graph, &TermValue::iri("http://example.org/q"));
+                let ix = graph.reifier_index();
+                let mut written = String::new();
+                write_property(
+                    &mut written,
+                    "",
+                    &graph,
+                    &ix,
+                    predicate,
+                    object,
+                    &namespaces(),
+                )
+                .expect("every nested subject is an IRI");
+                assert_eq!(
+                    written.matches("rdf:parseType=\"Triple\"").count(),
+                    LEVELS,
+                    "one triple element a level"
+                );
+                assert!(written.ends_with("</ex:q>\n"));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the writer did not overflow the thread's stack");
     }
 }

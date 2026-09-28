@@ -63,12 +63,14 @@
 //!
 //! [`bind_cdt_blank_labels`] parses the lexical form with the real SEP-0009
 //! grammar ([`purrdf_cdt::parse_cdt_by_iri`]) and returns
-//! [`CdtBlankError::Malformed`] when it does not parse, when it nests deeper
-//! than [`purrdf_cdt::MAX_NESTING_DEPTH`], when it holds more than
+//! [`CdtBlankError::Malformed`] when it does not parse, when it holds more than
 //! [`purrdf_cdt::MAX_ELEMENTS`] elements, or when it is longer than
-//! [`purrdf_cdt::MAX_LEXICAL_BYTES`]. Ingress turns that into a parse
-//! diagnostic and the **whole document is refused**, even though it is
-//! otherwise syntactically valid.
+//! [`purrdf_cdt::MAX_LEXICAL_BYTES`]. Nesting depth is not a bound of its own:
+//! a level is one element of the level above it, so the element bound caps it,
+//! and a literal a hundred thousand brackets deep is a value whose labels are
+//! bound like any other's. Ingress turns a refusal into a parse diagnostic and
+//! the **whole document is refused**, even though it is otherwise syntactically
+//! valid.
 //!
 //! That is deliberate and it is not a style choice. A composite literal that
 //! does not parse has an undefined set of embedded blank nodes, so admitting it
@@ -81,15 +83,14 @@
 //! # Traversal is iterative
 //!
 //! Every walk here uses an explicit stack. Rust aborts on stack overflow and the
-//! abort is not catchable, so a 64-deep hostile literal must never become 64
-//! frames of recursion.
+//! abort is not catchable, so a hostile literal nested as deep as the element
+//! bound allows must never become that many frames of recursion — here, or in the
+//! `purrdf-cdt` value it parses into, whose every walk (its `Drop` included) is
+//! iterative too.
 
 use std::borrow::Cow;
 
-use purrdf_cdt::{
-    CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, MAX_NESTING_DEPTH,
-    parse_cdt_by_iri,
-};
+use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
 
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::ir::term::BlankScope;
@@ -241,10 +242,9 @@ impl From<CdtBlankError> for crate::RdfDiagnostic {
 ///
 /// # Errors
 /// [`CdtBlankError::Malformed`] when `lexical` is not a well-formed value of
-/// `datatype`, including a violation of `purrdf-cdt`'s nesting-depth,
-/// element-count or lexical-length limits; the caller must refuse the whole
-/// document. [`CdtBlankError::ScannerDisagreement`] never occurs on a
-/// well-formed input.
+/// `datatype`, including a violation of `purrdf-cdt`'s element-count or
+/// lexical-length limits; the caller must refuse the whole document.
+/// [`CdtBlankError::ScannerDisagreement`] never occurs on a well-formed input.
 pub fn bind_cdt_blank_labels<'a>(
     lexical: &'a str,
     datatype: &str,
@@ -516,18 +516,14 @@ fn grammar_blank_labels(root: &CdtValue) -> Result<Vec<String>, CdtBlankError> {
 
 /// Collect `value`'s own blank labels and queue any composite-typed literal it
 /// embeds, iteratively.
+///
+/// The value is a finite owning tree — every term is visited once and pushes only
+/// the terms it owns — so the walk terminates on any value, whatever its depth and
+/// however it was built.
 fn walk_value(value: &CdtValue, out: &mut Vec<String>, embedded: &mut Vec<(String, String)>) {
     let mut stack: Vec<&CdtTerm> = Vec::new();
     push_children(&mut stack, value);
-    // The parse already enforced MAX_NESTING_DEPTH and MAX_ELEMENTS, so the walk
-    // is bounded; the counter also bounds a value assembled PROGRAMMATICALLY,
-    // which carries no such guarantee.
-    let mut budget = MAX_NESTING_DEPTH.saturating_mul(purrdf_cdt::MAX_ELEMENTS);
     while let Some(term) = stack.pop() {
-        if budget == 0 {
-            return;
-        }
-        budget -= 1;
         match term {
             CdtTerm::Blank(label) => out.push(label.clone()),
             CdtTerm::Composite(inner) => push_children(&mut stack, inner),

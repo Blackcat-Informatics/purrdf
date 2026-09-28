@@ -43,46 +43,31 @@
 //!
 //! # The `SILENT` contract
 //!
-//! SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached "will
-//! be considered to have matched with a single, empty, solution" — the join identity, so
-//! the surrounding query proceeds unchanged. This crate keeps that promise exactly, and
-//! confines it to what it is a promise *about*. Three outcomes, three answers:
+//! SPARQL 1.1 Federated Query §3.2: a `SERVICE` clause evaluates to the endpoint's answer
+//! "in case of a successful service invocation according to the SPARQL protocol, and
+//! otherwise Ω0 in case SilentOp is true, and otherwise error". Ω0 is the single empty
+//! solution — the join identity, so the surrounding query proceeds unchanged. This crate
+//! reads "otherwise" as it is written: every invocation that does not succeed is
+//! silenced, whatever the reason it did not, and only this engine's own budget is not.
 //!
 //! | Outcome | Non-silent `SERVICE` | `SERVICE SILENT` |
 //! |---|---|---|
-//! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
-//! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
-//! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |
+//! | The invocation fails, for any reason: the endpoint is unreachable or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]); no source reaches it (none is configured, or the source answers [`RemoteError::Unconfigured`]); a capability was denied or the host refused ([`RemoteError::Denied`], [`RemoteError::HostDenied`]); the host's own adapter faulted answering it ([`RemoteError::HostFault`]); a variable endpoint is bound to a term that is not an IRI | an error: [`EvalError::Remote`](crate::EvalError), [`EvalError::ServiceUnconfigured`](crate::EvalError), [`EvalError::ServiceDenied`](crate::EvalError), [`EvalError::ServiceHostDenied`](crate::EvalError), [`EvalError::ServiceHostFault`](crate::EvalError) or [`EvalError::Unsupported`](crate::EvalError) | Ω0, and a [`SilencedInvocation`](purrdf_core::SilencedInvocation) on the execution's evidence |
+//! | This engine's governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]), or its stack ran out ([`RemoteError::StackExhausted`], [`RemoteError::HostStackExhausted`]) | truncation, or the typed stack refusal | the same: truncation, or the typed stack refusal |
 //!
-//! The first and last rows are the pre-existing rule, unchanged: `SILENT` is a statement
-//! about an endpoint the caller does not control, never about the caller's own budget, so
+//! `SILENT` is a statement about the invocation, never about the caller's own budget, so
 //! a governor trip reached through a `SERVICE` clause propagates as a truncation whether
-//! or not `SILENT` is written (see [`crate::remote`]).
+//! or not `SILENT` is written (see [`crate::remote`]). A denial is different: the query
+//! author wrote `SILENT` knowing the service might not answer, and a service this host
+//! declines to contact has not answered. The record on the evidence says which failure it
+//! was, so a host that needs to tell a denial from an outage reads it there rather than
+//! from the shape of the answer.
 //!
-//! **The middle row is decided by that same principle, and it is not configurable.** A
-//! capability denial is a decision taken on *this* side of the seam — by the host running
-//! this engine, deterministically, before any endpoint was consulted. It is therefore
-//! exactly like a governor trip and nothing like an unreachable endpoint, and `SILENT`
-//! does not get to swallow it. Swallowing one would put the join identity into a
-//! surrounding join, making it a no-op, and hand back an answer that looks complete and
-//! is wrong — permanently and identically on every run, rather than transiently, so
-//! nothing would ever produce a symptom.
-//!
-//! There is deliberately no knob that softens this. A host that genuinely wants a blocked
-//! service to behave like an unreachable one can already say so with total precision, by
-//! returning [`RemoteError::Transport`] from its own resolver: that is an honest claim
-//! that the endpoint did not answer, and `SILENT` swallows it under the first row above.
-//! The expressive power is in the error type, so a visibility flag would have added no
-//! reach — only a second way to spell an existing one, and with it the possibility of two
-//! callers running the same query over the same data through the same resolver and
-//! getting different answers.
-//!
-//! The denial row holds at **every depth**. An [`InProcessServiceResolver`] evaluates a
-//! forwarded body itself, so a denial raised by a `SERVICE` nested inside one travels back
-//! out through that inner evaluation's error channel; it is carried as the structured
-//! [`EvalError::ServiceDenied`](crate::EvalError) and reclassified as
-//! [`RemoteError::Denied`] on the way out, never flattened into a message. Flattening it
-//! would make a nested denial silenceable while the identical denial one level up is not.
+//! A denial raised by a `SERVICE` nested inside a body an [`InProcessServiceResolver`]
+//! evaluates travels back out through that inner evaluation's error channel as the
+//! structured [`EvalError::ServiceDenied`](crate::EvalError) and is reclassified as
+//! [`RemoteError::Denied`] on the way out, never flattened into a message, so the
+//! enclosing clause reports it — or, under `SILENT`, records it — as the denial it was.
 
 use std::fmt;
 use std::sync::Arc;
@@ -295,8 +280,9 @@ fn base64_standard(bytes: &[u8]) -> String {
 
 /// A [`ServiceResolver`] refused a service because a capability was withheld.
 ///
-/// Never swallowed by `SERVICE SILENT` — see this module's `SILENT` contract. Carries no
-/// credential material and no request text: it is written into query diagnostics.
+/// `SERVICE SILENT` answers it with Ω0 and records it — see this module's `SILENT`
+/// contract. Carries no credential material and no request text: it is written into query
+/// diagnostics and silenced-invocation records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceDenial {
     /// The service IRI that was refused.
@@ -604,9 +590,16 @@ impl ServiceCatalog {
         needs: ServiceCapabilities,
     ) -> Result<&ServiceProfile, ServiceDenial> {
         let Some(profile) = self.profile_for(endpoint) else {
+            // No profile grants anything, so the first capability the request needs is the
+            // one withheld; a request that needs none is still refused by a catalog that
+            // knows nothing of the endpoint, and is named as the `query` capability every
+            // `SERVICE` request needs.
+            let withheld = needs
+                .first_withheld_by(ServiceCapabilities::NONE)
+                .unwrap_or(ServiceCapability::Query);
             return Err(ServiceDenial::new(
                 endpoint,
-                ServiceCapability::Query,
+                withheld,
                 "no profile is configured for this service, and the catalog has no fallback",
             ));
         };
@@ -707,8 +700,8 @@ impl ServiceResolver for InProcessServiceResolver {
     /// same here as it does anywhere else. So the caller's [`StopSignal`](crate::governor::StopSignal) is installed on
     /// the forwarded context, which polls it at every operator boundary, and a signal that
     /// fires part-way through is reported as [`RemoteError::Governed`] rather than as a
-    /// decode failure. Reporting it as a failure would make it silenceable, which is
-    /// exactly the laundering `SILENT` must not perform.
+    /// decode failure. Reporting it as a failure would let `SILENT` swallow this engine's
+    /// own stop, which it never does.
     ///
     /// The forwarded evaluation carries the caller's intermediate-cell ceiling, so an
     /// in-memory endpoint cannot materialize a bag the caller already bounded. It carries
@@ -719,10 +712,10 @@ impl ServiceResolver for InProcessServiceResolver {
         if let Some(trip) = request.stop_trip() {
             return Err(trip);
         }
-        // The governor above outranks the policy below deliberately, and in this order:
-        // a stop that has already fired is a fact about this execution, and both are
-        // non-silenceable, so reporting the stop keeps the certificate naming the
-        // governor that actually ended the query.
+        // The governor above outranks the policy below deliberately: a stop that has
+        // already fired is a fact about this execution that `SILENT` never swallows, so
+        // reporting it keeps the certificate naming the governor that actually ended the
+        // query rather than a denial `SILENT` would erase.
         if let Some(catalog) = &self.catalog {
             catalog.authorize(
                 request.endpoint,
@@ -954,6 +947,15 @@ mod tests {
             .expect_err("an empty catalog denies everything");
         assert_eq!(denial.withheld(), ServiceCapability::Query);
         assert_eq!(denial.endpoint(), "https://example.org/sparql");
+        // A request that needs only `network` (a `LOAD` fetch) is refused for the
+        // capability it needs, not for one it never asked for.
+        let fetch = catalog
+            .authorize(
+                "https://example.org/doc",
+                ServiceCapabilities::granting([ServiceCapability::Network]),
+            )
+            .expect_err("an empty catalog denies a fetch too");
+        assert_eq!(fetch.withheld(), ServiceCapability::Network);
 
         // …and the neighbouring VALID case: the same catalog with the service listed
         // authorizes it. A denial that fired for everything would prove nothing.

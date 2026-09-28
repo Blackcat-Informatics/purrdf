@@ -166,11 +166,7 @@ fn run(predicate: &str) -> (GovernedOutcome, Arc<AtomicU64>) {
         .bind_functions(functions(predicate), &env)
         .expect("the body parses and admits against this environment");
 
-    let options = QueryOptions {
-        functions: &bound,
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_functions(&bound).with_env(&env);
     let query =
         format!("SELECT ?s WHERE {{ ?s a <{EX}Thing> . FILTER(<{FN_IRI}>(?s)) }} ORDER BY ?s");
     let dataset = dataset();
@@ -320,11 +316,9 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
-                    functions: &bound,
-                    env: &nested_env,
-                    ..QueryOptions::EMPTY
-                },
+                QueryOptions::new()
+                    .with_functions(&bound)
+                    .with_env(&nested_env),
                 &state,
             )
             .map_err(|e| EvalError::function(e.to_string()))?;
@@ -351,12 +345,10 @@ fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &bound,
-                env: &env,
-                focus_graph: Some(&dataset),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new()
+                .with_functions(&bound)
+                .with_env(&env)
+                .with_focus_graph(Some(&dataset)),
             &state,
         )
         .expect("a governed run of a valid query is an outcome, never an error");
@@ -406,12 +398,10 @@ fn an_expression_body_that_invokes_no_relation_attests_nothing() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                functions: &bound,
-                env: &env,
-                focus_graph: Some(&dataset),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new()
+                .with_functions(&bound)
+                .with_env(&env)
+                .with_focus_graph(Some(&dataset)),
             &state,
         )
         .expect("a governed run of a valid query is an outcome, never an error");

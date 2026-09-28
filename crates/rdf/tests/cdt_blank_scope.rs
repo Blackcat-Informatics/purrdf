@@ -461,19 +461,42 @@ fn the_refusal_reaches_the_line_and_xml_codecs() {
     );
 }
 
-/// A composite literal that nests past `purrdf-cdt`'s depth limit is refused
-/// rather than looped on or truncated — the limit is a hard fail, and the walk
-/// that enforces it is iterative, so a hostile document cannot abort the process
-/// through stack exhaustion.
+/// Nesting depth is not a `purrdf-cdt` bound. A composite literal a hundred
+/// thousand brackets deep is accepted by the document parser, and the label
+/// inside it is the document-scope node exactly as in `bnodes-turtle-05` one
+/// bracket deep: it resolves to the quad's own `_:b` subject, once, and the
+/// literal's bytes survive untouched — on a 256 KiB stack, because every walk over
+/// the literal on the way in (the grammar, the label scanner, the parsed value's
+/// drop) is iterative.
 #[test]
-fn an_over_deep_composite_literal_is_refused_not_truncated() {
-    let depth = purrdf_cdt::MAX_NESTING_DEPTH + 4;
+fn a_hundred_thousand_deep_composite_literal_is_accepted_and_scoped_like_a_shallow_one() {
+    let depth = 100_000usize;
     let lexical: String = "[".repeat(depth) + "_:b" + &"]".repeat(depth);
-    let text = format!("{PREFIXES}ex:s ex:p \"{lexical}\"^^cdt:List .\n");
-    assert!(
-        parse_dataset(text.as_bytes(), "text/turtle", None).is_err(),
-        "an over-deep composite literal must be refused"
+    let text = format!("{PREFIXES}_:b ex:p \"{lexical}\"^^cdt:List .\n");
+    let (quads, embedded, is_subject, stored) = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let ds = parse_dataset(text.as_bytes(), "text/turtle", None)
+                .unwrap_or_else(|e| panic!("a deep composite literal must parse: {e}"));
+            let ids = embedded_ids(&ds, "p");
+            let is_subject = ids.first() == Some(&subject_of(&ds, "p"));
+            let (stored, datatype) = composite_of(&ds, "p");
+            assert_eq!(datatype, LIST);
+            (ds.quad_count(), ids.len(), is_subject, stored)
+        })
+        .expect("the thread starts")
+        .join()
+        .expect("the walks did not abort");
+    assert_eq!(quads, 1);
+    assert_eq!(
+        embedded, 1,
+        "the one label inside the literal is found once"
     );
+    assert!(
+        is_subject,
+        "the embedded node must be the quad's own subject"
+    );
+    assert_eq!(stored, lexical, "the lexical form is stored byte for byte");
 }
 
 // ── A composite lexical form has no base, whatever the document has ─────────

@@ -28,9 +28,9 @@ pub enum TextError {
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
     Config(String),
 
-    /// The input data cannot be indexed or queried as given — a term the index
-    /// cannot encode (a triple term nested past the encoder's depth bound), a
-    /// corpus larger than the `u32` document-id space, or a query naming a
+    /// The input data cannot be indexed or queried as given — a literal whose
+    /// datatype does not resolve to an IRI, a corpus larger than the `u32`
+    /// document-id space, or a query naming a
     /// document the index does not hold. Distinct from [`TextError::Config`]: the
     /// caller asked a well-formed question of data that does not answer it.
     ///

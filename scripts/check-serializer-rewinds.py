@@ -83,6 +83,34 @@ CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 ALLOWLIST: dict[tuple[str, str], str] = {
     (
         "crates/rdf/src/native_codecs/rdfxml.rs",
+        "closings",
+    ): "Closing tags queued while nested rdf:Description elements are opened; popping one writes it. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/rdf/src/native_codecs/ser_model.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/json.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/json_read.rs",
+        "open",
+    ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
+    (
+        "crates/sparql-results/src/json_read.rs",
+        "pending",
+    ): "The SPARQL-JSON READER's work list of parsed values still to drop, so a deep document is freed without recursion. The reader emits nothing.",
+    (
+        "crates/sparql-results/src/xml.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/xml_read.rs",
+        "frames",
+    ): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
+    (
+        "crates/rdf/src/native_codecs/rdfxml.rs",
         "pending",
     ): "The RDF/XML READER's depth-first work stack over the parsed element tree, "
     "which collects a document's `xmlns` declarations. It holds input elements "

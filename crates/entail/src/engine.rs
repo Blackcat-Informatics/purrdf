@@ -85,11 +85,15 @@
 //! [`surface_of`] order — a total order over term VALUES, not over interned ids — so the
 //! emission sequence is a function of the dataset's content alone.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
+use purrdf_core::{
+    DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue, fold_term,
+};
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
@@ -129,45 +133,60 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
     surface_of(&TermValue::typed_literal(lexical, datatype))
 }
 
-/// Resolve a [`DatasetView`] id to its dataset-INDEPENDENT [`TermValue`], recursing through
-/// a literal's datatype and a triple term's `(s, p, o)` components.
+/// Resolve a [`DatasetView`] id to its dataset-INDEPENDENT [`TermValue`], through a
+/// literal's datatype and a triple term's `(s, p, o)` components.
 ///
 /// This is the view-generic replacement for `RdfDataset::term_value`: the seeding layer
 /// reasons over id-agnostic [`TermValue`]s, so it reads a view's terms through this one
 /// bridge whatever backend minted the id. Byte-identical to `RdfDataset::term_value` for the
 /// production view — the blank label is scope-qualified by the value model, the literal
-/// datatype is expanded to its IRI, and triple terms recurse by value (C0.1/C0.2/C0.3).
+/// datatype is expanded to its IRI, and triple terms are carried by value (C0.1/C0.2/C0.3).
+///
+/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its subject,
+/// predicate and object are resolved in that order, each fully before the next.
 pub(crate) fn resolve_value<D: DatasetView>(ds: &D, id: D::Id) -> TermValue {
-    match ds.resolve(id) {
-        TermRef::Iri(iri) => TermValue::iri(iri),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match ds.resolve(datatype) {
-                TermRef::Iri(dt) => dt.to_owned(),
-                other => {
-                    unreachable!("a literal's datatype always resolves to an IRI, got {other:?}")
+    let value = fold_term(
+        ds,
+        id,
+        |_, term| {
+            Ok::<_, Infallible>(match term {
+                TermRef::Iri(iri) => TermValue::iri(iri),
+                TermRef::Blank { label, scope } => TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let datatype = match ds.resolve(datatype) {
+                        TermRef::Iri(dt) => dt.to_owned(),
+                        other => unreachable!(
+                            "a literal's datatype always resolves to an IRI, got {other:?}"
+                        ),
+                    };
+                    TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype,
+                        language: language.map(str::to_owned),
+                        direction,
+                    }
                 }
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(resolve_value(ds, s)),
-            p: Box::new(resolve_value(ds, p)),
-            o: Box::new(resolve_value(ds, o)),
+                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+            })
         },
+        |_, s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
+        },
+    );
+    match value {
+        Ok(value) => value,
     }
 }
 
@@ -1362,15 +1381,41 @@ impl Terms {
 ///   is unambiguous, and what follows is either `@` (a language tag, hence the datatype
 ///   `rdf:langString` or `rdf:dirLangString` by C0.1) or `^^<` (a datatype IRI) or nothing (`xsd:string`);
 /// * a triple term's three components are separated by the spaces its delimiters reserve,
-///   and each recurses through the same argument.
+///   and each is spelled by the same argument.
 pub(crate) fn surface_of(value: &TermValue) -> String {
     let mut out = String::new();
     write_surface(value, &mut out);
     out
 }
 
-/// Append [`surface_of`]'s rendering of `value` to `out`.
+/// Append [`surface_of`]'s rendering of `value` to `out`, each triple term spelled
+/// `<<( s p o )>>` over [`TermValue::try_write_nested`]'s work list.
 fn write_surface(value: &TermValue, out: &mut String) {
+    let written = value.try_write_nested(
+        out,
+        "<<( ",
+        " ",
+        " )>>",
+        |out, leaf| {
+            write_leaf_surface(leaf, out);
+            Ok::<(), Infallible>(())
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    );
+    match written {
+        Ok(()) => {}
+    }
+}
+
+/// Append the surface of a term that is not a triple term to `out`.
+///
+/// Out of line, so the IRI and literal escape calls are one compiled function
+/// rather than a fragment of [`write_surface`]'s work list.
+#[inline(never)]
+fn write_leaf_surface(value: &TermValue, out: &mut String) {
     match value {
         TermValue::Iri(iri) => {
             out.push('<');
@@ -1409,15 +1454,7 @@ fn write_surface(value: &TermValue, out: &mut String) {
                 out.push('>');
             }
         }
-        TermValue::Triple { s, p, o } => {
-            out.push_str("<<( ");
-            write_surface(s, out);
-            out.push(' ');
-            write_surface(p, out);
-            out.push(' ');
-            write_surface(o, out);
-            out.push_str(" )>>");
-        }
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
 
@@ -1556,6 +1593,7 @@ mod tests {
         OWL_HASKEY, OWL_INTERSECTIONOF, OWL_PROPERTYCHAINAXIOM, OWL_UNIONOF, RDF_FIRST, RDF_NIL,
         RDF_REST, RDF_TYPE, RDFS_SUBCLASSOF, XSD_STRING,
     };
+    use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfTextDirection, TermValue};
     use purrdf_datalog::cache::PlanCache;
     use purrdf_datalog::clause::{ClauseTerm, DlClause};
@@ -1653,9 +1691,9 @@ mod tests {
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
         TermValue::Triple {
-            s: Box::new(TermValue::iri(s)),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(TermValue::iri(o)),
+            s: TermBox::new(TermValue::iri(s)),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(TermValue::iri(o)),
         }
     }
 
@@ -2162,5 +2200,96 @@ mod tests {
             warm, cold,
             "a reused plan produced a different answer than a freshly compiled one"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The value bridge and the store surface against their recursive references, and
+    //! the surface at a hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
+
+    use super::{resolve_value, surface_of, write_iri_escaped};
+
+    fn reference_value(ds: &RdfDataset, id: TermId) -> TermValue {
+        match ds.resolve(id) {
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference_value(ds, s)),
+                p: TermBox::new(reference_value(ds, p)),
+                o: TermBox::new(reference_value(ds, o)),
+            },
+            _ => ds.term_value(id),
+        }
+    }
+
+    fn reference_surface(value: &TermValue) -> String {
+        match value {
+            TermValue::Triple { s, p, o } => format!(
+                "<<( {} {} {} )>>",
+                reference_surface(s),
+                reference_surface(p),
+                reference_surface(o)
+            ),
+            TermValue::Iri(iri) => {
+                let mut out = String::from("<");
+                write_iri_escaped(iri, &mut out);
+                out.push('>');
+                out
+            }
+            leaf => surface_of(leaf),
+        }
+    }
+
+    /// The bridge resolves, and the surface spells, every generated term exactly as the
+    /// recursive references do.
+    #[test]
+    fn the_bridge_and_the_surface_agree_with_their_recursive_references() {
+        let mut nested = 0;
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::WellFormed,
+            );
+            nested += usize::from(budget < 7);
+            assert_eq!(surface_of(&value), reference_surface(&value), "seed {seed}");
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let object = ds.quads().next().expect("one quad").o;
+            assert_eq!(
+                resolve_value(&*ds, object),
+                reference_value(&ds, object),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is spelled on a thread whose whole
+    /// stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_spelled_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let level =
+                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+                assert_eq!(
+                    surface_of(&value).len(),
+                    LEVELS * level + "<http://example.org/o>".len()
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the surface did not overflow the thread's stack");
     }
 }

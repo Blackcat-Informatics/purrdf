@@ -21,6 +21,7 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b).
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -243,13 +244,20 @@ pub(crate) enum PreparedExists {
         /// [`crate::enf::ledger_source_map`]. [`crate::binop::eval_correlated`]'s `EXISTS`
         /// caller pushes this onto [`EvalCtx::correlated_node_maps`] for the span of the
         /// per-row evaluation, which is what makes the inner's charges land on real ledger
-        /// ordinals instead of the enclosing `FILTER`/`BIND`, and lets
-        /// [`EvalCtx::prepared_exists`] resolve a doubly-nested `EXISTS` site's cache key
-        /// back to a stable address instead of rebuilding every outer row. Empty whenever
+        /// ordinals instead of the enclosing `FILTER`/`BIND`; a nested `EXISTS` site read
+        /// from this preparation carries it one hop further, to the plan
+        /// ([`crate::deferred_exists::ExistsSite::plan_map`]). Empty whenever
         /// `ledger_source_map` declined to track this site's top-level shape (see its doc)
         /// — tracking then simply does not engage, exactly the behavior before this field
         /// existed.
         ledger_source: Arc<crate::expr::SubstitutionSourceMap>,
+        /// The sites of the `EXISTS` bodies nested in [`Self::Pattern::witness_wrapped`],
+        /// prepared by its first per-row substitution and kept here, with the tree they
+        /// are read from, for every later one (see [`crate::deferred_exists`]).
+        witness_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
+        /// The same for [`Self::Pattern::normalized`], which is substituted when the
+        /// first-witness wrap is suppressed or the probe is forced (both test-only seams).
+        normalized_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
     },
 }
 
@@ -270,11 +278,25 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+/// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
+/// judged by the body it stands for; `None` for a body to be walked as written.
+fn placeholder_unsafe(
+    deferred: &crate::deferred_exists::DeferredMap,
+    body: &GraphPattern,
+) -> Option<bool> {
+    deferred
+        .get(&(std::ptr::from_ref(body) as usize))
+        .map(|slot| slot.site.parallel_unsafe)
+}
+
 impl PreparedExists {
     /// Build a [`PreparedExists`] for `pattern` — the walk `crate::expr::exists` calls
     /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
-    /// per-evaluation cache and the substituted-temporary ABA guard).
-    fn build(pattern: &GraphPattern) -> Self {
+    /// per-evaluation cache and the substituted-temporary ABA guard). Preparing a site
+    /// walks its whole inner pattern — normalization, the source map, the structural
+    /// analysis and the copies — over work lists, so a site reached deep in the
+    /// evaluation, over a body of any depth, is prepared on the stack it has.
+    pub(crate) fn build(pattern: &GraphPattern) -> Self {
         #[cfg(test)]
         PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
         match crate::enf::normalize(pattern) {
@@ -300,14 +322,18 @@ impl PreparedExists {
                 // location, and `witness_inner` is boxed BEFORE its address is taken, so
                 // both walks key every entry by the address the node actually ends up at.
                 let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
-                let witness_inner = Box::new((*normalized).clone());
+                #[cfg(test)]
+                crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
+                    normalized.as_ref(),
+                ));
+                let witness_inner = Box::new(GraphPattern::clone(&normalized));
                 let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
                 let root_source = ledger_source
                     .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
                     .map(|entry| entry.source);
                 ledger_source.extend(witness_inner_map);
                 let witness_wrapped = Arc::new(GraphPattern::Slice {
-                    inner: witness_inner,
+                    inner: witness_inner.into(),
                     start: 0,
                     length: Some(1),
                 });
@@ -338,6 +364,8 @@ impl PreparedExists {
                     free_vars: Arc::new(root.free_vars),
                     stateful: root.has_stateful_builtin,
                     ledger_source: Arc::new(ledger_source),
+                    witness_sites: std::sync::OnceLock::new(),
+                    normalized_sites: std::sync::OnceLock::new(),
                 }
             }
         }
@@ -470,16 +498,16 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
     pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey<D::Id>, Arc<ExistsInner<D::Id>>>,
     /// Per-query cache of [`PreparedExists`] (ENF normal form, the first-witness-wrapped
-    /// form, and the fourth structural analysis table), keyed by the `EXISTS`/`NOT EXISTS`
-    /// AST node's immutable address. Populated lazily, once per distinct site — see
-    /// [`Self::prepared_exists`], the sole accessor, for the substituted-temporary ABA
-    /// guard this cache observes. UNLIKE [`Self::exists_inner_cache`] and
-    /// [`Self::const_atom_cache`], that guard is not a blanket bypass: a nested `EXISTS`
-    /// reached through a per-row substituted copy first tries to resolve back to a
-    /// stable address via [`Self::correlated_node_maps`] and, on success, still reads
-    /// and writes this cache under that resolved address — see
-    /// [`Self::in_substituted_exists`]'s doc for why this one member can do that and the
-    /// other two cannot.
+    /// form, and the fourth structural analysis table) for the `EXISTS`/`NOT EXISTS`
+    /// bodies that are NOT nodes of the evaluation's tree ([`Self::plan`]) — a body inside
+    /// a prepared, normalized `EXISTS` tree — keyed by the body's immutable address. A
+    /// body of the tree keeps its preparation on its [`crate::plan::ExistsSite`] instead.
+    /// Populated lazily, once per distinct site — see [`Self::prepared_exists`], the sole
+    /// accessor, for the substituted-temporary ABA guard this cache observes: like
+    /// [`Self::exists_inner_cache`], it is neither read nor written inside a substituted
+    /// window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
+    /// placeholder whose body was prepared once, from the written body, and kept by the
+    /// preparation (or plan node) the body was read from (see [`crate::deferred_exists`]).
     pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
     /// The `EXISTS` definition path's μ-restriction memo: `key = μ` restricted to the
     /// inner's own correlated-variable set (from [`PreparedExists::free_vars`]), `value =
@@ -515,29 +543,6 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// the scratch interner dedups by value — so the cached term is bit-identical
     /// to what a fresh intern would return.
     pub(crate) cached_bool_terms: [Option<SolutionTerm<D::Id>>; 2],
-    /// Per-query memo of interned constant expression atoms (`NamedNode` /
-    /// `Literal`), keyed by the atom node's immutable AST address. A constant atom
-    /// inside a `FILTER`/`BIND` is otherwise re-`to_owned()`'d into an owned
-    /// `TermValue` and re-interned (a dataset reverse-index probe) once per row;
-    /// this collapses that to a single intern per distinct atom node. Like
-    /// [`Self::cached_bool_terms`], interning is deterministic for the pinned
-    /// `(dataset, scratch)` pair, so a cached hit is the same `SolutionTerm` a
-    /// fresh intern would produce. Naturally per-query — **but only for the
-    /// static query algebra**: the address is a sound cache key precisely because
-    /// those nodes are allocated once and outlive the whole `query()` call.
-    /// Per-outer-row correlated-`EXISTS` substitution (`expr::exists`) is the
-    /// exception: it heap-allocates a fresh substituted pattern tree per row and
-    /// drops it at the end of that row, so a later row's differently-substituted
-    /// node can be allocated at the SAME address (an ABA hazard) and would
-    /// otherwise return a stale, wrong-row value from this cache.
-    /// [`Self::in_substituted_exists`] flags exactly that window so `const_atom`
-    /// bypasses this cache while it is set.
-    /// The memoized value is `Option<SolutionTerm>` because the intern itself is:
-    /// a constant atom whose language tag the grammar refuses is unbound, and
-    /// that verdict is as constant as the term would have been (the SPARQL
-    /// parser and `crate::scratch` name the same profile), so it is memoized on
-    /// equal footing rather than recomputed per row.
-    pub(crate) const_atom_cache: DetHashMap<usize, Option<SolutionTerm<D::Id>>>,
     /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
     /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
     /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on
@@ -577,26 +582,17 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// cache key: a later row's allocation can reuse a dropped node's address (the ABA
     /// hazard), and a hit keyed by it would return an earlier row's answer.
     ///
-    /// This crate keeps exactly FOUR address-keyed, per-query caches subject to that
-    /// hazard — [`Self::const_atom_cache`], [`Self::exists_prepared_cache`],
-    /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`] — none of them
-    /// deleted, disabled, or replaced by this flag; each one stays exactly as lazy,
-    /// address-keyed, and per-evaluation as its own doc describes. What this flag
-    /// changes is narrower than "bypass the cache class": [`Self::const_atom_cache`],
-    /// [`Self::exists_inner_cache`], and [`Self::exists_definition_memo`] have no way to
-    /// tell a per-row temporary's address from a real one, so all three skip both the
-    /// read and the write, unconditionally, whenever this flag is set — a fresh,
-    /// unshared answer every reach, same as before this field existed.
-    /// [`Self::exists_prepared_cache`] is the one exception: [`Self::prepared_exists`]
-    /// first tries to resolve the reached node's address one hop through
-    /// [`Self::correlated_node_maps`] (the SAME tracked-window resolution
-    /// [`Self::resolve_ledger_ordinal`] uses for the charge ledger) to the STABLE,
-    /// un-substituted AST address a nested `EXISTS` site's copy is standing in for —
-    /// when that resolves, the cache is read and written keyed by the stable address,
-    /// same as an ordinary (non-substituted) reach; only when it does NOT resolve (a
-    /// node the substitution walk genuinely synthesized, with no AST identity of its
-    /// own) does it fall back to the unshared, build-fresh behavior the other three
-    /// caches always take here.
+    /// This crate keeps exactly THREE address-keyed, per-query caches subject to that
+    /// hazard — [`Self::exists_prepared_cache`], [`Self::exists_inner_cache`],
+    /// [`Self::exists_definition_memo`] — none of them deleted, disabled, or replaced by
+    /// this flag; each one stays exactly as lazy, address-keyed, and per-evaluation as its
+    /// own doc describes. What this flag changes is narrower than "bypass the cache
+    /// class": none of the three can tell a per-row temporary's address from a real one,
+    /// so all three skip both the read and
+    /// the write, unconditionally, whenever this flag is set — a fresh, unshared answer
+    /// every reach, same as before this field existed. The nested `EXISTS` sites a copy
+    /// defers are kept elsewhere: on the preparation whose tree holds them, or on
+    /// [`Self::plan_exists_sites`] for a plan node — never under a copy's address.
     pub(crate) in_substituted_exists: bool,
     /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
     /// last — see [`crate::expr::SubstitutionSourceMap`].
@@ -616,6 +612,30 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// single slot merged in place, because both the outer and the inner window's map are
     /// simultaneously live for the whole time the inner one is being evaluated.
     pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
+    /// The placeholders of the per-row substituted copy being evaluated — each a nested
+    /// `EXISTS` body the substitution walk left for its own evaluation to substitute (see
+    /// [`crate::deferred_exists`]) — keyed by the placeholder's address. `None` outside a
+    /// substituted window, and inside one whose copy holds no `EXISTS`. Set and restored
+    /// by [`Self::enter_substituted_exists`], so it always names the innermost window: a
+    /// copy's placeholders are reachable only while that copy is the one being evaluated.
+    pub(crate) deferred_exists: Option<Arc<crate::deferred_exists::DeferredMap>>,
+    /// The sites of the nested `EXISTS` bodies of every plan node a `LATERAL` substitutes
+    /// (a preparation keeps its own), so each is prepared once per evaluation however many
+    /// left rows substitute the node. SHARED with every forked worker (see
+    /// [`crate::deferred_exists::PlanSites`]). Created by the first `LATERAL` that needs it,
+    /// so an evaluation without one allocates nothing for it.
+    pub(crate) plan_exists_sites: Option<Arc<crate::deferred_exists::PlanSites>>,
+    /// The endpoints enclosing group joins, `OPTIONAL`s and `MINUS`es list for the
+    /// variable-endpoint `SERVICE` clauses in their right operands, innermost last — see
+    /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
+    /// a query without a variable endpoint.
+    pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
+    /// The numbered tree of the pattern being evaluated: its shape (the variable-endpoint
+    /// `SERVICE` analysis, the `EXISTS` sites) and the key its node ids are read against.
+    /// Installed with the tree by every evaluation entry ([`prepare_query_context`],
+    /// [`eval`], an UPDATE's `WHERE`); `None` on a context no entry prepared, which then
+    /// has no variable-endpoint analysis and no tree-resident `EXISTS` preparations.
+    pub(crate) plan: Option<crate::plan::PlanHandle>,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -696,26 +716,28 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// worker, because a worker evaluating part of a node's rows is under the same ceiling
     /// the node is.
     pub(crate) cap_pushdown: Option<Arc<CapPushdown>>,
-    /// The address of the algebra node currently being evaluated, set by
-    /// [`eval_evaluated`] and restored on the way out.
+    /// The algebra node currently being evaluated, as the installed
+    /// [`Self::cap_pushdown`] numbers it — `None` when no pushdown is installed or it
+    /// numbers no such node. Set by [`Self::enter_node`] and restored on the way out.
     ///
-    /// The key both the pushdown and the ledger are looked up by. It is a plain scalar so
-    /// that a fork copies it: a worker charges the node its parent was charging, which is
-    /// what makes the ledger's per-node totals independent of how the work was split.
-    pub(crate) current_node: usize,
+    /// A plain `Copy` value so that a fork copies it: a worker reads the ceiling of the
+    /// node its parent was evaluating.
+    pub(crate) cap_at: Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
     /// The per-node charge ledger, when one is installed. `None` on every ordinary query;
     /// the EXPLAIN path installs one.
     pub(crate) ledger: Option<Arc<ChargeLedger>>,
     /// The ledger ordinal of the nearest enclosing **plan** node.
     ///
-    /// Distinct from [`Self::current_node`] because not every pattern the evaluator
+    /// A plain `Copy` value so that a fork copies it: a worker charges the node its parent
+    /// was charging, which is what makes the ledger's per-node totals independent of how
+    /// the work was split. Distinct from [`Self::cap_at`] because not every pattern the evaluator
     /// enters is in the plan: a correlated `EXISTS` builds a substituted temporary tree
     /// per outer row, and a SHACL-AF function body is a separate query entirely. Those
     /// have no ordinal, so this cursor does not move for them and their charges accrue to
     /// the operator that owns the expression — which is what makes the ledger's fuel
     /// column sum to the evidence's fuel total exactly.
-    pub(crate) ledger_node: usize,
-    /// Whether [`Self::current_node`]'s own committed-output rows/cells ARE
+    pub(crate) ledger_node: crate::plan::NodeId,
+    /// Whether the current node's own committed-output rows/cells ARE
     /// [`Self::ledger_node`]'s true output for this evaluation, and should therefore be
     /// added to its ledger `rows`/`cells` columns.
     ///
@@ -802,6 +824,15 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
     }
 }
 
+/// The cursors [`EvalCtx::enter_node`] saves and [`EvalCtx::leave_node`] restores: the
+/// node the installed pushdown reads its ceiling at, the ledger node, and whether the
+/// current node's committed rows count as that ledger node's.
+pub(crate) type NodeCursors = (
+    Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
+    crate::plan::NodeId,
+    bool,
+);
+
 /// RAII guard returned by [`EvalCtx::enter_substituted_exists`]; see there for
 /// why the flag it manages exists and what composes correctly because this is
 /// a guard rather than the two hand-rolled save/restore pairs it replaces
@@ -817,6 +848,7 @@ pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
     ctx: &'ctx mut EvalCtx<'d, D>,
     prev: bool,
     pushed_map: bool,
+    prev_deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
 }
 
 impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
@@ -835,6 +867,7 @@ impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '
 impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
     fn drop(&mut self) {
         self.ctx.in_substituted_exists = self.prev;
+        self.ctx.deferred_exists = self.prev_deferred.take();
         if self.pushed_map {
             self.ctx.correlated_node_maps.pop();
         }
@@ -890,13 +923,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: Vec::new(),
             in_substituted_exists: false,
             correlated_node_maps: Vec::new(),
+            deferred_exists: None,
+            plan_exists_sites: None,
+            endpoint_frames: Vec::new(),
+            // The tree is installed when a pattern is prepared for evaluation
+            // (`prepare_query_context`, `eval`, an UPDATE's `WHERE`).
+            plan: None,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -906,9 +944,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
             cap_pushdown: None,
-            current_node: 0,
+            cap_at: None,
             ledger: None,
-            ledger_node: ChargeLedger::root_ordinal(),
+            ledger_node: crate::plan::NodeId::ROOT,
             ledger_counts_rows: true,
             witness: RelationWitness::default(),
             // A directly-built context is not a governed entry: it has no outcome type
@@ -936,12 +974,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// and popped on drop, same RAII discipline as the flag — see that field's doc for why
     /// a nested correlated evaluation needs BOTH this window's map and every enclosing
     /// one's still live at once.
+    ///
+    /// `deferred` is the copy's own placeholders ([`Self::deferred_exists`]), installed for
+    /// the guard's lifetime in place of the enclosing window's and restored on drop.
     pub(crate) fn enter_substituted_exists(
         &mut self,
         ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+        deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
     ) -> SubstitutedExistsGuard<'_, 'd, D> {
         let prev = self.in_substituted_exists;
         self.in_substituted_exists = true;
+        let prev_deferred = std::mem::replace(&mut self.deferred_exists, deferred);
         let pushed_map = ledger_map.is_some();
         if let Some(map) = ledger_map {
             self.correlated_node_maps.push(Arc::new(map));
@@ -950,6 +993,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ctx: self,
             prev,
             pushed_map,
+            prev_deferred,
         }
     }
 
@@ -1158,7 +1202,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     #[must_use]
     pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
         self.ledger = Some(ledger);
-        self.ledger_node = ChargeLedger::root_ordinal();
+        self.ledger_node = crate::plan::NodeId::ROOT;
         self.ledger_counts_rows = true;
         self
     }
@@ -1171,7 +1215,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// a 32-bit or wasm32 target a ceiling above `usize::MAX` is one no execution can
     /// reach, so clamping it is exactly "no cut".
     pub(crate) fn row_ceiling(&self) -> Option<usize> {
-        let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.current_node)?;
+        let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.cap_at?)?;
         Some(usize::try_from(ceiling).unwrap_or(usize::MAX))
     }
 
@@ -1208,10 +1252,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// The ledger cursor and its `counts_rows` flag move together, and only when `pattern`
     /// resolves to a node of the plan the ledger was built for — see
     /// [`Self::resolve_ledger_ordinal`].
-    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize, bool) {
-        let restore = (self.current_node, self.ledger_node, self.ledger_counts_rows);
-        self.current_node = std::ptr::from_ref(pattern) as usize;
-        if let Some((ordinal, counts_rows)) = self.resolve_ledger_ordinal(self.current_node) {
+    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> NodeCursors {
+        let restore = (self.cap_at, self.ledger_node, self.ledger_counts_rows);
+        self.cap_at = self
+            .cap_pushdown
+            .as_ref()
+            .and_then(|pushdown| pushdown.locate(pattern, self.plan.as_ref()));
+        if let Some((ordinal, counts_rows)) =
+            self.resolve_ledger_ordinal(std::ptr::from_ref(pattern) as usize)
+        {
             self.ledger_node = ordinal;
             self.ledger_counts_rows = counts_rows;
         }
@@ -1270,7 +1319,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// resolves nowhere really is synthetic bookkeeping with no source of its own, and its
     /// charges are meant to fall to whatever node is already the ledger cursor — the
     /// nearest enclosing node that DID resolve.
-    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<(usize, bool)> {
+    pub(crate) fn resolve_ledger_ordinal(
+        &self,
+        address: usize,
+    ) -> Option<(crate::plan::NodeId, bool)> {
         let ledger = self.ledger.as_ref()?;
         if let Some(ordinal) = ledger.ordinal_of(address) {
             return Some((ordinal, true));
@@ -1300,10 +1352,35 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Restore the cursors [`Self::enter_node`] returned.
-    pub(crate) const fn leave_node(&mut self, restore: (usize, usize, bool)) {
-        self.current_node = restore.0;
+    pub(crate) const fn leave_node(&mut self, restore: NodeCursors) {
+        self.cap_at = restore.0;
         self.ledger_node = restore.1;
         self.ledger_counts_rows = restore.2;
+    }
+
+    /// Install `tree` as the tree this context evaluates: its node ids, its `EXISTS`
+    /// sites and its variable-endpoint analysis are read from here on.
+    pub(crate) fn install_plan(&mut self, tree: &crate::plan::Tree<'_>) {
+        self.plan = Some(tree.handle());
+    }
+
+    /// Install the tree `plan` is the handle of, as [`Self::install_plan`] does.
+    pub(crate) fn install_plan_handle(&mut self, plan: crate::plan::PlanHandle) {
+        self.plan = Some(plan);
+    }
+
+    /// The id of `pattern` in the installed tree, when it is one of its nodes.
+    pub(crate) fn plan_node(&self, pattern: &GraphPattern) -> Option<crate::plan::NodeId> {
+        self.plan.as_ref()?.node_of(pattern)
+    }
+
+    /// The installed tree's variable-endpoint `SERVICE` analysis; absent when no tree is.
+    pub(crate) fn endpoint_scan(&self) -> &crate::service_endpoints::EndpointScan {
+        static ABSENT: crate::service_endpoints::EndpointScan =
+            crate::service_endpoints::EndpointScan::Absent;
+        self.plan
+            .as_ref()
+            .map_or(&ABSENT, |plan| plan.shape().endpoints())
     }
 
     /// The per-node charge ledger this execution records into, if one is installed.
@@ -1370,6 +1447,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// Record an invocation a `SILENT` clause absorbed, on the evidence of a governed
+    /// execution. An ungoverned execution returns a bare result with nowhere to carry the
+    /// record, so there it is not kept.
+    pub(crate) fn record_silenced(&self, invocation: purrdf_core::SilencedInvocation) {
+        if let Some(state) = self.governors.as_ref() {
+            state.record_silenced(invocation);
+        }
+    }
+
     /// The caller-injected tables the fork-join safety walk consults — the one place
     /// this context's three registries are paired, so a call site cannot pass one and
     /// forget the others.
@@ -1399,11 +1485,37 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Asked here rather than at the four fork sites (`FILTER`, `BIND`, `OPTIONAL`'s
     /// inline condition, and the per-group aggregate compute) so the rule is stated once
     /// and a new fork site cannot inherit half of it.
+    ///
+    /// Inside a substituted window, a nested `EXISTS` the substitution left as a
+    /// placeholder is judged by its site ([`crate::deferred_exists::ExistsSite::parallel_unsafe`]),
+    /// the body the placeholder stands for, rather than by the placeholder.
     pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
-        if !crate::parallel::is_parallel_safe(expr, self.safety_registries()) {
+        let safe = match &self.deferred_exists {
+            None => crate::parallel::is_parallel_safe(expr, self.safety_registries()),
+            Some(deferred) => {
+                crate::parallel::is_parallel_safe_with(expr, self.safety_registries(), &|body| {
+                    placeholder_unsafe(deferred, body)
+                })
+            }
+        };
+        if !safe {
             return false;
         }
         !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+    }
+
+    /// Whether `pattern` may be evaluated from a forked worker: the pattern-level twin of
+    /// [`Self::may_fork_row_loop`]'s first condition, with the same reading of a
+    /// placeholder.
+    pub(crate) fn pattern_is_parallel_safe(&self, pattern: &GraphPattern) -> bool {
+        match &self.deferred_exists {
+            None => crate::parallel::is_parallel_safe_pattern(pattern, self.safety_registries()),
+            Some(deferred) => crate::parallel::is_parallel_safe_pattern_with(
+                pattern,
+                self.safety_registries(),
+                &|body| placeholder_unsafe(deferred, body),
+            ),
+        }
     }
 
     /// Whether one `GROUP BY` group's aggregate compute may be forked across
@@ -1497,6 +1609,24 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         !self.governors_are_engaged()
     }
 
+    /// Whether every fork site of this evaluation runs its sequential implementation:
+    /// the evaluation was opened sequential ([`EvalOptions::force_sequential`] — set by
+    /// the fallible lazy-view entries, whose page request order and exact budget boundary
+    /// are observable evidence no fork may race, and by the measurement seams).
+    ///
+    /// The decision is a field of this context, copied into every worker fork, so one
+    /// evaluation's answer never reaches another evaluation interleaved on the same
+    /// thread. A test build lets [`crate::parallel::force_parallel_for_test`] drive it:
+    /// `Some(false)` there holds the whole evaluation — the `UNION` fork included — on
+    /// one thread.
+    pub(crate) fn sequential_operation_required(&self) -> bool {
+        #[cfg(test)]
+        if crate::parallel::forced_parallel_for_test() == Some(false) {
+            return true;
+        }
+        self.options.force_sequential
+    }
+
     /// The live governor accounting state, if this execution is governed at all.
     ///
     /// `None` is the ungoverned execution every non-governor entry point takes: every
@@ -1532,6 +1662,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         &self,
         point: crate::governor::ChargePoint,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {point:?}"));
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => {
@@ -1580,6 +1712,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         point: crate::governor::ChargePoint,
         occurrences: u64,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {point:?} x{occurrences}"));
         if occurrences == 0 {
             return Ok(());
         }
@@ -1617,6 +1751,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         dimension: purrdf_core::ResourceDimension,
         amount: u64,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {dimension:?} {amount}"));
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => state.charge_if_engaged(dimension, amount),
@@ -1705,40 +1841,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         )
     }
 
-    /// Charge one occurrence of `point` per row of `rows`, **in order**, truncating
-    /// `rows` to the prefix the budget admits.
-    ///
-    /// The truncated bag is a positional prefix of what the operator computed, which is
-    /// what the partial-lift channel needs in order to certify it. Charging in order and
-    /// on the main thread is also what makes this identical under forced-parallel and
-    /// forced-sequential evaluation: the rows have already been reduced into source
-    /// order by the time this runs.
-    pub(crate) fn admit_rows<I: ViewTermId>(
-        &self,
-        rows: &mut Vec<crate::solution::Solution<I>>,
-        point: crate::governor::ChargePoint,
-    ) -> Option<TrippedGovernor> {
-        let state = self.governors.as_ref()?;
-        if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
-            && state.stop_signal().is_none()
-        {
-            return None;
-        }
-        for admitted in 0..rows.len() {
-            if let Err(tripped) = self.charge(point) {
-                rows.truncate(admitted);
-                return Some(tripped);
-            }
-        }
-        None
-    }
-
     /// Charge `count` rows against fuel **without discarding any of them**, reporting the
     /// governor that stopped the charge if one did.
     ///
-    /// # Why this one does not cut, when [`Self::admit_rows`] does
+    /// # Why this one does not cut, when a row loop's admission does
     ///
-    /// [`Self::admit_rows`] is charged *before* per-row work that has not happened yet —
+    /// A row loop's admission ([`crate::row_checkpoint::RowCheckpoint::pass`]) is charged
+    /// *before* per-row work that has not happened yet —
     /// a `FILTER` predicate, a `BIND` expression — so refusing a row there refuses the
     /// work, and the cut is the bound. This one is charged *after* an operator has
     /// finished: `commit_node_output` runs on a materialized bag, so truncating it saves
@@ -1884,8 +1993,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   id is valid in the parent's space (a raw child `ScratchId` is never
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
-    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
-    ///   `xsd_parse_cache`, `constructed`): per-worker mutable state that must
+    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
+    ///   `constructed`): per-worker mutable state that must
     ///   NOT be shared, so each worker mints its own constructed-quad buffer
     ///   without contending on a lock. The caller
     ///   classifies each worker row with [`crate::parallel::minted_row`] into a
@@ -1935,7 +2044,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: self.exists_definition_memo.clone(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
@@ -1960,6 +2068,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // parent would — dropping the stack here would silently reproduce the false-zero
             // attribution this field exists to fix, just scoped to the parallel path.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // SHARED for the same reason as `in_substituted_exists`: a worker evaluating
+            // part of the window's copy reaches the same placeholders its parent would. The
+            // plan-node site cache is shared outright (one `Arc`), so a site a worker
+            // prepares is not dropped with the worker — see
+            // `crate::deferred_exists::PlanSites`.
+            deferred_exists: self.deferred_exists.clone(),
+            plan_exists_sites: self.plan_exists_sites.clone(),
+            // Carried, not reset: a worker evaluating part of a join's right operand (a
+            // `UNION` arm) must answer a variable-endpoint `SERVICE` over the same
+            // endpoints its parent would. The terms are the parent's, and a worker's
+            // scratch is a clone of the parent's, so they read back the same.
+            endpoint_frames: self.endpoint_frames.clone(),
+            // SHARED: the worker evaluates part of the same tree.
+            plan: self.plan.clone(),
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -1993,7 +2115,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // COPIED: a worker is evaluating part of its parent's node, so it charges the
             // parent's node. Resetting either cursor would scatter one node's charges
             // across the ledger by worker count.
-            current_node: self.current_node,
+            cap_at: self.cap_at,
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
             ledger_counts_rows: self.ledger_counts_rows,
@@ -2151,7 +2273,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
@@ -2164,6 +2285,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // still see the enclosing window's map for any of ITS OWN charges that legitimately
             // resolve through it.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // A function body is its own query: no placeholder of the caller's copy is in
+            // it, and its own `EXISTS` bodies are its own.
+            deferred_exists: None,
+            plan_exists_sites: None,
+            // A function body is its own query: no join of the caller's encloses its
+            // clauses, so no endpoint list of the caller's applies to them.
+            endpoint_frames: Vec::new(),
+            // The body's own tree is installed when it is prepared for evaluation
+            // (`prepare_query_context`); nothing of the caller's applies to it.
+            plan: None,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2191,7 +2322,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // so the calling query's row ceilings say nothing about it. A body that wants
             // a ceiling gets one from its own `LIMIT`.
             cap_pushdown: None,
-            current_node: 0,
+            cap_at: None,
             // SHARED, and the cursor deliberately does NOT move: the body's nodes are not
             // in the calling plan, so its cost is reported against the call site — the one
             // node a reader of the ledger can act on.
@@ -2225,40 +2356,29 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// it fresh on the first reach and reusing it for every later reach of the SAME AST
     /// node within this evaluation (`crate::enf`'s module doc, "Prepare-seam choice").
     ///
-    /// While [`Self::in_substituted_exists`] is set, `pattern`'s OWN address is a per-row
+    /// While [`Self::in_substituted_exists`] is set, `pattern`'s address may be a per-row
     /// heap temporary that can alias a dropped-and-reused allocation from an earlier outer
-    /// row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
-    /// already guard against — so it can never be used as the cache key directly. This is
-    /// reached for exactly one shape: a nested `EXISTS` inside an enclosing correlated
-    /// `EXISTS`/`LATERAL` window's per-row substituted copy (`crate::binop::eval_correlated`
-    /// via [`crate::expr::substitute_pattern_tracked`]'s tracked `Expression::Exists` arm).
-    /// That nested site's OWN AST node, unlike the per-row copy, is perfectly stable across
-    /// every outer row — so [`Self::resolve_ledger_ordinal`]'s own one-hop-per-window chase
-    /// (through [`Self::correlated_node_maps`]) is tried FIRST: when `pattern`'s address
-    /// resolves to a stable one, the cache is keyed by THAT address instead, turning what
-    /// would otherwise be a fresh [`PreparedExists::build`] (ENF-normalize, clone, full
-    /// structural analysis) on every single outer row into one build per site, exactly like
-    /// the un-substituted fast path below. Only when no window's map covers `pattern` at
-    /// all — a node the substitution walk genuinely synthesized, with no AST identity of
-    /// its own — does this fall back to the old build-fresh-and-discard behavior.
+    /// row — the same ABA hazard [`Self::exists_inner_cache`] guards against — so it is
+    /// never a cache key there, and the preparation is built fresh and returned uncached. A nested `EXISTS` inside a substituted copy does not come
+    /// here at all: the substitution left it as a placeholder whose site was prepared once,
+    /// from the written body (see [`crate::deferred_exists`]). What does come here inside a
+    /// window is a body the window evaluates as it is written, or one substituted in full
+    /// (a `SERVICE` body, or layers that disagree) — the second of which is exactly the
+    /// case a cached preparation would answer with an earlier row's substitution.
     pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
-        let key = std::ptr::from_ref(pattern) as usize;
         if self.in_substituted_exists {
-            let Some(resolved) = self
-                .correlated_node_maps
-                .last()
-                .and_then(|map| map.get(&key))
-                .map(|entry| entry.source)
-            else {
-                return Arc::new(PreparedExists::build(pattern));
-            };
-            if let Some(existing) = self.exists_prepared_cache.get(&resolved) {
-                return existing.clone();
-            }
-            let built = Arc::new(PreparedExists::build(pattern));
-            self.exists_prepared_cache.insert(resolved, built.clone());
-            return built;
+            return Arc::new(PreparedExists::build(pattern));
         }
+        if let Some(plan) = self.plan.as_ref()
+            && let Some(site) = plan
+                .node_of(pattern)
+                .and_then(|body| plan.shape().site_of(body))
+        {
+            return plan
+                .shape()
+                .prepared_exists(site, || PreparedExists::build(pattern));
+        }
+        let key = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
             return existing.clone();
         }
@@ -2285,6 +2405,14 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // Every algebra node is one level of this recursion, and the stack that parsed a
+    // request bounds how many levels it has, not how much stack evaluating them takes:
+    // see `crate::stack`. The construct is named only on the refusal.
+    if crate::stack::is_low() {
+        return Err(EvalError::StackExhausted {
+            construct: pattern_construct(pattern),
+        });
+    }
     // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
     // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
     // all and two independent subquery slices do not overwrite one another.
@@ -2294,6 +2422,33 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
         ctx.cap_pushdown = None;
     }
     evaluated
+}
+
+/// The name a stack refusal at `pattern` reports: the construct a request writes to get
+/// this algebra node.
+const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
+    match pattern {
+        GraphPattern::Bgp { .. } => "basic graph pattern",
+        GraphPattern::Path { .. } => "property path",
+        GraphPattern::Join { .. } => "group graph pattern",
+        GraphPattern::LeftJoin { .. } => "OPTIONAL",
+        GraphPattern::Lateral { .. } => "LATERAL",
+        GraphPattern::Filter { .. } => "FILTER",
+        GraphPattern::Union { .. } => "UNION",
+        GraphPattern::Graph { .. } => "GRAPH",
+        GraphPattern::Extend { .. } => "BIND",
+        GraphPattern::Unfold { .. } => "UNFOLD",
+        GraphPattern::Minus { .. } => "MINUS",
+        GraphPattern::Values { .. } => "VALUES",
+        GraphPattern::OrderBy { .. } => "ORDER BY",
+        GraphPattern::Project { .. } => "SELECT",
+        GraphPattern::Distinct { .. } => "DISTINCT",
+        GraphPattern::Reduced { .. } => "REDUCED",
+        GraphPattern::Slice { .. } => "LIMIT/OFFSET",
+        GraphPattern::Group { .. } => "GROUP BY",
+        GraphPattern::Service { .. } => "SERVICE",
+        GraphPattern::PropertyFunction(_) => "property function",
+    }
 }
 
 /// The evaluator recursion after any local semantic-Slice ceiling has been installed.
@@ -2395,12 +2550,24 @@ fn install_local_slice_pushdown<D: DatasetView + Sync>(
         return false;
     }
 
-    let pushdown = crate::governor::soundness::plan_cap_pushdown(pattern, Some(u64::MAX));
-    if pushdown.is_empty() {
-        false
-    } else {
-        ctx.cap_pushdown = Some(Arc::new(pushdown));
-        true
+    // A slice of the evaluation's own tree is planned in that tree's ids; any other
+    // (a substituted temporary, a prepared `EXISTS` body) is numbered on its own.
+    let pushdown = match ctx.plan.as_ref() {
+        Some(plan) if plan.node_of(pattern).is_some() => {
+            CapPushdown::over_plan(plan, pattern, u64::MAX)
+        }
+        _ => Some(crate::governor::soundness::plan_cap_pushdown(
+            pattern,
+            Some(u64::MAX),
+        ))
+        .filter(|pushdown| !pushdown.is_empty()),
+    };
+    match pushdown {
+        Some(pushdown) => {
+            ctx.cap_pushdown = Some(Arc::new(pushdown));
+            true
+        }
+        None => false,
     }
 }
 
@@ -2551,7 +2718,7 @@ fn eval_node<D: DatasetView + Sync>(
         )?)),
 
         GraphPattern::Join { left, right } => crate::binop::eval_join(pattern, left, right, ctx),
-        GraphPattern::Union { left, right } => crate::binop::eval_union(pattern, left, right, ctx),
+        GraphPattern::Union { arms } => crate::binop::eval_union(pattern, arms, ctx),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -2622,137 +2789,241 @@ fn eval_node<D: DatasetView + Sync>(
 /// to discover its schema would spend a budget that has already tripped or trigger side
 /// effects in a branch known not to match. The match is exhaustive so a new algebra node
 /// cannot silently inherit an empty schema.
+///
+/// The schema is a fold over the node's tree — a leaf's columns are its own term
+/// positions, a binary operator's the ordered union of its left operand's then its
+/// right's, a `Union`'s the ordered union of its arms' in arm order, a row-shaping
+/// operator's its inner pattern's with its own targets appended — run over a work list
+/// of the nodes still to derive and a stack of the schemas already derived, each
+/// operator's built once its operands' are on the stack. So a node of any depth is
+/// derived without a machine-stack frame per level, and the columns come out in the
+/// same order a recursive reading pushes them: an operand's whole schema before the
+/// next operand's, a node's own targets after its inner's columns. The term positions
+/// of a triple pattern are read the same way, subject then predicate then object,
+/// through a quoted triple's positions at any depth.
 pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
-    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
-        match term {
-            TermPattern::Variable(variable) => {
-                schema.push(variable.clone());
+    /// One term position still to read for its variables.
+    enum Position<'a> {
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
+    }
+
+    /// Push the variables of the positions on `pending` onto `schema`, in the order the
+    /// positions pop: a quoted triple's subject, then its predicate, then its object.
+    fn push_positions(pending: &mut Vec<Position<'_>>, schema: &mut VarSchema) {
+        while let Some(position) = pending.pop() {
+            match position {
+                Position::Term(TermPattern::Variable(variable)) => {
+                    schema.push(variable.clone());
+                }
+                Position::Term(TermPattern::Triple(triple)) => {
+                    pending.push(Position::Term(&triple.object));
+                    pending.push(Position::Predicate(&triple.predicate));
+                    pending.push(Position::Term(&triple.subject));
+                }
+                Position::Term(
+                    TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
+                ) => {}
+                Position::Predicate(NamedNodePattern::Variable(variable)) => {
+                    schema.push(variable.clone());
+                }
+                Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
             }
-            TermPattern::Triple(triple) => push_triple(triple, schema),
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
+    }
+
+    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
+        push_positions(&mut vec![Position::Term(term)], schema);
     }
 
     fn push_triple(triple: &TriplePattern, schema: &mut VarSchema) {
-        push_term(&triple.subject, schema);
-        if let NamedNodePattern::Variable(variable) = &triple.predicate {
-            schema.push(variable.clone());
-        }
-        push_term(&triple.object, schema);
+        push_positions(
+            &mut vec![
+                Position::Term(&triple.object),
+                Position::Predicate(&triple.predicate),
+                Position::Term(&triple.subject),
+            ],
+            schema,
+        );
     }
 
-    fn derive(pattern: &GraphPattern) -> VarSchema {
-        match pattern {
-            GraphPattern::Bgp { patterns } => {
-                let mut schema = VarSchema::new();
-                for pattern in patterns {
-                    push_triple(pattern, &mut schema);
+    /// What a row-shaping operator appends to its inner pattern's columns.
+    enum Append<'a> {
+        /// A `GRAPH` name, when it is a variable.
+        GraphName(&'a NamedNodePattern),
+        /// A `BIND` target.
+        Variable(&'a Variable),
+        /// An `UNFOLD`'s element target, then its companion when there is one.
+        Unfold(&'a Variable, Option<&'a Variable>),
+    }
+
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Derive this node's schema, or schedule its operands and the operator over
+        /// them.
+        Derive(&'a GraphPattern),
+        /// Replace the schema on top of the stack by that schema with `append` added.
+        Shape(Append<'a>),
+        /// Replace the top two schemas (the right operand's on top) by the left's union
+        /// with the right's.
+        Union,
+        /// Replace the top `count` schemas (the first arm's deepest) by the ordered union
+        /// of all of them, starting from no columns.
+        UnionArms(usize),
+    }
+
+    let mut steps = vec![Step::Derive(pattern)];
+    let mut schemas: Vec<VarSchema> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Derive(pattern) => match pattern {
+                GraphPattern::Bgp { patterns } => {
+                    let mut schema = VarSchema::new();
+                    for pattern in patterns {
+                        push_triple(pattern, &mut schema);
+                    }
+                    schemas.push(schema);
                 }
-                schema
-            }
-            GraphPattern::Path {
-                subject,
-                path: _,
-                object,
-            } => {
-                let mut schema = VarSchema::new();
-                push_term(subject, &mut schema);
-                push_term(object, &mut schema);
-                schema
-            }
-            GraphPattern::Join { left, right }
-            | GraphPattern::LeftJoin {
-                left,
-                right,
-                expression: _,
-            }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right } => derive(left).union(&derive(right)),
-            GraphPattern::Minus { left, right: _ } => derive(left),
-            GraphPattern::Filter { expr: _, inner }
-            | GraphPattern::OrderBy {
-                inner,
-                expression: _,
-            }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice {
-                inner,
-                start: _,
-                length: _,
-            } => derive(inner),
-            GraphPattern::Graph { name, inner } => {
-                let mut schema = derive(inner);
-                if let NamedNodePattern::Variable(variable) = name {
-                    schema.push(variable.clone());
+                GraphPattern::Path {
+                    subject,
+                    path: _,
+                    object,
+                } => {
+                    let mut schema = VarSchema::new();
+                    push_term(subject, &mut schema);
+                    push_term(object, &mut schema);
+                    schemas.push(schema);
                 }
-                schema
-            }
-            GraphPattern::Service {
-                name: _,
-                inner,
-                silent: _,
-            } => derive(inner),
-            GraphPattern::Extend {
-                inner,
-                variable,
-                expression: _,
-            } => {
-                let mut schema = derive(inner);
-                schema.push(variable.clone());
-                schema
-            }
-            // `UNFOLD`'s columns are its inner pattern's plus its own one or two
-            // targets, in declaration order — the same rule `Extend` follows for
-            // its single target.
-            GraphPattern::Unfold {
-                inner,
-                expression: _,
-                element,
-                companion,
-            } => {
-                let mut schema = derive(inner);
-                schema.push(element.clone());
-                if let Some(companion) = companion {
-                    schema.push(companion.clone());
+                GraphPattern::Join { left, right }
+                | GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression: _,
                 }
-                schema
-            }
-            GraphPattern::Values {
-                variables,
-                bindings: _,
-            }
-            | GraphPattern::Project {
-                inner: _,
-                variables,
-            } => VarSchema::from_vars(variables.iter().cloned()),
-            GraphPattern::Group {
-                inner: _,
-                variables,
-                aggregates,
-            } => {
-                let mut schema = VarSchema::from_vars(variables.iter().cloned());
-                for (variable, _) in aggregates {
-                    schema.push(variable.clone());
+                | GraphPattern::Lateral { left, right } => {
+                    steps.push(Step::Union);
+                    steps.push(Step::Derive(right));
+                    steps.push(Step::Derive(left));
                 }
-                schema
-            }
-            // Every argument variable of a property function is in scope in the
-            // enclosing group (the arguments are simultaneously the call's inputs and
-            // its bindings), so the node's columns are exactly those variables — in
-            // flattened first-seen order, subject side then object side, which is the
-            // order the dispatch fills them in.
-            GraphPattern::PropertyFunction(call) => {
-                let mut schema = VarSchema::new();
-                for term in call.subject_args.iter().chain(&call.object_args) {
-                    push_term(term, &mut schema);
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::UnionArms(arms.len()));
+                    steps.extend(arms.iter().rev().map(Step::Derive));
                 }
-                schema
+                GraphPattern::Minus { left, right: _ } => steps.push(Step::Derive(left)),
+                GraphPattern::Filter { expr: _, inner }
+                | GraphPattern::OrderBy {
+                    inner,
+                    expression: _,
+                }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice {
+                    inner,
+                    start: _,
+                    length: _,
+                }
+                | GraphPattern::Service {
+                    name: _,
+                    inner,
+                    silent: _,
+                } => steps.push(Step::Derive(inner)),
+                GraphPattern::Graph { name, inner } => {
+                    steps.push(Step::Shape(Append::GraphName(name)));
+                    steps.push(Step::Derive(inner));
+                }
+                GraphPattern::Extend {
+                    inner,
+                    variable,
+                    expression: _,
+                } => {
+                    steps.push(Step::Shape(Append::Variable(variable)));
+                    steps.push(Step::Derive(inner));
+                }
+                // `UNFOLD`'s columns are its inner pattern's plus its own one or two
+                // targets, in declaration order — the same rule `Extend` follows for
+                // its single target.
+                GraphPattern::Unfold {
+                    inner,
+                    expression: _,
+                    element,
+                    companion,
+                } => {
+                    steps.push(Step::Shape(Append::Unfold(element, companion.as_ref())));
+                    steps.push(Step::Derive(inner));
+                }
+                GraphPattern::Values {
+                    variables,
+                    bindings: _,
+                }
+                | GraphPattern::Project {
+                    inner: _,
+                    variables,
+                } => schemas.push(VarSchema::from_vars(variables.iter().cloned())),
+                GraphPattern::Group {
+                    inner: _,
+                    variables,
+                    aggregates,
+                } => {
+                    let mut schema = VarSchema::from_vars(variables.iter().cloned());
+                    for (variable, _) in aggregates {
+                        schema.push(variable.clone());
+                    }
+                    schemas.push(schema);
+                }
+                // Every argument variable of a property function is in scope in the
+                // enclosing group (the arguments are simultaneously the call's inputs and
+                // its bindings), so the node's columns are exactly those variables — in
+                // flattened first-seen order, subject side then object side, which is the
+                // order the dispatch fills them in.
+                GraphPattern::PropertyFunction(call) => {
+                    let mut schema = VarSchema::new();
+                    for term in call.subject_args.iter().chain(&call.object_args) {
+                        push_term(term, &mut schema);
+                    }
+                    schemas.push(schema);
+                }
+            },
+            Step::Shape(append) => {
+                let schema = schemas
+                    .last_mut()
+                    .expect("the inner pattern's schema is derived before its operator's");
+                match append {
+                    Append::GraphName(name) => {
+                        if let NamedNodePattern::Variable(variable) = name {
+                            schema.push(variable.clone());
+                        }
+                    }
+                    Append::Variable(variable) => {
+                        schema.push(variable.clone());
+                    }
+                    Append::Unfold(element, companion) => {
+                        schema.push(element.clone());
+                        if let Some(companion) = companion {
+                            schema.push(companion.clone());
+                        }
+                    }
+                }
+            }
+            Step::Union => {
+                let right = schemas.pop().expect("the right operand's schema");
+                let left = schemas.pop().expect("the left operand's schema");
+                schemas.push(left.union(&right));
+            }
+            Step::UnionArms(count) => {
+                let first = schemas.len() - count;
+                let union = schemas
+                    .drain(first..)
+                    .fold(VarSchema::new(), |schema, arm| schema.union(&arm));
+                schemas.push(union);
             }
         }
     }
 
-    Arc::new(derive(pattern))
+    Arc::new(
+        schemas
+            .pop()
+            .expect("the root's schema is the last one derived"),
+    )
 }
 
 /// Evaluate a graph pattern to a multiset of solutions, requiring completion.
@@ -2787,6 +3058,8 @@ pub fn eval<D: DatasetView + Sync>(
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
+    let tree = crate::plan::Tree::build(pattern);
+    ctx.install_plan(&tree);
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -2881,7 +3154,11 @@ pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
 /// ([`crate::construct::commit_answer_triples`]), and one solution row can instantiate a
 /// whole template — so a row ceiling derived from a triple cap would be an arithmetic
 /// non-sequitur. Their semantic slices are still planned locally.
-fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<'_, D>) {
+fn install_answer_cap_pushdown<D: DatasetView + Sync>(
+    query: &Query,
+    plan: &crate::plan::PlanHandle,
+    ctx: &mut EvalCtx<'_, D>,
+) {
     ctx.cap_pushdown = None;
     let cap = match (query, ctx.governors.as_ref()) {
         (Query::Select { .. }, Some(state))
@@ -2895,10 +3172,8 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut E
         // No root cap: semantic slices install their local pushdown only if reached.
         _ => return,
     };
-    let pushdown = crate::governor::soundness::plan_cap_pushdown(query_pattern(query), Some(cap));
-    if !pushdown.is_empty() {
-        ctx.cap_pushdown = Some(Arc::new(pushdown));
-    }
+    let pushdown = CapPushdown::over_plan(plan, query_pattern(query), cap);
+    ctx.cap_pushdown = pushdown.map(Arc::new);
 }
 
 /// What is being admitted at the `VERSION` boundary: a full query or an update
@@ -3016,6 +3291,17 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
+    prepare_query_context_over(query, None, ctx)
+}
+
+/// [`prepare_query_context`], numbering `query` through `kept` — the plan cache of the
+/// owner holding `query` unchanged across evaluations — when there is one, and afresh
+/// when there is not.
+pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
@@ -3023,7 +3309,14 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    install_answer_cap_pushdown(query, ctx);
+    // The tree every node of this evaluation is numbered in, with its variable-endpoint
+    // analysis and `EXISTS` sites: the kept one, or one built here.
+    let plan = match kept {
+        Some(cache) => cache.handle(query_pattern(query)),
+        None => crate::plan::Tree::build(query_pattern(query)).handle(),
+    };
+    ctx.install_plan_handle(plan.clone());
+    install_answer_cap_pushdown(query, &plan, ctx);
     Ok(())
 }
 
@@ -3044,14 +3337,20 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    // Criterion and differential tests can hold the operation on the sequential branch;
-    // production keeps the ordered parallel fold. The guard is operation-scoped so every
-    // recursive fork gate sees the same decision.
-    let _sequential = ctx
-        .options
-        .force_sequential
-        .then(crate::parallel::force_sequential_operation);
-    prepare_query_context(query, ctx)?;
+    evaluate_query_evaluated_over(query, None, ctx)
+}
+
+/// [`evaluate_query_evaluated`], numbering `query` through `kept` when its owner keeps a
+/// plan cache for it (see [`prepare_query_context_over`]).
+pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    // Criterion and differential tests can hold the operation on the sequential branch
+    // (`EvalOptions::force_sequential`, read by every fork gate through
+    // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
+    prepare_query_context_over(query, kept, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column
@@ -3126,11 +3425,25 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
+    evaluate_query_over(query, None, ctx)
+}
+
+/// [`evaluate_query`], numbering `query` through `kept` when its owner keeps a plan
+/// cache for it (see [`prepare_query_context_over`]). A query whose shared blank labels
+/// are joined here is a new tree, and is numbered afresh.
+pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
+    query: &Query,
+    kept: Option<&crate::plan::PlanCache>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Outcome<D::Id>, EvalError> {
     // As [`eval`]: a query handed in here has not passed admission, so the shared
     // blank labels admission joins are joined here.
     let joined = crate::blank_scope::join_shared_blanks_in_query(query);
-    let query = joined.as_ref().unwrap_or(query);
-    match evaluate_query_evaluated(query, ctx)? {
+    let (query, kept) = match joined.as_ref() {
+        Some(joined) => (joined, None),
+        None => (query, kept),
+    };
+    match evaluate_query_evaluated_over(query, kept, ctx)? {
         EvaluatedOutcome::Complete(outcome) => Ok(outcome),
         EvaluatedOutcome::Truncated {
             outcome,
@@ -3211,51 +3524,85 @@ fn memoized_value_of<D: DatasetView + Sync>(
 }
 
 /// `scratch::term_id_to_value`, with the literal datatype id → IRI string
-/// resolution memoized across cells (recursing through RDF-1.2 triple terms).
+/// resolution memoized across cells.
+///
+/// A triple term is assembled bottom-up over a work list: its components are resolved
+/// subject, predicate, object — each fully before the next, so the memo is written in
+/// that order — and the triple is built once all three exist. A term of any nesting
+/// costs no more machine stack.
 fn memoized_term_value<D: DatasetView>(
     dataset: &D,
     id: D::Id,
     datatype_memo: &mut DetHashMap<D::Id, String>,
 ) -> TermValue {
-    match dataset.resolve(id) {
-        purrdf_core::TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        purrdf_core::TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        purrdf_core::TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = datatype_memo
-                .entry(datatype)
-                .or_insert_with(|| match dataset.resolve(datatype) {
-                    purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
-                    // A literal's datatype is always an interned IRI (C0.1).
-                    other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-                })
-                .clone();
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
+    enum Step<I> {
+        Resolve(I),
+        Assemble,
+    }
+    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
+    // plain cell costs only its own value.
+    let mut steps: smallvec::SmallVec<[Step<D::Id>; 8]> = smallvec::smallvec![Step::Resolve(id)];
+    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Resolve(id) => match dataset.resolve(id) {
+                purrdf_core::TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
+                purrdf_core::TermRef::Blank { label, scope } => values.push(TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                }),
+                purrdf_core::TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let datatype = datatype_memo
+                        .entry(datatype)
+                        .or_insert_with(|| match dataset.resolve(datatype) {
+                            purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
+                            // A literal's datatype is always an interned IRI (C0.1).
+                            other => {
+                                unreachable!("literal datatype must be an IRI, got {other:?}")
+                            }
+                        })
+                        .clone();
+                    values.push(TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype,
+                        language: language.map(str::to_owned),
+                        direction,
+                    });
+                }
+                purrdf_core::TermRef::Triple { s, p, o } => steps.extend([
+                    Step::Assemble,
+                    Step::Resolve(o),
+                    Step::Resolve(p),
+                    Step::Resolve(s),
+                ]),
+            },
+            Step::Assemble => {
+                let o = values.pop().expect("a triple term's object is resolved");
+                let p = values.pop().expect("a triple term's predicate is resolved");
+                let s = values.pop().expect("a triple term's subject is resolved");
+                values.push(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                });
             }
         }
-        purrdf_core::TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(memoized_term_value(dataset, s, datatype_memo)),
-            p: Box::new(memoized_term_value(dataset, p, datatype_memo)),
-            o: Box::new(memoized_term_value(dataset, o, datatype_memo)),
-        },
     }
+    values
+        .pop()
+        .expect("the root term's value is the last one assembled")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
+    use purrdf_sparql_algebra::Child;
 
     #[test]
     fn bnode_mint_prefix_rejects_an_illegal_prefix() {
@@ -3467,8 +3814,8 @@ mod tests {
         // LATERAL(Z, Z): the left unit table drives one substituted evaluation of
         // the right unit table, merging to a single binding-nothing solution.
         let pattern = GraphPattern::Lateral {
-            left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-            right: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+            left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+            right: Child::new(GraphPattern::Bgp { patterns: vec![] }),
         };
         let seq = eval(&pattern, &mut ctx).expect("LATERAL of units");
         assert_eq!(seq.len(), 1);
@@ -3520,8 +3867,8 @@ mod tests {
         let outer_for_low_level_check = outer.clone();
         let inner_for_low_level_check = inner.clone();
         let filter = GraphPattern::Filter {
-            expr: Expression::Exists(Box::new(inner)),
-            inner: Box::new(outer),
+            expr: Expression::Exists(Child::new(inner)),
+            inner: Child::new(outer),
         };
 
         let mut ctx = EvalCtx::new(&ds);
@@ -3542,7 +3889,7 @@ mod tests {
         // the "no per-row index rebuild" invariant.
         let mut child_ctx = EvalCtx::new(&ds);
         let outer_seq = eval(&outer_for_low_level_check, &mut child_ctx).expect("outer bgp");
-        let exists_expr = Expression::Exists(Box::new(inner_for_low_level_check));
+        let exists_expr = Expression::Exists(Child::new(inner_for_low_level_check));
         let mut kept = 0;
         for row in &outer_seq.rows {
             if crate::expr::eval_ebv(&exists_expr, row, &outer_seq.schema, &mut child_ctx)
@@ -3635,19 +3982,19 @@ mod tests {
         let knows_bgp = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
         let likes_bgp = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
         let join = GraphPattern::Join {
-            left: Box::new(knows_bgp),
-            right: Box::new(likes_bgp),
+            left: Child::new(knows_bgp),
+            right: Child::new(likes_bgp),
         };
         let extra_bgp = bgp(vp("z"), pred("http://ex/extra"), vp("w"));
         let optional = GraphPattern::LeftJoin {
-            left: Box::new(join),
-            right: Box::new(extra_bgp),
+            left: Child::new(join),
+            right: Child::new(extra_bgp),
             expression: None,
         };
         let bad_bgp = bgp(vp("x"), pred("http://ex/bad"), vp("v"));
         let pattern = GraphPattern::Minus {
-            left: Box::new(optional),
-            right: Box::new(bad_bgp),
+            left: Child::new(optional),
+            right: Child::new(bad_bgp),
         };
 
         let run = |forced: bool| {
@@ -3725,8 +4072,8 @@ mod tests {
         let name_bgp = bgp(vp("x"), pred("http://ex/name"), vp("n"));
         let age_bgp = bgp(vp("x"), pred("http://ex/age"), vp("a"));
         let join = GraphPattern::Join {
-            left: Box::new(name_bgp),
-            right: Box::new(age_bgp),
+            left: Child::new(name_bgp),
+            right: Child::new(age_bgp),
         };
 
         let regex = Expression::FunctionCall(
@@ -3734,19 +4081,20 @@ mod tests {
             vec![
                 Expression::Variable(Variable::new("n")),
                 Expression::Literal(Literal::new_simple("^Name1[0-9][0-9]2$")),
-            ],
+            ]
+            .into(),
         );
         let numeric = Expression::Greater(
-            Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(Literal::new_typed(
+            Child::new(Expression::Variable(Variable::new("a"))),
+            Child::new(Expression::Literal(Literal::new_typed(
                 "40",
                 NamedNode::new_unchecked(XINT),
             ))),
         );
-        let cond = Expression::And(Box::new(regex), Box::new(numeric));
+        let cond = Expression::and(regex, numeric);
         let pattern = GraphPattern::Filter {
             expr: cond,
-            inner: Box::new(join),
+            inner: Child::new(join),
         };
 
         let run = |forced: bool| {
@@ -3814,8 +4162,8 @@ mod tests {
         );
         let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
         let pattern = GraphPattern::Filter {
-            expr: Expression::Exists(Box::new(inner)),
-            inner: Box::new(outer),
+            expr: Expression::Exists(Child::new(inner)),
+            inner: Child::new(outer),
         };
 
         let run = |forced: bool| {
@@ -3895,14 +4243,14 @@ mod tests {
         let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
         let right = bgp(vp("y"), pred("http://ex/age"), vp("a"));
         let cond = Expression::Greater(
-            Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(
+            Child::new(Expression::Variable(Variable::new("a"))),
+            Child::new(Expression::Literal(
                 purrdf_sparql_algebra::Literal::new_typed("40", NamedNode::new_unchecked(XINT)),
             )),
         );
         let pattern = GraphPattern::LeftJoin {
-            left: Box::new(left),
-            right: Box::new(right),
+            left: Child::new(left),
+            right: Child::new(right),
             expression: Some(cond),
         };
 
@@ -3997,8 +4345,8 @@ mod tests {
             }],
         };
         GraphPattern::Lateral {
-            left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
-            right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
+            left: Child::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
+            right: Child::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
         }
     }
 
@@ -4129,6 +4477,542 @@ mod tests {
         assert!(
             eval(&plan, &mut governed).is_err(),
             "a truncation reaching the completion-only entry point must be refused"
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_value_walk_tests {
+    //! The memoized id-to-value resolution, checked against a recursive reference over
+    //! generated triple-term shapes: the same value and the same datatype memo after
+    //! each. There is no deep case: a dataset's triple terms nest a bounded number of
+    //! levels, so the deepest term it can hand back is far shallower than the generated
+    //! shapes already cover.
+
+    use super::memoized_term_value;
+    use crate::DetHashMap;
+    use purrdf_core::{
+        BlankScope, RdfDataset, RdfDatasetBuilder, TermBox, TermFactory as _, TermId, TermRef,
+        TermValue,
+    };
+    use std::sync::Arc;
+
+    const EX: &str = "http://example.org/";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn typed(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A generated value a dataset admits, with triple terms nested through the object
+    /// while `budget` lasts.
+    fn admissible(choices: &mut Choices, budget: &mut usize) -> TermValue {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Blank {
+                label: ["a", "bb"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => typed(["x", "y"][choices.choose(2)], XSD_STRING),
+            3 => typed(["1", "2"][choices.choose(2)], XSD_INTEGER),
+            _ => {
+                *budget -= 1;
+                TermValue::Triple {
+                    s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
+                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                    o: TermBox::new(admissible(choices, budget)),
+                }
+            }
+        }
+    }
+
+    /// The recursive reference for [`memoized_term_value`].
+    fn reference(
+        dataset: &RdfDataset,
+        id: TermId,
+        memo: &mut DetHashMap<TermId, String>,
+    ) -> TermValue {
+        match dataset.resolve(id) {
+            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+            TermRef::Blank { label, scope } => TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype = memo
+                    .entry(datatype)
+                    .or_insert_with(|| {
+                        let TermRef::Iri(iri) = dataset.resolve(datatype) else {
+                            panic!("a literal's datatype is an IRI");
+                        };
+                        iri.to_owned()
+                    })
+                    .clone();
+                TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype,
+                    language: language.map(str::to_owned),
+                    direction,
+                }
+            }
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference(dataset, s, memo)),
+                p: TermBox::new(reference(dataset, p, memo)),
+                o: TermBox::new(reference(dataset, o, memo)),
+            },
+        }
+    }
+
+    /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
+    fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let ids: Vec<TermId> = values
+            .iter()
+            .map(|value| {
+                let id = builder.intern_value(value);
+                builder.push_quad(s, p, id, None);
+                id
+            })
+            .collect();
+        (builder.freeze().expect("the generated values freeze"), ids)
+    }
+
+    #[test]
+    fn the_memoized_resolution_agrees_with_the_recursive_reference() {
+        let mut choices = Choices::new(13);
+        let values: Vec<TermValue> = (0..200)
+            .map(|_| {
+                let mut budget = 6;
+                admissible(&mut choices, &mut budget)
+            })
+            .collect();
+        let (dataset, ids) = dataset_of(&values);
+        let mut memo_walk = DetHashMap::default();
+        let mut memo_ref = DetHashMap::default();
+        for (value, id) in values.iter().zip(ids) {
+            let walked = memoized_term_value(&*dataset, id, &mut memo_walk);
+            assert_eq!(walked, reference(&dataset, id, &mut memo_ref));
+            assert_eq!(walked, *value);
+            assert_eq!(memo_walk, memo_ref);
+        }
+        assert_eq!(memo_walk.len(), 2, "one memo entry per literal datatype");
+    }
+}
+
+/// The syntactic schema against a recursive reading of the same algebra, over generated
+/// shapes, and at a depth no recursive reading could reach on a small stack.
+#[cfg(test)]
+mod syntactic_schema_tests {
+    use purrdf_sparql_algebra::{
+        AggregateExpression, AggregateFunction, Chain, Child, Expression, GraphPattern, NamedNode,
+        NamedNodePattern, PropertyFunctionCall, PropertyPathExpression, TermPattern, TriplePattern,
+        Variable,
+    };
+
+    use super::syntactic_schema;
+    use crate::solution::VarSchema;
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    fn reference_term(term: &TermPattern, schema: &mut VarSchema) {
+        match term {
+            TermPattern::Variable(variable) => {
+                schema.push(variable.clone());
+            }
+            TermPattern::Triple(triple) => reference_triple(triple, schema),
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn reference_triple(triple: &TriplePattern, schema: &mut VarSchema) {
+        reference_term(&triple.subject, schema);
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            schema.push(variable.clone());
+        }
+        reference_term(&triple.object, schema);
+    }
+
+    fn reference(pattern: &GraphPattern) -> VarSchema {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                let mut schema = VarSchema::new();
+                for pattern in patterns {
+                    reference_triple(pattern, &mut schema);
+                }
+                schema
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                let mut schema = VarSchema::new();
+                reference_term(subject, &mut schema);
+                reference_term(object, &mut schema);
+                schema
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::LeftJoin { left, right, .. }
+            | GraphPattern::Lateral { left, right } => reference(left).union(&reference(right)),
+            GraphPattern::Union { arms } => arms.iter().fold(VarSchema::new(), |schema, arm| {
+                schema.union(&reference(arm))
+            }),
+            GraphPattern::Minus { left, .. } => reference(left),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Service { inner, .. } => reference(inner),
+            GraphPattern::Graph { name, inner } => {
+                let mut schema = reference(inner);
+                if let NamedNodePattern::Variable(variable) = name {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
+                let mut schema = reference(inner);
+                schema.push(variable.clone());
+                schema
+            }
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                let mut schema = reference(inner);
+                schema.push(element.clone());
+                if let Some(companion) = companion {
+                    schema.push(companion.clone());
+                }
+                schema
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                VarSchema::from_vars(variables.iter().cloned())
+            }
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                let mut schema = VarSchema::from_vars(variables.iter().cloned());
+                for (variable, _) in aggregates {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+            GraphPattern::PropertyFunction(call) => {
+                let mut schema = VarSchema::new();
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    reference_term(term, &mut schema);
+                }
+                schema
+            }
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+
+        fn variable(&mut self) -> Variable {
+            Variable::new(NAMES[self.choose(NAMES.len())])
+        }
+
+        fn variables(&mut self) -> Vec<Variable> {
+            (0..self.choose(4)).map(|_| self.variable()).collect()
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/{local}"))
+    }
+
+    fn predicate(choices: &mut Choices) -> NamedNodePattern {
+        if choices.choose(3) == 0 {
+            NamedNodePattern::Variable(choices.variable())
+        } else {
+            NamedNodePattern::NamedNode(iri("p"))
+        }
+    }
+
+    fn term(choices: &mut Choices) -> TermPattern {
+        match choices.choose(if choices.budget > 0 { 4 } else { 3 }) {
+            0 => TermPattern::NamedNode(iri("n")),
+            1 | 2 => TermPattern::Variable(choices.variable()),
+            _ => {
+                choices.budget -= 1;
+                TermPattern::Triple(Child::new(triple(choices)))
+            }
+        }
+    }
+
+    fn triple(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: term(choices),
+            predicate: predicate(choices),
+            object: term(choices),
+        }
+    }
+
+    fn aggregate(choices: &mut Choices) -> (Variable, AggregateExpression) {
+        (
+            choices.variable(),
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .expect("a bare COUNT is a well-formed aggregate"),
+        )
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return GraphPattern::Bgp {
+                patterns: vec![triple(choices)],
+            };
+        }
+        let expression = Expression::Variable(Variable::new("v"));
+        match choices.choose(20) {
+            0 | 1 => GraphPattern::Bgp {
+                patterns: (0..choices.choose(3)).map(|_| triple(choices)).collect(),
+            },
+            2 => GraphPattern::Path {
+                subject: term(choices),
+                path: PropertyPathExpression::NamedNode(iri("p")),
+                object: term(choices),
+            },
+            3 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            4 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            5 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => GraphPattern::Union {
+                arms: Chain::try_from(
+                    (0..2 + choices.choose(2))
+                        .map(|_| pattern(choices))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("at least two arms"),
+            },
+            7 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Filter {
+                expr: expression,
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::OrderBy {
+                inner: Child::new(pattern(choices)),
+                expression: Vec::new(),
+            },
+            10 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            11 => GraphPattern::Reduced {
+                inner: Child::new(pattern(choices)),
+            },
+            12 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: 0,
+                length: None,
+            },
+            13 => GraphPattern::Graph {
+                name: predicate(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            14 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            15 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: choices.variable(),
+                expression,
+            },
+            16 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression,
+                element: choices.variable(),
+                companion: (choices.choose(2) == 0).then(|| choices.variable()),
+            },
+            17 => GraphPattern::Values {
+                variables: choices.variables(),
+                bindings: Vec::new(),
+            },
+            18 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: choices.variables(),
+            },
+            19 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: choices.variables(),
+                aggregates: (0..choices.choose(3)).map(|_| aggregate(choices)).collect(),
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: (0..choices.choose(3)).map(|_| term(choices)).collect(),
+                object_args: (0..choices.choose(3)).map(|_| term(choices)).collect(),
+            }),
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The fold derives exactly the schema the recursion derives — the same columns in
+    /// the same order — for every generated shape.
+    #[test]
+    fn the_fold_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut widths = std::collections::BTreeSet::new();
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let ours = syntactic_schema(&shape);
+            let expected = reference(&shape);
+            assert_eq!(*ours, expected, "seed {seed}: {shape:?}");
+            assert_eq!(ours.vars(), expected.vars(), "seed {seed}: {shape:?}");
+            widths.insert(ours.len());
+        }
+        assert!(
+            widths.len() > 3,
+            "the generator produces schemas of several widths ({widths:?})"
+        );
+    }
+
+    /// A pattern under a hundred thousand `DISTINCT`s, a join spine of that height with
+    /// a fresh column at every level, and a quoted triple nested a hundred thousand deep
+    /// each derive their schema on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_shape_is_derived_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+        let (shallow, wide, quoted) = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let leaf = || GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("s")),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: TermPattern::Variable(Variable::new("o")),
+                    }],
+                };
+                let mut distinct = leaf();
+                let mut spine = leaf();
+                let mut term = TermPattern::Variable(Variable::new("deep"));
+                for level in 0..DEPTH {
+                    distinct = GraphPattern::Distinct {
+                        inner: Child::new(distinct),
+                    };
+                    spine = GraphPattern::Join {
+                        left: Child::new(spine),
+                        right: Child::new(GraphPattern::Extend {
+                            inner: Child::new(leaf()),
+                            variable: Variable::new(format!("x{level}")),
+                            expression: Expression::Variable(Variable::new("s")),
+                        }),
+                    };
+                    term = TermPattern::Triple(Child::new(TriplePattern {
+                        subject: TermPattern::NamedNode(iri("n")),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: term,
+                    }));
+                }
+                let quoted = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("s")),
+                        predicate: NamedNodePattern::Variable(Variable::new("p")),
+                        object: term,
+                    }],
+                };
+                (
+                    syntactic_schema(&distinct).vars().to_vec(),
+                    syntactic_schema(&spine).len(),
+                    syntactic_schema(&quoted).vars().to_vec(),
+                )
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(shallow, [Variable::new("s"), Variable::new("o")]);
+        assert_eq!(wide, 2 + DEPTH);
+        assert_eq!(
+            quoted,
+            [
+                Variable::new("s"),
+                Variable::new("p"),
+                Variable::new("deep")
+            ]
         );
     }
 }

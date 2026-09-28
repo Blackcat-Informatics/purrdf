@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test test-shard doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -101,6 +101,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-binding-tests.py
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
+	python3 scripts/check-thread-locals.py --self-test
+	python3 scripts/check-thread-locals.py
 	python3 scripts/check-shapes-parser-drops.py --self-test
 	python3 scripts/check-shapes-parser-drops.py
 	python3 scripts/check-licenses.py --self-test
@@ -126,6 +128,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-simd-asm.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
+	python3 scripts/check-test-shards.py --self-test
+	python3 scripts/check-test-shards.py
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
@@ -225,46 +229,9 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-# `make test` as six parallel CI jobs. As one job it compiled for 25 minutes before
-# running anything, against a 30-minute job budget. The compile is almost all
-# first-party test targets, so caching dependencies cannot fix it; splitting the
-# targets across runners does.
-#
-# EVERY SHARD SELECTS `--workspace`, and that is the load-bearing choice. Cargo
-# unifies dependency features across the packages SELECTED on the command line, so
-# sharding by package (`-p purrdf-shapes`, ...) would compile several dependencies
-# (clap, regex-automata, ahash, smallvec, insta) with different features from the
-# ones `cargo test --workspace` uses — a different build, not a split of the same one.
-# Target-kind flags change which targets are built, never how features resolve.
-#
-# THE SHARDS PARTITION `cargo test --workspace`'s default target selection exactly:
-#   lib            every library's unit tests, and every binary's. purrdf-python is
-#                  excluded because its library is `test = false` (a PyO3 extension
-#                  cannot link a test harness), and the default selection skips it for
-#                  the same reason; the explicit `--lib` flag would not. Excluding it
-#                  changes no other package's features (only pyo3 leaves the graph).
-#   doc            every library's doc tests (purrdf-python's included, as before),
-#                  and the examples, which the default selection builds but does not
-#                  run; `cargo build --profile test` is that same build.
-#   integration-N  the integration-test targets, split by the first character of the
-#                  target name: [a-d] [e-o] [p-r], and [!a-r] for everything else, so
-#                  the four globs are disjoint and cover every name by construction.
-# No bench target sets `test = true`, so the default selection has none to run.
-#
-# c_abi_smoke is skipped in integration-1 because `make capi-check` runs that same
-# `cargo test -p purrdf-capi --test c_smoke`, and the capi CI job runs capi-check.
-# `make test` locally still runs everything in one invocation.
-test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
-	@case "$(SHARD)" in \
-		lib) set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
-		doc) set -x; cargo test --workspace --locked --doc \
-			&& cargo build --workspace --locked --examples --profile test ;; \
-		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
-		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
-		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
-		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
-		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
-	esac
+test-shard: node-prerequisite ## Run one CI test shard locally: make test-shard SHARD=kernel (names: scripts/test-shards.py --matrix).
+	@test -n "$(SHARD)" || { echo "usage: make test-shard SHARD=<name>; shards: $$(python3 scripts/test-shards.py --matrix)" >&2; exit 2; }
+	cargo test --locked $$(python3 scripts/test-shards.py --packages $(SHARD))
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
 	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
@@ -281,7 +248,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 25 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -441,6 +408,10 @@ terminal-hygiene: ## Prove no scanner decides a token boundary with a Unicode pr
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
 
+thread-local-hygiene: ## Prove every thread_local! in crates/ is in the wasm interleaving ledger with its reason, and nothing stale is.
+	python3 scripts/check-thread-locals.py --self-test
+	python3 scripts/check-thread-locals.py
+
 build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with debug-assertions and overflow-checks on.
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
@@ -533,7 +504,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -733,6 +704,13 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
 		"$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm" \
 		--out-dir crates/rdf-wasm/js/pkg --target web
+	@# The asynchronous lane's suspending import comes from ./purrdf_jspi.mjs, which the
+	@# glue imports by relative path and wires into the instance's import object as is.
+	@# The module ships next to the glue; a glue that does not import it would leave
+	@# the raw import unresolved at instantiation, so its absence is a build failure.
+	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
+		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
@@ -750,6 +728,14 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
 		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@# The post-link step, last because it must see the module wasm-opt ships. It
+	@# exports the shadow-stack pointer, routes every call of the suspending import
+	@# through an injected $suspend that puts the resumed job's own pointer back
+	@# before anything else runs, wraps purrdf_jspi_run so a run starts on the region
+	@# top its caller passes and returns with the idle pointer restored, and puts
+	@# every exported function behind the poison gate (crates/wasm-link). It validates
+	@# the module it writes and refuses one it does not recognize or has already linked.
+	cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
 	@# Durable proof that +simd128 actually produced SIMD codegen: a green
 	@# wasm-pkg-test round-trip only proves the module runs correctly, not that
 	@# it is vectorized — a memchr/RUSTFLAGS/dependency regression could ship a
@@ -764,8 +750,8 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 wasm-pkg-test: wasm-pkg ## Build and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
-wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
-	cd crates/rdf-wasm/js && node bench/parse.bench.mjs
+wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput and poison-gate benchmarks (report-only; never a gate).
+	cd crates/rdf-wasm/js && node bench/parse.bench.mjs && node bench/gate.bench.mjs
 
 # The static RDF-1.2 console (docs/playground/) assembled next to a fresh copy of the
 # published ESM package — the exact tree the Pages deploy ships at /playground. The app

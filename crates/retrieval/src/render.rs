@@ -48,6 +48,7 @@
 //! exists.
 
 use core::fmt::Write as _;
+use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 
 use purrdf_core::{RdfTextDirection, TermValue};
@@ -156,37 +157,41 @@ pub(crate) fn typed_literal(lexical_form: &str, datatype: &str) -> String {
 /// is the repeated doubling that building a term one character at a time from an
 /// empty `String` otherwise pays — a 60-byte IRI costs four allocations without
 /// it and one with it, on every row a stratum emits.
+///
+/// A triple term's hint is summed from its components' over [`TermValue::fold`]'s
+/// work list.
 fn lexical_size_hint(value: &TermValue) -> usize {
-    match value {
-        // `<` + text + `>`.
-        TermValue::Iri(iri) => iri.len() + 2,
-        // `_:` + label.
-        TermValue::Blank { label, .. } => label.len() + 2,
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            // `"` + lexical + `"`.
-            let mut size = lexical_form.len() + 2;
-            if let Some(tag) = language {
-                // `@` + tag, then `--` + `ltr`/`rtl`.
-                size += tag.len() + 1;
-                if direction.is_some() {
-                    size += 5;
+    value.fold(
+        |leaf| match leaf {
+            // `<` + text + `>`.
+            TermValue::Iri(iri) => iri.len() + 2,
+            // `_:` + label.
+            TermValue::Blank { label, .. } => label.len() + 2,
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                // `"` + lexical + `"`.
+                let mut size = lexical_form.len() + 2;
+                if let Some(tag) = language {
+                    // `@` + tag, then `--` + `ltr`/`rtl`.
+                    size += tag.len() + 1;
+                    if direction.is_some() {
+                        size += 5;
+                    }
+                } else if datatype != XSD_STRING {
+                    // `^^` + `<` + datatype + `>`.
+                    size += datatype.len() + 4;
                 }
-            } else if datatype != XSD_STRING {
-                // `^^` + `<` + datatype + `>`.
-                size += datatype.len() + 4;
+                size
             }
-            size
-        }
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
         // `<<( ` + s + ` ` + p + ` ` + o + ` )>>`.
-        TermValue::Triple { s, p, o } => {
-            10 + lexical_size_hint(s) + lexical_size_hint(p) + lexical_size_hint(o)
-        }
-    }
+        |s, p, o| 10 + s + p + o,
+    )
 }
 
 /// Write `value` as the canonical term lexical naming a **result**.
@@ -229,29 +234,45 @@ pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError
 /// spell. Such a literal is not well-formed RDF; writing it without its tag or
 /// direction would name a *different* term — one that collides with the plain
 /// literal of the same lexical form — so it is refused rather than misnamed.
+///
+/// A triple term is spelled `<<( s p o )>>` over [`TermValue::try_write_nested`]'s
+/// work list, and the first refusal ends the write.
 fn write_candidate(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
-    match value {
-        TermValue::Blank { label, .. } => {
-            out.push_str("_:");
-            out.push_str(label);
+    value.try_write_nested(
+        out,
+        "<<( ",
+        " ",
+        " )>>",
+        |out, leaf| match leaf {
+            TermValue::Blank { label, .. } => {
+                out.push_str("_:");
+                out.push_str(label);
+                Ok(())
+            }
+            other => write_leaf(out, other),
+        },
+        |out, text| {
+            out.push_str(text);
             Ok(())
-        }
-        TermValue::Triple { s, p, o } => {
-            out.push_str("<<( ");
-            write_candidate(s, out)?;
-            out.push(' ');
-            write_candidate(p, out)?;
-            out.push(' ');
-            write_candidate(o, out)?;
-            out.push_str(" )>>");
-            Ok(())
-        }
-        other => write_term(other, out),
-    }
+        },
+    )
 }
 
 /// Append `value`'s SPARQL constant form to `out`.
+///
+/// An RDF 1.2 triple term is spelled `<<( s p o )>>` — the value form the SPARQL
+/// parser reads as a term (`<< s p o >>` is a *reifying* triple, which emits its own
+/// triples and is not a value) — over [`TermValue::try_write_nested`]'s work list, and
+/// the first refusal ends the write.
 fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
+    value.try_write_nested(out, "<<( ", " ", " )>>", write_leaf, |out, text| {
+        out.push_str(text);
+        Ok(())
+    })
+}
+
+/// Append the SPARQL constant form of a term that is not a triple term to `out`.
+fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
     match value {
         TermValue::Iri(iri) => {
             write_iri(iri, out);
@@ -266,19 +287,7 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
             language,
             direction,
         } => write_literal(lexical_form, datatype, language.as_deref(), *direction, out),
-        TermValue::Triple { s, p, o } => {
-            // RDF 1.2 triple term. `<<( s p o )>>` is the value form the SPARQL
-            // parser reads as a term (`<< s p o >>` is a *reifying* triple, which
-            // emits its own triples and is not a value).
-            out.push_str("<<( ");
-            write_term(s, out)?;
-            out.push(' ');
-            write_term(p, out)?;
-            out.push(' ');
-            write_term(o, out)?;
-            out.push_str(" )>>");
-            Ok(())
-        }
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
     }
 }
 
@@ -430,11 +439,50 @@ impl<'a> Cursor<'a> {
     }
 
     /// Decode one term at the cursor.
+    ///
+    /// Nested triple terms are decoded by a loop over the triple terms opened and not
+    /// yet closed, each holding the components decoded so far: `<<(` opens one, a
+    /// finished term becomes the next component of the innermost open one, and its
+    /// third component is followed by the `)>>` that closes it.
     fn term(&mut self) -> Result<TermValue, String> {
-        self.skip_whitespace();
-        if self.eat("<<(") {
-            return self.triple_term();
+        let mut open: Vec<Vec<TermValue>> = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.eat("<<(") {
+                open.push(Vec::with_capacity(3));
+                continue;
+            }
+            let mut term = self.leaf_term()?;
+            loop {
+                let Some(components) = open.last_mut() else {
+                    return Ok(term);
+                };
+                components.push(term);
+                if components.len() < 3 {
+                    break;
+                }
+                self.skip_whitespace();
+                if !self.eat(")>>") {
+                    return Err(format!(
+                        "unterminated triple term: expected `)>>` at byte {}",
+                        self.position
+                    ));
+                }
+                let [subject, predicate, object] = <[TermValue; 3]>::try_from(
+                    open.pop().expect("the innermost triple term is open"),
+                )
+                .unwrap_or_else(|_| unreachable!("a triple term closes after three components"));
+                term = TermValue::Triple {
+                    s: TermBox::new(subject),
+                    p: TermBox::new(predicate),
+                    o: TermBox::new(object),
+                };
+            }
         }
+    }
+
+    /// Decode one term at the cursor that does not open a triple term.
+    fn leaf_term(&mut self) -> Result<TermValue, String> {
         if self.rest().starts_with("<<") {
             return Err(
                 "a reifying triple `<< s p o >>` is not a term value; a triple term \
@@ -458,28 +506,13 @@ impl<'a> Cursor<'a> {
         ))
     }
 
-    /// Decode `<<( s p o )>>`, the opening delimiter already consumed.
-    fn triple_term(&mut self) -> Result<TermValue, String> {
-        let subject = self.term()?;
-        let predicate = self.term()?;
-        let object = self.term()?;
-        self.skip_whitespace();
-        if !self.eat(")>>") {
-            return Err(format!(
-                "unterminated triple term: expected `)>>` at byte {}",
-                self.position
-            ));
-        }
-        Ok(TermValue::Triple {
-            s: Box::new(subject),
-            p: Box::new(predicate),
-            o: Box::new(object),
-        })
-    }
-
-    /// Decode `<…>`, resolving `UCHAR` escapes.
+    /// Decode `<…>`, resolving `UCHAR` escapes. The opening `<` is consumed here, so a
+    /// datatype position after `^^` that holds anything else — or nothing, at the end
+    /// of the text — is refused rather than stepped over.
     fn iri(&mut self) -> Result<String, String> {
-        self.position += 1;
+        if !self.eat("<") {
+            return Err(format!("expected an IRI `<…>` at byte {}", self.position));
+        }
         let mut out = String::new();
         loop {
             let Some(ch) = self.rest().chars().next() else {
@@ -696,6 +729,7 @@ pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> Str
 #[cfg(test)]
 mod tests {
     use super::{RenderError, decode_term, sparql_term};
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfTextDirection, TermValue};
 
     fn rendered(value: &TermValue) -> String {
@@ -824,9 +858,9 @@ mod tests {
     #[test]
     fn a_triple_term_renders_in_its_value_form() {
         let value = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(TermValue::simple_literal("o")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::simple_literal("o")),
         };
         assert_eq!(
             rendered(&value),
@@ -854,9 +888,9 @@ mod tests {
                 direction: Some(RdfTextDirection::Rtl),
             },
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             let text = rendered(&value);
@@ -875,6 +909,10 @@ mod tests {
             "<< <a> <b> <c> >>",
             "\"x\"@en--upside-down",
             "\"x\"\\q",
+            // A datatype position with no IRI: empty at the end of the text, and a
+            // character other than `<` where the IRI opens.
+            "\"1\"^^",
+            "\"1\"^^Xhttp://www.w3.org/2001/XMLSchema#integer>",
         ] {
             assert!(
                 decode_term(text).is_err(),
@@ -882,7 +920,13 @@ mod tests {
             );
         }
         // The neighbouring valid cases still decode.
-        for text in ["<http://example.org/s>", "_:b0", "\"x\"@en", "\"x\""] {
+        for text in [
+            "<http://example.org/s>",
+            "_:b0",
+            "\"x\"@en",
+            "\"x\"",
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        ] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
         }
     }
@@ -949,5 +993,142 @@ mod tests {
             .map(|pair| pair.split_once('=').expect("name=value").0)
             .collect();
         assert_eq!(rendered_names, DOCUMENTED_COUNTERS);
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term writers, the size hint and the canonical-lexical decoder against their
+    //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::test_rng::TermShape;
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{
+        Cursor, RenderError, candidate_lexical, decode_term, lexical_size_hint, write_candidate,
+        write_term,
+    };
+
+    fn reference_hint(value: &TermValue) -> usize {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                10 + reference_hint(s) + reference_hint(p) + reference_hint(o)
+            }
+            leaf => lexical_size_hint(leaf),
+        }
+    }
+
+    fn reference_write(
+        value: &TermValue,
+        out: &mut String,
+        blanks: bool,
+    ) -> Result<(), RenderError> {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                out.push_str("<<( ");
+                reference_write(s, out, blanks)?;
+                out.push(' ');
+                reference_write(p, out, blanks)?;
+                out.push(' ');
+                reference_write(o, out, blanks)?;
+                out.push_str(" )>>");
+                Ok(())
+            }
+            leaf if blanks => write_candidate(leaf, out),
+            leaf => write_term(leaf, out),
+        }
+    }
+
+    fn reference_decode(cursor: &mut Cursor<'_>) -> Result<TermValue, String> {
+        cursor.skip_whitespace();
+        if !cursor.eat("<<(") {
+            return cursor.term();
+        }
+        let subject = reference_decode(cursor)?;
+        let predicate = reference_decode(cursor)?;
+        let object = reference_decode(cursor)?;
+        cursor.skip_whitespace();
+        if !cursor.eat(")>>") {
+            return Err(format!(
+                "unterminated triple term: expected `)>>` at byte {}",
+                cursor.position
+            ));
+        }
+        Ok(TermValue::Triple {
+            s: TermBox::new(subject),
+            p: TermBox::new(predicate),
+            o: TermBox::new(object),
+        })
+    }
+
+    /// Every generated term's hint, both writings — the partial text and the refusal
+    /// of a blank node or an unspellable literal included — and the decoding of its
+    /// candidate lexical, whole and cut short, agree with the recursive references.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let (mut decoded, mut refused) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(&mut state, &mut budget, TermShape::Any);
+            assert_eq!(
+                lexical_size_hint(&value),
+                reference_hint(&value),
+                "seed {seed}"
+            );
+            for blanks in [true, false] {
+                let (mut written, mut expected) = (String::new(), String::new());
+                let result = if blanks {
+                    write_candidate(&value, &mut written)
+                } else {
+                    write_term(&value, &mut written)
+                };
+                let reference = reference_write(&value, &mut expected, blanks);
+                assert_eq!(
+                    format!("{result:?}"),
+                    format!("{reference:?}"),
+                    "seed {seed}"
+                );
+                assert_eq!(written, expected, "seed {seed}");
+                refused += usize::from(result.is_err());
+            }
+            let Ok(text) = candidate_lexical(&value) else {
+                continue;
+            };
+            let cut = &text[..text
+                .char_indices()
+                .nth(text.chars().count() / 2)
+                .map_or(0, |(i, _)| i)];
+            for input in [text.as_str(), cut] {
+                let found = Cursor::new(input).term();
+                let mut cursor = Cursor::new(input);
+                let expected = reference_decode(&mut cursor);
+                assert_eq!(found, expected, "seed {seed}: {input}");
+                decoded += usize::from(found.is_ok());
+            }
+        }
+        assert!(decoded > 0, "some generated lexical decodes");
+        assert!(refused > 0, "some generated term is refused");
+    }
+
+    /// A triple term a hundred thousand levels deep is hinted, written both ways and
+    /// decoded back on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
+                assert_eq!(lexical_size_hint(&value), text.len());
+                let mut written = String::new();
+                write_term(&value, &mut written).expect("a chain of IRIs is ground");
+                assert_eq!(written, text);
+                assert_eq!(decode_term(&text), Ok(value));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

@@ -59,6 +59,7 @@
 
 #![allow(clippy::too_many_lines)]
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -145,9 +146,9 @@ fn object(obj: Obj) -> TermValue {
         Obj::Ex(local) => TermValue::iri(ex(local)),
         Obj::Lit(lexical) => TermValue::simple_literal(lexical),
         Obj::Triple(s, p, o) => TermValue::Triple {
-            s: Box::new(TermValue::iri(ex(s))),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(TermValue::iri(ex(o))),
+            s: TermBox::new(TermValue::iri(ex(s))),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(TermValue::iri(ex(o))),
         },
     }
 }

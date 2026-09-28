@@ -26,7 +26,7 @@ use crate::sparql::{
     from_json_boolean, from_xml, from_xml_boolean, provenance_from_json, provenance_from_xml,
     serialize as serialize_results,
 };
-use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue};
+use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermBox, TermValue};
 
 /// Map the short format id (`json`/`xml`/`csv`/`tsv`) to the crate's format enum.
 fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
@@ -58,9 +58,9 @@ fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
             direction: lit.direction,
         },
         RdfTerm::Triple(t) => TermValue::Triple {
-            s: Box::new(rdf_term_to_value(&t.subject)),
-            p: Box::new(TermValue::Iri(t.predicate.clone())),
-            o: Box::new(rdf_term_to_value(&t.object)),
+            s: TermBox::new(rdf_term_to_value(&t.subject)),
+            p: TermBox::new(TermValue::Iri(t.predicate.clone())),
+            o: TermBox::new(rdf_term_to_value(&t.object)),
         },
     }
 }

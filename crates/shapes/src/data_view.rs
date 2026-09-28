@@ -3,6 +3,7 @@
 
 //! Shared native carriers for SHACL, with compact validation-local term handles.
 
+use purrdf_core::TermBox;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -996,9 +997,9 @@ impl ShaclRead for ShaclDatasetView {
             return source.term_id_by_triple(s, p, o);
         }
         self.term_id_by_value(&TermValue::Triple {
-            s: Box::new(crate::term::term_id_to_native(self, s).to_term_value()),
-            p: Box::new(crate::term::term_id_to_native(self, p).to_term_value()),
-            o: Box::new(crate::term::term_id_to_native(self, o).to_term_value()),
+            s: TermBox::new(crate::term::term_id_to_native(self, s).to_term_value()),
+            p: TermBox::new(crate::term::term_id_to_native(self, p).to_term_value()),
+            o: TermBox::new(crate::term::term_id_to_native(self, o).to_term_value()),
         })
     }
 }

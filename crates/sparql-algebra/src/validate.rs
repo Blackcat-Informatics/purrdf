@@ -5,27 +5,58 @@
 
 use std::collections::BTreeSet;
 
+use crate::walk::NodeRef;
 use crate::{
     AggregateExpression, Expression, Function, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    OrderExpression, ParseError, PropertyPathExpression, Query, Result, TermPattern, TriplePattern,
-    Variable,
+    ParseError, PropertyPathExpression, Query, Result, TermPattern, Variable,
 };
 
-// Unlike a flat graph-combinator spine, expressions, paths and RDF values are
-// recursively evaluated. Keep their own envelope within native-stack bounds.
-const MAX_VALUE_NESTING: usize = 512;
-
-#[derive(Clone, Copy)]
-struct Depth {
-    structural: usize,
-    values: usize,
+impl TermPattern {
+    /// How many triple terms this term's longest chain holds, the outermost included:
+    /// `0` for an IRI, blank node, literal or variable, `1` for `<<( ?s ?p ?o )>>`, `2`
+    /// for `<<( ?s ?p <<( ?s ?p ?o )>> )>>`.
+    ///
+    /// Counted iteratively, so it needs no more stack however deep the term nests, and
+    /// without allocating unless a triple term's subject is itself one.
+    #[must_use]
+    pub fn triple_term_nesting(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending: Vec<(&Self, usize)> = Vec::new();
+        let mut next = Some((self, 0));
+        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+            if let Self::Triple(triple) = term {
+                let depth = above + 1;
+                deepest = deepest.max(depth);
+                if matches!(triple.subject, Self::Triple(_)) {
+                    pending.push((&triple.subject, depth));
+                }
+                next = Some((&triple.object, depth));
+            }
+        }
+        deepest
+    }
 }
 
-impl Depth {
-    const ROOT: Self = Self {
-        structural: 1,
-        values: 0,
-    };
+impl GroundTerm {
+    /// How many triple terms this `VALUES` cell's longest chain holds, the outermost
+    /// included; see [`TermPattern::triple_term_nesting`].
+    #[must_use]
+    pub fn triple_term_nesting(&self) -> usize {
+        let mut deepest = 0;
+        let mut pending: Vec<(&Self, usize)> = Vec::new();
+        let mut next = Some((self, 0));
+        while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+            if let Self::Triple(triple) = term {
+                let depth = above + 1;
+                deepest = deepest.max(depth);
+                if matches!(triple.subject, Self::Triple(_)) {
+                    pending.push((&triple.subject, depth));
+                }
+                next = Some((&triple.object, depth));
+            }
+        }
+        deepest
+    }
 }
 
 impl Query {
@@ -36,9 +67,12 @@ impl Query {
     /// Blank labels remain opaque identifiers, including scope-qualified labels.
     /// Registry admission belongs to the evaluator, which owns those registries.
     ///
+    /// Walks the tree over a work list, so a tree of any height is checked without
+    /// recursion; how tall a tree may be to be *evaluated* is the evaluator's to decide.
+    ///
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, malformed typed calls or ranges, and unsafe recursive nesting.
+    /// collisions, and malformed typed calls or ranges.
     pub fn validate(&self) -> Result<()> {
         self.walk(&mut BTreeSet::new())
     }
@@ -95,14 +129,14 @@ impl Query {
         if let Some(base) = base {
             purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
         }
-        let mut stack = vec![(Node::Pattern(pattern), Depth::ROOT)];
+        let mut stack = vec![NodeRef::Pattern(pattern)];
         match self {
             Self::Construct { template, .. } => {
                 for quad in template {
                     if let Some(graph) = &quad.graph {
                         named(graph)?;
                     }
-                    stack.push((Node::Triple(&quad.triple), Depth::ROOT));
+                    stack.push(NodeRef::Triple(&quad.triple));
                 }
             }
             Self::Describe { targets, .. } => {
@@ -112,28 +146,9 @@ impl Query {
             }
             Self::Select { .. } | Self::Ask { .. } => {}
         }
-        while let Some((node, depth)) = stack.pop() {
-            // The parser's brace limit is not an algebra-depth limit: sibling
-            // operators can produce a spine as long as its combinator budget.
-            // Each nested SELECT may add uncharged query modifiers and leaf
-            // wrappers, so reserve eight additional nodes per braced group.
-            if depth.structural
-                > crate::MAX_GRAPH_PATTERN_NODES + 8 * crate::MAX_GRAPH_PATTERN_DEPTH
-            {
-                return Err(invalid(
-                    "query algebra exceeds the structural nesting limit",
-                ));
-            }
-            if depth.values > MAX_VALUE_NESTING {
-                return Err(invalid(
-                    "query expression, path or term nesting exceeds the safety limit",
-                ));
-            }
-            let child_depth = Depth {
-                structural: depth.structural + 1,
-                values: depth.values + usize::from(!matches!(node, Node::Pattern(_))),
-            };
-            node.check(&mut stack, child_depth, calls)?;
+        while let Some(node) = stack.pop() {
+            check(node, calls)?;
+            node.for_each_child(|child| stack.push(child));
         }
         Ok(())
     }
@@ -226,319 +241,187 @@ fn literal(value: &Literal) -> Result<()> {
     Ok(())
 }
 
-enum Node<'a> {
-    Pattern(&'a GraphPattern),
-    Expr(&'a Expression),
-    Path(&'a PropertyPathExpression),
-    Triple(&'a TriplePattern),
-    Term(&'a TermPattern),
-    Ground(&'a GroundTerm),
-}
-
-fn order<'a>(values: &'a [OrderExpression], stack: &mut Vec<(Node<'a>, Depth)>, depth: Depth) {
-    for OrderExpression::Asc(expr) | OrderExpression::Desc(expr) in values {
-        stack.push((Node::Expr(expr), depth));
+/// The checks of `node` itself; its children are checked when they are reached.
+/// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
+fn check<'a>(node: NodeRef<'a>, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+    match node {
+        NodeRef::Pattern(pattern) => check_pattern(pattern),
+        NodeRef::Expr(expr) => check_expression(expr, calls),
+        NodeRef::Path(path) => check_path(path),
+        NodeRef::Triple(triple) => named(&triple.predicate),
+        NodeRef::Term(term) => match term {
+            TermPattern::NamedNode(n) => iri(n.as_str()),
+            TermPattern::Variable(v) => variable(v),
+            TermPattern::Literal(l) => literal(l),
+            TermPattern::Triple(_) | TermPattern::BlankNode(_) => Ok(()),
+        },
+        NodeRef::Ground(term) => match term {
+            GroundTerm::NamedNode(n) => iri(n.as_str()),
+            GroundTerm::Literal(l) => literal(l),
+            GroundTerm::BlankNode(_) => Ok(()),
+            GroundTerm::Triple(t) => {
+                if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
+                    return Err(invalid(
+                        "a ground triple term requires an IRI or blank subject",
+                    ));
+                }
+                iri(t.predicate.as_str())
+            }
+        },
+        NodeRef::Order(_) => Ok(()),
+        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate),
     }
 }
 
-fn aggregate<'a>(
-    value: &'a AggregateExpression,
-    stack: &mut Vec<(Node<'a>, Depth)>,
-    depth: Depth,
-) -> Result<()> {
+fn check_aggregate(value: &AggregateExpression) -> Result<()> {
     if let crate::AggregateFunction::Custom(name) = value.function() {
         iri(name.as_str())?;
-    }
-    for expr in value.args() {
-        stack.push((Node::Expr(expr), depth));
     }
     for (_, value) in value.scalarvals() {
         literal(value)?;
     }
-    order(value.order_by(), stack, depth);
     Ok(())
 }
 
-impl<'a> Node<'a> {
-    fn check(
-        self,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-        calls: &mut BTreeSet<&'a str>,
-    ) -> Result<()> {
-        match self {
-            Self::Pattern(pattern) => Self::pattern(pattern, stack, depth)?,
-            Self::Expr(expr) => Self::expression(expr, stack, depth, calls)?,
-            Self::Path(path) => Self::path(path, stack, depth)?,
-            Self::Triple(triple) => {
-                named(&triple.predicate)?;
-                stack.push((Self::Term(&triple.subject), depth));
-                stack.push((Self::Term(&triple.object), depth));
+fn check_pattern(pattern: &GraphPattern) -> Result<()> {
+    use GraphPattern as G;
+    match pattern {
+        G::Bgp { .. }
+        | G::Path { .. }
+        | G::Join { .. }
+        | G::Lateral { .. }
+        | G::Minus { .. }
+        | G::Union { .. }
+        | G::LeftJoin { .. }
+        | G::Filter { .. }
+        | G::OrderBy { .. }
+        | G::Distinct { .. }
+        | G::Reduced { .. }
+        | G::Slice { .. } => {}
+        G::Graph { name, .. } | G::Service { name, .. } => named(name)?,
+        G::Extend {
+            variable: target, ..
+        } => variable(target)?,
+        G::Values {
+            variables,
+            bindings,
+        } => {
+            distinct_variables(variables)?;
+            if bindings.iter().any(|row| row.len() != variables.len()) {
+                return Err(invalid("VALUES row width differs from its variables"));
             }
-            Self::Term(term) => match term {
-                TermPattern::NamedNode(n) => iri(n.as_str())?,
-                TermPattern::Variable(v) => variable(v)?,
-                TermPattern::Literal(l) => literal(l)?,
-                TermPattern::Triple(t) => stack.push((Self::Triple(t), depth)),
-                TermPattern::BlankNode(_) => {}
-            },
-            Self::Ground(term) => match term {
-                GroundTerm::NamedNode(n) => iri(n.as_str())?,
-                GroundTerm::Literal(l) => literal(l)?,
-                GroundTerm::BlankNode(_) => {}
-                GroundTerm::Triple(t) => {
-                    if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
-                        return Err(invalid(
-                            "a ground triple term requires an IRI or blank subject",
-                        ));
-                    }
-                    iri(t.predicate.as_str())?;
-                    stack.push((Self::Ground(&t.subject), depth));
-                    stack.push((Self::Ground(&t.object), depth));
-                }
-            },
         }
-        Ok(())
-    }
-
-    fn pattern(
-        pattern: &'a GraphPattern,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-    ) -> Result<()> {
-        use GraphPattern as G;
-        match pattern {
-            G::Bgp { patterns } => {
-                for triple in patterns {
-                    stack.push((Self::Triple(triple), depth));
-                }
+        G::Project { variables, .. } => {
+            // Repeated projection variables are normalized by the result schema.
+            for value in variables {
+                variable(value)?;
             }
-            G::Path {
-                subject,
-                path,
-                object,
-            } => {
-                stack.extend([
-                    (Self::Term(subject), depth),
-                    (Self::Path(path), depth),
-                    (Self::Term(object), depth),
-                ]);
+        }
+        G::Group {
+            variables,
+            aggregates,
+            ..
+        } => {
+            let mut outputs = BTreeSet::new();
+            for value in variables {
+                variable(value)?;
+                outputs.insert(value);
             }
-            G::Join { left, right }
-            | G::Lateral { left, right }
-            | G::Union { left, right }
-            | G::Minus { left, right } => {
-                stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-            }
-            G::LeftJoin {
-                left,
-                right,
-                expression,
-            } => {
-                stack.extend([(Self::Pattern(left), depth), (Self::Pattern(right), depth)]);
-                if let Some(expr) = expression {
-                    stack.push((Self::Expr(expr), depth));
-                }
-            }
-            G::Filter { expr, inner } => {
-                stack.extend([(Self::Expr(expr), depth), (Self::Pattern(inner), depth)]);
-            }
-            G::Graph { name, inner } | G::Service { name, inner, .. } => {
-                named(name)?;
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Extend {
-                inner,
-                variable: target,
-                expression,
-            } => {
+            for (target, _) in aggregates {
                 variable(target)?;
-                stack.extend([
-                    (Self::Pattern(inner), depth),
-                    (Self::Expr(expression), depth),
-                ]);
-            }
-            G::Values {
-                variables,
-                bindings,
-            } => {
-                distinct_variables(variables)?;
-                for row in bindings {
-                    if row.len() != variables.len() {
-                        return Err(invalid("VALUES row width differs from its variables"));
-                    }
-                    for term in row.iter().flatten() {
-                        stack.push((Self::Ground(term), depth));
-                    }
+                if !outputs.insert(target) {
+                    return Err(invalid(
+                        "aggregate output collides with another group output",
+                    ));
                 }
             }
-            G::OrderBy { inner, expression } => {
-                stack.push((Self::Pattern(inner), depth));
-                order(expression, stack, depth);
+        }
+        G::PropertyFunction(call) => iri(&call.iri)?,
+        G::Unfold {
+            element, companion, ..
+        } => distinct_variables(std::iter::once(element).chain(companion))?,
+    }
+    Ok(())
+}
+
+fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+    use Expression as E;
+    match expr {
+        E::NamedNode(n) => iri(n.as_str())?,
+        E::Literal(l) => literal(l)?,
+        E::Variable(v) | E::Bound(v) => variable(v)?,
+        E::FunctionCall(function, args) => match function {
+            Function::Custom(n) => {
+                iri(n.as_str())?;
+                calls.insert(n.as_str());
             }
-            G::Project { inner, variables } => {
-                // Repeated projection variables are normalized by the result schema.
-                for value in variables {
-                    variable(value)?;
-                }
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Distinct { inner } | G::Reduced { inner } | G::Slice { inner, .. } => {
-                stack.push((Self::Pattern(inner), depth));
-            }
-            G::Group {
-                inner,
-                variables,
-                aggregates,
-            } => {
-                let mut outputs = BTreeSet::new();
-                for value in variables {
-                    variable(value)?;
-                    outputs.insert(value);
-                }
-                for (target, _) in aggregates {
-                    variable(target)?;
-                    if !outputs.insert(target) {
-                        return Err(invalid(
-                            "aggregate output collides with another group output",
-                        ));
-                    }
-                }
-                stack.push((Self::Pattern(inner), depth));
-                for (_, value) in aggregates {
-                    aggregate(value, stack, depth)?;
+            Function::Cdt(call) => {
+                if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
+                    || !call.fn_kind.arity().admits(args.len())
+                {
+                    return Err(invalid(
+                        "invalid composite datatype function identity or arity",
+                    ));
                 }
             }
-            G::PropertyFunction(call) => {
+            Function::Purrdf(call) => {
                 iri(&call.iri)?;
-                for term in call.subject_args.iter().chain(&call.object_args) {
-                    stack.push((Self::Term(term), depth));
+                if !call.iri.ends_with(call.local_name()) {
+                    return Err(invalid("extension function IRI disagrees with its kind"));
                 }
             }
-            G::Unfold {
-                inner,
-                expression,
-                element,
-                companion,
-            } => {
-                distinct_variables(std::iter::once(element).chain(companion))?;
-                stack.extend([
-                    (Self::Pattern(inner), depth),
-                    (Self::Expr(expression), depth),
-                ]);
+            Function::Adjust if args.len() != 2 => {
+                return Err(invalid("ADJUST requires two arguments"));
             }
-        }
-        Ok(())
+            _ => {}
+        },
+        E::Or(_)
+        | E::And(_)
+        | E::Arithmetic(..)
+        | E::Equal(..)
+        | E::SameTerm(..)
+        | E::Greater(..)
+        | E::GreaterOrEqual(..)
+        | E::Less(..)
+        | E::LessOrEqual(..)
+        | E::UnaryPlus(_)
+        | E::UnaryMinus(_)
+        | E::Not(_)
+        | E::In(..)
+        | E::If(..)
+        | E::Coalesce(_)
+        | E::Exists(_) => {}
     }
+    Ok(())
+}
 
-    fn expression(
-        expr: &'a Expression,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-        calls: &mut BTreeSet<&'a str>,
-    ) -> Result<()> {
-        use Expression as E;
-        match expr {
-            E::NamedNode(n) => iri(n.as_str())?,
-            E::Literal(l) => literal(l)?,
-            E::Variable(v) | E::Bound(v) => variable(v)?,
-            E::Or(a, b)
-            | E::And(a, b)
-            | E::Equal(a, b)
-            | E::SameTerm(a, b)
-            | E::Greater(a, b)
-            | E::GreaterOrEqual(a, b)
-            | E::Less(a, b)
-            | E::LessOrEqual(a, b)
-            | E::Add(a, b)
-            | E::Subtract(a, b)
-            | E::Multiply(a, b)
-            | E::Divide(a, b) => stack.extend([(Self::Expr(a), depth), (Self::Expr(b), depth)]),
-            E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => stack.push((Self::Expr(x), depth)),
-            E::In(x, args) => {
-                stack.push((Self::Expr(x), depth));
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::If(a, b, c) => stack.extend([
-                (Self::Expr(a), depth),
-                (Self::Expr(b), depth),
-                (Self::Expr(c), depth),
-            ]),
-            E::Coalesce(args) => {
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::FunctionCall(function, args) => {
-                match function {
-                    Function::Custom(n) => {
-                        iri(n.as_str())?;
-                        calls.insert(n.as_str());
-                    }
-                    Function::Cdt(call) => {
-                        if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
-                            || !call.fn_kind.arity().admits(args.len())
-                        {
-                            return Err(invalid(
-                                "invalid composite datatype function identity or arity",
-                            ));
-                        }
-                    }
-                    Function::Purrdf(call) => {
-                        iri(&call.iri)?;
-                        if !call.iri.ends_with(call.local_name()) {
-                            return Err(invalid("extension function IRI disagrees with its kind"));
-                        }
-                    }
-                    Function::Adjust if args.len() != 2 => {
-                        return Err(invalid("ADJUST requires two arguments"));
-                    }
-                    _ => {}
-                }
-                for arg in args {
-                    stack.push((Self::Expr(arg), depth));
-                }
-            }
-            E::Exists(pattern) => stack.push((Self::Pattern(pattern), depth)),
-        }
-        Ok(())
-    }
-
-    fn path(
-        path: &'a PropertyPathExpression,
-        stack: &mut Vec<(Self, Depth)>,
-        depth: Depth,
-    ) -> Result<()> {
-        use PropertyPathExpression as P;
-        match path {
-            P::NamedNode(n) => iri(n.as_str())?,
-            P::Reverse(x) | P::ZeroOrMore(x) | P::OneOrMore(x) | P::ZeroOrOne(x) => {
-                stack.push((Self::Path(x), depth));
-            }
-            P::Sequence(a, b) | P::Alternative(a, b) => {
-                stack.extend([(Self::Path(a), depth), (Self::Path(b), depth)]);
-            }
-            P::Range { inner, min, max } => {
-                if max.is_some_and(|max| *min > max) {
-                    return Err(invalid("path range lower bound exceeds upper bound"));
-                }
-                stack.push((Self::Path(inner), depth));
-            }
-            P::NegatedPropertySet(values) => {
-                for v in values {
-                    iri(v.predicate.as_str())?;
-                }
-            }
-            P::Wildcard { namespace } => {
-                if let Some(n) = namespace {
-                    iri(n.as_str())?;
-                }
+fn check_path(path: &PropertyPathExpression) -> Result<()> {
+    use PropertyPathExpression as P;
+    match path {
+        P::NamedNode(n) => iri(n.as_str())?,
+        P::Reverse(_)
+        | P::ZeroOrMore(_)
+        | P::OneOrMore(_)
+        | P::ZeroOrOne(_)
+        | P::Sequence(_)
+        | P::Alternative(_) => {}
+        P::Range { min, max, .. } => {
+            if max.is_some_and(|max| *min > max) {
+                return Err(invalid("path range lower bound exceeds upper bound"));
             }
         }
-        Ok(())
+        P::NegatedPropertySet(values) => {
+            for v in values {
+                iri(v.predicate.as_str())?;
+            }
+        }
+        P::Wildcard { namespace } => {
+            if let Some(n) = namespace {
+                iri(n.as_str())?;
+            }
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]

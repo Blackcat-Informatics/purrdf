@@ -53,47 +53,62 @@
 //! TriG / RDF-XML) and the JSON-LD serializer — the one serialization seam.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use crate::{
     DatasetView, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTerm,
-    RdfTriple, TermId, TermRef, TermValue,
+    RdfTriple, TermId, TermRef, TermValue, fold_term,
 };
 
 /// Resolve a term id to the owned [`RdfTerm`] model through the [`DatasetView`] read
-/// path (recursively for triple terms) — the id-agnostic twin of
+/// path, triple terms included — the id-agnostic twin of
 /// `RdfDataset::to_owned_term`, so the extractor rebuilds a describing subgraph over
 /// any backend whose id type is [`TermId`].
+///
+/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its subject,
+/// predicate and object are resolved in that order, each fully before the next.
 fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> RdfTerm {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => RdfTerm::iri(iri),
-        TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype_iri = match dataset.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                other => unreachable!("literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical.to_owned(),
-                datatype: Some(datatype_iri),
-                language: language.map(str::to_owned),
-                direction,
+    let owned = fold_term(
+        dataset,
+        id,
+        |_, term| {
+            Ok::<_, Infallible>(match term {
+                TermRef::Iri(iri) => RdfTerm::iri(iri),
+                TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let datatype_iri = match dataset.resolve(datatype) {
+                        TermRef::Iri(iri) => iri.to_owned(),
+                        other => {
+                            unreachable!("literal datatype must resolve to an IRI, got {other:?}")
+                        }
+                    };
+                    RdfTerm::literal(RdfLiteral {
+                        lexical_form: lexical.to_owned(),
+                        datatype: Some(datatype_iri),
+                        language: language.map(str::to_owned),
+                        direction,
+                    })
+                }
+                TermRef::Triple { .. } => {
+                    unreachable!("a triple term is assembled from its components")
+                }
             })
-        }
-        TermRef::Triple { s, p, o } => {
-            let subject = owned_term(dataset, s);
-            let predicate = match dataset.resolve(p) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                other => unreachable!("triple predicate must resolve to an IRI, got {other:?}"),
+        },
+        |_, subject, predicate, object| {
+            let RdfTerm::Iri(predicate) = predicate else {
+                unreachable!("triple predicate must resolve to an IRI, got {predicate:?}")
             };
-            let object = owned_term(dataset, o);
-            RdfTerm::triple(RdfTriple::new(subject, predicate, object))
-        }
+            Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
+        },
+    );
+    match owned {
+        Ok(term) => term,
     }
 }
 
@@ -339,8 +354,8 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         matches!(self.dataset.resolve(id), TermRef::Blank { .. })
     }
 
-    /// Intern a source term id into `builder`, memoized. `to_owned_term` recurses
-    /// through triple terms, and `intern_owned_term` re-interns them, so quoted
+    /// Intern a source term id into `builder`, memoized. `to_owned_term` resolves
+    /// triple terms whole, and `intern_owned_term` re-interns them, so quoted
     /// triples inside reifiers rebuild faithfully.
     fn map_id(
         &self,
@@ -803,5 +818,53 @@ mod tests {
             has_deep,
             "the blank endpoint of the second reified triple must be closed"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The owned-model resolution against its recursive reference.
+
+    use super::owned_term;
+    use crate::backend::TermFactory as _;
+    use crate::test_rng::TermShape;
+    use crate::{RdfDataset, RdfDatasetBuilder, RdfTerm, RdfTriple, TermId, TermRef};
+
+    fn reference(dataset: &RdfDataset, id: TermId) -> RdfTerm {
+        match dataset.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let TermRef::Iri(predicate) = dataset.resolve(p) else {
+                    unreachable!("a stored predicate is an IRI")
+                };
+                RdfTerm::triple(RdfTriple::new(
+                    reference(dataset, s),
+                    predicate,
+                    reference(dataset, o),
+                ))
+            }
+            _ => owned_term(dataset, id),
+        }
+    }
+
+    /// Every generated stored term resolves to the owned term the recursive reference
+    /// builds.
+    #[test]
+    fn resolution_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            let object = dataset.quads().next().expect("one quad").o;
+            assert_eq!(
+                owned_term(&*dataset, object),
+                reference(&dataset, object),
+                "seed {seed}"
+            );
+        }
     }
 }
